@@ -15,3 +15,5 @@
 ## 使用
 
 下载 `一键更新SVN.zip`，解压后运行 `SVNAutoTool.exe`。
+
+发布包文件：`一键更新SVN.zip`
