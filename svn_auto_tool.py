@@ -1,4 +1,5 @@
 import ctypes
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import os
 import queue
@@ -27,6 +28,8 @@ CONFIG_PATH = APP_DIR / "svn_auto_tool_config.json"
 LOG_DIR = APP_DIR / "logs"
 LOG_RETENTION_DAYS = 7
 MUSIC_EXTENSIONS = (".wav",)
+MAX_PARALLEL_FOLDERS = 4
+FOLDER_START_STAGGER_SECONDS = 1.0
 
 
 class SvnAutoTool:
@@ -49,10 +52,16 @@ class SvnAutoTool:
         self.run_build_after_cleanup = BooleanVar(value=True)
         self.enable_schedule = BooleanVar(value=False)
         self.music_enabled = BooleanVar(value=True)
+        self.custom_update_bat_path = StringVar(value="")
+        self.custom_build_bat_path = StringVar(value="")
         self.schedule_time = StringVar(value="09:00")
         self.next_run_text = StringVar(value="未启用")
         self.status_text = StringVar(value="就绪")
         self.music_file = self._find_music_file()
+        self.music_alias = f"svnmate_music_{id(self)}"
+        self.music_backend = ""
+        self.music_fading = False
+        self.music_paused_after_task = False
         self.current_theme = ""
 
         self._cleanup_old_logs()
@@ -116,7 +125,21 @@ class SvnAutoTool:
             variable=self.run_build_after_cleanup,
             command=self._save_config,
         ).pack(anchor="w", pady=(6, 0))
-        ttk.Label(options, text="说明：svn update 完成后仍会自动执行 svn cleanup。").pack(anchor="w", pady=(6, 0))
+        self._build_script_path_row(
+            options,
+            "Update.bat 位置",
+            self.custom_update_bat_path,
+            self._choose_update_bat_path,
+            self._clear_update_bat_path,
+        )
+        self._build_script_path_row(
+            options,
+            "Build.bat 位置",
+            self.custom_build_bat_path,
+            self._choose_build_bat_path,
+            self._clear_build_bat_path,
+        )
+        ttk.Label(options, text="说明：脚本位置留空时使用默认规则；svn update 完成后仍会自动执行 svn cleanup。").pack(anchor="w", pady=(6, 0))
 
         schedule = ttk.LabelFrame(settings, text="定时执行", padding=10)
         schedule.pack(side=LEFT, fill=BOTH, expand=True, padx=(8, 0))
@@ -176,6 +199,21 @@ class SvnAutoTool:
         tree.bind("<space>", lambda _event, key=group_key: self._toggle_selected_folder(key))
         self.folder_trees[group_key] = tree
 
+    def _build_script_path_row(
+        self,
+        parent: ttk.Frame,
+        label: str,
+        value: StringVar,
+        choose_command: object,
+        clear_command: object,
+    ) -> None:
+        row = ttk.Frame(parent)
+        row.pack(fill=X, pady=(8, 0))
+        ttk.Button(row, text=label, command=choose_command).pack(side=LEFT)
+        entry = ttk.Entry(row, textvariable=value, state="readonly")
+        entry.pack(side=LEFT, fill=X, expand=True, padx=(8, 6))
+        ttk.Button(row, text="默认", width=6, command=clear_command).pack(side=LEFT)
+
     def _load_config(self) -> None:
         if not CONFIG_PATH.exists():
             return
@@ -188,6 +226,8 @@ class SvnAutoTool:
         self.run_bin_update.set(bool(data.get("run_bin_update", True)))
         self.run_build_after_cleanup.set(bool(data.get("run_build_after_cleanup", True)))
         self.music_enabled.set(bool(data.get("music_enabled", True)))
+        self.custom_update_bat_path.set(str(data.get("custom_update_bat_path", "")))
+        self.custom_build_bat_path.set(str(data.get("custom_build_bat_path", "")))
         self.enable_schedule.set(bool(data.get("enable_schedule", False)))
         self.schedule_time.set(str(data.get("schedule_time", "09:00")))
         self.last_bin_update_date = str(data.get("last_bin_update_date", ""))
@@ -197,13 +237,59 @@ class SvnAutoTool:
             "folder_groups": self.folder_groups,
             "run_bin_update": self.run_bin_update.get(),
             "run_build_after_cleanup": self.run_build_after_cleanup.get(),
-            "music_enabled": self.music_enabled.get(),
+            "music_enabled": True if self.music_paused_after_task else self.music_enabled.get(),
+            "custom_update_bat_path": self.custom_update_bat_path.get().strip(),
+            "custom_build_bat_path": self.custom_build_bat_path.get().strip(),
             "enable_schedule": self.enable_schedule.get(),
             "schedule_time": self.schedule_time.get().strip(),
             "last_bin_update_date": self.last_bin_update_date,
         }
         CONFIG_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         self._refresh_next_run_text()
+
+    def _choose_update_bat_path(self) -> None:
+        self._choose_script_path(self.custom_update_bat_path, "选择 Update.bat")
+
+    def _choose_build_bat_path(self) -> None:
+        self._choose_script_path(self.custom_build_bat_path, "选择 Build.bat")
+
+    def _clear_update_bat_path(self) -> None:
+        self.custom_update_bat_path.set("")
+        self._save_config()
+
+    def _clear_build_bat_path(self) -> None:
+        self.custom_build_bat_path.set("")
+        self._save_config()
+
+    def _choose_script_path(self, target: StringVar, title: str) -> None:
+        file_path = filedialog.askopenfilename(
+            title=title,
+            filetypes=(("Batch 文件", "*.bat"), ("所有文件", "*.*")),
+        )
+        if not file_path:
+            return
+        target.set(self._script_path_for_config(Path(file_path)))
+        self._save_config()
+
+    def _script_path_for_config(self, script_path: Path) -> str:
+        try:
+            script_resolved = script_path.resolve()
+        except OSError:
+            script_resolved = script_path
+        candidates = []
+        for folder_items in self.folder_groups.values():
+            for item in folder_items:
+                path_text = str(item.get("path", ""))
+                if path_text:
+                    candidates.append(Path(path_text))
+        candidates.sort(key=lambda path: len(str(path)), reverse=True)
+        for base in candidates:
+            try:
+                base_resolved = base.resolve()
+                return str(script_resolved.relative_to(base_resolved))
+            except (OSError, ValueError):
+                continue
+        return str(script_path)
 
     def _find_music_file(self) -> Path | None:
         for path in sorted(APP_DIR.iterdir()):
@@ -212,6 +298,8 @@ class SvnAutoTool:
         return None
 
     def _on_music_toggle(self) -> None:
+        self.music_fading = False
+        self.music_paused_after_task = False
         self._apply_music_setting()
         self._refresh_music_button()
         self._save_config()
@@ -220,9 +308,73 @@ class SvnAutoTool:
         if os.name != "nt":
             return
         if self.music_enabled.get() and self.music_file and self.music_file.exists():
-            winsound.PlaySound(str(self.music_file), winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_LOOP)
+            self._start_music()
         else:
-            winsound.PlaySound(None, 0)
+            self._stop_music()
+
+    def _start_music(self) -> None:
+        self._stop_music()
+        self.music_backend = ""
+        if self.music_file and self._mci_open_music(self.music_file):
+            self._mci_set_volume(1000)
+            if self._mci_command(f"play {self.music_alias} repeat"):
+                self.music_backend = "mci"
+                return
+            self._mci_command(f"close {self.music_alias}")
+        if self.music_file:
+            winsound.PlaySound(str(self.music_file), winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_LOOP)
+            self.music_backend = "winsound"
+
+    def _stop_music(self) -> None:
+        if os.name != "nt":
+            return
+        if self.music_backend == "mci":
+            self._mci_command(f"stop {self.music_alias}")
+            self._mci_command(f"close {self.music_alias}")
+        winsound.PlaySound(None, 0)
+        self.music_backend = ""
+
+    def _fade_out_music_after_tasks(self) -> None:
+        if os.name != "nt" or not self.music_enabled.get() or self.music_fading:
+            return
+        self.music_fading = True
+
+        def fade_worker() -> None:
+            if self.music_backend == "mci":
+                for volume in range(900, -1, -100):
+                    if not self.music_fading:
+                        return
+                    self._mci_set_volume(volume)
+                    time.sleep(0.12)
+            else:
+                time.sleep(0.6)
+            self._stop_music()
+
+            def mark_paused() -> None:
+                self.music_paused_after_task = True
+                self.music_enabled.set(False)
+                self.music_fading = False
+                self._refresh_music_button()
+                self._save_config()
+
+            self.root.after(0, mark_paused)
+
+        threading.Thread(target=fade_worker, daemon=True).start()
+
+    def _mci_open_music(self, music_file: Path) -> bool:
+        return self._mci_command(f'open "{music_file}" type waveaudio alias {self.music_alias}')
+
+    def _mci_set_volume(self, volume: int) -> bool:
+        volume = max(0, min(1000, volume))
+        return self._mci_command(f"setaudio {self.music_alias} volume to {volume}")
+
+    @staticmethod
+    def _mci_command(command: str) -> bool:
+        if os.name != "nt":
+            return False
+        buffer = ctypes.create_unicode_buffer(255)
+        result = ctypes.windll.winmm.mciSendStringW(command, buffer, 254, 0)
+        return result == 0
 
     def _refresh_music_button(self) -> None:
         if not hasattr(self, "music_button"):
@@ -471,18 +623,46 @@ class SvnAutoTool:
         bin_update_attempted = False
         bin_update_all_success = True
         try:
+            valid_folders: list[Path] = []
             for folder_text in enabled_folders:
                 folder = Path(folder_text)
                 if not folder.exists() or not folder.is_dir():
                     self._record(folder_text, "检查文件夹", "失败", "文件夹不存在")
                     continue
-                attempted, success = self._run_for_folder(folder, run_daily_bin_update)
-                bin_update_attempted = bin_update_attempted or attempted
-                bin_update_all_success = bin_update_all_success and success
+                valid_folders.append(folder)
+            if valid_folders:
+                workers = min(len(valid_folders), MAX_PARALLEL_FOLDERS)
+                self._log(f"并行执行 {len(valid_folders)} 个文件夹，最多同时 {workers} 个；每个 update 启动错开 {FOLDER_START_STAGGER_SECONDS:.0f}s")
+                with ThreadPoolExecutor(max_workers=workers) as executor:
+                    futures = {
+                        executor.submit(self._run_for_folder_with_stagger, folder, run_daily_bin_update, index): folder
+                        for index, folder in enumerate(valid_folders)
+                    }
+                    for future in as_completed(futures):
+                        folder = futures[future]
+                        try:
+                            attempted, success = future.result()
+                        except Exception as exc:
+                            self._record(str(folder), "执行文件夹任务", "失败", str(exc))
+                            attempted, success = False, False
+                        bin_update_attempted = bin_update_attempted or attempted
+                        bin_update_all_success = bin_update_all_success and success
             if run_daily_bin_update and bin_update_attempted and bin_update_all_success:
                 self.last_bin_update_date = today
         finally:
             self.log_queue.put(("done", trigger))
+
+    def _run_for_folder_with_stagger(
+        self,
+        folder: Path,
+        run_daily_bin_update: bool,
+        index: int,
+    ) -> tuple[bool, bool]:
+        delay = index * FOLDER_START_STAGGER_SECONDS
+        if delay > 0:
+            self._log(f"[等待] {folder} | 延迟 {delay:.0f}s 后启动 update")
+            time.sleep(delay)
+        return self._run_for_folder(folder, run_daily_bin_update)
 
     def _run_for_folder(self, folder: Path, run_daily_bin_update: bool) -> tuple[bool, bool]:
         bin_update_attempted = False
@@ -490,27 +670,68 @@ class SvnAutoTool:
         update_ok = self._run_command(folder, self._svn_update_command(folder), "svn update", auto_cleanup=True)
 
         if update_ok and run_daily_bin_update:
-            for bin_folder in self._find_bin_folders(folder):
-                windows_no_editor = bin_folder / "WindowsNoEditor"
-                update_bat = windows_no_editor / "Update.bat"
-                if update_bat.exists():
+            update_scripts = self._find_update_bat_scripts(folder)
+            if update_scripts:
+                for update_bat in update_scripts:
                     bin_update_attempted = True
-                    bin_update_success = self._run_command(windows_no_editor, self._bat_command(update_bat), "Update.bat") and bin_update_success
-                else:
+                    bin_update_success = self._run_command(update_bat.parent, self._bat_command(update_bat), "Update.bat") and bin_update_success
+            elif self.custom_update_bat_path.get().strip():
+                bin_update_attempted = True
+                bin_update_success = False
+                self._record(str(folder), "Update.bat", "跳过", f"未找到自定义路径：{self.custom_update_bat_path.get().strip()}")
+            else:
+                for bin_folder in self._find_bin_folders(folder):
                     bin_update_attempted = True
                     bin_update_success = False
-                    self._record(str(windows_no_editor), "Update.bat", "跳过", "未找到 WindowsNoEditor\\Update.bat")
+                    self._record(str(bin_folder / "WindowsNoEditor"), "Update.bat", "跳过", "未找到 WindowsNoEditor\\Update.bat")
 
         cleanup_ok = self._run_command(folder, self._svn_cleanup_command(folder), "svn cleanup")
 
         if cleanup_ok and self.run_build_after_cleanup.get():
-            for res_folder in self._find_res_folders(folder):
-                build_bat = res_folder / "Build.bat"
-                if build_bat.exists():
-                    self._run_command(res_folder, self._bat_command(build_bat), "Build.bat", visible_console=True)
-                else:
+            build_scripts = self._find_build_bat_scripts(folder)
+            if build_scripts:
+                for build_bat in build_scripts:
+                    self._run_command(build_bat.parent, self._bat_command(build_bat), "Build.bat", visible_console=True)
+            elif self.custom_build_bat_path.get().strip():
+                self._record(str(folder), "Build.bat", "跳过", f"未找到自定义路径：{self.custom_build_bat_path.get().strip()}")
+            else:
+                for res_folder in self._find_res_folders(folder):
                     self._record(str(res_folder), "Build.bat", "跳过", "未找到 Build.bat")
         return bin_update_attempted, bin_update_success
+
+    def _find_update_bat_scripts(self, folder: Path) -> list[Path]:
+        custom = self._resolve_custom_script(folder, self.custom_update_bat_path.get())
+        if custom:
+            return [custom]
+        candidates = []
+        for bin_folder in self._find_bin_folders(folder):
+            update_bat = bin_folder / "WindowsNoEditor" / "Update.bat"
+            if update_bat.exists():
+                candidates.append(update_bat)
+        return self._dedupe_paths(candidates)
+
+    def _find_build_bat_scripts(self, folder: Path) -> list[Path]:
+        custom = self._resolve_custom_script(folder, self.custom_build_bat_path.get())
+        if custom:
+            return [custom]
+        candidates = []
+        for res_folder in self._find_res_folders(folder):
+            build_bat = res_folder / "Build.bat"
+            if build_bat.exists():
+                candidates.append(build_bat)
+        return self._dedupe_paths(candidates)
+
+    @staticmethod
+    def _resolve_custom_script(folder: Path, script_path_text: str) -> Path | None:
+        script_path_text = script_path_text.strip()
+        if not script_path_text:
+            return None
+        script_path = Path(script_path_text)
+        if not script_path.is_absolute():
+            script_path = folder / script_path
+        if script_path.exists() and script_path.is_file():
+            return script_path
+        return None
 
     def _find_bin_folders(self, folder: Path) -> list[Path]:
         candidates: list[Path] = []
@@ -543,7 +764,7 @@ class SvnAutoTool:
 
     @staticmethod
     def _bat_command(bat_path: Path) -> list[str]:
-        return ["cmd", "/c", str(bat_path)]
+        return ["cmd", "/d", "/c", f'call "{bat_path}" & exit']
 
     @staticmethod
     def _find_tortoise_proc() -> str | None:
@@ -644,6 +865,8 @@ class SvnAutoTool:
         return False
 
     def _run_visible_console_command(self, cwd: Path, command: list[str]) -> tuple[int, str, str]:
+        console_title = f"SVNmate Build {int(time.time() * 1000)}"
+        command = self._add_console_title(command, console_title)
         process = subprocess.Popen(
             command,
             cwd=str(cwd),
@@ -659,11 +882,20 @@ class SvnAutoTool:
         while process.poll() is None:
             now = time.time()
             if now - started_at > 5 and now - last_enter_at > 5:
-                self._press_enter_for_process_window(process.pid)
+                self._press_enter_for_process_window(process.pid, console_title)
                 last_enter_at = now
             time.sleep(0.5)
         return_code = process.returncode
+        self._close_process_windows(process.pid, console_title)
         return return_code, "", ""
+
+    @staticmethod
+    def _add_console_title(command: list[str], title: str) -> list[str]:
+        if len(command) >= 4 and command[0].lower() == "cmd" and command[2].lower() == "/c":
+            titled = command.copy()
+            titled[3] = f'title {title} & {command[3]}'
+            return titled
+        return command
 
     def _run_tortoise_command(self, cwd: Path, command: list[str]) -> tuple[int, str, str]:
         process = subprocess.Popen(
@@ -783,7 +1015,7 @@ class SvnAutoTool:
         user32.EnumWindows(enum_windows_proc(enum_window_callback), 0)
         return clicked
 
-    def _press_enter_for_process_window(self, process_id: int) -> bool:
+    def _press_enter_for_process_window(self, process_id: int, title_keyword: str = "") -> bool:
         if os.name != "nt":
             return False
 
@@ -794,11 +1026,19 @@ class SvnAutoTool:
         wm_keyup = 0x0101
         vk_return = 0x0D
 
+        def get_window_text(hwnd: int) -> str:
+            length = user32.GetWindowTextLengthW(hwnd)
+            buffer = ctypes.create_unicode_buffer(length + 1)
+            user32.GetWindowTextW(hwnd, buffer, length + 1)
+            return buffer.value.strip()
+
         def enum_window_callback(hwnd: int, _lparam: int) -> bool:
             nonlocal sent
             window_pid = wintypes.DWORD()
             user32.GetWindowThreadProcessId(hwnd, ctypes.byref(window_pid))
-            if window_pid.value == process_id and user32.IsWindowVisible(hwnd):
+            title = get_window_text(hwnd)
+            title_matches = bool(title_keyword and title_keyword.lower() in title.lower())
+            if user32.IsWindowVisible(hwnd) and (window_pid.value == process_id or title_matches):
                 user32.PostMessageW(hwnd, wm_keydown, vk_return, 0)
                 user32.PostMessageW(hwnd, wm_keyup, vk_return, 0)
                 sent = True
@@ -806,6 +1046,35 @@ class SvnAutoTool:
 
         user32.EnumWindows(enum_windows_proc(enum_window_callback), 0)
         return sent
+
+    def _close_process_windows(self, process_id: int, title_keyword: str = "") -> bool:
+        if os.name != "nt":
+            return False
+
+        closed = False
+        user32 = ctypes.windll.user32
+        enum_windows_proc = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+        wm_close = 0x0010
+
+        def get_window_text(hwnd: int) -> str:
+            length = user32.GetWindowTextLengthW(hwnd)
+            buffer = ctypes.create_unicode_buffer(length + 1)
+            user32.GetWindowTextW(hwnd, buffer, length + 1)
+            return buffer.value.strip()
+
+        def enum_window_callback(hwnd: int, _lparam: int) -> bool:
+            nonlocal closed
+            window_pid = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(window_pid))
+            title = get_window_text(hwnd)
+            title_matches = bool(title_keyword and title_keyword.lower() in title.lower())
+            if user32.IsWindowVisible(hwnd) and (window_pid.value == process_id or title_matches):
+                user32.PostMessageW(hwnd, wm_close, 0, 0)
+                closed = True
+            return True
+
+        user32.EnumWindows(enum_windows_proc(enum_window_callback), 0)
+        return closed
 
     @staticmethod
     def _needs_svn_cleanup(message: str) -> bool:
@@ -884,6 +1153,7 @@ class SvnAutoTool:
                     self._log(f"========== {payload}结束：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ==========")
                     self._log("全部任务已完成")
                     self.live_log.configure(style="Completed.LiveLog.Treeview")
+                    self._fade_out_music_after_tasks()
         except queue.Empty:
             pass
         self.root.after(200, self._poll_log_queue)
@@ -899,8 +1169,7 @@ class SvnAutoTool:
         if self.running and not messagebox.askyesno("任务仍在执行", "任务还在执行中，确定要关闭工具吗？"):
             return
         self._save_config()
-        if os.name == "nt":
-            winsound.PlaySound(None, 0)
+        self._stop_music()
         self.root.destroy()
 
 

@@ -6,11 +6,13 @@
 
 - 管理两栏 SVN 文件夹列表，只执行已勾选项目
 - 自动执行 SVN update 和 cleanup
+- 不同文件夹可并行执行，update 启动错开约 1 秒
 - 支持每日更新 `bin\WindowsNoEditor\Update.bat`
 - 支持 cleanup 后自动运行 `res\Build.bat`
+- 支持手动选择 `Update.bat` 和 `Build.bat` 的位置
 - 支持每天定时执行
 - 实时输出执行日志，任务完成后变为绿色提示
-- 右上角音乐开关，默认播放同目录 `.wav` 音乐
+- 右上角音乐开关，默认播放同目录 `.wav` 音乐，任务完成后淡出暂停
 - 19:00 后自动切换暗黑主题，白天恢复浅色主题
 
 ## 使用
