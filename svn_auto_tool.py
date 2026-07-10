@@ -1,5 +1,4 @@
 import ctypes
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import os
 import queue
@@ -28,8 +27,6 @@ CONFIG_PATH = APP_DIR / "svn_auto_tool_config.json"
 LOG_DIR = APP_DIR / "logs"
 LOG_RETENTION_DAYS = 7
 MUSIC_EXTENSIONS = (".wav",)
-MAX_PARALLEL_FOLDERS = 4
-FOLDER_START_STAGGER_SECONDS = 1.0
 
 
 class SvnAutoTool:
@@ -113,31 +110,22 @@ class SvnAutoTool:
 
         options = ttk.LabelFrame(settings, text="执行选项", padding=10)
         options.pack(side=LEFT, fill=BOTH, expand=True, padx=(0, 8))
-        ttk.Checkbutton(
+        self._build_option_script_row(
             options,
+            self.run_bin_update,
             text="每日更新主干Bin包",
-            variable=self.run_bin_update,
-            command=self._save_config,
-        ).pack(anchor="w")
-        ttk.Checkbutton(
-            options,
-            text="Clean up完成后，自动运行res目录Build.bat",
-            variable=self.run_build_after_cleanup,
-            command=self._save_config,
-        ).pack(anchor="w", pady=(6, 0))
-        self._build_script_path_row(
-            options,
-            "Update.bat 位置",
-            self.custom_update_bat_path,
-            self._choose_update_bat_path,
-            self._clear_update_bat_path,
+            choose_text="Update位置",
+            choose_command=self._choose_update_bat_path,
+            clear_command=self._clear_update_bat_path,
         )
-        self._build_script_path_row(
+        self._build_option_script_row(
             options,
-            "Build.bat 位置",
-            self.custom_build_bat_path,
-            self._choose_build_bat_path,
-            self._clear_build_bat_path,
+            self.run_build_after_cleanup,
+            text="Clean up完成后，自动运行res目录Build.bat",
+            choose_text="Build位置",
+            choose_command=self._choose_build_bat_path,
+            clear_command=self._clear_build_bat_path,
+            pady=(6, 0),
         )
         ttk.Label(options, text="说明：脚本位置留空时使用默认规则；svn update 完成后仍会自动执行 svn cleanup。").pack(anchor="w", pady=(6, 0))
 
@@ -199,20 +187,26 @@ class SvnAutoTool:
         tree.bind("<space>", lambda _event, key=group_key: self._toggle_selected_folder(key))
         self.folder_trees[group_key] = tree
 
-    def _build_script_path_row(
+    def _build_option_script_row(
         self,
         parent: ttk.Frame,
-        label: str,
-        value: StringVar,
+        variable: BooleanVar,
+        text: str,
+        choose_text: str,
         choose_command: object,
         clear_command: object,
+        pady: tuple[int, int] = (0, 0),
     ) -> None:
         row = ttk.Frame(parent)
-        row.pack(fill=X, pady=(8, 0))
-        ttk.Button(row, text=label, command=choose_command).pack(side=LEFT)
-        entry = ttk.Entry(row, textvariable=value, state="readonly")
-        entry.pack(side=LEFT, fill=X, expand=True, padx=(8, 6))
-        ttk.Button(row, text="默认", width=6, command=clear_command).pack(side=LEFT)
+        row.pack(fill=X, pady=pady)
+        ttk.Button(row, text=choose_text, width=10, command=choose_command).pack(side=LEFT)
+        ttk.Button(row, text="默认", width=6, command=clear_command).pack(side=LEFT, padx=(6, 8))
+        ttk.Checkbutton(
+            row,
+            text=text,
+            variable=variable,
+            command=self._save_config,
+        ).pack(side=LEFT, anchor="w")
 
     def _load_config(self) -> None:
         if not CONFIG_PATH.exists():
@@ -623,46 +617,18 @@ class SvnAutoTool:
         bin_update_attempted = False
         bin_update_all_success = True
         try:
-            valid_folders: list[Path] = []
             for folder_text in enabled_folders:
                 folder = Path(folder_text)
                 if not folder.exists() or not folder.is_dir():
                     self._record(folder_text, "检查文件夹", "失败", "文件夹不存在")
                     continue
-                valid_folders.append(folder)
-            if valid_folders:
-                workers = min(len(valid_folders), MAX_PARALLEL_FOLDERS)
-                self._log(f"并行执行 {len(valid_folders)} 个文件夹，最多同时 {workers} 个；每个 update 启动错开 {FOLDER_START_STAGGER_SECONDS:.0f}s")
-                with ThreadPoolExecutor(max_workers=workers) as executor:
-                    futures = {
-                        executor.submit(self._run_for_folder_with_stagger, folder, run_daily_bin_update, index): folder
-                        for index, folder in enumerate(valid_folders)
-                    }
-                    for future in as_completed(futures):
-                        folder = futures[future]
-                        try:
-                            attempted, success = future.result()
-                        except Exception as exc:
-                            self._record(str(folder), "执行文件夹任务", "失败", str(exc))
-                            attempted, success = False, False
-                        bin_update_attempted = bin_update_attempted or attempted
-                        bin_update_all_success = bin_update_all_success and success
+                attempted, success = self._run_for_folder(folder, run_daily_bin_update)
+                bin_update_attempted = bin_update_attempted or attempted
+                bin_update_all_success = bin_update_all_success and success
             if run_daily_bin_update and bin_update_attempted and bin_update_all_success:
                 self.last_bin_update_date = today
         finally:
             self.log_queue.put(("done", trigger))
-
-    def _run_for_folder_with_stagger(
-        self,
-        folder: Path,
-        run_daily_bin_update: bool,
-        index: int,
-    ) -> tuple[bool, bool]:
-        delay = index * FOLDER_START_STAGGER_SECONDS
-        if delay > 0:
-            self._log(f"[等待] {folder} | 延迟 {delay:.0f}s 后启动 update")
-            time.sleep(delay)
-        return self._run_for_folder(folder, run_daily_bin_update)
 
     def _run_for_folder(self, folder: Path, run_daily_bin_update: bool) -> tuple[bool, bool]:
         bin_update_attempted = False

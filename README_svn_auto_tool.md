@@ -62,9 +62,9 @@ dist\SVNAutoTool.exe
 
 ## 执行流程
 
-不同勾选文件夹会并行执行，最多同时处理 4 个文件夹；每个文件夹的 `svn update` 启动会错开约 1 秒，减少同时抢占 SVN 工作副本的概率。
+工具会按勾选顺序逐个处理文件夹，避免多个 SVN 工作副本操作同时抢锁。
 
-单个文件夹内部仍然按以下顺序执行：
+每个文件夹内部按以下顺序执行：
 
 1. `svn update`
 2. 如果开启“每日更新主干Bin包”，并且当天还没有成功执行过，则识别 `bin\\WindowsNoEditor` 并在 `bin\\WindowsNoEditor` 文件夹内执行 `Update.bat`
