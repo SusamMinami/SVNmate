@@ -73,7 +73,7 @@ dist\SVNAutoTool.exe
 
 如果 `svn update` 时 SVN 提示需要先执行 cleanup，工具会自动执行一次 `svn cleanup`，然后重试一次 `svn update`。
 
-执行 `Build.bat` 时会显示原始 CMD 窗口；工具会自动给窗口发送 Enter 来通过脚本里的 `pause`，Build 结束后窗口会关闭。全部任务完成后，工具状态会显示“已完成”，实时输出区域会变成绿色。
+执行 `Update.bat` 和 `Build.bat` 时会显示原始 CMD 窗口；工具会自动给窗口发送 Enter 来通过脚本里的 `pause`。脚本成功结束后窗口会关闭，如果脚本返回错误，窗口会保留 120 秒方便查看错误。全部任务完成后，工具状态会显示“已完成”，实时输出区域会变成绿色。
 
 ## 自定义脚本位置
 

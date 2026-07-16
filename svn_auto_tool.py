@@ -640,7 +640,12 @@ class SvnAutoTool:
             if update_scripts:
                 for update_bat in update_scripts:
                     bin_update_attempted = True
-                    bin_update_success = self._run_command(update_bat.parent, self._bat_command(update_bat), "Update.bat") and bin_update_success
+                    bin_update_success = self._run_command(
+                        update_bat.parent,
+                        self._bat_command(update_bat),
+                        "Update.bat",
+                        visible_console=True,
+                    ) and bin_update_success
             elif self.custom_update_bat_path.get().strip():
                 bin_update_attempted = True
                 bin_update_success = False
@@ -730,7 +735,7 @@ class SvnAutoTool:
 
     @staticmethod
     def _bat_command(bat_path: Path) -> list[str]:
-        return ["cmd", "/d", "/c", f'call "{bat_path}" & exit']
+        return ["cmd", "/v:on", "/d", "/c", f'call "{bat_path}"']
 
     @staticmethod
     def _find_tortoise_proc() -> str | None:
@@ -857,11 +862,26 @@ class SvnAutoTool:
 
     @staticmethod
     def _add_console_title(command: list[str], title: str) -> list[str]:
-        if len(command) >= 4 and command[0].lower() == "cmd" and command[2].lower() == "/c":
-            titled = command.copy()
-            titled[3] = f'title {title} & {command[3]}'
-            return titled
-        return command
+        normalized = [part.lower() for part in command]
+        if not normalized or normalized[0] != "cmd" or "/c" not in normalized:
+            return command
+        command_index = normalized.index("/c") + 1
+        if command_index >= len(command):
+            return command
+        body = command[command_index]
+        failure_hold = (
+            'set "SVNMATE_RC=!ERRORLEVEL!" & '
+            'if not "!SVNMATE_RC!"=="0" ('
+            "echo. & "
+            "echo [SVNmate] BAT 执行返回码：!SVNMATE_RC! & "
+            "echo [SVNmate] 窗口将在 120 秒后自动关闭，也可以手动关闭。 & "
+            "timeout /t 120 /nobreak >nul"
+            ') & '
+            "exit /b !SVNMATE_RC!"
+        )
+        titled = command.copy()
+        titled[command_index] = f"title {title} & {body} & {failure_hold}"
+        return titled
 
     def _run_tortoise_command(self, cwd: Path, command: list[str]) -> tuple[int, str, str]:
         process = subprocess.Popen(
