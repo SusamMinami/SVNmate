@@ -7,6 +7,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 import urllib.request
 import webbrowser
 from datetime import datetime, timedelta
@@ -28,8 +29,9 @@ CONFIG_PATH = APP_DIR / "svn_auto_tool_config.json"
 LOG_DIR = APP_DIR / "logs"
 LOG_RETENTION_DAYS = 7
 MUSIC_EXTENSIONS = (".mp3", ".wav")
-APP_VERSION = "v1.1.3"
-LATEST_RELEASE_API = "https://api.github.com/repos/SusamMinami/SVNmate/releases/latest"
+APP_VERSION = "v1.1.4"
+LATEST_RELEASE_URL = "https://github.com/SusamMinami/SVNmate/releases/latest"
+RELEASE_DOWNLOAD_URL = "https://github.com/SusamMinami/SVNmate/releases/download/{tag}/{asset}"
 RELEASE_ASSET_NAME = "一键更新SVN.zip"
 
 
@@ -166,7 +168,7 @@ class SvnAutoTool:
         self.live_log.pack(fill=BOTH, expand=True)
 
         self.update_dot = ttk.Label(main, text="○", style="UpdateDot.TLabel", cursor="hand2")
-        self.update_dot.place(relx=1.0, rely=1.0, x=-96, y=-1, anchor="se")
+        self.update_dot.place(relx=1.0, rely=1.0, x=-90, y=-3, anchor="se")
         self.update_dot.bind("<Button-1>", lambda _event: self._on_update_dot_clicked())
         self.signature_label = ttk.Label(main, text="SusamMinami", style="Signature.TLabel")
         self.signature_label.place(relx=1.0, rely=1.0, x=-6, y=-2, anchor="se")
@@ -445,8 +447,8 @@ class SvnAutoTool:
         self.ui_style.configure("TLabelframe", background=colors["panel"], foreground=colors["text"])
         self.ui_style.configure("TLabelframe.Label", background=colors["panel"], foreground=colors["accent"])
         self.ui_style.configure("Signature.TLabel", background=colors["panel"], foreground=colors["muted"], font=("Segoe UI", 9, "italic"))
-        self.ui_style.configure("UpdateDot.TLabel", background=colors["panel"], foreground=colors["muted"], font=("Segoe UI", 15, "bold"))
-        self.ui_style.configure("UpdateDotReady.TLabel", background=colors["panel"], foreground="#D93636", font=("Segoe UI", 15, "bold"))
+        self.ui_style.configure("UpdateDot.TLabel", background=colors["panel"], foreground=colors["muted"], font=("Segoe UI", 11, "bold"))
+        self.ui_style.configure("UpdateDotReady.TLabel", background=colors["panel"], foreground="#D93636", font=("Segoe UI", 11, "bold"))
         self.ui_style.configure("LiveLog.Treeview", background=colors["tree"], fieldbackground=colors["tree"], foreground=colors["tree_text"])
         self.ui_style.configure("Completed.LiveLog.Treeview", background=colors["completed"], fieldbackground=colors["completed"], foreground=colors["tree_text"])
         self.ui_style.map("Treeview", background=[("selected", colors["selected"])], foreground=[("selected", "white")])
@@ -1276,20 +1278,18 @@ Start-Process -FilePath (Join-Path $appDir 'SVNAutoTool.exe')
 
     @staticmethod
     def _fetch_latest_release() -> dict[str, str] | None:
-        request = urllib.request.Request(LATEST_RELEASE_API, headers={"User-Agent": "SVNmate-Updater"})
+        request = urllib.request.Request(LATEST_RELEASE_URL, headers={"User-Agent": "SVNmate-Updater"})
         with urllib.request.urlopen(request, timeout=10) as response:
-            data = json.loads(response.read().decode("utf-8"))
-        asset_url = ""
-        for asset in data.get("assets", []):
-            if asset.get("name") == RELEASE_ASSET_NAME:
-                asset_url = str(asset.get("browser_download_url", ""))
-                break
-        if not asset_url:
+            latest_url = response.geturl()
+        marker = "/releases/tag/"
+        if marker not in latest_url:
             return None
+        tag_name = latest_url.rstrip("/").split(marker, 1)[1]
+        encoded_asset = urllib.parse.quote(RELEASE_ASSET_NAME)
         return {
-            "tag_name": str(data.get("tag_name", "")),
-            "html_url": str(data.get("html_url", "")),
-            "asset_url": asset_url,
+            "tag_name": tag_name,
+            "html_url": latest_url,
+            "asset_url": RELEASE_DOWNLOAD_URL.format(tag=urllib.parse.quote(tag_name), asset=encoded_asset),
         }
 
     @staticmethod
