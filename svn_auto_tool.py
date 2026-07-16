@@ -7,6 +7,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.request
 import webbrowser
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -26,7 +27,10 @@ else:
 CONFIG_PATH = APP_DIR / "svn_auto_tool_config.json"
 LOG_DIR = APP_DIR / "logs"
 LOG_RETENTION_DAYS = 7
-MUSIC_EXTENSIONS = (".wav",)
+MUSIC_EXTENSIONS = (".mp3", ".wav")
+APP_VERSION = "v1.1.3"
+LATEST_RELEASE_API = "https://api.github.com/repos/SusamMinami/SVNmate/releases/latest"
+RELEASE_ASSET_NAME = "一键更新SVN.zip"
 
 
 class SvnAutoTool:
@@ -59,6 +63,8 @@ class SvnAutoTool:
         self.music_backend = ""
         self.music_fading = False
         self.music_paused_after_task = False
+        self.update_info: dict[str, str] | None = None
+        self.update_state = "checking"
         self.current_theme = ""
 
         self._cleanup_old_logs()
@@ -71,6 +77,7 @@ class SvnAutoTool:
         self._refresh_next_run_text()
         self._poll_log_queue()
         self._schedule_tick()
+        self.root.after(2000, self._check_for_updates_async)
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -158,6 +165,9 @@ class SvnAutoTool:
         self.live_log.column("line", width=880, anchor="w")
         self.live_log.pack(fill=BOTH, expand=True)
 
+        self.update_dot = ttk.Label(main, text="○", style="UpdateDot.TLabel", cursor="hand2")
+        self.update_dot.place(relx=1.0, rely=1.0, x=-96, y=-1, anchor="se")
+        self.update_dot.bind("<Button-1>", lambda _event: self._on_update_dot_clicked())
         self.signature_label = ttk.Label(main, text="SusamMinami", style="Signature.TLabel")
         self.signature_label.place(relx=1.0, rely=1.0, x=-6, y=-2, anchor="se")
 
@@ -315,7 +325,7 @@ class SvnAutoTool:
                 self.music_backend = "mci"
                 return
             self._mci_command(f"close {self.music_alias}")
-        if self.music_file:
+        if self.music_file and self.music_file.suffix.lower() == ".wav":
             winsound.PlaySound(str(self.music_file), winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_LOOP)
             self.music_backend = "winsound"
 
@@ -356,7 +366,8 @@ class SvnAutoTool:
         threading.Thread(target=fade_worker, daemon=True).start()
 
     def _mci_open_music(self, music_file: Path) -> bool:
-        return self._mci_command(f'open "{music_file}" type waveaudio alias {self.music_alias}')
+        media_type = "mpegvideo" if music_file.suffix.lower() == ".mp3" else "waveaudio"
+        return self._mci_command(f'open "{music_file}" type {media_type} alias {self.music_alias}')
 
     def _mci_set_volume(self, volume: int) -> bool:
         volume = max(0, min(1000, volume))
@@ -434,9 +445,12 @@ class SvnAutoTool:
         self.ui_style.configure("TLabelframe", background=colors["panel"], foreground=colors["text"])
         self.ui_style.configure("TLabelframe.Label", background=colors["panel"], foreground=colors["accent"])
         self.ui_style.configure("Signature.TLabel", background=colors["panel"], foreground=colors["muted"], font=("Segoe UI", 9, "italic"))
+        self.ui_style.configure("UpdateDot.TLabel", background=colors["panel"], foreground=colors["muted"], font=("Segoe UI", 15, "bold"))
+        self.ui_style.configure("UpdateDotReady.TLabel", background=colors["panel"], foreground="#D93636", font=("Segoe UI", 15, "bold"))
         self.ui_style.configure("LiveLog.Treeview", background=colors["tree"], fieldbackground=colors["tree"], foreground=colors["tree_text"])
         self.ui_style.configure("Completed.LiveLog.Treeview", background=colors["completed"], fieldbackground=colors["completed"], foreground=colors["tree_text"])
         self.ui_style.map("Treeview", background=[("selected", colors["selected"])], foreground=[("selected", "white")])
+        self._refresh_update_dot()
         if self.status_text.get() == "已完成":
             self.live_log.configure(style="Completed.LiveLog.Treeview")
         else:
@@ -874,8 +888,8 @@ class SvnAutoTool:
             'if not "!SVNMATE_RC!"=="0" ('
             "echo. & "
             "echo [SVNmate] BAT 执行返回码：!SVNMATE_RC! & "
-            "echo [SVNmate] 窗口将在 120 秒后自动关闭，也可以手动关闭。 & "
-            "timeout /t 120 /nobreak >nul"
+            "echo [SVNmate] 窗口将在 5 秒后自动关闭，也可以手动关闭。 & "
+            "timeout /t 5 /nobreak >nul"
             ') & '
             "exit /b !SVNMATE_RC!"
         )
@@ -1150,6 +1164,150 @@ class SvnAutoTool:
 
     def _open_user_guide(self) -> None:
         webbrowser.open("https://bytedance.larkoffice.com/docx/BdDod9tjIo4rPbx2oWHchVRUnwh")
+
+    def _check_for_updates_async(self) -> None:
+        self.update_state = "checking"
+        self._refresh_update_dot()
+        threading.Thread(target=self._check_for_updates_worker, daemon=True).start()
+
+    def _check_for_updates_worker(self) -> None:
+        try:
+            info = self._fetch_latest_release()
+            has_update = bool(info and self._is_newer_version(info.get("tag_name", ""), APP_VERSION))
+        except Exception as exc:
+            self._log(f"检查更新失败：{exc}")
+            self.root.after(0, lambda: self._set_update_state("idle", None))
+            return
+        self.root.after(0, lambda: self._set_update_state("ready" if has_update else "idle", info if has_update else None))
+
+    def _set_update_state(self, state: str, info: dict[str, str] | None) -> None:
+        self.update_state = state
+        self.update_info = info
+        self._refresh_update_dot()
+        if state == "ready" and info:
+            self._log(f"发现新版本：{info.get('tag_name', '')}")
+
+    def _refresh_update_dot(self) -> None:
+        if not hasattr(self, "update_dot"):
+            return
+        if self.update_state == "ready":
+            self.update_dot.configure(text="●", style="UpdateDotReady.TLabel")
+        elif self.update_state in {"checking", "downloading"}:
+            self.update_dot.configure(text="◌", style="UpdateDot.TLabel")
+        else:
+            self.update_dot.configure(text="○", style="UpdateDot.TLabel")
+
+    def _on_update_dot_clicked(self) -> None:
+        if self.update_state == "checking":
+            messagebox.showinfo("检查更新", "正在检查更新，请稍后。")
+            return
+        if self.update_state == "downloading":
+            messagebox.showinfo("正在更新", "正在下载更新包，请稍后。")
+            return
+        if self.update_state != "ready" or not self.update_info:
+            self._check_for_updates_async()
+            messagebox.showinfo("检查更新", "当前未发现新版本，已重新检查。")
+            return
+        tag = self.update_info.get("tag_name", "")
+        if not messagebox.askyesno("发现新版本", f"发现 {tag}，是否立即下载并更新？"):
+            return
+        self.update_state = "downloading"
+        self._refresh_update_dot()
+        threading.Thread(target=self._download_update_worker, args=(self.update_info,), daemon=True).start()
+
+    def _download_update_worker(self, info: dict[str, str]) -> None:
+        try:
+            asset_url = info["asset_url"]
+            update_dir = APP_DIR / "_updates"
+            update_dir.mkdir(parents=True, exist_ok=True)
+            zip_path = update_dir / RELEASE_ASSET_NAME
+            request = urllib.request.Request(asset_url, headers={"User-Agent": "SVNmate-Updater"})
+            with urllib.request.urlopen(request, timeout=120) as response, zip_path.open("wb") as fp:
+                shutil.copyfileobj(response, fp)
+            self.root.after(0, lambda: self._confirm_apply_update(zip_path, info.get("tag_name", "")))
+        except Exception as exc:
+            self.root.after(0, lambda: self._update_download_failed(str(exc)))
+
+    def _confirm_apply_update(self, zip_path: Path, tag: str) -> None:
+        self.update_state = "ready"
+        self._refresh_update_dot()
+        if not messagebox.askyesno("更新已下载", f"{tag} 已下载完成。是否现在重启并应用更新？"):
+            os.startfile(str(zip_path.parent))
+            return
+        self._launch_update_installer(zip_path)
+        self._stop_music()
+        self.root.destroy()
+
+    def _update_download_failed(self, message: str) -> None:
+        self.update_state = "ready" if self.update_info else "idle"
+        self._refresh_update_dot()
+        messagebox.showerror("更新失败", f"下载更新失败：{message}")
+
+    def _launch_update_installer(self, zip_path: Path) -> None:
+        update_dir = zip_path.parent
+        script_path = update_dir / "apply_update.ps1"
+        script = f"""
+$ErrorActionPreference = 'Stop'
+$pidToWait = {os.getpid()}
+$appDir = {json.dumps(str(APP_DIR))}
+$zipPath = {json.dumps(str(zip_path))}
+$extractDir = Join-Path (Split-Path -Parent $zipPath) 'extract'
+while (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue) {{
+    Start-Sleep -Milliseconds 500
+}}
+if (Test-Path $extractDir) {{ Remove-Item $extractDir -Recurse -Force }}
+Expand-Archive -LiteralPath $zipPath -DestinationPath $extractDir -Force
+$payload = Join-Path $extractDir '一键更新SVN'
+Copy-Item -Path (Join-Path $payload '*') -Destination $appDir -Recurse -Force
+Start-Process -FilePath (Join-Path $appDir 'SVNAutoTool.exe')
+"""
+        script_path.write_text(script.strip(), encoding="utf-8")
+        subprocess.Popen(
+            [
+                "powershell",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(script_path),
+            ],
+            creationflags=self._visible_console_flags(),
+        )
+
+    @staticmethod
+    def _fetch_latest_release() -> dict[str, str] | None:
+        request = urllib.request.Request(LATEST_RELEASE_API, headers={"User-Agent": "SVNmate-Updater"})
+        with urllib.request.urlopen(request, timeout=10) as response:
+            data = json.loads(response.read().decode("utf-8"))
+        asset_url = ""
+        for asset in data.get("assets", []):
+            if asset.get("name") == RELEASE_ASSET_NAME:
+                asset_url = str(asset.get("browser_download_url", ""))
+                break
+        if not asset_url:
+            return None
+        return {
+            "tag_name": str(data.get("tag_name", "")),
+            "html_url": str(data.get("html_url", "")),
+            "asset_url": asset_url,
+        }
+
+    @staticmethod
+    def _is_newer_version(remote: str, local: str) -> bool:
+        def parse(version: str) -> tuple[int, ...]:
+            version = version.lower().lstrip("v")
+            parts = []
+            for part in version.split("."):
+                number = ""
+                for char in part:
+                    if char.isdigit():
+                        number += char
+                    else:
+                        break
+                parts.append(int(number or "0"))
+            return tuple(parts)
+
+        return parse(remote) > parse(local)
 
     def _on_close(self) -> None:
         if self.running and not messagebox.askyesno("任务仍在执行", "任务还在执行中，确定要关闭工具吗？"):

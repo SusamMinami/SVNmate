@@ -11,7 +11,8 @@
 - 支持手动选择 `Update.bat` 和 `Build.bat` 的位置
 - 支持每天定时执行
 - 实时输出执行日志，任务完成后变为绿色提示
-- 右上角音乐开关，默认播放同目录 `.wav` 音乐，任务完成后淡出暂停
+- 右上角音乐开关，默认播放同目录 `.mp3` / `.wav` 音乐，任务完成后淡出暂停
+- 右下角签名左侧有更新圆点，检测到新版本后变红，点击即可更新
 - 19:00 后自动切换暗黑主题，白天恢复浅色主题
 
 ## 使用
@@ -37,7 +38,7 @@ SVNAutoTool.exe
 ```text
 一键更新SVN/
   SVNAutoTool.exe
-  Max Riser - Ladyfingers Lofi.wav
+  Max Riser - Ladyfingers Lofi.mp3
   README_svn_auto_tool.md
 ```
 

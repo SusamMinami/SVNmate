@@ -16,6 +16,7 @@ print_debug.log
 
 # Local media/assets already packaged in the release zip
 *.wav
+*.mp3
 
 # Previous workspace artifacts
 *.scene
