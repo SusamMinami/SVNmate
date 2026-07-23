@@ -410,16 +410,28 @@ class SvnAutoTool:
             except Exception:
                 pass
             colors = {
-                "bg": "#141821",
-                "panel": "#1F2633",
-                "text": "#ECE7DC",
-                "muted": "#C8BFAF",
-                "accent": "#F2A65A",
-                "entry": "#242C3A",
-                "tree": "#18202B",
-                "tree_text": "#F3EDE2",
-                "selected": "#3A4A60",
-                "completed": "#21442D",
+                "bg": "#101720",
+                "panel": "#192534",
+                "text": "#F4F7FB",
+                "muted": "#B7C5D6",
+                "accent": "#F0B56A",
+                "border": "#61738A",
+                "button": "#2A3B50",
+                "button_active": "#38516B",
+                "button_pressed": "#233449",
+                "entry": "#243447",
+                "entry_focus": "#2D4057",
+                "tree": "#1D2A39",
+                "tree_text": "#F2F6FA",
+                "heading": "#2A3B50",
+                "heading_text": "#F7FAFC",
+                "selected": "#38648F",
+                "selected_text": "#FFFFFF",
+                "completed": "#20523A",
+                "completed_text": "#F0FBF3",
+                "scrollbar": "#4C6077",
+                "scroll_trough": "#16212D",
+                "disabled": "#65778B",
             }
         else:
             try:
@@ -432,11 +444,23 @@ class SvnAutoTool:
                 "text": "#1F1F1F",
                 "muted": "#5F5F5F",
                 "accent": "#1F1F1F",
+                "border": "#A6A6A6",
+                "button": "#F0F0F0",
+                "button_active": "#E5E5E5",
+                "button_pressed": "#D6D6D6",
                 "entry": "white",
+                "entry_focus": "white",
                 "tree": "white",
                 "tree_text": "#1F1F1F",
+                "heading": "#E2E2E2",
+                "heading_text": "#1F1F1F",
                 "selected": "#0078D7",
+                "selected_text": "white",
                 "completed": "#E8F7E8",
+                "completed_text": "#1F1F1F",
+                "scrollbar": "#C8C8C8",
+                "scroll_trough": "#E8E8E8",
+                "disabled": "#A0A0A0",
             }
 
         self.root.configure(bg=colors["bg"])
@@ -446,12 +470,100 @@ class SvnAutoTool:
         self.ui_style.configure("TCheckbutton", background=colors["panel"], foreground=colors["text"])
         self.ui_style.configure("TLabelframe", background=colors["panel"], foreground=colors["text"])
         self.ui_style.configure("TLabelframe.Label", background=colors["panel"], foreground=colors["accent"])
+        self.ui_style.configure(
+            "TButton",
+            background=colors["button"],
+            foreground=colors["text"],
+            bordercolor=colors["border"],
+            lightcolor=colors["border"],
+            darkcolor=colors["border"],
+        )
+        self.ui_style.map(
+            "TButton",
+            background=[
+                ("disabled", colors["panel"]),
+                ("pressed", colors["button_pressed"]),
+                ("active", colors["button_active"]),
+            ],
+            foreground=[("disabled", colors["disabled"])],
+        )
+        self.ui_style.configure(
+            "Primary.TButton",
+            background=colors["button"],
+            foreground=colors["text"],
+            bordercolor=colors["accent"],
+            lightcolor=colors["accent"],
+            darkcolor=colors["border"],
+            font=("Microsoft YaHei UI", 12, "bold"),
+            padding=(22, 10),
+        )
+        self.ui_style.map(
+            "Primary.TButton",
+            background=[
+                ("disabled", colors["panel"]),
+                ("pressed", colors["button_pressed"]),
+                ("active", colors["button_active"]),
+            ],
+            foreground=[("disabled", colors["disabled"])],
+        )
+        self.ui_style.configure(
+            "TEntry",
+            fieldbackground=colors["entry"],
+            foreground=colors["text"],
+            bordercolor=colors["border"],
+            lightcolor=colors["border"],
+            darkcolor=colors["border"],
+        )
+        self.ui_style.map(
+            "TEntry",
+            fieldbackground=[
+                ("disabled", colors["panel"]),
+                ("focus", colors["entry_focus"]),
+            ],
+            foreground=[("disabled", colors["disabled"])],
+        )
+        self.ui_style.configure(
+            "Treeview",
+            background=colors["tree"],
+            fieldbackground=colors["tree"],
+            foreground=colors["tree_text"],
+            bordercolor=colors["border"],
+            lightcolor=colors["border"],
+            darkcolor=colors["border"],
+        )
+        self.ui_style.map(
+            "Treeview",
+            background=[("selected", colors["selected"])],
+            foreground=[("selected", colors["selected_text"])],
+        )
+        self.ui_style.configure(
+            "Treeview.Heading",
+            background=colors["heading"],
+            foreground=colors["heading_text"],
+            bordercolor=colors["border"],
+            lightcolor=colors["border"],
+            darkcolor=colors["border"],
+        )
+        self.ui_style.map("Treeview.Heading", background=[("active", colors["button_active"])])
+        self.ui_style.configure(
+            "TScrollbar",
+            background=colors["scrollbar"],
+            troughcolor=colors["scroll_trough"],
+            bordercolor=colors["border"],
+            lightcolor=colors["scrollbar"],
+            darkcolor=colors["border"],
+            arrowcolor=colors["text"],
+        )
         self.ui_style.configure("Signature.TLabel", background=colors["panel"], foreground=colors["muted"], font=("Segoe UI", 9, "italic"))
         self.ui_style.configure("UpdateDot.TLabel", background=colors["panel"], foreground=colors["muted"], font=("Segoe UI", 11, "bold"))
         self.ui_style.configure("UpdateDotReady.TLabel", background=colors["panel"], foreground="#D93636", font=("Segoe UI", 11, "bold"))
         self.ui_style.configure("LiveLog.Treeview", background=colors["tree"], fieldbackground=colors["tree"], foreground=colors["tree_text"])
-        self.ui_style.configure("Completed.LiveLog.Treeview", background=colors["completed"], fieldbackground=colors["completed"], foreground=colors["tree_text"])
-        self.ui_style.map("Treeview", background=[("selected", colors["selected"])], foreground=[("selected", "white")])
+        self.ui_style.configure(
+            "Completed.LiveLog.Treeview",
+            background=colors["completed"],
+            fieldbackground=colors["completed"],
+            foreground=colors["completed_text"],
+        )
         self._refresh_update_dot()
         if self.status_text.get() == "已完成":
             self.live_log.configure(style="Completed.LiveLog.Treeview")
