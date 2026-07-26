@@ -2,6 +2,18 @@
 
 这是一个 Windows 桌面小工具，用来批量执行多个文件夹的 SVN 更新、清理和项目脚本。
 
+## v1.3.1 更新摘要
+
+本版本主要解决界面空间、日常启动和高 DPI 显示问题：
+
+- 将定时执行与 KindleLarkStatus 联动启动合并到“自动化”区域，减少设置区占用。
+- 使用 Metro 风格重构界面，采用 Segoe UI、扁平卡片和蓝色强调按钮。
+- 文件夹列表调整为更紧凑的双栏显示，下方实时输出区域更高。
+- 新增 Windows 系统托盘；关闭窗口只隐藏到托盘，定时任务仍会继续。
+- 托盘菜单支持打开 SVNmate、立即执行和彻底退出；双击托盘图标可恢复窗口。
+- 启用 Per-Monitor V2 DPI 感知，并按当前显示器 DPI 校准 Tk 字体，修复 125%/150% 缩放下的字体发虚。
+- 保留 KindleLarkStatus 独立维护方式，SVNmate 只负责按配置路径联动启动。
+
 ## 启动方式
 
 双击：
@@ -30,6 +42,8 @@ python svn_auto_tool.py
 
 全部任务完成后，音乐会淡出并暂停。
 
+界面采用紧凑的 Metro 风格：Segoe UI 字体、扁平卡片、蓝色强调按钮和高对比度昼夜主题。定时执行与 Kindle 提示板联动位于同一行，为下方实时输出保留更多空间。Windows 端启用 Per-Monitor V2 DPI 感知，在 125%/150% 缩放和多显示器环境下会按当前显示器 DPI 重新校准字体，避免系统拉伸造成文字发虚。
+
 界面右下角会显示作者签名 `SusamMinami`，签名左侧的圆点用于检查更新；检测到新版本后圆点会变红，点击即可下载并应用更新。软件会根据时间自动切换外观：19:00 后进入暗黑主题，白天保持浅色主题。
 
 点击“使用指南”按钮会打开在线文档：
@@ -37,6 +51,32 @@ python svn_auto_tool.py
 ```text
 https://bytedance.larkoffice.com/docx/BdDod9tjIo4rPbx2oWHchVRUnwh
 ```
+
+## 联动启动 Kindle 提示板
+
+在“自动化”区域勾选“联动提示板”后，每次只需启动 SVNmate。
+
+程序会优先自动识别：
+
+```text
+%USERPROFILE%\Downloads\提示板\KindleLarkStatus\dist\KindleLarkStatus.exe
+```
+
+如果 KindleLarkStatus 放在其他位置，点击“选择程序”重新指定稳定版 `KindleLarkStatus.exe`。点击“立即打开”可以随时手动启动。
+
+- KindleLarkStatus 已经运行时会跳过，不会重复打开实例。
+- SVNmate 只保存 EXE 路径，不读取或修改 KindleLarkStatus 的配置。
+- 从托盘彻底退出 SVNmate 也不会结束 KindleLarkStatus 的托盘服务。
+- 两个项目可以继续分别更新；只要 KindleLarkStatus 更新后仍生成同一路径的稳定 EXE，就不需要重新选择。
+
+## 系统托盘
+
+SVNmate 启动后会在 Windows 通知区域显示 Metro 蓝色图标。
+
+- 点击窗口关闭按钮或“隐藏到托盘”只会隐藏窗口，定时任务仍会继续。
+- 双击托盘图标可恢复并激活主窗口。
+- 右键托盘图标可选择“打开 SVNmate”“立即执行”或“退出”。
+- 只有选择托盘菜单中的“退出”才会彻底关闭 SVNmate。
 
 ## 重新打包
 

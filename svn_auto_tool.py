@@ -12,8 +12,53 @@ import urllib.request
 import webbrowser
 from datetime import datetime, timedelta
 from pathlib import Path
+
+
+def _enable_windows_dpi_awareness() -> None:
+    if os.name != "nt":
+        return
+    try:
+        if ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4)):
+            return
+    except (AttributeError, OSError):
+        pass
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except (AttributeError, OSError):
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except (AttributeError, OSError):
+            pass
+
+
+_enable_windows_dpi_awareness()
+
 from tkinter import BOTH, END, LEFT, RIGHT, X, Y, BooleanVar, StringVar, Tk, filedialog, messagebox
 from tkinter import ttk
+
+
+def _get_window_dpi(root: Tk) -> int:
+    if os.name != "nt":
+        return 96
+    try:
+        user32 = ctypes.windll.user32
+        user32.GetParent.argtypes = [ctypes.c_void_p]
+        user32.GetParent.restype = ctypes.c_void_p
+        user32.GetDpiForWindow.argtypes = [ctypes.c_void_p]
+        user32.GetDpiForWindow.restype = ctypes.c_uint
+        child_hwnd = root.winfo_id()
+        top_level_hwnd = user32.GetParent(child_hwnd) or child_hwnd
+        dpi = int(user32.GetDpiForWindow(top_level_hwnd))
+    except (AttributeError, OSError, ValueError):
+        return 96
+    return dpi if dpi > 0 else 96
+
+
+def _configure_tk_dpi(root: Tk) -> int:
+    root.update_idletasks()
+    dpi = _get_window_dpi(root)
+    root.tk.call("tk", "scaling", dpi / 72.0)
+    return dpi
 
 
 if os.name == "nt":
@@ -25,22 +70,344 @@ if getattr(sys, "frozen", False):
     APP_DIR = Path(sys.executable).resolve().parent
 else:
     APP_DIR = Path(__file__).resolve().parent
+RESOURCE_DIR = Path(getattr(sys, "_MEIPASS", APP_DIR))
 CONFIG_PATH = APP_DIR / "svn_auto_tool_config.json"
 LOG_DIR = APP_DIR / "logs"
 LOG_RETENTION_DAYS = 7
 MUSIC_EXTENSIONS = (".mp3", ".wav")
-APP_VERSION = "v1.1.4"
+APP_VERSION = "v1.3.1"
 LATEST_RELEASE_URL = "https://github.com/SusamMinami/SVNmate/releases/latest"
 RELEASE_DOWNLOAD_URL = "https://github.com/SusamMinami/SVNmate/releases/download/{tag}/{asset}"
 RELEASE_ASSET_NAME = "一键更新SVN.zip"
+KINDLE_STATUS_EXE_NAME = "KindleLarkStatus.exe"
+APP_ICON_PATH = RESOURCE_DIR / "svnmate.ico"
+
+
+if os.name == "nt":
+    class _Guid(ctypes.Structure):
+        _fields_ = [
+            ("data1", wintypes.DWORD),
+            ("data2", wintypes.WORD),
+            ("data3", wintypes.WORD),
+            ("data4", ctypes.c_ubyte * 8),
+        ]
+
+
+    class _NotifyIconData(ctypes.Structure):
+        _fields_ = [
+            ("cbSize", wintypes.DWORD),
+            ("hWnd", wintypes.HWND),
+            ("uID", wintypes.UINT),
+            ("uFlags", wintypes.UINT),
+            ("uCallbackMessage", wintypes.UINT),
+            ("hIcon", wintypes.HICON),
+            ("szTip", wintypes.WCHAR * 128),
+            ("dwState", wintypes.DWORD),
+            ("dwStateMask", wintypes.DWORD),
+            ("szInfo", wintypes.WCHAR * 256),
+            ("uVersion", wintypes.UINT),
+            ("szInfoTitle", wintypes.WCHAR * 64),
+            ("dwInfoFlags", wintypes.DWORD),
+            ("guidItem", _Guid),
+            ("hBalloonIcon", wintypes.HICON),
+        ]
+
+    class _WindowClass(ctypes.Structure):
+        _fields_ = [
+            ("style", wintypes.UINT),
+            ("lpfnWndProc", ctypes.c_void_p),
+            ("cbClsExtra", ctypes.c_int),
+            ("cbWndExtra", ctypes.c_int),
+            ("hInstance", wintypes.HINSTANCE),
+            ("hIcon", wintypes.HICON),
+            ("hCursor", wintypes.HANDLE),
+            ("hbrBackground", wintypes.HBRUSH),
+            ("lpszMenuName", wintypes.LPCWSTR),
+            ("lpszClassName", wintypes.LPCWSTR),
+        ]
+
+
+class WindowsTrayIcon:
+    NIM_ADD = 0
+    NIM_DELETE = 2
+    NIF_MESSAGE = 0x1
+    NIF_ICON = 0x2
+    NIF_TIP = 0x4
+    WM_TRAYICON = 0x8000 + 27
+    WM_LBUTTONDBLCLK = 0x0203
+    WM_RBUTTONUP = 0x0205
+    WM_CONTEXTMENU = 0x007B
+    WM_CLOSE = 0x0010
+    WM_DESTROY = 0x0002
+    IMAGE_ICON = 1
+    LR_LOADFROMFILE = 0x0010
+    ID_SHOW = 1001
+    ID_RUN = 1002
+    ID_EXIT = 1003
+
+    def __init__(
+        self,
+        root: Tk,
+        on_show: object,
+        on_run: object,
+        on_exit: object,
+        icon_path: Path,
+    ) -> None:
+        self.root = root
+        self.on_show = on_show
+        self.on_run = on_run
+        self.on_exit = on_exit
+        self.icon_path = icon_path
+        self.available = False
+        self.hwnd = 0
+        self.icon_handle = 0
+        self.owns_icon = False
+        self._notify_data = None
+        self._window_proc_callback = None
+        self._thread: threading.Thread | None = None
+        self._ready_event = threading.Event()
+        self._actions: queue.Queue[str] = queue.Queue()
+        self._class_name = f"SVNmateTrayWindow_{os.getpid()}_{id(self)}"
+        self._instance = 0
+
+    def start(self) -> bool:
+        if os.name != "nt" or self.available:
+            return self.available
+        if self._thread and self._thread.is_alive():
+            return self.available
+        self._ready_event.clear()
+        self._thread = threading.Thread(target=self._message_loop, name="svnmate-tray", daemon=True)
+        self._thread.start()
+        self._ready_event.wait(3)
+        return self.available
+
+    def stop(self) -> None:
+        if os.name != "nt":
+            return
+        if self.hwnd:
+            ctypes.windll.user32.PostMessageW(self.hwnd, self.WM_CLOSE, 0, 0)
+        if self._thread and self._thread.is_alive() and threading.current_thread() is not self._thread:
+            self._thread.join(timeout=2)
+        self.available = False
+        self._thread = None
+
+    def process_pending_actions(self) -> None:
+        try:
+            while True:
+                action = self._actions.get_nowait()
+                if action == "show":
+                    self.on_show()
+                elif action == "run":
+                    self.on_run()
+                elif action == "exit":
+                    self.on_exit()
+        except queue.Empty:
+            pass
+
+    def _message_loop(self) -> None:
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+        window_proc_type = ctypes.WINFUNCTYPE(
+            ctypes.c_ssize_t,
+            wintypes.HWND,
+            wintypes.UINT,
+            wintypes.WPARAM,
+            wintypes.LPARAM,
+        )
+        self._window_proc_callback = window_proc_type(self._window_proc)
+        kernel32.GetModuleHandleW.restype = wintypes.HINSTANCE
+        self._instance = kernel32.GetModuleHandleW(None)
+        user32.RegisterClassW.argtypes = [ctypes.POINTER(_WindowClass)]
+        user32.RegisterClassW.restype = wintypes.WORD
+        user32.CreateWindowExW.argtypes = [
+            wintypes.DWORD,
+            wintypes.LPCWSTR,
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            wintypes.HWND,
+            wintypes.HANDLE,
+            wintypes.HINSTANCE,
+            ctypes.c_void_p,
+        ]
+        user32.CreateWindowExW.restype = wintypes.HWND
+        user32.UnregisterClassW.argtypes = [wintypes.LPCWSTR, wintypes.HINSTANCE]
+        user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+        user32.GetMessageW.argtypes = [ctypes.POINTER(wintypes.MSG), wintypes.HWND, wintypes.UINT, wintypes.UINT]
+        user32.DefWindowProcW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+        user32.DefWindowProcW.restype = ctypes.c_ssize_t
+        user32.DestroyWindow.argtypes = [wintypes.HWND]
+        user32.IsWindow.argtypes = [wintypes.HWND]
+        user32.DispatchMessageW.argtypes = [ctypes.POINTER(wintypes.MSG)]
+        window_class = _WindowClass(
+            style=0,
+            lpfnWndProc=ctypes.cast(self._window_proc_callback, ctypes.c_void_p).value,
+            cbClsExtra=0,
+            cbWndExtra=0,
+            hInstance=self._instance,
+            hIcon=None,
+            hCursor=None,
+            hbrBackground=None,
+            lpszMenuName=None,
+            lpszClassName=self._class_name,
+        )
+        try:
+            if not user32.RegisterClassW(ctypes.byref(window_class)):
+                return
+            self.hwnd = user32.CreateWindowExW(
+                0,
+                self._class_name,
+                "SVNmate Tray Host",
+                0,
+                0,
+                0,
+                0,
+                0,
+                None,
+                None,
+                self._instance,
+                None,
+            )
+            if not self.hwnd or not self._add_icon():
+                return
+            self.available = True
+            self._ready_event.set()
+            message = wintypes.MSG()
+            while user32.GetMessageW(ctypes.byref(message), None, 0, 0) > 0:
+                user32.TranslateMessage(ctypes.byref(message))
+                user32.DispatchMessageW(ctypes.byref(message))
+        finally:
+            self._remove_icon()
+            if self.hwnd and user32.IsWindow(self.hwnd):
+                user32.DestroyWindow(self.hwnd)
+            if self._instance:
+                user32.UnregisterClassW(self._class_name, self._instance)
+            self.available = False
+            self.hwnd = 0
+            self._window_proc_callback = None
+            self._ready_event.set()
+
+    def _add_icon(self) -> bool:
+        user32 = ctypes.windll.user32
+        shell32 = ctypes.windll.shell32
+        user32.LoadImageW.argtypes = [
+            wintypes.HINSTANCE,
+            wintypes.LPCWSTR,
+            wintypes.UINT,
+            ctypes.c_int,
+            ctypes.c_int,
+            wintypes.UINT,
+        ]
+        shell32.Shell_NotifyIconW.argtypes = [wintypes.DWORD, ctypes.POINTER(_NotifyIconData)]
+        width = user32.GetSystemMetrics(49) or 16
+        height = user32.GetSystemMetrics(50) or 16
+        user32.LoadImageW.restype = wintypes.HICON
+        self.icon_handle = user32.LoadImageW(
+            None,
+            str(self.icon_path),
+            self.IMAGE_ICON,
+            width,
+            height,
+            self.LR_LOADFROMFILE,
+        )
+        if self.icon_handle:
+            self.owns_icon = True
+        else:
+            user32.LoadIconW.restype = wintypes.HICON
+            self.icon_handle = user32.LoadIconW(None, ctypes.c_void_p(32512))
+        data = _NotifyIconData()
+        data.cbSize = ctypes.sizeof(_NotifyIconData)
+        data.hWnd = self.hwnd
+        data.uID = 1
+        data.uFlags = self.NIF_MESSAGE | self.NIF_ICON | self.NIF_TIP
+        data.uCallbackMessage = self.WM_TRAYICON
+        data.hIcon = self.icon_handle
+        data.szTip = "SVNmate - 一键更新 SVN"
+        self._notify_data = data
+        return bool(shell32.Shell_NotifyIconW(self.NIM_ADD, ctypes.byref(data)))
+
+    def _remove_icon(self) -> None:
+        if self._notify_data is not None:
+            ctypes.windll.shell32.Shell_NotifyIconW(self.NIM_DELETE, ctypes.byref(self._notify_data))
+            self._notify_data = None
+        if self.owns_icon and self.icon_handle:
+            ctypes.windll.user32.DestroyIcon(self.icon_handle)
+        self.icon_handle = 0
+        self.owns_icon = False
+
+    def _window_proc(self, hwnd: int, message: int, wparam: int, lparam: int) -> int:
+        if message == self.WM_TRAYICON:
+            event = int(lparam) & 0xFFFF
+            if event == self.WM_LBUTTONDBLCLK:
+                self._actions.put("show")
+                return 0
+            if event in {self.WM_RBUTTONUP, self.WM_CONTEXTMENU}:
+                self._show_context_menu()
+                return 0
+        if message == self.WM_CLOSE:
+            ctypes.windll.user32.DestroyWindow(hwnd)
+            return 0
+        if message == self.WM_DESTROY:
+            self._remove_icon()
+            ctypes.windll.user32.PostQuitMessage(0)
+            return 0
+        return ctypes.windll.user32.DefWindowProcW(hwnd, message, wparam, lparam)
+
+    def _show_context_menu(self) -> None:
+        user32 = ctypes.windll.user32
+        user32.CreatePopupMenu.restype = wintypes.HANDLE
+        user32.AppendMenuW.argtypes = [wintypes.HANDLE, wintypes.UINT, ctypes.c_size_t, wintypes.LPCWSTR]
+        user32.TrackPopupMenu.argtypes = [
+            wintypes.HANDLE,
+            wintypes.UINT,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            wintypes.HWND,
+            ctypes.c_void_p,
+        ]
+        menu = user32.CreatePopupMenu()
+        if not menu:
+            return
+        user32.AppendMenuW(menu, 0x0000, self.ID_SHOW, "打开 SVNmate")
+        user32.AppendMenuW(menu, 0x0000, self.ID_RUN, "立即执行")
+        user32.AppendMenuW(menu, 0x0800, 0, None)
+        user32.AppendMenuW(menu, 0x0000, self.ID_EXIT, "退出")
+        point = wintypes.POINT()
+        user32.GetCursorPos(ctypes.byref(point))
+        user32.SetForegroundWindow(self.hwnd)
+        command = user32.TrackPopupMenu(
+            menu,
+            0x0100 | 0x0002,
+            point.x,
+            point.y,
+            0,
+            self.hwnd,
+            None,
+        )
+        user32.DestroyMenu(menu)
+        if command == self.ID_SHOW:
+            self._actions.put("show")
+        elif command == self.ID_RUN:
+            self._actions.put("run")
+        elif command == self.ID_EXIT:
+            self._actions.put("exit")
 
 
 class SvnAutoTool:
     def __init__(self, root: Tk) -> None:
         self.root = root
+        self.current_dpi = _configure_tk_dpi(self.root)
         self.root.title("P6-文案小组SVN懒人更新工具")
-        self.root.geometry("1120x760")
-        self.root.minsize(980, 640)
+        self._set_initial_window_geometry(self.current_dpi)
+        if APP_ICON_PATH.is_file():
+            try:
+                self.root.iconbitmap(default=str(APP_ICON_PATH))
+            except Exception:
+                pass
 
         self.folder_groups: dict[str, list[dict[str, object]]] = {"left": [], "right": []}
         self.folder_trees: dict[str, ttk.Treeview] = {}
@@ -57,6 +424,10 @@ class SvnAutoTool:
         self.music_enabled = BooleanVar(value=True)
         self.custom_update_bat_path = StringVar(value="")
         self.custom_build_bat_path = StringVar(value="")
+        detected_kindle_status = self._find_default_kindle_status_executable()
+        self.launch_kindle_status_on_startup = BooleanVar(value=detected_kindle_status is not None)
+        self.kindle_status_path = StringVar(value=str(detected_kindle_status or ""))
+        self.kindle_status_path_text = StringVar(value="未选择程序")
         self.schedule_time = StringVar(value="09:00")
         self.next_run_text = StringVar(value="未启用")
         self.status_text = StringVar(value="就绪")
@@ -68,57 +439,109 @@ class SvnAutoTool:
         self.update_info: dict[str, str] | None = None
         self.update_state = "checking"
         self.current_theme = ""
+        self.tray_icon = WindowsTrayIcon(
+            self.root,
+            self._show_from_tray,
+            self._run_from_tray,
+            self._exit_application,
+            APP_ICON_PATH,
+        )
 
         self._cleanup_old_logs()
         self._build_ui()
         self._load_config()
+        self._refresh_kindle_status_path_text()
         self._refresh_music_button()
         self._apply_music_setting()
         self._theme_tick()
         self._refresh_folder_list()
         self._refresh_next_run_text()
         self._poll_log_queue()
+        self._poll_tray_actions()
         self._schedule_tick()
+        self.root.after(1000, self._dpi_tick)
+        self.root.after(200, self._start_tray_icon)
+        self.root.after(800, self._launch_kindle_status_at_startup)
         self.root.after(2000, self._check_for_updates_async)
+        self.root.after(500, self._finalize_initial_dpi)
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
+    def _set_initial_window_geometry(self, dpi: int) -> None:
+        dpi_scale = dpi / 96.0
+        available_width = max(640, self.root.winfo_screenwidth() - 48)
+        available_height = max(480, self.root.winfo_screenheight() - 80)
+        window_width = min(round(1140 * dpi_scale), available_width)
+        window_height = min(round(760 * dpi_scale), available_height)
+        minimum_width = min(round(1000 * dpi_scale), window_width)
+        minimum_height = min(round(650 * dpi_scale), window_height)
+        self.root.geometry(f"{window_width}x{window_height}")
+        self.root.minsize(minimum_width, minimum_height)
+
+    def _finalize_initial_dpi(self) -> None:
+        dpi = _get_window_dpi(self.root)
+        self.current_dpi = dpi
+        self.root.tk.call("tk", "scaling", dpi / 72.0)
+        self._set_initial_window_geometry(dpi)
+        self._apply_visual_theme(self.current_theme)
+
     def _build_ui(self) -> None:
-        main = ttk.Frame(self.root, padding=14)
+        self.ui_style = ttk.Style()
+        try:
+            self.ui_style.theme_use("clam")
+        except Exception:
+            pass
+
+        main = ttk.Frame(self.root, style="App.TFrame", padding=(18, 14, 18, 10))
         main.pack(fill=BOTH, expand=True)
 
-        header = ttk.Frame(main)
+        header = ttk.Frame(main, style="App.TFrame")
         header.pack(fill=X)
-        ttk.Label(header, text="P6-文案小组SVN懒人更新工具", font=("Microsoft YaHei UI", 16, "bold")).pack(side=LEFT)
-        header_actions = ttk.Frame(header)
+        title_block = ttk.Frame(header, style="App.TFrame")
+        title_block.pack(side=LEFT)
+        ttk.Label(title_block, text="SVNmate", style="Title.TLabel").pack(anchor="w")
+        ttk.Label(title_block, text="P6 文案小组 · SVN 工作区自动化", style="Subtitle.TLabel").pack(anchor="w")
+
+        header_actions = ttk.Frame(header, style="App.TFrame")
         header_actions.pack(side=RIGHT)
-        ttk.Label(header_actions, textvariable=self.status_text).pack(side=LEFT, padx=(0, 12))
-        self.ui_style = ttk.Style()
-        self.ui_style.configure("Primary.TButton", font=("Microsoft YaHei UI", 12, "bold"), padding=(22, 10))
-        self.ui_style.configure("LiveLog.Treeview", background="white", fieldbackground="white")
-        self.ui_style.configure("Completed.LiveLog.Treeview", background="#E8F7E8", fieldbackground="#E8F7E8")
+        ttk.Label(header_actions, textvariable=self.status_text, style="Status.TLabel").pack(side=LEFT, padx=(0, 10))
         self.music_button = ttk.Checkbutton(
             header_actions,
             text="音乐开",
             variable=self.music_enabled,
             command=self._on_music_toggle,
+            style="Header.TCheckbutton",
         )
-        self.music_button.pack(side=LEFT, padx=(0, 12))
-        self.run_button = ttk.Button(header_actions, text="立即执行", style="Primary.TButton", command=self._run_now)
+        self.music_button.pack(side=LEFT, padx=(0, 8))
+        ttk.Button(
+            header_actions,
+            text="隐藏到托盘",
+            style="Subtle.TButton",
+            command=self._hide_to_tray,
+        ).pack(side=LEFT, padx=(0, 8))
+        self.run_button = ttk.Button(header_actions, text="立即执行", style="Accent.TButton", command=self._run_now)
         self.run_button.pack(side=LEFT)
 
-        folder_frame = ttk.LabelFrame(main, text="需要自动更新的文件夹：只执行已勾选的项目", padding=10)
-        folder_frame.pack(fill=BOTH, expand=False, pady=(12, 8))
-        columns_frame = ttk.Frame(folder_frame)
+        folder_frame = ttk.Frame(main, style="Card.TFrame", padding=(12, 9))
+        folder_frame.pack(fill=BOTH, expand=False, pady=(12, 6))
+        folder_title = ttk.Frame(folder_frame, style="Card.TFrame")
+        folder_title.pack(fill=X, pady=(0, 7))
+        ttk.Label(folder_title, text="工作目录", style="SectionTitle.TLabel").pack(side=LEFT)
+        ttk.Label(folder_title, text="仅执行已勾选项目，按列表顺序串行处理", style="CardMuted.TLabel").pack(
+            side=LEFT,
+            padx=(10, 0),
+        )
+        columns_frame = ttk.Frame(folder_frame, style="Card.TFrame")
         columns_frame.pack(fill=BOTH, expand=True)
         self._build_folder_column(columns_frame, "left", "栏目一")
         self._build_folder_column(columns_frame, "right", "栏目二")
 
-        settings = ttk.Frame(main)
-        settings.pack(fill=X, pady=8)
+        settings = ttk.Frame(main, style="App.TFrame")
+        settings.pack(fill=X, pady=(0, 6))
 
-        options = ttk.LabelFrame(settings, text="执行选项", padding=10)
-        options.pack(side=LEFT, fill=BOTH, expand=True, padx=(0, 8))
+        options = ttk.Frame(settings, style="Card.TFrame", padding=(12, 8))
+        options.pack(side=LEFT, fill=BOTH, expand=True, padx=(0, 5))
+        ttk.Label(options, text="执行选项", style="SectionTitle.TLabel").pack(anchor="w", pady=(0, 5))
         self._build_option_script_row(
             options,
             self.run_bin_update,
@@ -134,38 +557,91 @@ class SvnAutoTool:
             choose_text="Build位置",
             choose_command=self._choose_build_bat_path,
             clear_command=self._clear_build_bat_path,
-            pady=(6, 0),
+            pady=(4, 0),
         )
-        ttk.Label(options, text="说明：脚本位置留空时使用默认规则；svn update 完成后仍会自动执行 svn cleanup。").pack(anchor="w", pady=(6, 0))
+        ttk.Label(options, text="脚本位置留空时使用默认规则；Update 后仍会执行 Cleanup。", style="CardMuted.TLabel").pack(
+            anchor="w",
+            pady=(5, 0),
+        )
 
-        schedule = ttk.LabelFrame(settings, text="定时执行", padding=10)
-        schedule.pack(side=LEFT, fill=BOTH, expand=True, padx=(8, 0))
-        ttk.Checkbutton(schedule, text="启用每天定时执行", variable=self.enable_schedule, command=self._on_schedule_changed).pack(anchor="w")
-        schedule_time_row = ttk.Frame(schedule)
-        schedule_time_row.pack(fill=X, pady=(8, 0))
-        ttk.Label(schedule_time_row, text="时间 HH:MM").pack(side=LEFT)
-        time_entry = ttk.Entry(schedule_time_row, width=8, textvariable=self.schedule_time)
-        time_entry.pack(side=LEFT, padx=(8, 0))
+        automation = ttk.Frame(settings, style="Card.TFrame", padding=(12, 8))
+        automation.pack(side=LEFT, fill=BOTH, expand=True, padx=(5, 0))
+        ttk.Label(automation, text="自动化", style="SectionTitle.TLabel").pack(anchor="w", pady=(0, 5))
+
+        automation_controls = ttk.Frame(automation, style="Card.TFrame")
+        automation_controls.pack(fill=X)
+        schedule_controls = ttk.Frame(automation_controls, style="Card.TFrame")
+        schedule_controls.pack(side=LEFT)
+        ttk.Checkbutton(
+            schedule_controls,
+            text="每日定时",
+            variable=self.enable_schedule,
+            command=self._on_schedule_changed,
+            style="Card.TCheckbutton",
+        ).pack(side=LEFT)
+        ttk.Label(schedule_controls, text="时间", style="Card.TLabel").pack(side=LEFT, padx=(8, 4))
+        time_entry = ttk.Entry(schedule_controls, width=7, textvariable=self.schedule_time)
+        time_entry.pack(side=LEFT)
         time_entry.bind("<FocusOut>", lambda _event: self._on_schedule_changed())
         time_entry.bind("<Return>", lambda _event: self._on_schedule_changed())
-        next_run_row = ttk.Frame(schedule)
-        next_run_row.pack(fill=X, pady=(8, 0))
-        ttk.Label(next_run_row, text="下次执行：").pack(side=LEFT)
-        ttk.Label(next_run_row, textvariable=self.next_run_text).pack(side=LEFT)
+        ttk.Separator(automation_controls, orient="vertical").pack(side=LEFT, fill=Y, padx=10)
+        companion_controls = ttk.Frame(automation_controls, style="Card.TFrame")
+        companion_controls.pack(side=LEFT, fill=X, expand=True)
+        ttk.Checkbutton(
+            companion_controls,
+            text="联动提示板",
+            variable=self.launch_kindle_status_on_startup,
+            command=self._on_kindle_status_setting_changed,
+            style="Card.TCheckbutton",
+        ).pack(side=LEFT)
+        ttk.Button(
+            companion_controls,
+            text="选择",
+            style="Compact.TButton",
+            command=self._choose_kindle_status_path,
+        ).pack(side=LEFT, padx=(8, 4))
+        ttk.Button(
+            companion_controls,
+            text="打开",
+            style="Compact.TButton",
+            command=lambda: self._launch_kindle_status(manual=True),
+        ).pack(side=LEFT)
 
-        actions = ttk.Frame(main)
-        actions.pack(fill=X, pady=(0, 8))
-        ttk.Button(actions, text="保存配置", command=self._save_config).pack(side=LEFT, padx=(8, 0))
-        ttk.Button(actions, text="打开日志文件夹", command=self._open_log_folder).pack(side=LEFT, padx=(8, 0))
-        ttk.Button(actions, text="使用指南", command=self._open_user_guide).pack(side=RIGHT)
+        automation_meta = ttk.Frame(automation, style="Card.TFrame")
+        automation_meta.pack(fill=X, pady=(5, 0))
+        ttk.Label(automation_meta, text="下次：", style="CardMuted.TLabel").pack(side=LEFT)
+        ttk.Label(automation_meta, textvariable=self.next_run_text, style="CardMuted.TLabel").pack(side=LEFT)
+        ttk.Label(
+            automation_meta,
+            textvariable=self.kindle_status_path_text,
+            style="CardMuted.TLabel",
+            width=30,
+            anchor="e",
+        ).pack(side=RIGHT, fill=X, expand=True, padx=(10, 0))
 
-        live_frame = ttk.LabelFrame(main, text="实时输出", padding=10)
-        live_frame.pack(fill=BOTH, expand=True, pady=(8, 0))
-        self.live_log = ttk.Treeview(live_frame, columns=("line",), show="headings", height=13)
+        live_header = ttk.Frame(main, style="App.TFrame")
+        live_header.pack(fill=X, pady=(2, 6))
+        ttk.Label(live_header, text="实时输出", style="SectionTitleApp.TLabel").pack(side=LEFT)
+        ttk.Button(live_header, text="使用指南", style="Subtle.TButton", command=self._open_user_guide).pack(side=RIGHT)
+        ttk.Button(live_header, text="日志文件夹", style="Subtle.TButton", command=self._open_log_folder).pack(
+            side=RIGHT,
+            padx=(0, 6),
+        )
+        ttk.Button(live_header, text="保存配置", style="Subtle.TButton", command=self._save_config).pack(
+            side=RIGHT,
+            padx=(0, 6),
+        )
+
+        live_frame = ttk.Frame(main, style="Card.TFrame", padding=1)
+        live_frame.pack(fill=BOTH, expand=True, pady=(0, 16))
+        self.live_log = ttk.Treeview(live_frame, columns=("line",), show="headings", height=11)
         self.live_log.configure(style="LiveLog.Treeview")
         self.live_log.heading("line", text="日志")
         self.live_log.column("line", width=880, anchor="w")
-        self.live_log.pack(fill=BOTH, expand=True)
+        log_scroll = ttk.Scrollbar(live_frame, orient="vertical", command=self.live_log.yview)
+        self.live_log.configure(yscrollcommand=log_scroll.set)
+        self.live_log.pack(side=LEFT, fill=BOTH, expand=True)
+        log_scroll.pack(side=RIGHT, fill=Y)
 
         self.update_dot = ttk.Label(main, text="○", style="UpdateDot.TLabel", cursor="hand2")
         self.update_dot.place(relx=1.0, rely=1.0, x=-90, y=-3, anchor="se")
@@ -174,21 +650,34 @@ class SvnAutoTool:
         self.signature_label.place(relx=1.0, rely=1.0, x=-6, y=-2, anchor="se")
 
     def _build_folder_column(self, parent: ttk.Frame, group_key: str, title: str) -> None:
-        column = ttk.Frame(parent)
-        column.pack(side=LEFT, fill=BOTH, expand=True, padx=(0, 8) if group_key == "left" else (8, 0))
+        column = ttk.Frame(parent, style="Card.TFrame")
+        column.pack(side=LEFT, fill=BOTH, expand=True, padx=(0, 6) if group_key == "left" else (6, 0))
 
-        toolbar = ttk.Frame(column)
-        toolbar.pack(fill=X, pady=(0, 6))
-        ttk.Button(toolbar, text="添加文件夹", command=lambda: self._add_folder(group_key)).pack(side=LEFT)
-        ttk.Button(toolbar, text="移除选中", command=lambda: self._remove_selected_folder(group_key)).pack(side=LEFT, padx=(8, 0))
-        ttk.Button(toolbar, text="清空本栏", command=lambda: self._clear_folders(group_key)).pack(side=LEFT, padx=(8, 0))
+        toolbar = ttk.Frame(column, style="Card.TFrame")
+        toolbar.pack(fill=X, pady=(0, 5))
+        ttk.Label(toolbar, text=title, style="CardTitle.TLabel").pack(side=LEFT)
+        ttk.Button(toolbar, text="清空", style="Compact.TButton", command=lambda: self._clear_folders(group_key)).pack(
+            side=RIGHT,
+        )
+        ttk.Button(
+            toolbar,
+            text="移除",
+            style="Compact.TButton",
+            command=lambda: self._remove_selected_folder(group_key),
+        ).pack(side=RIGHT, padx=(0, 5))
+        ttk.Button(
+            toolbar,
+            text="+ 添加文件夹",
+            style="Compact.TButton",
+            command=lambda: self._add_folder(group_key),
+        ).pack(side=RIGHT, padx=(0, 5))
 
-        tree_frame = ttk.LabelFrame(column, text=title, padding=6)
+        tree_frame = ttk.Frame(column, style="Card.TFrame")
         tree_frame.pack(fill=BOTH, expand=True)
-        tree = ttk.Treeview(tree_frame, columns=("enabled", "path"), show="headings", height=8)
+        tree = ttk.Treeview(tree_frame, columns=("enabled", "path"), show="headings", height=6)
         tree.heading("enabled", text="执行")
         tree.heading("path", text="文件夹路径")
-        tree.column("enabled", width=56, anchor="center", stretch=False)
+        tree.column("enabled", width=52, anchor="center", stretch=False)
         tree.column("path", width=430, anchor="w")
         tree.pack(side=LEFT, fill=BOTH, expand=True)
         scroll = ttk.Scrollbar(tree_frame, orient="vertical", command=tree.yview)
@@ -209,16 +698,20 @@ class SvnAutoTool:
         clear_command: object,
         pady: tuple[int, int] = (0, 0),
     ) -> None:
-        row = ttk.Frame(parent)
+        row = ttk.Frame(parent, style="Card.TFrame")
         row.pack(fill=X, pady=pady)
-        ttk.Button(row, text=choose_text, width=10, command=choose_command).pack(side=LEFT)
-        ttk.Button(row, text="默认", width=6, command=clear_command).pack(side=LEFT, padx=(6, 8))
         ttk.Checkbutton(
             row,
             text=text,
             variable=variable,
             command=self._save_config,
+            style="Card.TCheckbutton",
         ).pack(side=LEFT, anchor="w")
+        ttk.Button(row, text="默认", style="Compact.TButton", command=clear_command).pack(side=RIGHT)
+        ttk.Button(row, text=choose_text, style="Compact.TButton", command=choose_command).pack(
+            side=RIGHT,
+            padx=(0, 5),
+        )
 
     def _load_config(self) -> None:
         if not CONFIG_PATH.exists():
@@ -234,6 +727,11 @@ class SvnAutoTool:
         self.music_enabled.set(bool(data.get("music_enabled", True)))
         self.custom_update_bat_path.set(str(data.get("custom_update_bat_path", "")))
         self.custom_build_bat_path.set(str(data.get("custom_build_bat_path", "")))
+        detected_path = self.kindle_status_path.get()
+        self.kindle_status_path.set(str(data.get("kindle_status_path", detected_path)))
+        self.launch_kindle_status_on_startup.set(
+            bool(data.get("launch_kindle_status_on_startup", bool(detected_path)))
+        )
         self.enable_schedule.set(bool(data.get("enable_schedule", False)))
         self.schedule_time.set(str(data.get("schedule_time", "09:00")))
         self.last_bin_update_date = str(data.get("last_bin_update_date", ""))
@@ -246,12 +744,15 @@ class SvnAutoTool:
             "music_enabled": True if self.music_paused_after_task else self.music_enabled.get(),
             "custom_update_bat_path": self.custom_update_bat_path.get().strip(),
             "custom_build_bat_path": self.custom_build_bat_path.get().strip(),
+            "launch_kindle_status_on_startup": self.launch_kindle_status_on_startup.get(),
+            "kindle_status_path": self.kindle_status_path.get().strip(),
             "enable_schedule": self.enable_schedule.get(),
             "schedule_time": self.schedule_time.get().strip(),
             "last_bin_update_date": self.last_bin_update_date,
         }
         CONFIG_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         self._refresh_next_run_text()
+        self._refresh_kindle_status_path_text()
 
     def _choose_update_bat_path(self) -> None:
         self._choose_script_path(self.custom_update_bat_path, "选择 Update.bat")
@@ -296,6 +797,117 @@ class SvnAutoTool:
             except (OSError, ValueError):
                 continue
         return str(script_path)
+
+    @staticmethod
+    def _find_default_kindle_status_executable() -> Path | None:
+        downloads = Path.home() / "Downloads"
+        candidates = [
+            APP_DIR / KINDLE_STATUS_EXE_NAME,
+            APP_DIR / "KindleLarkStatus" / "dist" / KINDLE_STATUS_EXE_NAME,
+            APP_DIR.parent / "KindleLarkStatus" / "dist" / KINDLE_STATUS_EXE_NAME,
+            APP_DIR.parent / "提示板" / "KindleLarkStatus" / "dist" / KINDLE_STATUS_EXE_NAME,
+            downloads / "提示板" / "KindleLarkStatus" / "dist" / KINDLE_STATUS_EXE_NAME,
+        ]
+        for candidate in candidates:
+            if candidate.is_file():
+                return candidate
+        return None
+
+    def _resolve_kindle_status_executable(self) -> Path | None:
+        path_text = self.kindle_status_path.get().strip()
+        if not path_text:
+            return None
+        path = Path(path_text).expanduser()
+        candidates = [path]
+        if path.is_dir():
+            candidates = [
+                path / KINDLE_STATUS_EXE_NAME,
+                path / "dist" / KINDLE_STATUS_EXE_NAME,
+                path / "dist" / "windows" / KINDLE_STATUS_EXE_NAME,
+            ]
+        for candidate in candidates:
+            if candidate.is_file():
+                return candidate.resolve()
+        return None
+
+    def _refresh_kindle_status_path_text(self) -> None:
+        executable = self._resolve_kindle_status_executable()
+        if executable is None:
+            self.kindle_status_path_text.set("未选择或路径不可用")
+            return
+        path_text = str(executable)
+        if len(path_text) > 44:
+            path_text = "..." + path_text[-41:]
+        self.kindle_status_path_text.set(path_text)
+
+    def _on_kindle_status_setting_changed(self) -> None:
+        self._save_config()
+
+    def _choose_kindle_status_path(self) -> None:
+        executable = self._resolve_kindle_status_executable()
+        initial_dir = executable.parent if executable else Path.home() / "Downloads"
+        file_path = filedialog.askopenfilename(
+            title="选择 Kindle 提示板程序",
+            initialdir=str(initial_dir),
+            filetypes=(("KindleLarkStatus", "KindleLarkStatus*.exe"), ("可执行程序", "*.exe"), ("所有文件", "*.*")),
+        )
+        if not file_path:
+            return
+        self.kindle_status_path.set(str(Path(file_path)))
+        self.launch_kindle_status_on_startup.set(True)
+        self._save_config()
+
+    def _launch_kindle_status_at_startup(self) -> None:
+        if self.launch_kindle_status_on_startup.get():
+            self._launch_kindle_status(manual=False)
+
+    def _launch_kindle_status(self, manual: bool) -> None:
+        executable = self._resolve_kindle_status_executable()
+        if executable is None:
+            message = "未找到 Kindle 提示板程序，请重新选择 KindleLarkStatus.exe。"
+            self._log(message)
+            if manual:
+                messagebox.showwarning("无法打开提示板", message)
+            return
+        if self._is_process_running(executable.name):
+            self._log("Kindle 提示板已在运行，已跳过重复启动。")
+            if manual:
+                messagebox.showinfo("Kindle 提示板", "Kindle 提示板已经在运行。")
+            return
+        creation_flags = 0
+        if os.name == "nt":
+            creation_flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        try:
+            subprocess.Popen(
+                [str(executable)],
+                cwd=str(executable.parent),
+                creationflags=creation_flags,
+                close_fds=True,
+            )
+        except OSError as exc:
+            self._log(f"Kindle 提示板启动失败：{exc}")
+            if manual:
+                messagebox.showerror("提示板启动失败", str(exc))
+            return
+        self._log(f"已联动启动 Kindle 提示板：{executable}")
+
+    @staticmethod
+    def _is_process_running(executable_name: str) -> bool:
+        if os.name != "nt":
+            return False
+        try:
+            result = subprocess.run(
+                ["tasklist", "/FI", f"IMAGENAME eq {executable_name}", "/FO", "CSV", "/NH"],
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=5,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return False
+        return executable_name.casefold() in result.stdout.casefold()
 
     def _find_music_file(self) -> Path | None:
         for path in sorted(APP_DIR.iterdir()):
@@ -398,112 +1010,212 @@ class SvnAutoTool:
             self._apply_visual_theme(theme)
         self.root.after(60000, self._theme_tick)
 
+    def _dpi_tick(self) -> None:
+        if os.name == "nt":
+            dpi = _get_window_dpi(self.root)
+            if dpi > 0 and dpi != self.current_dpi:
+                self.current_dpi = dpi
+                self.root.tk.call("tk", "scaling", dpi / 72.0)
+                self._apply_visual_theme(self.current_theme)
+        self.root.after(1000, self._dpi_tick)
+
     @staticmethod
     def _is_night_time() -> bool:
         hour = datetime.now().hour
         return hour >= 19 or hour < 6
 
     def _apply_visual_theme(self, theme: str) -> None:
+        try:
+            self.ui_style.theme_use("clam")
+        except Exception:
+            pass
         if theme == "night":
-            try:
-                self.ui_style.theme_use("clam")
-            except Exception:
-                pass
             colors = {
-                "bg": "#101720",
-                "panel": "#192534",
-                "text": "#F4F7FB",
-                "muted": "#B7C5D6",
-                "accent": "#F0B56A",
-                "border": "#61738A",
-                "button": "#2A3B50",
-                "button_active": "#38516B",
-                "button_pressed": "#233449",
-                "entry": "#243447",
-                "entry_focus": "#2D4057",
-                "tree": "#1D2A39",
-                "tree_text": "#F2F6FA",
-                "heading": "#2A3B50",
-                "heading_text": "#F7FAFC",
-                "selected": "#38648F",
+                "bg": "#202020",
+                "card": "#2B2B2B",
+                "text": "#FFFFFF",
+                "muted": "#C8C8C8",
+                "accent": "#60CDFF",
+                "accent_fill": "#0078D4",
+                "accent_hover": "#1686D9",
+                "accent_pressed": "#0067B8",
+                "border": "#454545",
+                "button": "#383838",
+                "button_active": "#454545",
+                "button_pressed": "#303030",
+                "entry": "#353535",
+                "entry_focus": "#3D3D3D",
+                "tree": "#252525",
+                "tree_text": "#F7F7F7",
+                "heading": "#333333",
+                "heading_text": "#FFFFFF",
+                "selected": "#005A9E",
                 "selected_text": "#FFFFFF",
-                "completed": "#20523A",
-                "completed_text": "#F0FBF3",
-                "scrollbar": "#4C6077",
-                "scroll_trough": "#16212D",
-                "disabled": "#65778B",
+                "completed": "#244B32",
+                "completed_text": "#F3FFF6",
+                "scrollbar": "#666666",
+                "scroll_trough": "#2B2B2B",
+                "disabled": "#777777",
             }
         else:
-            try:
-                self.ui_style.theme_use("vista")
-            except Exception:
-                pass
             colors = {
-                "bg": "#F0F0F0",
-                "panel": "#F0F0F0",
-                "text": "#1F1F1F",
-                "muted": "#5F5F5F",
-                "accent": "#1F1F1F",
-                "border": "#A6A6A6",
-                "button": "#F0F0F0",
-                "button_active": "#E5E5E5",
-                "button_pressed": "#D6D6D6",
-                "entry": "white",
-                "entry_focus": "white",
-                "tree": "white",
-                "tree_text": "#1F1F1F",
-                "heading": "#E2E2E2",
-                "heading_text": "#1F1F1F",
-                "selected": "#0078D7",
-                "selected_text": "white",
-                "completed": "#E8F7E8",
-                "completed_text": "#1F1F1F",
-                "scrollbar": "#C8C8C8",
-                "scroll_trough": "#E8E8E8",
-                "disabled": "#A0A0A0",
+                "bg": "#F3F3F3",
+                "card": "#FFFFFF",
+                "text": "#1A1A1A",
+                "muted": "#666666",
+                "accent": "#0067C0",
+                "accent_fill": "#0067C0",
+                "accent_hover": "#1976D2",
+                "accent_pressed": "#005A9E",
+                "border": "#D1D1D1",
+                "button": "#F7F7F7",
+                "button_active": "#E9E9E9",
+                "button_pressed": "#DDDDDD",
+                "entry": "#FFFFFF",
+                "entry_focus": "#FFFFFF",
+                "tree": "#FFFFFF",
+                "tree_text": "#1A1A1A",
+                "heading": "#F5F5F5",
+                "heading_text": "#333333",
+                "selected": "#0078D4",
+                "selected_text": "#FFFFFF",
+                "completed": "#DFF6DD",
+                "completed_text": "#153B1B",
+                "scrollbar": "#B8B8B8",
+                "scroll_trough": "#F3F3F3",
+                "disabled": "#9A9A9A",
             }
 
         self.root.configure(bg=colors["bg"])
-        self.ui_style.configure(".", background=colors["panel"], foreground=colors["text"])
-        self.ui_style.configure("TFrame", background=colors["panel"])
-        self.ui_style.configure("TLabel", background=colors["panel"], foreground=colors["text"])
-        self.ui_style.configure("TCheckbutton", background=colors["panel"], foreground=colors["text"])
-        self.ui_style.configure("TLabelframe", background=colors["panel"], foreground=colors["text"])
-        self.ui_style.configure("TLabelframe.Label", background=colors["panel"], foreground=colors["accent"])
+        self.ui_style.configure(".", font=("Segoe UI", 10), background=colors["card"], foreground=colors["text"])
+        self.ui_style.configure("TFrame", background=colors["card"])
+        self.ui_style.configure("App.TFrame", background=colors["bg"])
+        self.ui_style.configure("Card.TFrame", background=colors["card"])
+        self.ui_style.configure("TLabel", background=colors["card"], foreground=colors["text"])
+        self.ui_style.configure("Card.TLabel", background=colors["card"], foreground=colors["text"])
+        self.ui_style.configure(
+            "Title.TLabel",
+            background=colors["bg"],
+            foreground=colors["text"],
+            font=("Segoe UI Semibold", 22),
+        )
+        self.ui_style.configure(
+            "Subtitle.TLabel",
+            background=colors["bg"],
+            foreground=colors["muted"],
+            font=("Segoe UI", 9),
+        )
+        self.ui_style.configure(
+            "SectionTitle.TLabel",
+            background=colors["card"],
+            foreground=colors["text"],
+            font=("Segoe UI Semibold", 11),
+        )
+        self.ui_style.configure(
+            "SectionTitleApp.TLabel",
+            background=colors["bg"],
+            foreground=colors["text"],
+            font=("Segoe UI Semibold", 11),
+        )
+        self.ui_style.configure(
+            "CardTitle.TLabel",
+            background=colors["card"],
+            foreground=colors["accent"],
+            font=("Segoe UI Semibold", 10),
+        )
+        self.ui_style.configure(
+            "CardMuted.TLabel",
+            background=colors["card"],
+            foreground=colors["muted"],
+            font=("Segoe UI", 9),
+        )
+        self.ui_style.configure(
+            "Status.TLabel",
+            background=colors["bg"],
+            foreground=colors["accent"],
+            font=("Segoe UI Semibold", 10),
+            padding=(8, 5),
+        )
+        self.ui_style.configure("TCheckbutton", background=colors["card"], foreground=colors["text"])
+        self.ui_style.configure("Card.TCheckbutton", background=colors["card"], foreground=colors["text"])
+        self.ui_style.configure("Header.TCheckbutton", background=colors["bg"], foreground=colors["text"])
+        for style_name, background in (("TCheckbutton", colors["card"]), ("Card.TCheckbutton", colors["card"]), ("Header.TCheckbutton", colors["bg"])):
+            self.ui_style.map(
+                style_name,
+                background=[("active", background), ("pressed", background)],
+                foreground=[("disabled", colors["disabled"])],
+            )
         self.ui_style.configure(
             "TButton",
             background=colors["button"],
             foreground=colors["text"],
             bordercolor=colors["border"],
-            lightcolor=colors["border"],
-            darkcolor=colors["border"],
+            lightcolor=colors["button"],
+            darkcolor=colors["button"],
+            relief="flat",
+            borderwidth=1,
+            padding=(10, 5),
+            font=("Segoe UI", 9),
         )
         self.ui_style.map(
             "TButton",
             background=[
-                ("disabled", colors["panel"]),
+                ("disabled", colors["card"]),
                 ("pressed", colors["button_pressed"]),
                 ("active", colors["button_active"]),
             ],
             foreground=[("disabled", colors["disabled"])],
         )
         self.ui_style.configure(
-            "Primary.TButton",
-            background=colors["button"],
-            foreground=colors["text"],
-            bordercolor=colors["accent"],
-            lightcolor=colors["accent"],
-            darkcolor=colors["border"],
-            font=("Microsoft YaHei UI", 12, "bold"),
-            padding=(22, 10),
+            "Accent.TButton",
+            background=colors["accent_fill"],
+            foreground="#FFFFFF",
+            bordercolor=colors["accent_fill"],
+            lightcolor=colors["accent_fill"],
+            darkcolor=colors["accent_fill"],
+            relief="flat",
+            borderwidth=1,
+            padding=(18, 8),
+            font=("Segoe UI Semibold", 10),
         )
         self.ui_style.map(
-            "Primary.TButton",
+            "Accent.TButton",
             background=[
-                ("disabled", colors["panel"]),
-                ("pressed", colors["button_pressed"]),
-                ("active", colors["button_active"]),
+                ("disabled", colors["disabled"]),
+                ("pressed", colors["accent_pressed"]),
+                ("active", colors["accent_hover"]),
             ],
+            foreground=[("disabled", colors["card"])],
+        )
+        self.ui_style.configure(
+            "Subtle.TButton",
+            background=colors["bg"],
+            foreground=colors["text"],
+            bordercolor=colors["bg"],
+            lightcolor=colors["bg"],
+            darkcolor=colors["bg"],
+            relief="flat",
+            padding=(9, 5),
+        )
+        self.ui_style.map(
+            "Subtle.TButton",
+            background=[("pressed", colors["button_pressed"]), ("active", colors["button_active"])],
+            foreground=[("disabled", colors["disabled"])],
+        )
+        self.ui_style.configure(
+            "Compact.TButton",
+            background=colors["button"],
+            foreground=colors["text"],
+            bordercolor=colors["border"],
+            lightcolor=colors["button"],
+            darkcolor=colors["button"],
+            relief="flat",
+            padding=(8, 3),
+            font=("Segoe UI", 9),
+        )
+        self.ui_style.map(
+            "Compact.TButton",
+            background=[("pressed", colors["button_pressed"]), ("active", colors["button_active"])],
             foreground=[("disabled", colors["disabled"])],
         )
         self.ui_style.configure(
@@ -513,11 +1225,12 @@ class SvnAutoTool:
             bordercolor=colors["border"],
             lightcolor=colors["border"],
             darkcolor=colors["border"],
+            padding=(5, 4),
         )
         self.ui_style.map(
             "TEntry",
             fieldbackground=[
-                ("disabled", colors["panel"]),
+                ("disabled", colors["card"]),
                 ("focus", colors["entry_focus"]),
             ],
             foreground=[("disabled", colors["disabled"])],
@@ -530,6 +1243,9 @@ class SvnAutoTool:
             bordercolor=colors["border"],
             lightcolor=colors["border"],
             darkcolor=colors["border"],
+            borderwidth=0,
+            rowheight=25,
+            font=("Segoe UI", 9),
         )
         self.ui_style.map(
             "Treeview",
@@ -543,6 +1259,9 @@ class SvnAutoTool:
             bordercolor=colors["border"],
             lightcolor=colors["border"],
             darkcolor=colors["border"],
+            relief="flat",
+            font=("Segoe UI Semibold", 9),
+            padding=(6, 5),
         )
         self.ui_style.map("Treeview.Heading", background=[("active", colors["button_active"])])
         self.ui_style.configure(
@@ -554,9 +1273,25 @@ class SvnAutoTool:
             darkcolor=colors["border"],
             arrowcolor=colors["text"],
         )
-        self.ui_style.configure("Signature.TLabel", background=colors["panel"], foreground=colors["muted"], font=("Segoe UI", 9, "italic"))
-        self.ui_style.configure("UpdateDot.TLabel", background=colors["panel"], foreground=colors["muted"], font=("Segoe UI", 11, "bold"))
-        self.ui_style.configure("UpdateDotReady.TLabel", background=colors["panel"], foreground="#D93636", font=("Segoe UI", 11, "bold"))
+        self.ui_style.configure("TSeparator", background=colors["border"])
+        self.ui_style.configure(
+            "Signature.TLabel",
+            background=colors["bg"],
+            foreground=colors["muted"],
+            font=("Segoe UI", 9, "italic"),
+        )
+        self.ui_style.configure(
+            "UpdateDot.TLabel",
+            background=colors["bg"],
+            foreground=colors["muted"],
+            font=("Segoe UI", 11, "bold"),
+        )
+        self.ui_style.configure(
+            "UpdateDotReady.TLabel",
+            background=colors["bg"],
+            foreground="#D93636",
+            font=("Segoe UI", 11, "bold"),
+        )
         self.ui_style.configure("LiveLog.Treeview", background=colors["tree"], fieldbackground=colors["tree"], foreground=colors["tree_text"])
         self.ui_style.configure(
             "Completed.LiveLog.Treeview",
@@ -1279,6 +2014,40 @@ class SvnAutoTool:
     def _open_user_guide(self) -> None:
         webbrowser.open("https://bytedance.larkoffice.com/docx/BdDod9tjIo4rPbx2oWHchVRUnwh")
 
+    def _start_tray_icon(self) -> None:
+        if not self.tray_icon.start():
+            self._log("系统托盘图标初始化失败，关闭窗口时将直接退出。")
+
+    def _poll_tray_actions(self) -> None:
+        self.tray_icon.process_pending_actions()
+        self.root.after(100, self._poll_tray_actions)
+
+    def _hide_to_tray(self) -> None:
+        if not self.tray_icon.available:
+            self._exit_application()
+            return
+        self.root.withdraw()
+
+    def _show_from_tray(self) -> None:
+        self.root.deiconify()
+        self.root.state("normal")
+        self.root.lift()
+        self.root.after(80, self.root.focus_force)
+
+    def _run_from_tray(self) -> None:
+        self._show_from_tray()
+        self.root.after(100, self._run_now)
+
+    def _exit_application(self) -> None:
+        if self.running:
+            self._show_from_tray()
+            if not messagebox.askyesno("任务仍在执行", "任务还在执行中，确定要退出工具吗？"):
+                return
+        self._save_config()
+        self._stop_music()
+        self.tray_icon.stop()
+        self.root.destroy()
+
     def _check_for_updates_async(self) -> None:
         self.update_state = "checking"
         self._refresh_update_dot()
@@ -1350,6 +2119,7 @@ class SvnAutoTool:
             return
         self._launch_update_installer(zip_path)
         self._stop_music()
+        self.tray_icon.stop()
         self.root.destroy()
 
     def _update_download_failed(self, message: str) -> None:
@@ -1422,17 +2192,16 @@ Start-Process -FilePath (Join-Path $appDir 'SVNAutoTool.exe')
         return parse(remote) > parse(local)
 
     def _on_close(self) -> None:
-        if self.running and not messagebox.askyesno("任务仍在执行", "任务还在执行中，确定要关闭工具吗？"):
-            return
-        self._save_config()
-        self._stop_music()
-        self.root.destroy()
+        if self.tray_icon.available:
+            self._hide_to_tray()
+        else:
+            self._exit_application()
 
 
 def main() -> None:
     root = Tk()
     try:
-        ttk.Style().theme_use("vista")
+        ttk.Style().theme_use("clam")
     except Exception:
         pass
     SvnAutoTool(root)

@@ -1,6 +1,6 @@
-# 一键更新SVN v1.1.4
+# 一键更新SVN v1.3.1
 
-本版本调整更新圆点样式，并修复检查更新时 GitHub API 可能返回 403 的问题。
+本版本修复高 DPI 缩放下的字体模糊，并保留 Metro 风格界面、Windows 系统托盘和 KindleLarkStatus 独立联动启动。
 
 ## 功能
 
@@ -11,6 +11,15 @@
 - 支持每日首次自动更新 `bin\WindowsNoEditor\Update.bat`。
 - 支持 Cleanup 完成后自动执行 `res\Build.bat`。
 - 支持手动选择 `Update.bat` 和 `Build.bat` 的位置，留空时使用默认规则。
+- 支持启动 SVNmate 时自动打开 KindleLarkStatus，可手动选择稳定 EXE 路径。
+- 自动检测 KindleLarkStatus 是否已经运行，避免重复启动。
+- SVNmate 退出时不关闭 KindleLarkStatus，提示板托盘服务可继续运行。
+- 使用 Segoe UI、扁平卡片和 Metro 蓝色强调色重构昼夜界面。
+- 启用 Per-Monitor V2 DPI 感知，修复 125%/150% 缩放下由系统拉伸导致的字体发虚。
+- 根据当前显示器 DPI 同步校准 Tk 字体缩放和初始窗口尺寸。
+- 将定时执行与提示板联动压缩到同一行，扩大实时输出区域。
+- 新增 Windows 系统托盘图标，双击恢复窗口，右键可立即执行或退出。
+- 窗口关闭按钮改为隐藏到托盘，保证定时任务继续运行。
 - 右下角签名左侧的更新圆点更小、更靠近签名，检测到新版本后变红，点击即可更新。
 - 检查更新改为使用 GitHub Releases 普通跳转链接，避免未登录 API 限流导致的 403。
 - `Update.bat` 和 `Build.bat` 都会使用可见 CMD 窗口运行，失败时保留窗口 5 秒，避免错误一闪而过。

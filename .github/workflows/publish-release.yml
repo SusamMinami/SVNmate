@@ -25,10 +25,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -e
-          if gh release view v1.1.4 >/dev/null 2>&1; then
-            gh release upload v1.1.4 "一键更新SVN.zip" --clobber
+          if gh release view v1.3.1 >/dev/null 2>&1; then
+            gh release upload v1.3.1 "一键更新SVN.zip" --clobber
           else
-            gh release create v1.1.4 "一键更新SVN.zip" \
-              --title "一键更新SVN v1.1.4" \
+            gh release create v1.3.1 "一键更新SVN.zip" \
+              --title "一键更新SVN v1.3.1" \
               --notes-file RELEASE_NOTES.md
           fi
