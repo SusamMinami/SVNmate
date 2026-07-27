@@ -75,10 +75,10 @@ CONFIG_PATH = APP_DIR / "svn_auto_tool_config.json"
 LOG_DIR = APP_DIR / "logs"
 LOG_RETENTION_DAYS = 7
 MUSIC_EXTENSIONS = (".mp3", ".wav")
-APP_VERSION = "v1.3.2"
+APP_VERSION = "v1.3.3"
 LATEST_RELEASE_URL = "https://github.com/SusamMinami/SVNmate/releases/latest"
 RELEASE_DOWNLOAD_URL = "https://github.com/SusamMinami/SVNmate/releases/download/{tag}/{asset}"
-RELEASE_ASSET_NAME = "一键更新SVN.zip"
+RELEASE_ASSET_NAME = "SVNmate.zip"
 KINDLE_STATUS_EXE_NAME = "KindleLarkStatus.exe"
 APP_ICON_PATH = RESOURCE_DIR / "svnmate.ico"
 

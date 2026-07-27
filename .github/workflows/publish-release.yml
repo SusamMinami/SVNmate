@@ -20,15 +20,18 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Prepare release asset
+        run: cp "一键更新SVN.zip" "SVNmate.zip"
+
       - name: Create or update release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -e
-          if gh release view v1.3.2 >/dev/null 2>&1; then
-            gh release upload v1.3.2 "一键更新SVN.zip" --clobber
+          if gh release view v1.3.3 >/dev/null 2>&1; then
+            gh release upload v1.3.3 "SVNmate.zip" --clobber
           else
-            gh release create v1.3.2 "一键更新SVN.zip" \
-              --title "一键更新SVN v1.3.2" \
+            gh release create v1.3.3 "SVNmate.zip" \
+              --title "一键更新SVN v1.3.3" \
               --notes-file RELEASE_NOTES.md
           fi
