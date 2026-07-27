@@ -75,7 +75,7 @@ CONFIG_PATH = APP_DIR / "svn_auto_tool_config.json"
 LOG_DIR = APP_DIR / "logs"
 LOG_RETENTION_DAYS = 7
 MUSIC_EXTENSIONS = (".mp3", ".wav")
-APP_VERSION = "v1.3.1"
+APP_VERSION = "v1.3.2"
 LATEST_RELEASE_URL = "https://github.com/SusamMinami/SVNmate/releases/latest"
 RELEASE_DOWNLOAD_URL = "https://github.com/SusamMinami/SVNmate/releases/download/{tag}/{asset}"
 RELEASE_ASSET_NAME = "一键更新SVN.zip"
@@ -1701,8 +1701,9 @@ class SvnAutoTool:
     def _run_visible_console_command(self, cwd: Path, command: list[str]) -> tuple[int, str, str]:
         console_title = f"SVNmate Build {int(time.time() * 1000)}"
         command = self._add_console_title(command, console_title)
+        launch_command = self._windows_cmd_command_line(command)
         process = subprocess.Popen(
-            command,
+            launch_command,
             cwd=str(cwd),
             stdin=None,
             stdout=None,
@@ -1745,6 +1746,22 @@ class SvnAutoTool:
         titled = command.copy()
         titled[command_index] = f"title {title} & {body} & {failure_hold}"
         return titled
+
+    @staticmethod
+    def _windows_cmd_command_line(command: list[str]) -> list[str] | str:
+        if os.name != "nt" or not command:
+            return command
+        executable_name = Path(command[0]).name.lower()
+        normalized = [part.lower() for part in command]
+        if executable_name not in {"cmd", "cmd.exe"} or "/c" not in normalized:
+            return command
+        body_index = normalized.index("/c") + 1
+        if body_index != len(command) - 1:
+            return command
+
+        # list2cmdline escapes body quotes as \", which cmd.exe treats literally.
+        prefix = subprocess.list2cmdline(command[:body_index])
+        return f'{prefix} "{command[body_index]}"'
 
     def _run_tortoise_command(self, cwd: Path, command: list[str]) -> tuple[int, str, str]:
         process = subprocess.Popen(
