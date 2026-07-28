@@ -26,6 +26,10 @@ class UiSmokeTests(unittest.TestCase):
             self.assertEqual(root.title(), "配置关系检索器")
             self.assertEqual(len(app.result_trees), 3)
             self.assertEqual(str(app.back_button.cget("state")), "disabled")
+            self.assertEqual(
+                str(app.choose_doc_button.cget("text")),
+                "选择 doc 目录",
+            )
         finally:
             root.destroy()
 
@@ -92,6 +96,49 @@ class UiSmokeTests(unittest.TestCase):
                 self.assertIn("仍使用旧数据", app.status_text.get())
                 app.visit_query(QueryKey(QueryKind.TARGET, 1001))
                 self.assertEqual(app.current_result.key.value, 1001)
+            finally:
+                root.destroy()
+
+    def test_focus_copy_toast_and_collapsed_target_location_details(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            doc_directory = Path(temp_dir)
+            write_fixture(doc_directory / "csvdir")
+            root = Tk()
+            root.withdraw()
+            try:
+                app = ConfigLinkerApp(
+                    root,
+                    config_path=doc_directory / "settings.json",
+                    auto_load=False,
+                )
+                app.settings = AppSettings(doc_directory)
+                app.reload_data()
+                app.visit_query(QueryKey(QueryKind.TARGET, 1001))
+                root.update_idletasks()
+
+                self.assertIn("1001", app.card_focus[QueryKind.TARGET].get())
+                focus_items = [
+                    item
+                    for item in app.result_trees[QueryKind.TARGET].get_children()
+                    if "focus" in app.result_trees[QueryKind.TARGET].item(item, "tags")
+                ]
+                self.assertTrue(focus_items)
+
+                target = app.repository.targets_by_id[1001][0]
+                app._show_record_detail(target)
+                self.assertEqual(app.target_position_text.get(), "(X=1,Y=2,Z=3)")
+                self.assertEqual(
+                    app.target_rotation_text.get(),
+                    "(Pitch=0,Yaw=90,Roll=0)",
+                )
+                self.assertFalse(app.target_location_expanded)
+                app.toggle_target_location()
+                self.assertTrue(app.target_location_expanded)
+                self.assertEqual(str(app.target_position_entry.cget("state")), "readonly")
+
+                app._copy_text("1001", "目标物 ID 1001")
+                self.assertEqual(root.clipboard_get(), "1001")
+                self.assertEqual(app.toast_text.get(), "已复制 目标物 ID 1001")
             finally:
                 root.destroy()
 

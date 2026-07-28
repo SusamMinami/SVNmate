@@ -4,6 +4,11 @@ from pathlib import Path
 
 
 DEFAULT_DOC_DIRECTORY = Path(r"C:\trunk\doc")
+EXPECTED_CSV_FILES = (
+    "m目标物表.csv",
+    "NPC表.csv",
+    "m模型资源表.csv",
+)
 
 
 @dataclass(frozen=True)
@@ -20,6 +25,23 @@ def normalize_doc_directory(selected: Path) -> Path:
 
 def csv_directory(settings: AppSettings) -> Path:
     return settings.doc_directory / "csvdir"
+
+
+def validate_doc_directory(
+    selected: Path,
+) -> tuple[Path | None, tuple[str, ...]]:
+    doc_directory = normalize_doc_directory(selected)
+    csvdir = doc_directory / "csvdir"
+    if not csvdir.is_dir():
+        return None, (str(csvdir),)
+    missing = tuple(
+        str(csvdir / filename)
+        for filename in EXPECTED_CSV_FILES
+        if not (csvdir / filename).is_file()
+    )
+    if missing:
+        return None, missing
+    return doc_directory, ()
 
 
 def load_settings(path: Path) -> tuple[AppSettings, str | None]:

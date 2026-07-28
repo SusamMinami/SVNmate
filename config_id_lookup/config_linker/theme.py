@@ -53,6 +53,13 @@ def configure_styles(root: Tk, style: ttk.Style, dark: bool) -> dict[str, str]:
     style.configure("Title.TLabel", background=colors["bg"], foreground=colors["text"], font=("Segoe UI Semibold", 24))
     style.configure("Subtitle.TLabel", background=colors["bg"], foreground=colors["muted"], font=("Segoe UI", 9))
     style.configure("Section.TLabel", background=colors["card"], foreground=colors["text"], font=("Segoe UI Semibold", 12))
+    style.configure(
+        "FocusBadge.TLabel",
+        background=colors["accent_soft"],
+        foreground=colors["accent"],
+        font=("Segoe UI Semibold", 9),
+        padding=(7, 3),
+    )
     style.configure("Muted.TLabel", background=colors["card"], foreground=colors["muted"], font=("Segoe UI", 9))
     style.configure("AppMuted.TLabel", background=colors["bg"], foreground=colors["muted"], font=("Segoe UI", 9))
     style.configure("Arrow.TLabel", background=colors["bg"], foreground=colors["accent"], font=("Segoe UI Semibold", 20))
@@ -62,6 +69,12 @@ def configure_styles(root: Tk, style: ttk.Style, dark: bool) -> dict[str, str]:
     style.configure("Message.TLabel", background=colors["bg"], foreground=colors["muted"], font=("Segoe UI", 9))
     style.configure("MessageWarn.TLabel", background=colors["bg"], foreground=colors["warning"], font=("Segoe UI", 9))
     style.configure("MessageError.TLabel", background=colors["bg"], foreground=colors["error"], font=("Segoe UI", 9))
+    style.configure(
+        "Toast.TLabel",
+        background=colors["accent"],
+        foreground="#FFFFFF",
+        font=("Segoe UI Semibold", 9),
+    )
 
     style.configure(
         "Accent.TButton",

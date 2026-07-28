@@ -9,7 +9,9 @@ from config_linker.settings import (
     load_settings,
     normalize_doc_directory,
     save_settings,
+    validate_doc_directory,
 )
+from tests.fixture_factory import write_fixture
 
 
 class SettingsTests(unittest.TestCase):
@@ -79,6 +81,36 @@ class SettingsTests(unittest.TestCase):
             normalize_doc_directory(selected),
             Path(r"D:\workspace\doc"),
         )
+
+    def test_validate_doc_directory_accepts_doc_and_csvdir(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            doc_directory = Path(temp_dir)
+            write_fixture(doc_directory / "csvdir")
+
+            selected_doc, missing = validate_doc_directory(doc_directory)
+            selected_csv, csv_missing = validate_doc_directory(
+                doc_directory / "csvdir"
+            )
+
+            self.assertEqual(selected_doc, doc_directory)
+            self.assertEqual(selected_csv, doc_directory)
+            self.assertEqual(missing, ())
+            self.assertEqual(csv_missing, ())
+
+    def test_validate_doc_directory_lists_missing_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            doc_directory = Path(temp_dir)
+
+            selected, missing = validate_doc_directory(doc_directory)
+
+            self.assertIsNone(selected)
+            self.assertTrue(any("csvdir" in path for path in missing))
+
+            write_fixture(doc_directory / "csvdir")
+            (doc_directory / "csvdir" / "NPC表.csv").unlink()
+            selected, missing = validate_doc_directory(doc_directory)
+            self.assertIsNone(selected)
+            self.assertTrue(any("NPC表.csv" in path for path in missing))
 
 
 if __name__ == "__main__":

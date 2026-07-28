@@ -1,9 +1,10 @@
 from datetime import datetime
 from pathlib import Path
-from tkinter import BOTH, LEFT, RIGHT, X, Y, StringVar, Tk, filedialog, ttk
+from tkinter import BOTH, LEFT, RIGHT, X, Y, StringVar, Tk, filedialog, messagebox, ttk
 from typing import Any
 
 from .dpi import configure_tk_dpi, get_window_dpi, get_work_area, window_geometry
+from .interactions import ClickArbiter
 from .models import (
     NpcRecord,
     QueryKey,
@@ -20,6 +21,7 @@ from .settings import (
     load_settings,
     normalize_doc_directory,
     save_settings,
+    validate_doc_directory,
 )
 from .theme import configure_styles
 from .view_state import QueryHistory, ResultPager
@@ -84,12 +86,20 @@ class ConfigLinkerApp:
         self.message_text = StringVar(value=settings_warning or "输入任意一种 ID 开始查询")
         self.detail_text = StringVar(value="选择任意结果行可查看完整信息")
         self.resource_path_text = StringVar(value="")
+        self.target_position_text = StringVar(value="")
+        self.target_rotation_text = StringVar(value="")
+        self.toast_text = StringVar(value="")
+        self.target_location_expanded = False
+        self.toast_label: ttk.Label | None = None
+        self.toast_job: str | None = None
+        self.click_arbiter = ClickArbiter(self.root.after, self.root.after_cancel)
 
         self.result_trees: dict[QueryKind, ttk.Treeview] = {}
         self.horizontal_scrollbars: dict[QueryKind, ttk.Scrollbar] = {}
         self.record_maps: dict[QueryKind, dict[str, Any]] = {}
         self.card_borders: dict[QueryKind, ttk.Frame] = {}
         self.card_meta: dict[QueryKind, StringVar] = {}
+        self.card_focus: dict[QueryKind, StringVar] = {}
         self.load_more_buttons: dict[QueryKind, ttk.Button] = {}
         self.pagers: dict[QueryKind, ResultPager] = {}
 
@@ -158,12 +168,13 @@ class ConfigLinkerApp:
             command=self.go_back,
         )
         self.back_button.pack(side=LEFT)
-        ttk.Button(
+        self.choose_doc_button = ttk.Button(
             toolbar,
-            text="选择数据目录",
+            text="选择 doc 目录",
             style="Subtle.TButton",
             command=self.choose_data_directory,
-        ).pack(side=LEFT, padx=(7, 0))
+        )
+        self.choose_doc_button.pack(side=LEFT, padx=(7, 0))
         ttk.Button(
             toolbar,
             text="复制诊断信息",
@@ -259,6 +270,62 @@ class ConfigLinkerApp:
             state="readonly",
         )
         self.resource_path_entry.pack(side=LEFT, fill=X, expand=True)
+        self.target_detail_frame = ttk.Frame(detail_card, style="Card.TFrame")
+        self.target_location_button = ttk.Button(
+            self.target_detail_frame,
+            text="位置详情 ▸",
+            style="Subtle.TButton",
+            command=self.toggle_target_location,
+        )
+        self.target_location_button.pack(anchor="w")
+        self.target_location_frame = ttk.Frame(
+            self.target_detail_frame,
+            style="Card.TFrame",
+        )
+        ttk.Label(
+            self.target_location_frame,
+            text="坐标",
+            style="Muted.TLabel",
+        ).grid(row=0, column=0, sticky="w", padx=(0, 8), pady=(6, 3))
+        self.target_position_entry = ttk.Entry(
+            self.target_location_frame,
+            textvariable=self.target_position_text,
+            state="readonly",
+        )
+        self.target_position_entry.grid(
+            row=0,
+            column=1,
+            sticky="ew",
+            pady=(6, 3),
+        )
+        ttk.Label(
+            self.target_location_frame,
+            text="旋转",
+            style="Muted.TLabel",
+        ).grid(row=1, column=0, sticky="w", padx=(0, 8), pady=(3, 0))
+        self.target_rotation_entry = ttk.Entry(
+            self.target_location_frame,
+            textvariable=self.target_rotation_text,
+            state="readonly",
+        )
+        self.target_rotation_entry.grid(row=1, column=1, sticky="ew", pady=(3, 0))
+        self.target_location_frame.grid_columnconfigure(1, weight=1)
+        self.target_position_entry.bind(
+            "<Double-1>",
+            lambda _event: self._copy_text(
+                self.target_position_text.get(),
+                "坐标",
+            )
+            or "break",
+        )
+        self.target_rotation_entry.bind(
+            "<Double-1>",
+            lambda _event: self._copy_text(
+                self.target_rotation_text.get(),
+                "旋转",
+            )
+            or "break",
+        )
 
     def _build_result_card(
         self,
@@ -276,6 +343,13 @@ class ConfigLinkerApp:
         card_header = ttk.Frame(card, style="Card.TFrame")
         card_header.pack(fill=X, pady=(0, 7))
         ttk.Label(card_header, text=title, style="Section.TLabel").pack(side=LEFT)
+        focus = StringVar(value="")
+        self.card_focus[kind] = focus
+        ttk.Label(
+            card_header,
+            textvariable=focus,
+            style="FocusBadge.TLabel",
+        ).pack(side=LEFT, padx=(7, 0))
         meta = StringVar(value="0 条")
         self.card_meta[kind] = meta
         ttk.Label(card_header, textvariable=meta, style="Muted.TLabel").pack(side=RIGHT)
@@ -309,7 +383,17 @@ class ConfigLinkerApp:
             tree.configure(xscrollcommand=horizontal.set)
             horizontal.pack(fill=X, pady=(5, 0))
             self.horizontal_scrollbars[kind] = horizontal
-        tree.bind("<Button-1>", lambda event, card_kind=kind: self._on_tree_click(event, card_kind))
+        tree.bind(
+            "<ButtonRelease-1>",
+            lambda event, card_kind=kind: self._on_tree_click(event, card_kind),
+        )
+        tree.bind(
+            "<Double-1>",
+            lambda event, card_kind=kind: self._on_tree_double_click(
+                event,
+                card_kind,
+            ),
+        )
         tree.bind("<Motion>", lambda event, card_kind=kind: self._on_tree_motion(event, card_kind))
         tree.bind("<Leave>", lambda _event, widget=tree: widget.configure(cursor=""))
         tree.bind("<<TreeviewSelect>>", lambda _event, card_kind=kind: self._show_selected_detail(card_kind))
@@ -409,19 +493,37 @@ class ConfigLinkerApp:
             self._run_query(self.history.current, add_history=False)
 
     def choose_data_directory(self) -> None:
+        messagebox.showinfo(
+            "选择 doc 目录",
+            "请选择配置仓的 doc 根目录。\n"
+            "程序会自动读取 doc\\csvdir 下的三张配置表。\n\n"
+            "如果误选 csvdir，程序也会自动识别。",
+            parent=self.root,
+        )
         selected = filedialog.askdirectory(
-            title="选择包含三张 CSV 的目录",
+            title="选择配置仓 doc 根目录",
             initialdir=str(self.settings.doc_directory),
         )
         if not selected:
             return
-        self.settings = AppSettings(normalize_doc_directory(Path(selected)))
-        self.data_directory_text.set(str(self.settings.doc_directory))
+        doc_directory, missing = validate_doc_directory(Path(selected))
+        if doc_directory is None:
+            message = "所选目录中未找到以下路径：\n" + "\n".join(missing)
+            self._set_message(message.replace("\n", "；"), "error")
+            messagebox.showerror(
+                "doc 目录无效",
+                message,
+                parent=self.root,
+            )
+            return
+        new_settings = AppSettings(normalize_doc_directory(doc_directory))
         try:
-            save_settings(self.config_path, self.settings)
+            save_settings(self.config_path, new_settings)
         except OSError as exc:
             self._set_message(f"保存数据目录失败：{exc}", "error")
             return
+        self.settings = new_settings
+        self.data_directory_text.set(str(self.settings.doc_directory))
         self.reload_data()
 
     def copy_diagnostics(self) -> None:
@@ -459,6 +561,12 @@ class ConfigLinkerApp:
             self.pagers[kind] = ResultPager(len(records))
             self._render_card(kind)
             is_active = self.current_result is not None and self.current_result.key.kind == kind
+            if is_active:
+                self.card_focus[kind].set(
+                    f"查询中心 · {self.current_result.key.value}"
+                )
+            else:
+                self.card_focus[kind].set("")
             self.card_borders[kind].configure(
                 style="ActiveCardBorder.TFrame" if is_active else "CardBorder.TFrame"
             )
@@ -470,6 +578,7 @@ class ConfigLinkerApp:
         records = self._records_for_kind(kind)
         pager = self.pagers.get(kind, ResultPager(len(records)))
         self.pagers[kind] = pager
+        focus_item = ""
         for index, record in enumerate(records[: pager.visible_count]):
             item_id = f"{kind.value}-{index}-{record.row_number}"
             tags = ()
@@ -479,9 +588,18 @@ class ConfigLinkerApp:
                 and record.id == self.current_result.key.value
             ):
                 tags = ("focus",)
+                if not focus_item:
+                    focus_item = item_id
             tree.insert("", "end", iid=item_id, values=self._record_values(record), tags=tags)
             self.record_maps[kind][item_id] = record
-        tree.tag_configure("focus", background=self.colors["accent_soft"])
+        tree.tag_configure(
+            "focus",
+            background=self.colors["accent_soft"],
+            foreground=self.colors["accent"],
+            font=("Segoe UI Semibold", 10),
+        )
+        if focus_item:
+            tree.see(focus_item)
         self.card_meta[kind].set(f"已显示 {pager.visible_count} / {len(records)}")
         self.load_more_buttons[kind].configure(
             state="normal" if pager.has_more else "disabled"
@@ -542,9 +660,25 @@ class ConfigLinkerApp:
         self._show_record_detail(record)
         query_key = self._query_key_for_cell(kind, record, column)
         if query_key is not None:
-            self.root.after_idle(lambda key=query_key: self.visit_query(key))
+            self.click_arbiter.single(
+                lambda key=query_key: self.visit_query(key)
+            )
             return "break"
         return None
+
+    def _on_tree_double_click(self, event: Any, kind: QueryKind) -> str | None:
+        tree = self.result_trees[kind]
+        item_id = tree.identify_row(event.y)
+        column = tree.identify_column(event.x)
+        record = self.record_maps[kind].get(item_id)
+        query_key = self._query_key_for_cell(kind, record, column)
+        if query_key is None:
+            return None
+        label = f"{KIND_TO_QUERY_LABEL[query_key.kind]} {query_key.value}"
+        self.click_arbiter.double(
+            lambda: self._copy_text(str(query_key.value), label)
+        )
+        return "break"
 
     def _on_tree_motion(self, event: Any, kind: QueryKind) -> None:
         tree = self.result_trees[kind]
@@ -583,13 +717,22 @@ class ConfigLinkerApp:
 
     def _show_record_detail(self, record: Any) -> None:
         self.resource_detail_frame.pack_forget()
+        self.target_detail_frame.pack_forget()
+        self.target_location_frame.pack_forget()
         self.resource_path_text.set("")
+        self.target_position_text.set("")
+        self.target_rotation_text.set("")
+        self.target_location_expanded = False
+        self.target_location_button.configure(text="位置详情 ▸")
         if isinstance(record, TargetRecord):
             text = (
                 f"目标物 ID：{record.id}  |  类型：{record.target_type or '未填写'}  |  "
                 f"NPC ID：{record.npc_id if record.npc_id is not None else '未填写'}  |  "
                 f"CSV 行：{record.row_number}\n描述：{record.description or '未填写'}"
             )
+            self.target_position_text.set(record.position)
+            self.target_rotation_text.set(record.rotation)
+            self.target_detail_frame.pack(fill=X, pady=(6, 0))
         elif isinstance(record, NpcRecord):
             text = (
                 f"NPC ID：{record.id}  |  名称：{record.name or '未填写'}  |  "
@@ -605,6 +748,48 @@ class ConfigLinkerApp:
         else:
             text = "选择任意结果行可查看完整信息"
         self.detail_text.set(text)
+
+    def toggle_target_location(self) -> None:
+        self.target_location_expanded = not self.target_location_expanded
+        if self.target_location_expanded:
+            self.target_location_button.configure(text="位置详情 ▾")
+            self.target_location_frame.pack(fill=X)
+        else:
+            self.target_location_button.configure(text="位置详情 ▸")
+            self.target_location_frame.pack_forget()
+
+    def _copy_text(self, value: str, label: str) -> None:
+        if not value:
+            self._set_message(f"{label}没有可复制内容", "warning")
+            return
+        self.root.clipboard_clear()
+        self.root.clipboard_append(value)
+        self._show_toast(f"已复制 {label}")
+
+    def _show_toast(self, message: str) -> None:
+        self.toast_text.set(message)
+        if self.toast_label is None or not self.toast_label.winfo_exists():
+            self.toast_label = ttk.Label(
+                self.root,
+                textvariable=self.toast_text,
+                style="Toast.TLabel",
+                padding=(12, 7),
+            )
+        self.toast_label.place(
+            relx=1.0,
+            rely=1.0,
+            x=-18,
+            y=-18,
+            anchor="se",
+        )
+        if self.toast_job is not None:
+            self.root.after_cancel(self.toast_job)
+        self.toast_job = self.root.after(1500, self._hide_toast)
+
+    def _hide_toast(self) -> None:
+        self.toast_job = None
+        if self.toast_label is not None and self.toast_label.winfo_exists():
+            self.toast_label.place_forget()
 
     def _set_message(self, text: str, level: str) -> None:
         self.message_text.set(text)
@@ -629,7 +814,12 @@ class ConfigLinkerApp:
         self.current_theme = theme
         self.colors = configure_styles(self.root, self.style, theme == "dark")
         for tree in self.result_trees.values():
-            tree.tag_configure("focus", background=self.colors["accent_soft"])
+            tree.tag_configure(
+                "focus",
+                background=self.colors["accent_soft"],
+                foreground=self.colors["accent"],
+                font=("Segoe UI Semibold", 10),
+            )
 
     def _theme_tick(self) -> None:
         self._apply_theme()
