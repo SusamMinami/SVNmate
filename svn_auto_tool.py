@@ -14,6 +14,16 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from module_updates import ModuleManifest, ModuleUpdateError, download_archive
+from tool_modules import (
+    CONFIG_LINKER,
+    KINDLE_STATUS,
+    TOOL_MODULES,
+    ToolModuleManager,
+    ToolModuleSpec,
+    module_paths_from_config,
+)
+
 
 def _enable_windows_dpi_awareness() -> None:
     if os.name != "nt":
@@ -425,10 +435,39 @@ class SvnAutoTool:
         self.music_enabled = BooleanVar(value=True)
         self.custom_update_bat_path = StringVar(value="")
         self.custom_build_bat_path = StringVar(value="")
+        detected_config_linker = self._find_default_config_linker_executable()
         detected_kindle_status = self._find_default_kindle_status_executable()
+        self.tool_module_manager = ToolModuleManager(
+            APP_DIR,
+            process_checker=self._is_process_running,
+        )
+        self.tool_module_paths = {
+            CONFIG_LINKER.module_id: StringVar(
+                value=str(detected_config_linker or "")
+            ),
+            KINDLE_STATUS.module_id: StringVar(
+                value=str(detected_kindle_status or "")
+            ),
+        }
         self.launch_kindle_status_on_startup = BooleanVar(value=detected_kindle_status is not None)
-        self.kindle_status_path = StringVar(value=str(detected_kindle_status or ""))
+        self.kindle_status_path = self.tool_module_paths[KINDLE_STATUS.module_id]
         self.kindle_status_path_text = StringVar(value="未选择程序")
+        self.tool_module_status = {
+            spec.module_id: StringVar(value="未检查")
+            for spec in TOOL_MODULES
+        }
+        self.tool_module_path_text = {
+            spec.module_id: StringVar(value="")
+            for spec in TOOL_MODULES
+        }
+        self.tool_module_states = {
+            spec.module_id: "idle"
+            for spec in TOOL_MODULES
+        }
+        self.tool_module_manifests: dict[str, ModuleManifest] = {}
+        self.tool_module_install_after_check: set[str] = set()
+        self.tool_module_action_buttons: dict[str, ttk.Button] = {}
+        self.tool_module_update_buttons: dict[str, ttk.Button] = {}
         self.schedule_time = StringVar(value="09:00")
         self.next_run_text = StringVar(value="未启用")
         self.status_text = StringVar(value="就绪")
@@ -451,7 +490,7 @@ class SvnAutoTool:
         self._cleanup_old_logs()
         self._build_ui()
         self._load_config()
-        self._refresh_kindle_status_path_text()
+        self._refresh_tool_module_rows()
         self._refresh_music_button()
         self._apply_music_setting()
         self._theme_tick()
@@ -464,6 +503,7 @@ class SvnAutoTool:
         self.root.after(200, self._start_tray_icon)
         self.root.after(800, self._launch_kindle_status_at_startup)
         self.root.after(2000, self._check_for_updates_async)
+        self.root.after(2600, self._check_tool_modules_async)
         self.root.after(500, self._finalize_initial_dpi)
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -542,7 +582,7 @@ class SvnAutoTool:
 
         options = ttk.Frame(settings, style="Card.TFrame", padding=(12, 8))
         options.pack(side=LEFT, fill=BOTH, expand=True, padx=(0, 5))
-        ttk.Label(options, text="执行选项", style="SectionTitle.TLabel").pack(anchor="w", pady=(0, 5))
+        ttk.Label(options, text="执行与自动化", style="SectionTitle.TLabel").pack(anchor="w", pady=(0, 5))
         self._build_option_script_row(
             options,
             self.run_bin_update,
@@ -564,15 +604,9 @@ class SvnAutoTool:
             anchor="w",
             pady=(5, 0),
         )
-
-        automation = ttk.Frame(settings, style="Card.TFrame", padding=(12, 8))
-        automation.pack(side=LEFT, fill=BOTH, expand=True, padx=(5, 0))
-        ttk.Label(automation, text="自动化", style="SectionTitle.TLabel").pack(anchor="w", pady=(0, 5))
-
-        automation_controls = ttk.Frame(automation, style="Card.TFrame")
-        automation_controls.pack(fill=X)
-        schedule_controls = ttk.Frame(automation_controls, style="Card.TFrame")
-        schedule_controls.pack(side=LEFT)
+        ttk.Separator(options, orient="horizontal").pack(fill=X, pady=(7, 6))
+        schedule_controls = ttk.Frame(options, style="Card.TFrame")
+        schedule_controls.pack(fill=X)
         ttk.Checkbutton(
             schedule_controls,
             text="每日定时",
@@ -585,40 +619,29 @@ class SvnAutoTool:
         time_entry.pack(side=LEFT)
         time_entry.bind("<FocusOut>", lambda _event: self._on_schedule_changed())
         time_entry.bind("<Return>", lambda _event: self._on_schedule_changed())
-        ttk.Separator(automation_controls, orient="vertical").pack(side=LEFT, fill=Y, padx=10)
-        companion_controls = ttk.Frame(automation_controls, style="Card.TFrame")
-        companion_controls.pack(side=LEFT, fill=X, expand=True)
-        ttk.Checkbutton(
-            companion_controls,
-            text="联动提示板",
-            variable=self.launch_kindle_status_on_startup,
-            command=self._on_kindle_status_setting_changed,
-            style="Card.TCheckbutton",
-        ).pack(side=LEFT)
-        ttk.Button(
-            companion_controls,
-            text="选择",
-            style="Compact.TButton",
-            command=self._choose_kindle_status_path,
-        ).pack(side=LEFT, padx=(8, 4))
-        ttk.Button(
-            companion_controls,
-            text="打开",
-            style="Compact.TButton",
-            command=lambda: self._launch_kindle_status(manual=True),
+        ttk.Label(
+            schedule_controls,
+            text="下次：",
+            style="CardMuted.TLabel",
+        ).pack(side=LEFT, padx=(12, 0))
+        ttk.Label(
+            schedule_controls,
+            textvariable=self.next_run_text,
+            style="CardMuted.TLabel",
         ).pack(side=LEFT)
 
-        automation_meta = ttk.Frame(automation, style="Card.TFrame")
-        automation_meta.pack(fill=X, pady=(5, 0))
-        ttk.Label(automation_meta, text="下次：", style="CardMuted.TLabel").pack(side=LEFT)
-        ttk.Label(automation_meta, textvariable=self.next_run_text, style="CardMuted.TLabel").pack(side=LEFT)
-        ttk.Label(
-            automation_meta,
-            textvariable=self.kindle_status_path_text,
-            style="CardMuted.TLabel",
-            width=30,
-            anchor="e",
-        ).pack(side=RIGHT, fill=X, expand=True, padx=(10, 0))
+        modules = ttk.Frame(settings, style="Card.TFrame", padding=(12, 8))
+        modules.pack(side=LEFT, fill=BOTH, expand=True, padx=(5, 0))
+        ttk.Label(modules, text="工具模块", style="SectionTitle.TLabel").pack(
+            anchor="w",
+            pady=(0, 3),
+        )
+        for index, spec in enumerate(TOOL_MODULES):
+            self._build_tool_module_row(
+                modules,
+                spec,
+                pady=(0, 0) if index == 0 else (6, 0),
+            )
 
         live_header = ttk.Frame(main, style="App.TFrame")
         live_header.pack(fill=X, pady=(2, 6))
@@ -714,6 +737,72 @@ class SvnAutoTool:
             padx=(0, 5),
         )
 
+    def _build_tool_module_row(
+        self,
+        parent: ttk.Frame,
+        spec: ToolModuleSpec,
+        *,
+        pady: tuple[int, int],
+    ) -> None:
+        row = ttk.Frame(parent, style="Card.TFrame")
+        row.pack(fill=X, pady=pady)
+
+        controls = ttk.Frame(row, style="Card.TFrame")
+        controls.pack(fill=X)
+        ttk.Label(
+            controls,
+            text=spec.display_name,
+            style="CardTitle.TLabel",
+            width=14,
+        ).pack(side=LEFT)
+        ttk.Label(
+            controls,
+            textvariable=self.tool_module_status[spec.module_id],
+            style="CardMuted.TLabel",
+        ).pack(side=LEFT, fill=X, expand=True)
+        action_button = ttk.Button(
+            controls,
+            text="安装",
+            width=6,
+            style="Compact.TButton",
+            command=lambda current=spec: self._on_tool_module_primary(current),
+        )
+        action_button.pack(side=LEFT, padx=(4, 0))
+        update_button = ttk.Button(
+            controls,
+            text="检查",
+            width=6,
+            style="Compact.TButton",
+            command=lambda current=spec: self._on_tool_module_update(current),
+        )
+        update_button.pack(side=LEFT, padx=(4, 0))
+        ttk.Button(
+            controls,
+            text="选择",
+            width=6,
+            style="Compact.TButton",
+            command=lambda current=spec: self._choose_tool_module_path(current),
+        ).pack(side=LEFT, padx=(4, 0))
+        self.tool_module_action_buttons[spec.module_id] = action_button
+        self.tool_module_update_buttons[spec.module_id] = update_button
+
+        meta = ttk.Frame(row, style="Card.TFrame")
+        meta.pack(fill=X, pady=(2, 0))
+        if spec == KINDLE_STATUS:
+            ttk.Checkbutton(
+                meta,
+                text="启动时联动",
+                variable=self.launch_kindle_status_on_startup,
+                command=self._on_kindle_status_setting_changed,
+                style="Card.TCheckbutton",
+            ).pack(side=LEFT, padx=(0, 7))
+        ttk.Label(
+            meta,
+            textvariable=self.tool_module_path_text[spec.module_id],
+            style="CardMuted.TLabel",
+            anchor="w",
+        ).pack(side=LEFT, fill=X, expand=True)
+
     def _load_config(self) -> None:
         if not CONFIG_PATH.exists():
             return
@@ -728,10 +817,22 @@ class SvnAutoTool:
         self.music_enabled.set(bool(data.get("music_enabled", True)))
         self.custom_update_bat_path.set(str(data.get("custom_update_bat_path", "")))
         self.custom_build_bat_path.set(str(data.get("custom_build_bat_path", "")))
-        detected_path = self.kindle_status_path.get()
-        self.kindle_status_path.set(str(data.get("kindle_status_path", detected_path)))
+        detected_config_linker = self.tool_module_paths[CONFIG_LINKER.module_id].get()
+        detected_kindle_status = self.tool_module_paths[KINDLE_STATUS.module_id].get()
+        module_paths = module_paths_from_config(
+            data,
+            detected_config_linker=detected_config_linker,
+            detected_kindle_status=detected_kindle_status,
+        )
+        for module_id, path in module_paths.items():
+            self.tool_module_paths[module_id].set(path)
         self.launch_kindle_status_on_startup.set(
-            bool(data.get("launch_kindle_status_on_startup", bool(detected_path)))
+            bool(
+                data.get(
+                    "launch_kindle_status_on_startup",
+                    bool(module_paths[KINDLE_STATUS.module_id]),
+                )
+            )
         )
         self.enable_schedule.set(bool(data.get("enable_schedule", False)))
         self.schedule_time.set(str(data.get("schedule_time", "09:00")))
@@ -747,13 +848,17 @@ class SvnAutoTool:
             "custom_build_bat_path": self.custom_build_bat_path.get().strip(),
             "launch_kindle_status_on_startup": self.launch_kindle_status_on_startup.get(),
             "kindle_status_path": self.kindle_status_path.get().strip(),
+            "tool_module_paths": {
+                module_id: variable.get().strip()
+                for module_id, variable in self.tool_module_paths.items()
+            },
             "enable_schedule": self.enable_schedule.get(),
             "schedule_time": self.schedule_time.get().strip(),
             "last_bin_update_date": self.last_bin_update_date,
         }
         CONFIG_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         self._refresh_next_run_text()
-        self._refresh_kindle_status_path_text()
+        self._refresh_tool_module_rows()
 
     def _choose_update_bat_path(self) -> None:
         self._choose_script_path(self.custom_update_bat_path, "选择 Update.bat")
@@ -800,6 +905,17 @@ class SvnAutoTool:
         return str(script_path)
 
     @staticmethod
+    def _find_default_config_linker_executable() -> Path | None:
+        candidates = [
+            APP_DIR / "ConfigLinker.exe",
+            APP_DIR / "config_id_lookup" / "dist" / "ConfigLinker.exe",
+        ]
+        for candidate in candidates:
+            if candidate.is_file():
+                return candidate
+        return None
+
+    @staticmethod
     def _find_default_kindle_status_executable() -> Path | None:
         downloads = Path.home() / "Downloads"
         candidates = [
@@ -814,22 +930,83 @@ class SvnAutoTool:
                 return candidate
         return None
 
-    def _resolve_kindle_status_executable(self) -> Path | None:
-        path_text = self.kindle_status_path.get().strip()
-        if not path_text:
+    def _configured_tool_module_path(
+        self,
+        spec: ToolModuleSpec,
+    ) -> str | None:
+        path_text = self.tool_module_paths[spec.module_id].get().strip()
+        return path_text or None
+
+    def _resolve_tool_module_executable(
+        self,
+        spec: ToolModuleSpec,
+    ) -> Path | None:
+        executable = self.tool_module_manager.executable_path(
+            spec,
+            self._configured_tool_module_path(spec),
+        )
+        if not executable.is_file():
             return None
-        path = Path(path_text).expanduser()
-        candidates = [path]
-        if path.is_dir():
-            candidates = [
-                path / KINDLE_STATUS_EXE_NAME,
-                path / "dist" / KINDLE_STATUS_EXE_NAME,
-                path / "dist" / "windows" / KINDLE_STATUS_EXE_NAME,
-            ]
-        for candidate in candidates:
-            if candidate.is_file():
-                return candidate.resolve()
-        return None
+        try:
+            return executable.resolve()
+        except OSError:
+            return executable
+
+    def _resolve_kindle_status_executable(self) -> Path | None:
+        return self._resolve_tool_module_executable(KINDLE_STATUS)
+
+    def _refresh_tool_module_rows(self) -> None:
+        for spec in TOOL_MODULES:
+            configured_path = self._configured_tool_module_path(spec)
+            executable = self.tool_module_manager.executable_path(
+                spec,
+                configured_path,
+            )
+            installed = executable.is_file()
+            version = self.tool_module_manager.local_version(
+                spec,
+                configured_path,
+            )
+            state = self.tool_module_states.get(spec.module_id, "idle")
+            manifest = self.tool_module_manifests.get(spec.module_id)
+
+            if state == "checking":
+                status = "检查中..."
+            elif state == "downloading":
+                status = "下载并安装中..."
+            elif state == "failed":
+                status = "检查失败"
+            elif state == "ready" and manifest:
+                action = "可更新" if installed else "可安装"
+                status = f"{action} v{manifest.version}"
+            elif installed and version != "0.0.0":
+                status = f"已安装 v{version}"
+            elif installed:
+                status = "已安装 · 版本未知"
+            else:
+                status = "未安装"
+            self.tool_module_status[spec.module_id].set(status)
+
+            path_text = str(executable)
+            if len(path_text) > 58:
+                path_text = "..." + path_text[-55:]
+            self.tool_module_path_text[spec.module_id].set(path_text)
+            if spec == KINDLE_STATUS:
+                self.kindle_status_path_text.set(path_text)
+
+            action_button = self.tool_module_action_buttons.get(spec.module_id)
+            update_button = self.tool_module_update_buttons.get(spec.module_id)
+            busy = state in {"checking", "downloading"}
+            if action_button:
+                action_button.configure(
+                    text="打开" if installed else "安装",
+                    state="disabled" if busy else "normal",
+                )
+            if update_button:
+                update_button.configure(
+                    text="更新" if state == "ready" and installed else "检查",
+                    state="disabled" if busy else "normal",
+                )
 
     def _refresh_kindle_status_path_text(self) -> None:
         executable = self._resolve_kindle_status_executable()
@@ -844,53 +1021,317 @@ class SvnAutoTool:
     def _on_kindle_status_setting_changed(self) -> None:
         self._save_config()
 
-    def _choose_kindle_status_path(self) -> None:
-        executable = self._resolve_kindle_status_executable()
+    def _choose_tool_module_path(self, spec: ToolModuleSpec) -> None:
+        executable = self._resolve_tool_module_executable(spec)
         initial_dir = executable.parent if executable else Path.home() / "Downloads"
         file_path = filedialog.askopenfilename(
-            title="选择 Kindle 提示板程序",
+            title=f"选择{spec.display_name}程序",
             initialdir=str(initial_dir),
-            filetypes=(("KindleLarkStatus", "KindleLarkStatus*.exe"), ("可执行程序", "*.exe"), ("所有文件", "*.*")),
+            filetypes=(
+                (spec.display_name, spec.executable_name),
+                ("可执行程序", "*.exe"),
+                ("所有文件", "*.*"),
+            ),
         )
         if not file_path:
             return
-        self.kindle_status_path.set(str(Path(file_path)))
-        self.launch_kindle_status_on_startup.set(True)
+        selected = Path(file_path)
+        if selected.name.casefold() != spec.executable_name.casefold():
+            messagebox.showwarning(
+                "程序不匹配",
+                f"请选择名为 {spec.executable_name} 的程序。",
+            )
+            return
+        self.tool_module_paths[spec.module_id].set(str(selected))
+        self.tool_module_states[spec.module_id] = "idle"
+        self.tool_module_manifests.pop(spec.module_id, None)
+        if spec == KINDLE_STATUS:
+            self.launch_kindle_status_on_startup.set(True)
         self._save_config()
+        self._check_tool_module_async(spec)
+
+    def _choose_kindle_status_path(self) -> None:
+        self._choose_tool_module_path(KINDLE_STATUS)
 
     def _launch_kindle_status_at_startup(self) -> None:
         if self.launch_kindle_status_on_startup.get():
             self._launch_kindle_status(manual=False)
 
     def _launch_kindle_status(self, manual: bool) -> None:
-        executable = self._resolve_kindle_status_executable()
-        if executable is None:
-            message = "未找到 Kindle 提示板程序，请重新选择 KindleLarkStatus.exe。"
-            self._log(message)
-            if manual:
-                messagebox.showwarning("无法打开提示板", message)
-            return
-        if self._is_process_running(executable.name):
-            self._log("Kindle 提示板已在运行，已跳过重复启动。")
-            if manual:
-                messagebox.showinfo("Kindle 提示板", "Kindle 提示板已经在运行。")
-            return
-        creation_flags = 0
-        if os.name == "nt":
-            creation_flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        self._launch_tool_module(KINDLE_STATUS, manual=manual)
+
+    def _launch_tool_module(
+        self,
+        spec: ToolModuleSpec,
+        *,
+        manual: bool,
+    ) -> None:
         try:
-            subprocess.Popen(
-                [str(executable)],
-                cwd=str(executable.parent),
-                creationflags=creation_flags,
-                close_fds=True,
+            result = self.tool_module_manager.launch(
+                spec,
+                self._configured_tool_module_path(spec),
             )
         except OSError as exc:
-            self._log(f"Kindle 提示板启动失败：{exc}")
+            self._log(f"{spec.display_name}启动失败：{exc}")
             if manual:
-                messagebox.showerror("提示板启动失败", str(exc))
+                messagebox.showerror("模块启动失败", str(exc))
             return
-        self._log(f"已联动启动 Kindle 提示板：{executable}")
+        if result == "install-required":
+            message = f"{spec.display_name}尚未安装，请先安装或选择现有程序。"
+            self._log(message)
+            if manual:
+                messagebox.showwarning("无法打开模块", message)
+            return
+        if result == "already-running":
+            self._log(f"{spec.display_name}已在运行，已跳过重复启动。")
+            if manual:
+                messagebox.showinfo(spec.display_name, "程序已经在运行。")
+            return
+        executable = self.tool_module_manager.executable_path(
+            spec,
+            self._configured_tool_module_path(spec),
+        )
+        self._log(f"已启动{spec.display_name}：{executable}")
+
+    def _on_tool_module_primary(self, spec: ToolModuleSpec) -> None:
+        if self.tool_module_manager.is_installed(
+            spec,
+            self._configured_tool_module_path(spec),
+        ):
+            self._launch_tool_module(spec, manual=True)
+            return
+        self._start_tool_module_install(spec)
+
+    def _on_tool_module_update(self, spec: ToolModuleSpec) -> None:
+        if self.tool_module_states.get(spec.module_id) == "ready":
+            self._start_tool_module_install(spec)
+            return
+        self._check_tool_module_async(spec, manual=True)
+
+    def _check_tool_modules_async(self) -> None:
+        for spec in TOOL_MODULES:
+            self._check_tool_module_async(spec)
+
+    def _check_tool_module_async(
+        self,
+        spec: ToolModuleSpec,
+        *,
+        manual: bool = False,
+        install_when_ready: bool = False,
+    ) -> None:
+        if install_when_ready:
+            self.tool_module_install_after_check.add(spec.module_id)
+        if self.tool_module_states.get(spec.module_id) in {
+            "checking",
+            "downloading",
+        }:
+            return
+        self.tool_module_states[spec.module_id] = "checking"
+        self._refresh_tool_module_rows()
+        threading.Thread(
+            target=self._check_tool_module_worker,
+            args=(spec, manual),
+            daemon=True,
+        ).start()
+
+    def _check_tool_module_worker(
+        self,
+        spec: ToolModuleSpec,
+        manual: bool,
+    ) -> None:
+        try:
+            manifest = self.tool_module_manager.check_update(spec)
+        except Exception as exc:
+            message = str(exc)
+            self.root.after(
+                0,
+                lambda: self._tool_module_check_failed(spec, message),
+            )
+            return
+        self.root.after(
+            0,
+            lambda: self._tool_module_manifest_ready(spec, manifest, manual),
+        )
+
+    def _tool_module_check_failed(
+        self,
+        spec: ToolModuleSpec,
+        message: str,
+    ) -> None:
+        self.tool_module_install_after_check.discard(spec.module_id)
+        self.tool_module_states[spec.module_id] = "failed"
+        self._refresh_tool_module_rows()
+        self._log(f"{spec.display_name}检查更新失败：{message}")
+
+    def _tool_module_manifest_ready(
+        self,
+        spec: ToolModuleSpec,
+        manifest: ModuleManifest,
+        manual: bool,
+    ) -> None:
+        self.tool_module_manifests[spec.module_id] = manifest
+        configured_path = self._configured_tool_module_path(spec)
+        installed = self.tool_module_manager.is_installed(spec, configured_path)
+        update_available = (
+            not installed
+            or self.tool_module_manager.update_available(
+                spec,
+                manifest,
+                configured_path,
+            )
+        )
+        self.tool_module_states[spec.module_id] = (
+            "ready" if update_available else "idle"
+        )
+        self._refresh_tool_module_rows()
+        if update_available:
+            action = "可安装" if not installed else "可更新"
+            self._log(
+                f"{spec.display_name}{action}到 v{manifest.version}。"
+            )
+        elif manual:
+            self._log(f"{spec.display_name}已是最新版本。")
+        if spec.module_id in self.tool_module_install_after_check:
+            self.tool_module_install_after_check.discard(spec.module_id)
+            if update_available:
+                self._confirm_tool_module_install(spec, manifest)
+
+    def _start_tool_module_install(self, spec: ToolModuleSpec) -> None:
+        manifest = self.tool_module_manifests.get(spec.module_id)
+        if manifest is None:
+            self._check_tool_module_async(
+                spec,
+                manual=True,
+                install_when_ready=True,
+            )
+            return
+        self._confirm_tool_module_install(spec, manifest)
+
+    def _confirm_tool_module_install(
+        self,
+        spec: ToolModuleSpec,
+        manifest: ModuleManifest,
+    ) -> None:
+        configured_path = self._configured_tool_module_path(spec)
+        installed = self.tool_module_manager.is_installed(spec, configured_path)
+        running = self.tool_module_manager.is_running(spec)
+        action = "更新" if installed else "安装"
+        details = (
+            f"将{action}{spec.display_name} v{manifest.version}。\n"
+            "只会替换程序文件和公开版本文件，模块配置不会被覆盖。"
+        )
+        if running:
+            interruption = (
+                "\n\n程序当前正在运行，确认后会关闭并在更新完成后重新启动。"
+            )
+            if spec == KINDLE_STATUS:
+                interruption = (
+                    "\n\nKindle 提示板当前正在运行，更新 Windows 模块会"
+                    "短暂中断刷新服务，完成后将自动重启。"
+                )
+            details += interruption
+        if not messagebox.askyesno(f"{action}{spec.display_name}", details):
+            return
+
+        self.tool_module_states[spec.module_id] = "downloading"
+        self._refresh_tool_module_rows()
+        threading.Thread(
+            target=self._install_tool_module_worker,
+            args=(spec, manifest, configured_path, running),
+            daemon=True,
+        ).start()
+
+    def _install_tool_module_worker(
+        self,
+        spec: ToolModuleSpec,
+        manifest: ModuleManifest,
+        configured_path: str | None,
+        was_running: bool,
+    ) -> None:
+        archive = (
+            APP_DIR
+            / "_module_updates"
+            / spec.module_id
+            / f"{spec.install_folder}.zip"
+        )
+        stopped = False
+        try:
+            download_archive(manifest.download_url, archive)
+            if was_running:
+                if not self.tool_module_manager.stop(spec):
+                    raise ModuleUpdateError(
+                        f"无法关闭正在运行的{spec.display_name}"
+                    )
+                stopped = True
+            target = self.tool_module_manager.install_archive(
+                spec,
+                manifest,
+                archive,
+                configured_path,
+            )
+            if was_running:
+                launch_result = self.tool_module_manager.launch(
+                    spec,
+                    configured_path,
+                )
+                if launch_result != "started":
+                    raise ModuleUpdateError(
+                        f"{spec.display_name}更新后未能重新启动"
+                    )
+        except Exception as exc:
+            if stopped:
+                try:
+                    self.tool_module_manager.launch(spec, configured_path)
+                except OSError:
+                    pass
+            message = str(exc)
+            self.root.after(
+                0,
+                lambda: self._tool_module_install_failed(spec, message),
+            )
+            return
+        self.root.after(
+            0,
+            lambda: self._tool_module_install_succeeded(
+                spec,
+                manifest,
+                target,
+            ),
+        )
+
+    def _tool_module_install_succeeded(
+        self,
+        spec: ToolModuleSpec,
+        manifest: ModuleManifest,
+        target: Path,
+    ) -> None:
+        self.tool_module_states[spec.module_id] = "idle"
+        self._refresh_tool_module_rows()
+        self._log(
+            f"{spec.display_name} v{manifest.version} 已安装：{target}"
+        )
+        messagebox.showinfo(
+            f"{spec.display_name}安装完成",
+            f"已安装 v{manifest.version}。",
+        )
+
+    def _tool_module_install_failed(
+        self,
+        spec: ToolModuleSpec,
+        message: str,
+    ) -> None:
+        self.tool_module_states[spec.module_id] = (
+            "ready"
+            if spec.module_id in self.tool_module_manifests
+            else "failed"
+        )
+        self._refresh_tool_module_rows()
+        self._log(f"{spec.display_name}安装失败：{message}")
+        messagebox.showerror(
+            f"{spec.display_name}安装失败",
+            message,
+        )
+
 
     @staticmethod
     def _is_process_running(executable_name: str) -> bool:

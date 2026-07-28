@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 
 from svn_auto_tool import RELEASE_ASSET_NAME, RELEASE_DOWNLOAD_URL, SvnAutoTool
+from tool_modules import CONFIG_LINKER, KINDLE_STATUS, ToolModuleManager
 
 
 class _Value:
@@ -17,12 +18,51 @@ class _Value:
     def get(self) -> object:
         return self.value
 
+    def set(self, value: object) -> None:
+        self.value = value
+
 
 class ReleaseConfigTests(unittest.TestCase):
     def test_release_asset_name_is_stable_and_url_safe(self) -> None:
         self.assertEqual(RELEASE_ASSET_NAME, "SVNmate.zip")
         asset_url = RELEASE_DOWNLOAD_URL.format(tag="v1.3.4", asset=RELEASE_ASSET_NAME)
         self.assertTrue(asset_url.endswith("/v1.3.4/SVNmate.zip"))
+
+
+class ToolModuleIntegrationTests(unittest.TestCase):
+    def test_empty_config_path_uses_managed_module_location(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            tool = SvnAutoTool.__new__(SvnAutoTool)
+            tool.tool_module_manager = ToolModuleManager(Path(temp_dir))
+            tool.tool_module_paths = {
+                CONFIG_LINKER.module_id: _Value(""),
+                KINDLE_STATUS.module_id: _Value(""),
+            }
+            expected = tool.tool_module_manager.executable_path(CONFIG_LINKER)
+            expected.parent.mkdir(parents=True)
+            expected.write_bytes(b"exe")
+
+            self.assertEqual(
+                tool._resolve_tool_module_executable(CONFIG_LINKER),
+                expected.resolve(),
+            )
+
+    def test_configured_module_path_overrides_managed_location(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            external = Path(temp_dir) / "external" / "KindleLarkStatus.exe"
+            external.parent.mkdir()
+            external.write_bytes(b"exe")
+            tool = SvnAutoTool.__new__(SvnAutoTool)
+            tool.tool_module_manager = ToolModuleManager(Path(temp_dir))
+            tool.tool_module_paths = {
+                CONFIG_LINKER.module_id: _Value(""),
+                KINDLE_STATUS.module_id: _Value(str(external)),
+            }
+
+            self.assertEqual(
+                tool._resolve_tool_module_executable(KINDLE_STATUS),
+                external.resolve(),
+            )
 
 
 @unittest.skipUnless(os.name == "nt", "Windows cmd.exe behavior only")
