@@ -7,6 +7,7 @@ build/
 dist/
 release/
 *.spec
+!config_id_lookup/ConfigLinker.spec
 
 # Local runtime state
 logs/
