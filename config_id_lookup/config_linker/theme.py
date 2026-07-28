@@ -62,6 +62,18 @@ def configure_styles(root: Tk, style: ttk.Style, dark: bool) -> dict[str, str]:
     )
     style.configure("Muted.TLabel", background=colors["card"], foreground=colors["muted"], font=("Segoe UI", 9))
     style.configure("AppMuted.TLabel", background=colors["bg"], foreground=colors["muted"], font=("Segoe UI", 9))
+    style.configure(
+        "UpdateDot.TLabel",
+        background=colors["bg"],
+        foreground=colors["muted"],
+        font=("Segoe UI Semibold", 11),
+    )
+    style.configure(
+        "UpdateDotReady.TLabel",
+        background=colors["bg"],
+        foreground=colors["error"],
+        font=("Segoe UI Semibold", 11),
+    )
     style.configure("Arrow.TLabel", background=colors["bg"], foreground=colors["accent"], font=("Segoe UI Semibold", 20))
     style.configure("StatusGood.TLabel", background=colors["bg"], foreground=colors["success"], font=("Segoe UI Semibold", 9))
     style.configure("StatusWarn.TLabel", background=colors["bg"], foreground=colors["warning"], font=("Segoe UI Semibold", 9))

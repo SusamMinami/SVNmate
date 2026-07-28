@@ -9,6 +9,7 @@ enable_windows_dpi_awareness()
 from tkinter import Tk
 
 from config_linker.ui import ConfigLinkerApp
+from config_linker.update_controller import ConfigLinkerUpdateController
 
 
 def _app_directory() -> Path:
@@ -17,9 +18,36 @@ def _app_directory() -> Path:
     return Path(__file__).resolve().parent
 
 
+def _resource_directory() -> Path:
+    return Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+
+
+def _app_version() -> str:
+    version_file = _resource_directory() / "VERSION"
+    try:
+        version = version_file.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeError):
+        return "1.1.0"
+    return version or "1.1.0"
+
+
 def main() -> None:
+    app_directory = _app_directory()
+    app_version = _app_version()
+    update_controller = None
+    if getattr(sys, "frozen", False):
+        update_controller = ConfigLinkerUpdateController(
+            local_version=app_version,
+            current_exe=Path(sys.executable).resolve(),
+            work_dir=app_directory / "_updates" / "config-linker",
+        )
     root = Tk()
-    ConfigLinkerApp(root, config_path=_app_directory() / "config_linker_config.json")
+    ConfigLinkerApp(
+        root,
+        config_path=app_directory / "config_linker_config.json",
+        app_version=app_version,
+        update_controller=update_controller,
+    )
     root.mainloop()
 
 

@@ -1,5 +1,6 @@
 from datetime import datetime
 from pathlib import Path
+import threading
 from tkinter import BOTH, LEFT, RIGHT, X, Y, StringVar, Tk, filedialog, messagebox, ttk
 from typing import Any
 
@@ -24,6 +25,12 @@ from .settings import (
     validate_doc_directory,
 )
 from .theme import configure_styles
+from .update_controller import (
+    ConfigLinkerUpdateController,
+    ModuleManifest,
+    PreparedUpdate,
+    UpdateCheckResult,
+)
 from .view_state import QueryHistory, ResultPager
 
 
@@ -61,6 +68,8 @@ class ConfigLinkerApp:
         *,
         config_path: Path | None = None,
         auto_load: bool = True,
+        app_version: str = "1.1.0",
+        update_controller: ConfigLinkerUpdateController | None = None,
     ) -> None:
         self.root = root
         self.current_dpi = configure_tk_dpi(self.root)
@@ -75,6 +84,11 @@ class ConfigLinkerApp:
         self.current_result: QueryResult | None = None
         self.last_error = ""
         self.current_theme = ""
+        self.app_version = app_version
+        self.update_controller = update_controller
+        self.update_state = "idle"
+        self.update_manifest: ModuleManifest | None = None
+        self.update_error = ""
 
         self.style = ttk.Style()
         self.colors = configure_styles(self.root, self.style, self._should_use_dark_theme())
@@ -89,6 +103,7 @@ class ConfigLinkerApp:
         self.target_position_text = StringVar(value="")
         self.target_rotation_text = StringVar(value="")
         self.toast_text = StringVar(value="")
+        self.version_text = StringVar(value=f"v{self.app_version}")
         self.target_location_expanded = False
         self.toast_label: ttk.Label | None = None
         self.toast_job: str | None = None
@@ -109,6 +124,8 @@ class ConfigLinkerApp:
         self._update_back_button()
         self.root.after(1000, self._dpi_tick)
         self.root.after(60_000, self._theme_tick)
+        if self.update_controller is not None:
+            self.root.after(1500, self._check_for_updates_async)
 
         if settings_warning:
             self._set_message(settings_warning, "warning")
@@ -146,6 +163,22 @@ class ConfigLinkerApp:
 
         header_actions = ttk.Frame(header, style="App.TFrame")
         header_actions.pack(side=RIGHT)
+        ttk.Label(
+            header_actions,
+            textvariable=self.version_text,
+            style="AppMuted.TLabel",
+        ).pack(side=LEFT, padx=(0, 4))
+        self.update_dot = ttk.Label(
+            header_actions,
+            text="○",
+            style="UpdateDot.TLabel",
+            cursor="hand2",
+        )
+        self.update_dot.pack(side=LEFT, padx=(0, 10))
+        self.update_dot.bind(
+            "<Button-1>",
+            lambda _event: self._on_update_dot_clicked(),
+        )
         self.status_label = ttk.Label(
             header_actions,
             textvariable=self.status_text,
@@ -326,6 +359,149 @@ class ConfigLinkerApp:
             )
             or "break",
         )
+
+    def _check_for_updates_async(self) -> None:
+        if self.update_controller is None:
+            return
+        if self.update_state in {"checking", "downloading"}:
+            return
+        self.update_state = "checking"
+        self.update_error = ""
+        self._refresh_update_dot()
+        threading.Thread(
+            target=self._check_for_updates_worker,
+            daemon=True,
+        ).start()
+
+    def _check_for_updates_worker(self) -> None:
+        if self.update_controller is None:
+            return
+        result = self.update_controller.check()
+        self.root.after(
+            0,
+            lambda: self._apply_update_check_result(result),
+        )
+
+    def _apply_update_check_result(
+        self,
+        result: UpdateCheckResult,
+    ) -> None:
+        self.update_state = result.state
+        self.update_manifest = result.manifest
+        self.update_error = result.message
+        self._refresh_update_dot()
+
+    def _refresh_update_dot(self) -> None:
+        self.version_text.set(
+            f"v{self.app_version}"
+            + (
+                " · 更新检查失败"
+                if self.update_state == "failed"
+                else ""
+            )
+        )
+        if self.update_state == "ready":
+            self.update_dot.configure(
+                text="●",
+                style="UpdateDotReady.TLabel",
+            )
+        elif self.update_state in {"checking", "downloading"}:
+            self.update_dot.configure(
+                text="◌",
+                style="UpdateDot.TLabel",
+            )
+        else:
+            self.update_dot.configure(
+                text="○",
+                style="UpdateDot.TLabel",
+            )
+
+    def _on_update_dot_clicked(self) -> None:
+        if self.update_controller is None:
+            messagebox.showinfo(
+                "独立更新",
+                "源码模式不执行自更新，请使用发布版 ConfigLinker.exe。",
+                parent=self.root,
+            )
+            return
+        if self.update_state == "checking":
+            messagebox.showinfo(
+                "检查更新",
+                "正在检查更新，请稍后。",
+                parent=self.root,
+            )
+            return
+        if self.update_state == "downloading":
+            messagebox.showinfo(
+                "正在更新",
+                "正在下载并校验更新包，请稍后。",
+                parent=self.root,
+            )
+            return
+        if self.update_state != "ready" or self.update_manifest is None:
+            self._check_for_updates_async()
+            return
+        if not messagebox.askyesno(
+            "发现新版本",
+            f"发现 ConfigLinker v{self.update_manifest.version}，"
+            "是否下载更新？",
+            parent=self.root,
+        ):
+            return
+        self.update_state = "downloading"
+        self._refresh_update_dot()
+        manifest = self.update_manifest
+        threading.Thread(
+            target=self._prepare_update_worker,
+            args=(manifest,),
+            daemon=True,
+        ).start()
+
+    def _prepare_update_worker(self, manifest: ModuleManifest) -> None:
+        if self.update_controller is None:
+            return
+        try:
+            prepared = self.update_controller.prepare_update(manifest)
+        except Exception as exc:
+            message = str(exc)
+            self.root.after(
+                0,
+                lambda: self._update_prepare_failed(message),
+            )
+            return
+        self.root.after(
+            0,
+            lambda: self._confirm_apply_update(prepared),
+        )
+
+    def _update_prepare_failed(self, message: str) -> None:
+        self.update_state = "ready"
+        self.update_error = message
+        self._refresh_update_dot()
+        messagebox.showerror(
+            "更新失败",
+            f"更新包下载或校验失败：{message}",
+            parent=self.root,
+        )
+
+    def _confirm_apply_update(self, prepared: PreparedUpdate) -> None:
+        self.update_state = "ready"
+        self._refresh_update_dot()
+        if not messagebox.askyesno(
+            "更新已准备完成",
+            f"ConfigLinker v{prepared.version} 已下载并通过校验。"
+            "是否立即重启并应用更新？",
+            parent=self.root,
+        ):
+            return
+        if self.update_controller is None:
+            return
+        try:
+            self.update_controller.launch_prepared_update(prepared)
+        except OSError as exc:
+            self._update_prepare_failed(str(exc))
+            return
+        self.root.destroy()
 
     def _build_result_card(
         self,

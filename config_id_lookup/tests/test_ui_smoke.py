@@ -3,6 +3,8 @@ import tempfile
 import unittest
 from pathlib import Path
 from tkinter import Tk
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from config_linker.models import NpcRecord, QueryKey, QueryKind, ResourceRecord, TargetRecord
 from config_linker.settings import AppSettings
@@ -30,6 +32,39 @@ class UiSmokeTests(unittest.TestCase):
                 str(app.choose_doc_button.cget("text")),
                 "选择 doc 目录",
             )
+            self.assertEqual(app.version_text.get(), "v1.1.0")
+        finally:
+            root.destroy()
+
+    def test_declining_update_does_not_prepare_download(self) -> None:
+        class FakeUpdateController:
+            def __init__(self) -> None:
+                self.prepare_calls = 0
+
+            def prepare_update(self, _manifest: object) -> None:
+                self.prepare_calls += 1
+
+        root = Tk()
+        root.withdraw()
+        try:
+            controller = FakeUpdateController()
+            app = ConfigLinkerApp(
+                root,
+                config_path=Path("__missing_config_for_test__.json"),
+                auto_load=False,
+                app_version="1.1.0",
+                update_controller=controller,
+            )
+            app.update_state = "ready"
+            app.update_manifest = SimpleNamespace(version="1.2.0")
+
+            with patch(
+                "config_linker.ui.messagebox.askyesno",
+                return_value=False,
+            ):
+                app._on_update_dot_clicked()
+
+            self.assertEqual(controller.prepare_calls, 0)
         finally:
             root.destroy()
 

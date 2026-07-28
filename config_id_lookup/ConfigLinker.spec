@@ -8,9 +8,9 @@ icon_path = project_dir.parent / "svnmate.ico"
 
 a = Analysis(
     ["config_linker_app.py"],
-    pathex=[str(project_dir)],
+    pathex=[str(project_dir), str(project_dir.parent)],
     binaries=[],
-    datas=[],
+    datas=[(str(project_dir / "VERSION"), ".")],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
