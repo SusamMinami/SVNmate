@@ -25,8 +25,8 @@ class _Value:
 class ReleaseConfigTests(unittest.TestCase):
     def test_release_asset_name_is_stable_and_url_safe(self) -> None:
         self.assertEqual(RELEASE_ASSET_NAME, "SVNmate.zip")
-        asset_url = RELEASE_DOWNLOAD_URL.format(tag="v1.3.4", asset=RELEASE_ASSET_NAME)
-        self.assertTrue(asset_url.endswith("/v1.3.4/SVNmate.zip"))
+        asset_url = RELEASE_DOWNLOAD_URL.format(tag="v1.4.0", asset=RELEASE_ASSET_NAME)
+        self.assertTrue(asset_url.endswith("/v1.4.0/SVNmate.zip"))
 
 
 class ToolModuleIntegrationTests(unittest.TestCase):

@@ -2,26 +2,21 @@
 
 这是一个 Windows 桌面小工具，用来批量执行多个文件夹的 SVN 更新、清理和项目脚本。
 
-## v1.3.4 更新摘要
+## v1.4.0 更新摘要
 
-本版本优化 BAT 自动关闭和任务流水线：
+本版本新增独立工具模块体系：
 
-- 使用控制台输入和安全兜底按键自动通过脚本末尾的 `pause`，执行完成后 CMD 自动关闭。
-- `bin` 的 SVN Update 成功后，`Update.bat` 进入单线程后台队列，同时主流程继续后续文件夹的 SVN Update。
-- 多个 SVN Update 仍按勾选顺序串行，多个 `Update.bat` 也彼此串行，避免工作副本数据库冲突。
-- 所有 SVN Update 与后台 `Update.bat` 完成后，再按勾选顺序执行 Cleanup 和 Build。
-- GitHub Release 改用稳定附件名 `SVNmate.zip`，避免中文文件名被平台重命名后下载返回 404。
-- 客户端自动更新下载地址与 Release 附件名保持一致。
-- 修复 `Update.bat` 和 `Build.bat` 路径被 Python 转义成 `\"...\"` 后无法由 `cmd.exe` 识别的问题。
-- 保留可见 CMD、自动通过 `pause` 和失败窗口停留 5 秒的反馈方式。
-- 新增真实 BAT 回归测试，覆盖含空格的脚本路径。
-- 将定时执行与 KindleLarkStatus 联动启动合并到“自动化”区域，减少设置区占用。
-- 使用 Metro 风格重构界面，采用 Segoe UI、扁平卡片和蓝色强调按钮。
-- 文件夹列表调整为更紧凑的双栏显示，下方实时输出区域更高。
-- 新增 Windows 系统托盘；关闭窗口只隐藏到托盘，定时任务仍会继续。
-- 托盘菜单支持打开 SVNmate、立即执行和彻底退出；双击托盘图标可恢复窗口。
-- 启用 Per-Monitor V2 DPI 感知，并按当前显示器 DPI 校准 Tk 字体，修复 125%/150% 缩放下的字体发虚。
-- 保留 KindleLarkStatus 独立维护方式，SVNmate 只负责按配置路径联动启动。
+- 设置区调整为“执行与自动化”和“工具模块”两张卡片。
+- ConfigLinker 与 KindleLarkStatus 按需安装，不进入 SVNmate 主安装包。
+- 支持安装、打开、选择现有 EXE、检查版本和更新模块。
+- 两个模块使用独立固定 Release 通道，不会覆盖 SVNmate 主程序更新。
+- 下载前校验 manifest 模块 ID、HTTPS 地址、版本、入口文件和 SHA-256。
+- ZIP 解压拒绝目录穿越；替换只允许模块 EXE 和公开 `VERSION`。
+- 模块配置、日志、OAuth Token、SSH 私钥和其他运行文件不在更新白名单内。
+- 运行中的模块会在用户确认后关闭、替换并按原状态重启。
+- ConfigLinker `1.1.0` 修复高 DPI 字体和默认窗口尺寸，三栏关系图完整显示。
+- ConfigLinker 支持查询中心高亮、双击 ID 复制、长路径横滚/选择复制，以及坐标和旋转详情。
+- ConfigLinker 数据入口改为 `doc` 根目录，自动定位 `doc\csvdir` 下的三张 CSV。
 
 ## 启动方式
 
@@ -51,7 +46,7 @@ python svn_auto_tool.py
 
 全部任务完成后，音乐会淡出并暂停。
 
-界面采用紧凑的 Metro 风格：Segoe UI 字体、扁平卡片、蓝色强调按钮和高对比度昼夜主题。定时执行与 Kindle 提示板联动位于同一行，为下方实时输出保留更多空间。Windows 端启用 Per-Monitor V2 DPI 感知，在 125%/150% 缩放和多显示器环境下会按当前显示器 DPI 重新校准字体，避免系统拉伸造成文字发虚。
+界面采用紧凑的 Metro 风格：Segoe UI 字体、扁平卡片、蓝色强调按钮和高对比度昼夜主题。设置区左侧是“执行与自动化”，右侧是“工具模块”。Windows 端启用 Per-Monitor V2 DPI 感知，在 125%/150% 缩放和多显示器环境下会按当前显示器 DPI 重新校准字体，避免系统拉伸造成文字发虚。
 
 界面右下角会显示作者签名 `SusamMinami`，签名左侧的圆点用于检查更新；检测到新版本后圆点会变红，点击即可下载并应用更新。软件会根据时间自动切换外观：19:00 后进入暗黑主题，白天保持浅色主题。
 
@@ -61,22 +56,77 @@ python svn_auto_tool.py
 https://bytedance.larkoffice.com/docx/BdDod9tjIo4rPbx2oWHchVRUnwh
 ```
 
-## 联动启动 Kindle 提示板
+## 工具模块
 
-在“自动化”区域勾选“联动提示板”后，每次只需启动 SVNmate。
-
-程序会优先自动识别：
+“工具模块”卡片提供两个独立程序：
 
 ```text
-%USERPROFILE%\Downloads\提示板\KindleLarkStatus\dist\KindleLarkStatus.exe
+配置关系检索器（ConfigLinker）
+Kindle 提示板（KindleLarkStatus）
 ```
 
-如果 KindleLarkStatus 放在其他位置，点击“选择程序”重新指定稳定版 `KindleLarkStatus.exe`。点击“立即打开”可以随时手动启动。
+每行包含模块状态/版本、安装或打开、检查或更新、选择现有程序。
 
-- KindleLarkStatus 已经运行时会跳过，不会重复打开实例。
-- SVNmate 只保存 EXE 路径，不读取或修改 KindleLarkStatus 的配置。
-- 从托盘彻底退出 SVNmate 也不会结束 KindleLarkStatus 的托盘服务。
-- 两个项目可以继续分别更新；只要 KindleLarkStatus 更新后仍生成同一路径的稳定 EXE，就不需要重新选择。
+### 按需安装
+
+模块未安装时点击“安装”。SVNmate 会读取固定 manifest、下载 ZIP、校验 SHA-256，再安装到：
+
+```text
+modules\ConfigLinker\ConfigLinker.exe
+modules\KindleLarkStatus\KindleLarkStatus.exe
+```
+
+模块不随 `SVNmate.zip` 预装。安装失败不会删除当前可用版本，也不会覆盖模块配置。
+
+### 选择已有程序
+
+已有独立 EXE 时点击对应行的“选择”：
+
+- ConfigLinker 必须选择 `ConfigLinker.exe`。
+- Kindle 提示板必须选择 `KindleLarkStatus.exe`。
+- 新的 `tool_module_paths` 会保存到 `svn_auto_tool_config.json`。
+- 旧版 `kindle_status_path` 会自动迁移，不需要重新选择。
+
+### 检查与更新
+
+SVNmate 启动后会后台检查两个模块。网络失败只把模块状态改为“检查失败”，不影响 SVN 更新和模块启动。
+
+- 无更新时保持当前版本。
+- 有更新时“检查”变为“更新”。
+- 更新前必须人工确认，不会静默替换。
+- 模块正在运行时会先提示关闭；更新完成后按原状态重启。
+- 更新只替换 EXE 和公开 `VERSION`，不覆盖 JSON/INI 配置、日志、Token、缓存或 SSH 私钥。
+
+ConfigLinker 还可以在自身标题区点击更新圆点独立更新。SVNmate、ConfigLinker 和 KindleLarkStatus Windows 模块拥有各自版本，互不覆盖。
+
+## ConfigLinker 使用
+
+1. 打开“配置关系检索器”。
+2. 点击“选择 doc 目录”，选择包含 `csvdir` 的配置仓 `doc` 根目录。
+3. 选择目标物 ID、NPC ID 或模型资源 ID，输入整数后搜索。
+4. 单击结果中的关系 ID 可切换查询中心，点击“返回上一步”可连续回退。
+5. 双击 ID 会复制完整数字并显示提示。
+6. 模型资源路径可横向滚动；下方只读输入框支持框选和 `Ctrl+C`。
+7. 目标物详情中的“位置详情”默认折叠，展开后可复制坐标和旋转。
+
+程序自动读取：
+
+```text
+doc\csvdir\m目标物表.csv
+doc\csvdir\NPC表.csv
+doc\csvdir\m模型资源表.csv
+```
+
+如果误选 `csvdir`，程序会自动使用父级 `doc`。ConfigLinker 只读 CSV，不保存 Excel，不运行 VBA、导表器或配置检查脚本。
+
+## Kindle 提示板联动与更新
+
+在 Kindle 提示板模块行勾选“启动时联动”后，每次启动 SVNmate 会打开提示板；已运行时不会重复启动。退出 SVNmate 不会关闭提示板托盘服务。
+
+必须区分两种更新：
+
+- **更新 Windows 模块**：由 SVNmate 替换 `KindleLarkStatus.exe`，运行中的刷新服务会短暂中断并自动重启。
+- **更新 Kindle 端**：由 KindleLarkStatus 自身通过 SSH 更新 KUAL 元数据和 Kindle Shell 文件，不替换 Windows EXE。
 
 ## 系统托盘
 
@@ -107,7 +157,7 @@ dist\SVNAutoTool.exe
 
 列表中的 `[x]` 表示会参与执行，`[ ]` 表示暂时不执行。点击第一列或双击选中行可以切换勾选状态。
 
-点击“保存配置”后，文件夹路径、勾选状态、执行选项和定时设置都会保存；下次打开软件会自动恢复。
+点击“保存配置”后，文件夹路径、勾选状态、执行选项、定时设置、工具模块路径和 Kindle 联动设置都会保存；下次打开软件会自动恢复。
 
 ## 执行流程
 
@@ -155,6 +205,8 @@ logs\svn_auto_tool_YYYY-MM-DD.log
 ```
 
 配置文件和日志目录会在第一次使用后自动生成。使用 exe 时，它们会保存在 `SVNAutoTool.exe` 所在目录。
+
+模块路径保存在配置中的 `tool_module_paths`。ConfigLinker 自己的 doc 目录保存在其 EXE 同目录的 `config_linker_config.json`；KindleLarkStatus 的私有配置仍位于 `%APPDATA%\KindleLarkStatus`，SVNmate 不读取这些内容。
 
 工具启动时会自动清理 7 天前的日志文件。
 

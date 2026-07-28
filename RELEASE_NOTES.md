@@ -1,42 +1,43 @@
-# 一键更新SVN v1.3.4
+# 一键更新SVN v1.4.0
 
-本版本修复 BAT 完成后无法自动关闭的问题，并优化 Update.bat 与后续 SVN Update 的执行流水线。
+本版本新增工具模块管理，并发布 ConfigLinker `1.1.0`。
 
-## 功能
+## SVNmate
 
-- 批量执行 SVN Update / Cleanup。
-- 支持双栏文件夹配置和勾选执行。
-- 按勾选顺序逐个处理文件夹，减少 SVN 工作副本锁冲突。
-- 支持定时执行日常更新任务。
-- 支持每日首次自动更新 `bin\WindowsNoEditor\Update.bat`。
-- 支持 Cleanup 完成后自动执行 `res\Build.bat`。
-- 支持手动选择 `Update.bat` 和 `Build.bat` 的位置，留空时使用默认规则。
-- 支持启动 SVNmate 时自动打开 KindleLarkStatus，可手动选择稳定 EXE 路径。
-- 自动检测 KindleLarkStatus 是否已经运行，避免重复启动。
-- SVNmate 退出时不关闭 KindleLarkStatus，提示板托盘服务可继续运行。
-- 使用 Segoe UI、扁平卡片和 Metro 蓝色强调色重构昼夜界面。
-- 启用 Per-Monitor V2 DPI 感知，修复 125%/150% 缩放下由系统拉伸导致的字体发虚。
-- 根据当前显示器 DPI 同步校准 Tk 字体缩放和初始窗口尺寸。
-- 将定时执行与提示板联动压缩到同一行，扩大实时输出区域。
-- 新增 Windows 系统托盘图标，双击恢复窗口，右键可立即执行或退出。
-- 窗口关闭按钮改为隐藏到托盘，保证定时任务继续运行。
-- 右下角签名左侧的更新圆点更小、更靠近签名，检测到新版本后变红，点击即可更新。
-- 检查更新改为使用 GitHub Releases 普通跳转链接，避免未登录 API 限流导致的 403。
-- 使用控制台输入和安全兜底按键自动通过 BAT 末尾的 `pause`，脚本完成后 CMD 自动关闭。
-- `bin` 更新完成后立即后台执行 `Update.bat`，同时继续后续文件夹的 SVN Update。
-- SVN Update 与多个 `Update.bat` 各自保持串行；全部完成后再按勾选顺序执行 Cleanup 和 Build。
-- GitHub Release 统一使用稳定附件名 `SVNmate.zip`，修复中文附件被重命名后自动更新下载返回 404 的问题。
-- 客户端下载地址与 Release 附件名保持一致。
-- 修复 BAT 路径引号被转义为 `\"...\"` 后 `cmd.exe` 无法识别脚本的问题。
-- BAT 继续在脚本所在目录的可见 CMD 中执行，行为与手动双击一致。
-- 新增 Windows BAT 启动回归测试，覆盖含空格的脚本路径。
-- `Update.bat` 和 `Build.bat` 都会使用可见 CMD 窗口运行，失败时保留窗口 5 秒，避免错误一闪而过。
-- 发布包音乐改为压缩后的 `.mp3`，显著降低安装包体积。
-- 实时输出执行过程，并在任务完成后显示完成状态。
-- 支持音乐开关、任务完成后音乐淡出暂停、昼夜主题、右下角签名和使用指南入口。
+- 设置区调整为“执行与自动化”和“工具模块”两张卡片。
+- 支持按需安装、打开、选择和独立更新 ConfigLinker 与 KindleLarkStatus。
+- 模块启动时后台检查版本；网络失败不阻断 SVN 更新或模块启动。
+- 已选择的旧 `kindle_status_path` 自动迁移到 `tool_module_paths`。
+- KindleLarkStatus 继续支持“启动时联动”，并避免重复启动。
+- SVNmate 主程序仍使用 `SVNmate.zip` 和 `v1.4.0` Release 更新。
 
-## 使用
+## ConfigLinker 1.1.0
+
+- 修复高 DPI 和跨显示器场景下的字体缩放，扩大默认三栏窗口。
+- 模型资源卡片移除自动生成路径，配置路径支持横向滚动、选择和复制。
+- 双击目标物、NPC、资源 ID 可复制完整数字并显示提示。
+- 当前查询 ID 和查询中心有明确高亮，多级返回会恢复焦点。
+- 目标物坐标和旋转放入默认折叠的详情区，可单独复制。
+- 数据入口改为选择配置仓 `doc` 根目录，并自动定位 `doc\csvdir`。
+- 支持从 SVNmate 更新，也支持标题区圆点独立检查和更新。
+
+## KindleLarkStatus Windows 模块
+
+- SVNmate 可安装、启动和更新独立的 `KindleLarkStatus.exe`。
+- 更新 Windows 模块时，运行中的刷新服务会在确认后短暂停止并自动重启。
+- 应用内“更新 Kindle”仍只通过 SSH 更新 KUAL 和 Kindle 端 Shell 文件。
+- Windows 模块更新与 Kindle 端更新是两条独立链路。
+
+## 更新安全
+
+- 模块清单校验模块 ID、版本、HTTPS 下载地址、SHA-256 和安全入口文件。
+- ZIP 解压拒绝绝对路径和目录穿越。
+- 更新仅替换模块 EXE 与公开 `VERSION` 文件。
+- 不覆盖 ConfigLinker JSON 配置、KindleLarkStatus `%APPDATA%` 配置、Token、日志、缓存或 SSH 私钥。
+- ConfigLinker 与 KindleLarkStatus 使用各自固定 Release 通道，不覆盖 SVNmate 主程序的 latest Release。
+
+## 安装
 
 从 GitHub Release 下载 `SVNmate.zip`，解压后运行 `SVNAutoTool.exe`。
 
-仓库内分享包：`一键更新SVN.zip`
+ConfigLinker 与 KindleLarkStatus 不预装。启动 SVNmate 后，在“工具模块”卡片中按需安装或选择已有 EXE。
