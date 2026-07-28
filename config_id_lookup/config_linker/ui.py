@@ -3,6 +3,7 @@ from pathlib import Path
 from tkinter import BOTH, LEFT, RIGHT, X, Y, StringVar, Tk, filedialog, ttk
 from typing import Any
 
+from .dpi import configure_tk_dpi, get_window_dpi, get_work_area, window_geometry
 from .models import (
     NpcRecord,
     QueryKey,
@@ -55,9 +56,9 @@ class ConfigLinkerApp:
         auto_load: bool = True,
     ) -> None:
         self.root = root
+        self.current_dpi = configure_tk_dpi(self.root)
         self.root.title("配置关系检索器")
-        self.root.geometry("1180x760")
-        self.root.minsize(1020, 650)
+        self._set_initial_window_geometry()
 
         self.config_path = Path(config_path or "config_linker_config.json")
         self.settings, settings_warning = load_settings(self.config_path)
@@ -89,12 +90,27 @@ class ConfigLinkerApp:
         self._apply_theme(force=True)
         self._render_all_cards()
         self._update_back_button()
+        self.root.after(1000, self._dpi_tick)
         self.root.after(60_000, self._theme_tick)
 
         if settings_warning:
             self._set_message(settings_warning, "warning")
         if auto_load:
             self.root.after(30, self.reload_data)
+
+    def _set_initial_window_geometry(self) -> None:
+        work_area = get_work_area(self.root)
+        geometry = window_geometry(
+            dpi=self.current_dpi,
+            screen_width=self.root.winfo_screenwidth(),
+            screen_height=self.root.winfo_screenheight(),
+            work_width=work_area.width,
+            work_height=work_area.height,
+        )
+        x = work_area.left + max(0, (work_area.width - geometry.width) // 2)
+        y = work_area.top + max(0, (work_area.height - geometry.height) // 2)
+        self.root.geometry(f"{geometry.width}x{geometry.height}+{x}+{y}")
+        self.root.minsize(geometry.minimum_width, geometry.minimum_height)
 
     def _build_ui(self) -> None:
         main = ttk.Frame(self.root, style="App.TFrame", padding=(18, 14, 18, 12))
@@ -586,3 +602,11 @@ class ConfigLinkerApp:
     def _theme_tick(self) -> None:
         self._apply_theme()
         self.root.after(60_000, self._theme_tick)
+
+    def _dpi_tick(self) -> None:
+        dpi = get_window_dpi(self.root)
+        if dpi > 0 and dpi != self.current_dpi:
+            self.current_dpi = dpi
+            self.root.tk.call("tk", "scaling", dpi / 72.0)
+            self._apply_theme(force=True)
+        self.root.after(1000, self._dpi_tick)
