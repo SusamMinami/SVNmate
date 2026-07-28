@@ -181,6 +181,18 @@ def _build_target(
         labels,
         member="MissionPosition.NPCID",
     )
+    position_column = _find_column(
+        TARGET_FILENAME,
+        members,
+        labels,
+        member="MissionPosition.Position",
+    )
+    rotation_column = _find_column(
+        TARGET_FILENAME,
+        members,
+        labels,
+        member="MissionPosition.Rotation",
+    )
     raw_id = _cell(row, id_column)
     if not raw_id:
         return None
@@ -195,6 +207,8 @@ def _build_target(
             "NPCID",
         ),
         row_number=row_number,
+        position=_cell(row, position_column),
+        rotation=_cell(row, rotation_column),
     )
 
 

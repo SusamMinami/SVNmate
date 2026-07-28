@@ -9,8 +9,10 @@ TARGET_MEMBER_ROW = [
     "",
     "MissionPosition.type",
     "MissionPosition.NPCID",
+    "MissionPosition.Position",
+    "MissionPosition.Rotation",
 ]
-TARGET_LABEL_ROW = ["##ID", "类型", "描述", "坐标类型", "NPCID"]
+TARGET_LABEL_ROW = ["##ID", "类型", "描述", "坐标类型", "NPCID", "坐标", "旋转"]
 
 NPC_MEMBER_ROW = ["##&NPC.id", "", "NPC.name", "NPC.resource_id"]
 NPC_LABEL_ROW = ["##id", "备注", "NPC名字", "资源id"]
@@ -51,11 +53,19 @@ def write_fixture(
         target_rows
         if target_rows is not None
         else [
-            [1001, "交互物", "目标A", 3, 2001],
-            [1002, "交互物", "目标B", 3, 2001],
-            [1003, "区域", "目标C", 2, 2002],
-            [1004, "区域", "无NPC目标", 2, 0],
-            [1005, "区域", "特殊NPC目标", 2, -1],
+            [
+                1001,
+                "交互物",
+                "目标A",
+                3,
+                2001,
+                "(X=1,Y=2,Z=3)",
+                "(Pitch=0,Yaw=90,Roll=0)",
+            ],
+            [1002, "交互物", "目标B", 3, 2001, "", ""],
+            [1003, "区域", "目标C", 2, 2002, "", ""],
+            [1004, "区域", "无NPC目标", 2, 0, "", ""],
+            [1005, "区域", "特殊NPC目标", 2, -1, "", ""],
         ],
     )
     _write_table(

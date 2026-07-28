@@ -23,6 +23,8 @@ class TargetRecord:
     description: str
     npc_id: int | None
     row_number: int
+    position: str = ""
+    rotation: str = ""
 
 
 @dataclass(frozen=True)

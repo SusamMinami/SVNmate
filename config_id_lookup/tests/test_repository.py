@@ -19,6 +19,14 @@ class RepositoryTests(unittest.TestCase):
             repository = CsvRepository.load(Path(temp_dir))
 
             self.assertEqual(repository.targets_by_id[1001][0].description, "目标A")
+            self.assertEqual(
+                repository.targets_by_id[1001][0].position,
+                "(X=1,Y=2,Z=3)",
+            )
+            self.assertEqual(
+                repository.targets_by_id[1001][0].rotation,
+                "(Pitch=0,Yaw=90,Roll=0)",
+            )
             self.assertEqual(len(repository.targets_by_npc_id[2001]), 2)
             self.assertEqual(repository.npcs_by_id[2001][0].name, "测试NPC甲")
             self.assertEqual(len(repository.npcs_by_resource_id[3001]), 2)
@@ -35,8 +43,8 @@ class RepositoryTests(unittest.TestCase):
             write_fixture(
                 Path(temp_dir),
                 target_rows=[
-                    [1001, "交互物", "目标A", 3, 2001],
-                    [1001, "区域", "目标A副本", 2, 2002],
+                    [1001, "交互物", "目标A", 3, 2001, "", ""],
+                    [1001, "区域", "目标A副本", 2, 2002, "", ""],
                 ],
             )
 
@@ -79,7 +87,7 @@ class RepositoryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             write_fixture(
                 Path(temp_dir),
-                target_rows=[["bad-id", "交互物", "错误目标", 3, 2001]],
+                target_rows=[["bad-id", "交互物", "错误目标", 3, 2001, "", ""]],
             )
 
             with self.assertRaisesRegex(CsvDataError, "m目标物表.csv.*第 3 行"):

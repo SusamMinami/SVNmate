@@ -14,7 +14,13 @@ from .models import (
 )
 from .query_service import NotFoundError, QueryService
 from .repository import CsvDataError, CsvRepository
-from .settings import AppSettings, load_settings, save_settings
+from .settings import (
+    AppSettings,
+    csv_directory,
+    load_settings,
+    normalize_doc_directory,
+    save_settings,
+)
 from .theme import configure_styles
 from .view_state import QueryHistory, ResultPager
 
@@ -75,7 +81,7 @@ class ConfigLinkerApp:
         self.query_type = StringVar(value="目标物 ID")
         self.query_value = StringVar(value="")
         self.status_text = StringVar(value="等待加载数据")
-        self.data_directory_text = StringVar(value=str(self.settings.data_directory))
+        self.data_directory_text = StringVar(value=str(self.settings.doc_directory))
         self.message_text = StringVar(value=settings_warning or "输入任意一种 ID 开始查询")
         self.detail_text = StringVar(value="选择任意结果行可查看完整信息")
 
@@ -348,7 +354,7 @@ class ConfigLinkerApp:
         self.status_label.configure(style="StatusWarn.TLabel")
         self.root.update_idletasks()
         try:
-            new_repository = CsvRepository.load(self.settings.data_directory)
+            new_repository = CsvRepository.load(csv_directory(self.settings))
         except (OSError, CsvDataError, UnicodeError) as exc:
             self.last_error = str(exc)
             if self.repository is None:
@@ -369,7 +375,7 @@ class ConfigLinkerApp:
             f"已加载 {report.target_count} / {report.npc_count} / {report.resource_count}"
         )
         self.status_label.configure(style="StatusGood.TLabel")
-        self.data_directory_text.set(str(report.directory))
+        self.data_directory_text.set(str(self.settings.doc_directory))
         self._set_message(
             f"数据加载成功：目标物 {report.target_count}，NPC {report.npc_count}，资源 {report.resource_count}",
             "normal",
@@ -380,12 +386,12 @@ class ConfigLinkerApp:
     def choose_data_directory(self) -> None:
         selected = filedialog.askdirectory(
             title="选择包含三张 CSV 的目录",
-            initialdir=str(self.settings.data_directory),
+            initialdir=str(self.settings.doc_directory),
         )
         if not selected:
             return
-        self.settings = AppSettings(Path(selected))
-        self.data_directory_text.set(selected)
+        self.settings = AppSettings(normalize_doc_directory(Path(selected)))
+        self.data_directory_text.set(str(self.settings.doc_directory))
         try:
             save_settings(self.config_path, self.settings)
         except OSError as exc:
@@ -402,7 +408,7 @@ class ConfigLinkerApp:
     def _diagnostic_text(self) -> str:
         lines = [
             "配置关系检索器诊断信息",
-            f"数据目录：{self.settings.data_directory}",
+            f"doc 目录：{self.settings.doc_directory}",
             f"状态：{self.status_text.get()}",
         ]
         if self.repository is not None:

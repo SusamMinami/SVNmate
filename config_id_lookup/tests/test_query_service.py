@@ -59,7 +59,7 @@ class QueryServiceTests(unittest.TestCase):
             directory = Path(temp_dir)
             write_fixture(
                 directory,
-                target_rows=[[1010, "交互物", "断链目标", 3, 9999]],
+                target_rows=[[1010, "交互物", "断链目标", 3, 9999, "", ""]],
             )
             service = QueryService(CsvRepository.load(directory))
 

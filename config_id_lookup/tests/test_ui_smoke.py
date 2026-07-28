@@ -44,20 +44,21 @@ class UiSmokeTests(unittest.TestCase):
 
     def test_failed_refresh_keeps_the_last_successful_repository(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            directory = Path(temp_dir)
-            write_fixture(directory)
+            doc_directory = Path(temp_dir)
+            csv_directory = doc_directory / "csvdir"
+            write_fixture(csv_directory)
             root = Tk()
             root.withdraw()
             try:
                 app = ConfigLinkerApp(
                     root,
-                    config_path=directory / "settings.json",
+                    config_path=doc_directory / "settings.json",
                     auto_load=False,
                 )
-                app.settings = AppSettings(directory)
+                app.settings = AppSettings(doc_directory)
                 app.reload_data()
                 loaded_repository = app.repository
-                (directory / "NPC表.csv").unlink()
+                (csv_directory / "NPC表.csv").unlink()
 
                 app.reload_data()
 
