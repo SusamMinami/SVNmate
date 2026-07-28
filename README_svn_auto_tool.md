@@ -99,6 +99,8 @@ SVNmate 启动后会后台检查两个模块。网络失败只把模块状态改
 
 ConfigLinker 还可以在自身标题区点击更新圆点独立更新。SVNmate、ConfigLinker 和 KindleLarkStatus Windows 模块拥有各自版本，互不覆盖。
 
+> Kindle Windows 模块交接状态（2026-07-28）：`KindleLarkStatus` 源码仓当前为私有仓库，匿名访问其 `windows-module-latest` manifest 会返回 `404`。因此“选择已有程序”和启动联动可用，但在线安装/更新要等后续维护者提供公开可访问的二进制通道，或为更新器设计明确的认证方案。待上传资产已保存在 `C:\Users\Admin\Downloads\提示板\KindleLarkStatus\dist\windows-module-release`，具体见该仓库的 `WINDOWS_MODULE_HANDOFF.md`。
+
 ## ConfigLinker 使用
 
 1. 打开“配置关系检索器”。
