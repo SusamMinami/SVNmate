@@ -40,7 +40,6 @@ class NpcRecord:
 class ResourceRecord:
     id: int
     configured_path: str
-    generated_path: str
     row_number: int
 
 

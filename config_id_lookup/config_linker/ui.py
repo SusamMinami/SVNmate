@@ -46,9 +46,8 @@ CARD_COLUMNS = {
         ("resource_id", "资源 ID", 78),
     ),
     QueryKind.RESOURCE: (
-        ("id", "资源 ID", 78),
-        ("configured_path", "配置路径", 205),
-        ("generated_path", "自动生成路径", 165),
+        ("id", "资源 ID", 100),
+        ("configured_path", "配置路径", 620),
     ),
 }
 
@@ -84,8 +83,10 @@ class ConfigLinkerApp:
         self.data_directory_text = StringVar(value=str(self.settings.doc_directory))
         self.message_text = StringVar(value=settings_warning or "输入任意一种 ID 开始查询")
         self.detail_text = StringVar(value="选择任意结果行可查看完整信息")
+        self.resource_path_text = StringVar(value="")
 
         self.result_trees: dict[QueryKind, ttk.Treeview] = {}
+        self.horizontal_scrollbars: dict[QueryKind, ttk.Scrollbar] = {}
         self.record_maps: dict[QueryKind, dict[str, Any]] = {}
         self.card_borders: dict[QueryKind, ttk.Frame] = {}
         self.card_meta: dict[QueryKind, StringVar] = {}
@@ -238,13 +239,26 @@ class ConfigLinkerApp:
         detail_card = ttk.Frame(main, style="Card.TFrame", padding=(12, 8))
         detail_card.pack(fill=X)
         ttk.Label(detail_card, text="选中详情", style="Section.TLabel").pack(anchor="w")
-        ttk.Label(
+        self.detail_label = ttk.Label(
             detail_card,
             textvariable=self.detail_text,
             style="Muted.TLabel",
             justify="left",
             wraplength=1110,
-        ).pack(fill=X, anchor="w", pady=(3, 0))
+        )
+        self.detail_label.pack(fill=X, anchor="w", pady=(3, 0))
+        self.resource_detail_frame = ttk.Frame(detail_card, style="Card.TFrame")
+        ttk.Label(
+            self.resource_detail_frame,
+            text="配置路径",
+            style="Muted.TLabel",
+        ).pack(side=LEFT, padx=(0, 8))
+        self.resource_path_entry = ttk.Entry(
+            self.resource_detail_frame,
+            textvariable=self.resource_path_text,
+            state="readonly",
+        )
+        self.resource_path_entry.pack(side=LEFT, fill=X, expand=True)
 
     def _build_result_card(
         self,
@@ -279,11 +293,22 @@ class ConfigLinkerApp:
         )
         for column_id, heading, width in CARD_COLUMNS[kind]:
             tree.heading(column_id, text=heading)
-            tree.column(column_id, width=width, minwidth=54, stretch=True, anchor="w")
+            tree.column(
+                column_id,
+                width=width,
+                minwidth=54,
+                stretch=kind != QueryKind.RESOURCE,
+                anchor="w",
+            )
         scrollbar = ttk.Scrollbar(tree_frame, orient="vertical", command=tree.yview)
         tree.configure(yscrollcommand=scrollbar.set)
         tree.pack(side=LEFT, fill=BOTH, expand=True)
         scrollbar.pack(side=RIGHT, fill=Y)
+        if kind == QueryKind.RESOURCE:
+            horizontal = ttk.Scrollbar(card, orient="horizontal", command=tree.xview)
+            tree.configure(xscrollcommand=horizontal.set)
+            horizontal.pack(fill=X, pady=(5, 0))
+            self.horizontal_scrollbars[kind] = horizontal
         tree.bind("<Button-1>", lambda event, card_kind=kind: self._on_tree_click(event, card_kind))
         tree.bind("<Motion>", lambda event, card_kind=kind: self._on_tree_motion(event, card_kind))
         tree.bind("<Leave>", lambda _event, widget=tree: widget.configure(cursor=""))
@@ -492,7 +517,6 @@ class ConfigLinkerApp:
         return (
             record.id,
             self._compact(record.configured_path),
-            self._compact(record.generated_path),
         )
 
     @staticmethod
@@ -558,6 +582,8 @@ class ConfigLinkerApp:
             self._show_record_detail(self.record_maps[kind].get(selected[0]))
 
     def _show_record_detail(self, record: Any) -> None:
+        self.resource_detail_frame.pack_forget()
+        self.resource_path_text.set("")
         if isinstance(record, TargetRecord):
             text = (
                 f"目标物 ID：{record.id}  |  类型：{record.target_type or '未填写'}  |  "
@@ -572,10 +598,10 @@ class ConfigLinkerApp:
             )
         elif isinstance(record, ResourceRecord):
             text = (
-                f"资源 ID：{record.id}  |  CSV 行：{record.row_number}\n"
-                f"配置路径：{record.configured_path or '未填写'}\n"
-                f"自动生成路径：{record.generated_path or '未填写'}"
+                f"资源 ID：{record.id}  |  CSV 行：{record.row_number}"
             )
+            self.resource_path_text.set(record.configured_path)
+            self.resource_detail_frame.pack(fill=X, pady=(6, 0))
         else:
             text = "选择任意结果行可查看完整信息"
         self.detail_text.set(text)

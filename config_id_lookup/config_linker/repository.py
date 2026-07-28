@@ -257,18 +257,11 @@ def _build_resource(
         labels,
         label_prefix="配置填写在此列",
     )
-    generated_path_column = _find_column(
-        RESOURCE_FILENAME,
-        members,
-        labels,
-        member="Model.path",
-    )
     raw_id = _cell(row, id_column)
     if not raw_id:
         return None
     return ResourceRecord(
         id=_parse_primary_id(RESOURCE_FILENAME, row_number, raw_id),
         configured_path=_cell(row, configured_path_column),
-        generated_path=_cell(row, generated_path_column),
         row_number=row_number,
     )

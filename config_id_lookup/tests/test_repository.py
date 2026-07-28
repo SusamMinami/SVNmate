@@ -33,7 +33,7 @@ class RepositoryTests(unittest.TestCase):
             resource = repository.resources_by_id[3001][0]
             self.assertIn(",", resource.configured_path)
             self.assertIn("\n", resource.configured_path)
-            self.assertEqual(resource.generated_path, "/Game/Test/BP_Test.BP_Test_C")
+            self.assertFalse(hasattr(resource, "generated_path"))
             self.assertEqual(repository.report.target_count, 5)
             self.assertEqual(repository.report.npc_count, 3)
             self.assertEqual(repository.report.resource_count, 1)

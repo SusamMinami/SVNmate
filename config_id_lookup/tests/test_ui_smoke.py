@@ -4,9 +4,9 @@ import unittest
 from pathlib import Path
 from tkinter import Tk
 
-from config_linker.models import NpcRecord, QueryKey, QueryKind, TargetRecord
+from config_linker.models import NpcRecord, QueryKey, QueryKind, ResourceRecord, TargetRecord
 from config_linker.settings import AppSettings
-from config_linker.ui import ConfigLinkerApp
+from config_linker.ui import CARD_COLUMNS, ConfigLinkerApp
 from tests.fixture_factory import write_fixture
 
 
@@ -41,6 +41,32 @@ class UiSmokeTests(unittest.TestCase):
             ConfigLinkerApp._query_key_for_cell(QueryKind.NPC, npc, "#4"),
             QueryKey(QueryKind.RESOURCE, 3001),
         )
+
+    def test_resource_card_has_horizontal_scroll_and_readonly_path_detail(self) -> None:
+        root = Tk()
+        root.withdraw()
+        try:
+            app = ConfigLinkerApp(
+                root,
+                config_path=Path("__missing_config_for_test__.json"),
+                auto_load=False,
+            )
+            root.update_idletasks()
+
+            self.assertEqual(
+                [column[0] for column in CARD_COLUMNS[QueryKind.RESOURCE]],
+                ["id", "configured_path"],
+            )
+            self.assertIn(QueryKind.RESOURCE, app.horizontal_scrollbars)
+            self.assertTrue(
+                str(app.result_trees[QueryKind.RESOURCE].cget("xscrollcommand"))
+            )
+            self.assertEqual(str(app.resource_path_entry.cget("state")), "readonly")
+
+            app._show_record_detail(ResourceRecord(3001, "/Game/Test/BP_Test", 3))
+            self.assertEqual(app.resource_path_text.get(), "/Game/Test/BP_Test")
+        finally:
+            root.destroy()
 
     def test_failed_refresh_keeps_the_last_successful_repository(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
