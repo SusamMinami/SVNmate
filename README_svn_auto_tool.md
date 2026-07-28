@@ -2,14 +2,17 @@
 
 这是一个 Windows 桌面小工具，用来批量执行多个文件夹的 SVN 更新、清理和项目脚本。
 
-## v1.3.3 更新摘要
+## v1.3.4 更新摘要
 
-本版本修复 BAT 执行和自动更新附件下载问题：
+本版本优化 BAT 自动关闭和任务流水线：
 
+- 使用控制台输入和安全兜底按键自动通过脚本末尾的 `pause`，执行完成后 CMD 自动关闭。
+- `bin` 的 SVN Update 成功后，`Update.bat` 进入单线程后台队列，同时主流程继续后续文件夹的 SVN Update。
+- 多个 SVN Update 仍按勾选顺序串行，多个 `Update.bat` 也彼此串行，避免工作副本数据库冲突。
+- 所有 SVN Update 与后台 `Update.bat` 完成后，再按勾选顺序执行 Cleanup 和 Build。
 - GitHub Release 改用稳定附件名 `SVNmate.zip`，避免中文文件名被平台重命名后下载返回 404。
 - 客户端自动更新下载地址与 Release 附件名保持一致。
 - 修复 `Update.bat` 和 `Build.bat` 路径被 Python 转义成 `\"...\"` 后无法由 `cmd.exe` 识别的问题。
-- BAT 仍按 `update -> bat -> cleanup -> bat` 顺序串行执行，并保持脚本所在目录为工作目录。
 - 保留可见 CMD、自动通过 `pause` 和失败窗口停留 5 秒的反馈方式。
 - 新增真实 BAT 回归测试，覆盖含空格的脚本路径。
 - 将定时执行与 KindleLarkStatus 联动启动合并到“自动化”区域，减少设置区占用。

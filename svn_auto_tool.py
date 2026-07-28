@@ -10,6 +10,7 @@ import time
 import urllib.parse
 import urllib.request
 import webbrowser
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -75,7 +76,7 @@ CONFIG_PATH = APP_DIR / "svn_auto_tool_config.json"
 LOG_DIR = APP_DIR / "logs"
 LOG_RETENTION_DAYS = 7
 MUSIC_EXTENSIONS = (".mp3", ".wav")
-APP_VERSION = "v1.3.3"
+APP_VERSION = "v1.3.4"
 LATEST_RELEASE_URL = "https://github.com/SusamMinami/SVNmate/releases/latest"
 RELEASE_DOWNLOAD_URL = "https://github.com/SusamMinami/SVNmate/releases/download/{tag}/{asset}"
 RELEASE_ASSET_NAME = "SVNmate.zip"
@@ -1479,36 +1480,74 @@ class SvnAutoTool:
         run_daily_bin_update = self.run_bin_update.get() and self.last_bin_update_date != today
         bin_update_attempted = False
         bin_update_all_success = True
+        valid_folders: list[Path] = []
+        pending_bin_updates: list[tuple[Path, Future[bool]]] = []
         try:
-            for folder_text in enabled_folders:
-                folder = Path(folder_text)
-                if not folder.exists() or not folder.is_dir():
-                    self._record(folder_text, "检查文件夹", "失败", "文件夹不存在")
-                    continue
-                attempted, success = self._run_for_folder(folder, run_daily_bin_update)
-                bin_update_attempted = bin_update_attempted or attempted
-                bin_update_all_success = bin_update_all_success and success
+            with ThreadPoolExecutor(max_workers=1, thread_name_prefix="svnmate-update-bat") as bat_executor:
+                for folder_text in enabled_folders:
+                    folder = Path(folder_text)
+                    if not folder.exists() or not folder.is_dir():
+                        self._record(folder_text, "检查文件夹", "失败", "文件夹不存在")
+                        continue
+                    valid_folders.append(folder)
+                    update_ok = self._run_command(
+                        folder,
+                        self._svn_update_command(folder),
+                        "svn update",
+                        auto_cleanup=True,
+                    )
+                    attempted, success, queued = self._queue_update_bat_scripts(
+                        folder,
+                        update_ok,
+                        run_daily_bin_update,
+                        bat_executor,
+                    )
+                    bin_update_attempted = bin_update_attempted or attempted
+                    bin_update_all_success = bin_update_all_success and success
+                    pending_bin_updates.extend(queued)
+
+                if pending_bin_updates:
+                    self._log("[等待] SVN Update 已全部完成，等待后台 Update.bat 结束")
+                for update_bat, future in pending_bin_updates:
+                    try:
+                        bin_update_all_success = future.result() and bin_update_all_success
+                    except Exception as exc:
+                        bin_update_all_success = False
+                        self._record(str(update_bat.parent), "Update.bat", "失败", f"后台任务异常：{exc}")
+
+            for folder in valid_folders:
+                self._run_cleanup_and_build(folder)
+
             if run_daily_bin_update and bin_update_attempted and bin_update_all_success:
                 self.last_bin_update_date = today
         finally:
             self.log_queue.put(("done", trigger))
 
-    def _run_for_folder(self, folder: Path, run_daily_bin_update: bool) -> tuple[bool, bool]:
+    def _queue_update_bat_scripts(
+        self,
+        folder: Path,
+        update_ok: bool,
+        run_daily_bin_update: bool,
+        executor: ThreadPoolExecutor,
+    ) -> tuple[bool, bool, list[tuple[Path, Future[bool]]]]:
         bin_update_attempted = False
         bin_update_success = True
-        update_ok = self._run_command(folder, self._svn_update_command(folder), "svn update", auto_cleanup=True)
+        queued: list[tuple[Path, Future[bool]]] = []
 
         if update_ok and run_daily_bin_update:
             update_scripts = self._find_update_bat_scripts(folder)
             if update_scripts:
                 for update_bat in update_scripts:
                     bin_update_attempted = True
-                    bin_update_success = self._run_command(
+                    self._record(str(update_bat.parent), "Update.bat", "后台执行", "继续处理后续文件夹的 SVN Update")
+                    future = executor.submit(
+                        self._run_command,
                         update_bat.parent,
                         self._bat_command(update_bat),
                         "Update.bat",
                         visible_console=True,
-                    ) and bin_update_success
+                    )
+                    queued.append((update_bat, future))
             elif self.custom_update_bat_path.get().strip():
                 bin_update_attempted = True
                 bin_update_success = False
@@ -1518,7 +1557,9 @@ class SvnAutoTool:
                     bin_update_attempted = True
                     bin_update_success = False
                     self._record(str(bin_folder / "WindowsNoEditor"), "Update.bat", "跳过", "未找到 WindowsNoEditor\\Update.bat")
+        return bin_update_attempted, bin_update_success, queued
 
+    def _run_cleanup_and_build(self, folder: Path) -> None:
         cleanup_ok = self._run_command(folder, self._svn_cleanup_command(folder), "svn cleanup")
 
         if cleanup_ok and self.run_build_after_cleanup.get():
@@ -1531,7 +1572,6 @@ class SvnAutoTool:
             else:
                 for res_folder in self._find_res_folders(folder):
                     self._record(str(res_folder), "Build.bat", "跳过", "未找到 Build.bat")
-        return bin_update_attempted, bin_update_success
 
     def _find_update_bat_scripts(self, folder: Path) -> list[Path]:
         custom = self._resolve_custom_script(folder, self.custom_update_bat_path.get())
@@ -1714,10 +1754,24 @@ class SvnAutoTool:
         )
         started_at = time.time()
         last_enter_at = 0.0
+        last_child_check_at = 0.0
+        childless_since: float | None = None
+        fallback_enter_sent = False
         while process.poll() is None:
             now = time.time()
-            if now - started_at > 5 and now - last_enter_at > 5:
-                self._press_enter_for_process_window(process.pid, console_title)
+            if now - last_child_check_at >= 1:
+                last_child_check_at = now
+                if self._has_running_child_process(process.pid):
+                    childless_since = None
+                    fallback_enter_sent = False
+                elif childless_since is None:
+                    childless_since = now
+
+            ready_for_pause_input = childless_since is not None and now - childless_since >= 1
+            if ready_for_pause_input and now - started_at > 5 and now - last_enter_at > 5:
+                console_input_sent = self._write_enter_to_process_console(process.pid)
+                if not console_input_sent and not fallback_enter_sent:
+                    fallback_enter_sent = self._press_enter_for_process_window(process.pid, console_title)
                 last_enter_at = now
             time.sleep(0.5)
         return_code = process.returncode
@@ -1881,6 +1935,150 @@ class SvnAutoTool:
         user32.EnumWindows(enum_windows_proc(enum_window_callback), 0)
         return clicked
 
+    @staticmethod
+    def _has_running_child_process(process_id: int) -> bool:
+        if os.name != "nt":
+            return False
+
+        class _ProcessEntry32W(ctypes.Structure):
+            _fields_ = [
+                ("dwSize", wintypes.DWORD),
+                ("cntUsage", wintypes.DWORD),
+                ("th32ProcessID", wintypes.DWORD),
+                ("th32DefaultHeapID", ctypes.c_size_t),
+                ("th32ModuleID", wintypes.DWORD),
+                ("cntThreads", wintypes.DWORD),
+                ("th32ParentProcessID", wintypes.DWORD),
+                ("pcPriClassBase", wintypes.LONG),
+                ("dwFlags", wintypes.DWORD),
+                ("szExeFile", wintypes.WCHAR * 260),
+            ]
+
+        kernel32 = ctypes.windll.kernel32
+        kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+        kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+        snapshot = kernel32.CreateToolhelp32Snapshot(0x00000002, 0)  # TH32CS_SNAPPROCESS
+        if snapshot == wintypes.HANDLE(-1).value:
+            return False
+
+        try:
+            entry = _ProcessEntry32W()
+            entry.dwSize = ctypes.sizeof(entry)
+            kernel32.Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.POINTER(_ProcessEntry32W)]
+            kernel32.Process32FirstW.restype = wintypes.BOOL
+            kernel32.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.POINTER(_ProcessEntry32W)]
+            kernel32.Process32NextW.restype = wintypes.BOOL
+            if not kernel32.Process32FirstW(snapshot, ctypes.byref(entry)):
+                return False
+            while True:
+                executable_name = entry.szExeFile.lower()
+                is_console_host = executable_name in {
+                    "conhost.exe",
+                    "openconsole.exe",
+                    "windowsterminal.exe",
+                }
+                if entry.th32ParentProcessID == process_id and not is_console_host:
+                    return True
+                if not kernel32.Process32NextW(snapshot, ctypes.byref(entry)):
+                    return False
+        finally:
+            kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+            kernel32.CloseHandle.restype = wintypes.BOOL
+            kernel32.CloseHandle(snapshot)
+
+    @staticmethod
+    def _write_enter_to_process_console(process_id: int) -> bool:
+        if os.name != "nt":
+            return False
+
+        kernel32 = ctypes.windll.kernel32
+        if kernel32.GetConsoleCP():
+            return False
+
+        class _CharUnion(ctypes.Union):
+            _fields_ = [
+                ("UnicodeChar", wintypes.WCHAR),
+                ("AsciiChar", ctypes.c_char),
+            ]
+
+        class _KeyEventRecord(ctypes.Structure):
+            _fields_ = [
+                ("bKeyDown", wintypes.BOOL),
+                ("wRepeatCount", wintypes.WORD),
+                ("wVirtualKeyCode", wintypes.WORD),
+                ("wVirtualScanCode", wintypes.WORD),
+                ("uChar", _CharUnion),
+                ("dwControlKeyState", wintypes.DWORD),
+            ]
+
+        class _InputEvent(ctypes.Union):
+            _fields_ = [
+                ("KeyEvent", _KeyEventRecord),
+                ("padding", ctypes.c_byte * 16),
+            ]
+
+        class _InputRecord(ctypes.Structure):
+            _fields_ = [
+                ("EventType", wintypes.WORD),
+                ("Event", _InputEvent),
+            ]
+
+        kernel32.AttachConsole.argtypes = [wintypes.DWORD]
+        kernel32.AttachConsole.restype = wintypes.BOOL
+        if not kernel32.AttachConsole(process_id):
+            return False
+
+        console_input = None
+        try:
+            kernel32.CreateFileW.argtypes = [
+                wintypes.LPCWSTR,
+                wintypes.DWORD,
+                wintypes.DWORD,
+                ctypes.c_void_p,
+                wintypes.DWORD,
+                wintypes.DWORD,
+                wintypes.HANDLE,
+            ]
+            kernel32.CreateFileW.restype = wintypes.HANDLE
+            console_input = kernel32.CreateFileW(
+                "CONIN$",
+                0xC0000000,  # GENERIC_READ | GENERIC_WRITE
+                0x00000003,  # FILE_SHARE_READ | FILE_SHARE_WRITE
+                None,
+                3,  # OPEN_EXISTING
+                0,
+                None,
+            )
+            if console_input == wintypes.HANDLE(-1).value:
+                return False
+
+            records = (_InputRecord * 2)()
+            scan_code = ctypes.windll.user32.MapVirtualKeyW(0x0D, 0)
+            for index, key_down in enumerate((True, False)):
+                records[index].EventType = 0x0001  # KEY_EVENT
+                key_event = records[index].Event.KeyEvent
+                key_event.bKeyDown = key_down
+                key_event.wRepeatCount = 1
+                key_event.wVirtualKeyCode = 0x0D
+                key_event.wVirtualScanCode = scan_code
+                key_event.uChar.UnicodeChar = "\r"
+
+            written = wintypes.DWORD()
+            kernel32.WriteConsoleInputW.argtypes = [
+                wintypes.HANDLE,
+                ctypes.POINTER(_InputRecord),
+                wintypes.DWORD,
+                ctypes.POINTER(wintypes.DWORD),
+            ]
+            kernel32.WriteConsoleInputW.restype = wintypes.BOOL
+            return bool(kernel32.WriteConsoleInputW(console_input, records, len(records), ctypes.byref(written)))
+        finally:
+            if console_input not in {None, wintypes.HANDLE(-1).value}:
+                kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+                kernel32.CloseHandle.restype = wintypes.BOOL
+                kernel32.CloseHandle(console_input)
+            kernel32.FreeConsole()
+
     def _press_enter_for_process_window(self, process_id: int, title_keyword: str = "") -> bool:
         if os.name != "nt":
             return False
@@ -1888,9 +2086,20 @@ class SvnAutoTool:
         sent = False
         user32 = ctypes.windll.user32
         enum_windows_proc = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
-        wm_keydown = 0x0100
-        wm_keyup = 0x0101
         vk_return = 0x0D
+        keyeventf_keyup = 0x0002
+        user32.GetForegroundWindow.restype = wintypes.HWND
+        user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+        user32.SetForegroundWindow.restype = wintypes.BOOL
+        user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+        user32.ShowWindow.restype = wintypes.BOOL
+        user32.keybd_event.argtypes = [
+            wintypes.BYTE,
+            wintypes.BYTE,
+            wintypes.DWORD,
+            ctypes.c_ulonglong,
+        ]
+        previous_foreground = user32.GetForegroundWindow()
 
         def get_window_text(hwnd: int) -> str:
             length = user32.GetWindowTextLengthW(hwnd)
@@ -1905,8 +2114,15 @@ class SvnAutoTool:
             title = get_window_text(hwnd)
             title_matches = bool(title_keyword and title_keyword.lower() in title.lower())
             if user32.IsWindowVisible(hwnd) and (window_pid.value == process_id or title_matches):
-                user32.PostMessageW(hwnd, wm_keydown, vk_return, 0)
-                user32.PostMessageW(hwnd, wm_keyup, vk_return, 0)
+                user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+                if not user32.SetForegroundWindow(hwnd):
+                    return True
+                time.sleep(0.05)
+                scan_code = user32.MapVirtualKeyW(vk_return, 0)
+                user32.keybd_event(vk_return, scan_code, 0, 0)
+                user32.keybd_event(vk_return, scan_code, keyeventf_keyup, 0)
+                if previous_foreground and previous_foreground != hwnd:
+                    user32.SetForegroundWindow(previous_foreground)
                 sent = True
             return True
 

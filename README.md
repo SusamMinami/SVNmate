@@ -31,8 +31,11 @@ SVNAutoTool.exe
 
 点击窗口关闭按钮或“隐藏到托盘”后，程序会继续在系统托盘运行，以保证定时任务有效。双击托盘图标可恢复窗口；右键托盘图标可打开窗口、立即执行或彻底退出。
 
-## v1.3.3 更新摘要
+## v1.3.4 更新摘要
 
+- 修复 `Update.bat` 和 `Build.bat` 结束后停在 `pause`、CMD 无法自动关闭的问题。
+- `bin` 的 SVN Update 完成后立即后台执行 `Update.bat`，同时继续后续文件夹的 SVN Update。
+- 所有 SVN Update 和后台 `Update.bat` 完成后，再按勾选顺序执行 Cleanup 和 Build。
 - 修复 GitHub 自动重命名中文附件后，软件内更新下载返回 404 的问题。
 - GitHub Release 统一使用稳定附件名 `SVNmate.zip`。
 - 修复程序启动 `Update.bat` 和 `Build.bat` 时路径引号被错误转义的问题。
