@@ -32,7 +32,7 @@ class UiSmokeTests(unittest.TestCase):
                 str(app.choose_doc_button.cget("text")),
                 "选择 doc 目录",
             )
-            self.assertEqual(app.version_text.get(), "v1.2.0")
+            self.assertEqual(app.version_text.get(), "v1.2.1")
         finally:
             root.destroy()
 
@@ -52,7 +52,7 @@ class UiSmokeTests(unittest.TestCase):
                 root,
                 config_path=Path("__missing_config_for_test__.json"),
                 auto_load=False,
-                app_version="1.2.0",
+                app_version="1.2.1",
                 update_controller=controller,
             )
             app.update_state = "ready"
@@ -169,6 +169,10 @@ class UiSmokeTests(unittest.TestCase):
                 self.assertEqual(app.target_detail_frame.winfo_manager(), "pack")
                 self.assertEqual(str(app.target_position_entry.cget("state")), "readonly")
                 self.assertEqual(str(app.target_rotation_entry.cget("state")), "readonly")
+                self.assertEqual(app.target_position_entry.grid_info()["row"], 0)
+                self.assertEqual(app.target_rotation_entry.grid_info()["row"], 0)
+                self.assertEqual(app.target_position_entry.grid_info()["column"], 1)
+                self.assertEqual(app.target_rotation_entry.grid_info()["column"], 3)
 
                 app._copy_text("1001", "目标物 ID 1001")
                 self.assertEqual(root.clipboard_get(), "1001")

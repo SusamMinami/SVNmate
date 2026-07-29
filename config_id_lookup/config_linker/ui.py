@@ -68,7 +68,7 @@ class ConfigLinkerApp:
         *,
         config_path: Path | None = None,
         auto_load: bool = True,
-        app_version: str = "1.2.0",
+        app_version: str = "1.2.1",
         update_controller: ConfigLinkerUpdateController | None = None,
     ) -> None:
         self.root = root
@@ -307,7 +307,7 @@ class ConfigLinkerApp:
             self.target_detail_frame,
             text="坐标",
             style="Muted.TLabel",
-        ).grid(row=0, column=0, sticky="w", padx=(0, 8), pady=(3, 3))
+        ).grid(row=0, column=0, sticky="w", padx=(0, 8), pady=(3, 0))
         self.target_position_entry = ttk.Entry(
             self.target_detail_frame,
             textvariable=self.target_position_text,
@@ -317,20 +317,30 @@ class ConfigLinkerApp:
             row=0,
             column=1,
             sticky="ew",
-            pady=(3, 3),
+            padx=(0, 16),
+            pady=(3, 0),
         )
         ttk.Label(
             self.target_detail_frame,
             text="旋转",
             style="Muted.TLabel",
-        ).grid(row=1, column=0, sticky="w", padx=(0, 8), pady=(3, 0))
+        ).grid(row=0, column=2, sticky="w", padx=(0, 8), pady=(3, 0))
         self.target_rotation_entry = ttk.Entry(
             self.target_detail_frame,
             textvariable=self.target_rotation_text,
             state="readonly",
         )
-        self.target_rotation_entry.grid(row=1, column=1, sticky="ew", pady=(3, 0))
-        self.target_detail_frame.grid_columnconfigure(1, weight=1)
+        self.target_rotation_entry.grid(row=0, column=3, sticky="ew", pady=(3, 0))
+        self.target_detail_frame.grid_columnconfigure(
+            1,
+            weight=1,
+            uniform="location",
+        )
+        self.target_detail_frame.grid_columnconfigure(
+            3,
+            weight=1,
+            uniform="location",
+        )
         self.target_position_entry.bind(
             "<Double-1>",
             lambda _event: self._copy_text(

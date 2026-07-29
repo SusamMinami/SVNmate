@@ -41,7 +41,7 @@ SVNAutoTool.exe
 - ConfigLinker 使用独立固定 Release 通道，版本不与 SVNmate 主版本绑定。
 - 模块下载执行 HTTPS、manifest 字段校验、SHA-256 校验和 ZIP 路径穿越防护。
 - 更新仅替换模块 EXE 和公开 `VERSION`，保留用户配置、日志、Token 和 SSH 私钥。
-- ConfigLinker 升级到 `1.2.0`：使用独立关系网络图标，目标物坐标和旋转在选中详情中直接显示。
+- ConfigLinker 升级到 `1.2.1`：使用独立关系网络图标，目标物坐标和旋转在选中详情中同一行显示。
 - ConfigLinker 修复高 DPI 字体、扩大三栏窗口，并支持查询高亮、双击复制和长路径选择复制。
 - ConfigLinker 改为选择 `doc` 根目录，并自动读取 `doc\csvdir` 下三张配置表。
 
