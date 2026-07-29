@@ -35,3 +35,4 @@ jobs:
               --title "一键更新SVN v1.4.1" \
               --notes-file RELEASE_NOTES.md
           fi
+          gh release edit v1.4.1 --latest
