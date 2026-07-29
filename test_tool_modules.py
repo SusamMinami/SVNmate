@@ -14,6 +14,15 @@ from tool_modules import (
 
 
 class ToolModuleManagerTests(unittest.TestCase):
+    def test_kindle_uses_public_svnmate_release_channel(self) -> None:
+        self.assertEqual(
+            KINDLE_STATUS.manifest_url,
+            (
+                "https://github.com/SusamMinami/SVNmate/releases/download/"
+                "kindle-windows-latest/manifest.json"
+            ),
+        )
+
     def test_old_kindle_path_migrates_into_module_paths(self) -> None:
         paths = module_paths_from_config(
             {"kindle_status_path": r"D:\Kindle\KindleLarkStatus.exe"},

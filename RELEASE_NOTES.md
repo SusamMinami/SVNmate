@@ -6,7 +6,7 @@
 
 - 设置区调整为“执行与自动化”和“工具模块”两张卡片。
 - 支持按需安装、打开、选择和独立更新 ConfigLinker。
-- KindleLarkStatus 支持选择已有 EXE、打开和启动时联动。
+- KindleLarkStatus 已预留公共更新端点，并支持选择已有 EXE、打开和启动时联动。
 - 模块启动时后台检查版本；网络失败不阻断 SVN 更新或模块启动。
 - 已选择的旧 `kindle_status_path` 自动迁移到 `tool_module_paths`。
 - KindleLarkStatus 继续支持“启动时联动”，并避免重复启动。
@@ -26,7 +26,8 @@
 ## KindleLarkStatus Windows 模块
 
 - SVNmate 可选择、启动已有的 `KindleLarkStatus.exe`。
-- Windows 模块更新器已实现关闭、替换和重启流程，但当前私有 Release 无法匿名下载。
+- Windows 模块已切换到 SVNmate 公共仓库的独立固定 Release 端点，首次资产发布后可匿名安装和更新。
+- 更新器支持关闭、替换和按原运行状态重启。
 - 应用内“更新 Kindle”仍只通过 SSH 更新 KUAL 和 Kindle 端 Shell 文件。
 - Windows 模块更新与 Kindle 端更新是两条独立链路。
 
@@ -36,11 +37,10 @@
 - ZIP 解压拒绝绝对路径和目录穿越。
 - 更新仅替换模块 EXE 与公开 `VERSION` 文件。
 - 不覆盖 ConfigLinker JSON 配置、KindleLarkStatus `%APPDATA%` 配置、Token、日志、缓存或 SSH 私钥。
-- ConfigLinker 使用独立固定 Release 通道，不覆盖 SVNmate 主程序的 latest Release。
-- KindleLarkStatus 当前私有发布清单匿名访问返回 `404`，在线安装/更新暂不可用。
+- ConfigLinker 与 KindleLarkStatus 使用各自的独立固定 Release 通道，不覆盖 SVNmate 主程序的 latest Release。
 
 ## 安装
 
 从 GitHub Release 下载 `SVNmate.zip`，解压后运行 `SVNAutoTool.exe`。
 
-ConfigLinker 与 KindleLarkStatus 不预装。ConfigLinker 可在“工具模块”卡片中按需安装；Kindle 当前需选择已有 EXE。
+ConfigLinker 与 KindleLarkStatus 不预装。ConfigLinker 可按需安装；Kindle 公共通道首次发布前需选择已有 EXE。

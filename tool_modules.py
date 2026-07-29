@@ -40,8 +40,8 @@ KINDLE_STATUS = ToolModuleSpec(
     module_id="kindle-lark-status",
     display_name="Kindle 提示板",
     manifest_url=(
-        "https://github.com/SusamMinami/KindleLarkStatus/releases/download/"
-        "windows-module-latest/manifest.json"
+        "https://github.com/SusamMinami/SVNmate/releases/download/"
+        "kindle-windows-latest/manifest.json"
     ),
     executable_name="KindleLarkStatus.exe",
     install_folder="KindleLarkStatus",

@@ -7,9 +7,9 @@
 本版本新增独立工具模块体系：
 
 - 设置区调整为“执行与自动化”和“工具模块”两张卡片。
-- ConfigLinker 可按需安装；KindleLarkStatus 可选择已有 EXE，两者都不进入 SVNmate 主安装包。
-- 支持打开、选择现有 EXE 和检查模块；ConfigLinker 支持在线安装和更新。
-- ConfigLinker 使用独立固定 Release 通道，不会覆盖 SVNmate 主程序更新。
+- ConfigLinker 可按需安装；KindleLarkStatus 已预留公共更新端点，两者都可选择已有 EXE，且不进入 SVNmate 主安装包。
+- 支持打开、选择现有 EXE 和检查模块；Kindle 在线安装将在公共通道首次发布后启用。
+- 两个模块使用各自的固定 Release 端点，不会覆盖 SVNmate 主程序更新。
 - 下载前校验 manifest 模块 ID、HTTPS 地址、版本、入口文件和 SHA-256。
 - ZIP 解压拒绝目录穿越；替换只允许模块 EXE 和公开 `VERSION`。
 - 模块配置、日志、OAuth Token、SSH 私钥和其他运行文件不在更新白名单内。
@@ -65,17 +65,18 @@ https://bytedance.larkoffice.com/docx/BdDod9tjIo4rPbx2oWHchVRUnwh
 Kindle 提示板（KindleLarkStatus）
 ```
 
-每行包含模块状态/版本、安装或打开、检查或更新、选择现有程序。Kindle 行保留统一操作入口，但在线通道不可访问时会显示“检查失败”。
+每行包含模块状态/版本、安装或打开、检查或更新、选择现有程序。Kindle 公共通道首次发布前仍会显示“检查失败”。
 
 ### 按需安装
 
-ConfigLinker 未安装时点击“安装”。SVNmate 会读取固定 manifest、下载 ZIP、校验 SHA-256，再安装到：
+模块未安装时点击“安装”。SVNmate 会读取对应的固定 manifest、下载 ZIP、校验 SHA-256，再安装到：
 
 ```text
 modules\ConfigLinker\ConfigLinker.exe
+modules\KindleLarkStatus\KindleLarkStatus.exe
 ```
 
-模块不随 `SVNmate.zip` 预装。安装失败不会删除当前可用版本，也不会覆盖模块配置。Kindle 当前需通过“选择”接管已有 EXE。
+模块不随 `SVNmate.zip` 预装。安装失败不会删除当前可用版本，也不会覆盖模块配置。Kindle 公共通道首次发布前仍需通过“选择”接管已有 EXE。
 
 ### 选择已有程序
 
@@ -98,7 +99,7 @@ SVNmate 启动后会后台检查两个模块。网络失败只把模块状态改
 
 ConfigLinker 还可以在自身标题区点击更新圆点独立更新。SVNmate、ConfigLinker 和 KindleLarkStatus Windows 模块拥有各自版本，互不覆盖。
 
-> Kindle Windows 模块当前限制：`KindleLarkStatus` 源码仓为私有仓库，匿名访问 `windows-module-latest` manifest 会返回 `404`。因此“选择已有程序”、打开和启动联动可用，在线安装/更新暂不可用。
+KindleLarkStatus 源码仓保持私有；Windows 模块的公共端点已预留为 SVNmate 仓库的独立 `kindle-windows-latest` 通道。首次资产发布前该地址仍返回 `404`，后续步骤见 [Kindle 公共更新通道交接](https://github.com/SusamMinami/SVNmate/blob/main/KINDLE_PUBLIC_CHANNEL_HANDOFF.md)。
 
 ## ConfigLinker 使用
 
@@ -128,7 +129,7 @@ doc\csvdir\m模型资源表.csv
 
 必须区分两种更新：
 
-- **更新 Windows 模块**：更新器负责替换 `KindleLarkStatus.exe`，但当前私有发布通道无法匿名下载，暂不可在线使用。
+- **更新 Windows 模块**：公共固定端点首次发布后，更新器可在线检查并替换 `KindleLarkStatus.exe`。
 - **更新 Kindle 端**：由 KindleLarkStatus 自身通过 SSH 更新 KUAL 元数据和 Kindle Shell 文件，不替换 Windows EXE。
 
 ## 系统托盘

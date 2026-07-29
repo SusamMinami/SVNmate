@@ -36,9 +36,9 @@ SVNAutoTool.exe
 ## v1.4.0 更新摘要
 
 - 新增“工具模块”卡片，统一管理配置关系检索器和 Kindle 提示板。
-- ConfigLinker 可按需下载安装；KindleLarkStatus 不随主包预装，可选择已有 EXE。
+- ConfigLinker 可按需下载安装；KindleLarkStatus 已预留公共更新端点，也可选择已有 EXE。
 - 支持选择已有 EXE、查看本地版本、打开和检查模块。
-- ConfigLinker 使用独立固定 Release 通道，版本不与 SVNmate 主版本绑定。
+- 两个模块使用各自的固定 Release 通道，版本不与 SVNmate 主版本绑定。
 - 模块下载执行 HTTPS、manifest 字段校验、SHA-256 校验和 ZIP 路径穿越防护。
 - 更新仅替换模块 EXE 和公开 `VERSION`，保留用户配置、日志、Token 和 SSH 私钥。
 - ConfigLinker 升级到 `1.2.1`：使用独立关系网络图标，目标物坐标和旋转在选中详情中同一行显示。
@@ -52,9 +52,9 @@ SVNmate 的“工具模块”卡片包含：
 - **配置关系检索器**：目标物 ID、NPC ID 与模型资源 ID 的双向检索。
 - **Kindle 提示板**：Windows 桌面客户端，可保留“启动时联动”。
 
-ConfigLinker 缺失时点击“安装”，已安装时点击“打开”；“检查”会读取固定发布清单，有新版后按钮变为“更新”。两个模块都可以点击“选择”接管已有的独立 EXE。
+模块缺失时点击“安装”，已安装时点击“打开”；“检查”会读取固定发布清单，有新版后按钮变为“更新”。两个模块都可以点击“选择”接管已有的独立 EXE。Kindle 在线安装将在公共通道首次发布后启用。
 
-KindleLarkStatus 源码仓当前为私有仓库，匿名读取 Windows 模块发布清单会返回 `404`。因此 Kindle 在线安装/更新暂不可用，但选择已有 EXE、打开和启动时联动不受影响。
+KindleLarkStatus 源码仓保持私有，Windows ZIP 与 manifest 的公共端点已预留为 SVNmate 仓库的独立 `kindle-windows-latest` 通道。首次资产发布前该地址仍返回 `404`，交接步骤见 [Kindle 公共更新通道交接](KINDLE_PUBLIC_CHANNEL_HANDOFF.md)。
 
 ConfigLinker 的完整操作说明见：[ConfigLinker 使用指南](config_id_lookup/USER_GUIDE.md)。
 
@@ -77,7 +77,7 @@ ConfigLinker 的完整操作说明见：[ConfigLinker 使用指南](config_id_lo
   README_svn_auto_tool.md
 ```
 
-ConfigLinker 与 KindleLarkStatus 不在分享包内。ConfigLinker 可由“工具模块”卡片按需安装；Kindle 当前需选择已有 EXE。
+ConfigLinker 与 KindleLarkStatus 不在分享包内。ConfigLinker 可按需安装；Kindle 公共通道首次发布前仍需选择已有 EXE。
 
 ## 使用指南
 
