@@ -2,12 +2,14 @@
 
 这是一个 Windows 桌面小工具，用来批量执行多个文件夹的 SVN 更新、清理和项目脚本。
 
-## v1.4.0 更新摘要
+## v1.4.1 更新摘要
 
 本版本新增独立工具模块体系：
 
+- 工作目录支持右键打开，可直接进入所选文件夹。
+- SVN Update 失败时会自动 Cleanup，并重试一次 Update。
 - 设置区调整为“执行与自动化”和“工具模块”两张卡片。
-- ConfigLinker 可按需安装；KindleLarkStatus 已预留公共更新端点，两者都可选择已有 EXE，且不进入 SVNmate 主安装包。
+- ConfigLinker 与 KindleLarkStatus 均可按需安装或选择已有 EXE，且不进入 SVNmate 主安装包。
 - 支持打开、选择现有 EXE、检查和在线安装模块；Kindle 公共通道已经启用。
 - 两个模块使用各自的固定 Release 端点，不会覆盖 SVNmate 主程序更新。
 - 下载前校验 manifest 模块 ID、HTTPS 地址、版本、入口文件和 SHA-256。
@@ -159,7 +161,7 @@ dist\SVNAutoTool.exe
 
 文件夹分为“栏目一”和“栏目二”两栏，每栏左上角都有“添加文件夹”按钮。
 
-列表中的 `[x]` 表示会参与执行，`[ ]` 表示暂时不执行。点击第一列或双击选中行可以切换勾选状态。
+列表中的 `[x]` 表示会参与执行，`[ ]` 表示暂时不执行。点击第一列或双击选中行可以切换勾选状态；右键任意行可在资源管理器中打开对应文件夹。
 
 点击“保存配置”后，文件夹路径、勾选状态、执行选项、定时设置、工具模块路径和 Kindle 联动设置都会保存；下次打开软件会自动恢复。
 
@@ -167,7 +169,7 @@ dist\SVNAutoTool.exe
 
 工具使用分阶段流水线，并保持同类任务串行：
 
-1. 按勾选顺序逐个执行各文件夹的 `svn update`。
+1. 按勾选顺序逐个执行各文件夹的 `svn update`；失败时立即 cleanup，清理成功后重试一次 update。
 2. `bin` 更新成功后，`Update.bat` 进入单线程后台队列，同时主流程继续后续文件夹的 `svn update`。
 3. 等待全部 SVN Update 和后台 `Update.bat` 完成。
 4. 按勾选顺序逐个执行 `svn cleanup`。
@@ -175,7 +177,7 @@ dist\SVNAutoTool.exe
 
 SVN Update 彼此不会并发，多个 `Update.bat` 也彼此串行；只有后台 `Update.bat` 会与后续文件夹的 SVN Update 重叠。
 
-如果 `svn update` 时 SVN 提示需要先执行 cleanup，工具会自动执行一次 `svn cleanup`，然后重试一次 `svn update`。
+如果 `svn update` 返回失败，工具会自动执行一次 `svn cleanup`，清理成功后重试一次 `svn update`。重试仍失败时会记录错误并继续后续文件夹，不会循环重试。
 
 执行 `Update.bat` 和 `Build.bat` 时会显示原始 CMD 窗口；工具会自动给窗口发送 Enter 来通过脚本里的 `pause`。脚本成功结束后窗口会关闭，如果脚本返回错误，窗口会保留 5 秒方便查看错误。全部任务完成后，工具状态会显示“已完成”，实时输出区域会变成绿色。
 

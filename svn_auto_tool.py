@@ -44,7 +44,7 @@ def _enable_windows_dpi_awareness() -> None:
 
 _enable_windows_dpi_awareness()
 
-from tkinter import BOTH, END, LEFT, RIGHT, X, Y, BooleanVar, StringVar, Tk, filedialog, messagebox
+from tkinter import BOTH, END, LEFT, RIGHT, X, Y, BooleanVar, Menu, StringVar, Tk, filedialog, messagebox
 from tkinter import ttk
 
 
@@ -86,7 +86,7 @@ CONFIG_PATH = APP_DIR / "svn_auto_tool_config.json"
 LOG_DIR = APP_DIR / "logs"
 LOG_RETENTION_DAYS = 7
 MUSIC_EXTENSIONS = (".mp3", ".wav")
-APP_VERSION = "v1.4.0"
+APP_VERSION = "v1.4.1"
 LATEST_RELEASE_URL = "https://github.com/SusamMinami/SVNmate/releases/latest"
 RELEASE_DOWNLOAD_URL = "https://github.com/SusamMinami/SVNmate/releases/download/{tag}/{asset}"
 RELEASE_ASSET_NAME = "SVNmate.zip"
@@ -708,6 +708,7 @@ class SvnAutoTool:
         scroll.pack(side=RIGHT, fill=Y)
         tree.configure(yscrollcommand=scroll.set)
         tree.bind("<Button-1>", lambda event, key=group_key: self._on_folder_tree_click(event, key))
+        tree.bind("<Button-3>", lambda event, key=group_key: self._show_folder_context_menu(event, key))
         tree.bind("<Double-1>", lambda event, key=group_key: self._toggle_selected_folder(key))
         tree.bind("<space>", lambda _event, key=group_key: self._toggle_selected_folder(key))
         self.folder_trees[group_key] = tree
@@ -1829,6 +1830,40 @@ class SvnAutoTool:
         if row_id and column == "#1":
             self._toggle_folder(group_key, int(row_id))
 
+    def _show_folder_context_menu(self, event: object, group_key: str) -> None:
+        tree = self.folder_trees[group_key]
+        row_id = tree.identify_row(event.y)
+        if not row_id:
+            return
+        index = int(row_id)
+        if index < 0 or index >= len(self.folder_groups[group_key]):
+            return
+        tree.selection_set(row_id)
+        tree.focus(row_id)
+        menu = Menu(tree, tearoff=False)
+        menu.add_command(
+            label="在资源管理器中打开",
+            command=lambda: self._open_folder(group_key, index),
+        )
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    def _open_folder(self, group_key: str, index: int) -> bool:
+        if index < 0 or index >= len(self.folder_groups[group_key]):
+            return False
+        folder = Path(str(self.folder_groups[group_key][index].get("path", "")))
+        if not folder.is_dir():
+            messagebox.showwarning("无法打开文件夹", f"文件夹不存在：\n{folder}")
+            return False
+        try:
+            os.startfile(str(folder))
+        except OSError as exc:
+            messagebox.showerror("无法打开文件夹", str(exc))
+            return False
+        return True
+
     def _toggle_selected_folder(self, group_key: str) -> None:
         tree = self.folder_trees[group_key]
         for row_id in tree.selection():
@@ -2167,9 +2202,17 @@ class SvnAutoTool:
             return True
 
         message = error or output or f"退出码 {return_code}"
-        if auto_cleanup and self._needs_svn_cleanup(message):
-            self._record(str(cwd), action, "需要清理", "SVN 提示需要先执行 cleanup，正在自动处理")
-            cleanup_ok = self._run_command(cwd, self._svn_cleanup_command(cwd), "svn cleanup(自动)")
+        if auto_cleanup and action == "svn update":
+            if self._needs_svn_cleanup(message):
+                recovery_message = "SVN 提示工作副本需要清理，正在执行 cleanup"
+            else:
+                recovery_message = f"SVN Update 失败（{message[:160]}），先执行 cleanup 后重试一次"
+            self._record(str(cwd), action, "自动恢复", recovery_message)
+            cleanup_ok = self._run_command(
+                cwd,
+                self._svn_cleanup_command(cwd),
+                "svn cleanup(自动恢复)",
+            )
             if cleanup_ok:
                 self._record(str(cwd), action, "重试", "cleanup 完成，重新执行 svn update")
                 return self._run_command(cwd, command, action, auto_cleanup=False)

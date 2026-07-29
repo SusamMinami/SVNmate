@@ -5,7 +5,9 @@
 ## 功能
 
 - 管理两栏 SVN 文件夹列表，只执行已勾选项目
+- 右键列表中的文件夹可直接在资源管理器中打开
 - 自动执行 SVN update 和 cleanup
+- SVN update 失败时自动 cleanup，并重试一次 update
 - 支持每日更新 `bin\WindowsNoEditor\Update.bat`
 - 支持 cleanup 后自动运行 `res\Build.bat`
 - 支持手动选择 `Update.bat` 和 `Build.bat` 的位置
@@ -33,10 +35,12 @@ SVNAutoTool.exe
 
 点击窗口关闭按钮或“隐藏到托盘”后，程序会继续在系统托盘运行，以保证定时任务有效。双击托盘图标可恢复窗口；右键托盘图标可打开窗口、立即执行或彻底退出。
 
-## v1.4.0 更新摘要
+## v1.4.1 更新摘要
 
+- 新增工作目录右键菜单，可直接在资源管理器中打开所选文件夹。
+- SVN Update 失败后立即执行一次 Cleanup；清理成功后自动重试一次 Update。
 - 新增“工具模块”卡片，统一管理配置关系检索器和 Kindle 提示板。
-- ConfigLinker 可按需下载安装；KindleLarkStatus 已预留公共更新端点，也可选择已有 EXE。
+- ConfigLinker 与 KindleLarkStatus 均可按需下载安装，也可选择已有 EXE。
 - 支持选择已有 EXE、查看本地版本、打开和检查模块。
 - 两个模块使用各自的固定 Release 通道，版本不与 SVNmate 主版本绑定。
 - 模块下载执行 HTTPS、manifest 字段校验、SHA-256 校验和 ZIP 路径穿越防护。

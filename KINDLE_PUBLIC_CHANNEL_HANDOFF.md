@@ -13,7 +13,7 @@ manifest: https://github.com/SusamMinami/SVNmate/releases/download/kindle-window
 package: https://github.com/SusamMinami/SVNmate/releases/download/kindle-windows-latest/KindleLarkStatus.zip
 ```
 
-该通道与 SVNmate 主程序 `v1.4.0`、ConfigLinker
+该通道与 SVNmate 主程序 `v1.4.1`、ConfigLinker
 `config-linker-latest` 相互独立，并保持 `latest=false`。
 
 ## SVNmate 侧状态
@@ -84,5 +84,5 @@ entrypoint = KindleLarkStatus.exe
 4. ZIP 只包含 `KindleLarkStatus.exe` 和 `VERSION`。
 5. SVNmate 的匿名检查、首次安装、旧版覆盖更新、备份和配置保留验证通过。
 6. 发布版 EXE 的隔离 `--check --data-dir` 验证通过。
-7. SVNmate 项目的 latest Release 仍为 `v1.4.0`。
+7. SVNmate 项目的 latest Release 为 `v1.4.1`。
 8. 应用内“更新 Kindle”仍只负责 SSH 投放 KUAL 和 Kindle Shell 文件。

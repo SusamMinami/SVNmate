@@ -6,6 +6,8 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 from svn_auto_tool import RELEASE_ASSET_NAME, RELEASE_DOWNLOAD_URL, SvnAutoTool
 from tool_modules import CONFIG_LINKER, KINDLE_STATUS, ToolModuleManager
@@ -25,8 +27,8 @@ class _Value:
 class ReleaseConfigTests(unittest.TestCase):
     def test_release_asset_name_is_stable_and_url_safe(self) -> None:
         self.assertEqual(RELEASE_ASSET_NAME, "SVNmate.zip")
-        asset_url = RELEASE_DOWNLOAD_URL.format(tag="v1.4.0", asset=RELEASE_ASSET_NAME)
-        self.assertTrue(asset_url.endswith("/v1.4.0/SVNmate.zip"))
+        asset_url = RELEASE_DOWNLOAD_URL.format(tag="v1.4.1", asset=RELEASE_ASSET_NAME)
+        self.assertTrue(asset_url.endswith("/v1.4.1/SVNmate.zip"))
 
 
 class ToolModuleIntegrationTests(unittest.TestCase):
@@ -63,6 +65,112 @@ class ToolModuleIntegrationTests(unittest.TestCase):
                 tool._resolve_tool_module_executable(KINDLE_STATUS),
                 external.resolve(),
             )
+
+
+class FolderInteractionTests(unittest.TestCase):
+    def test_right_click_selects_folder_and_opens_context_action(self) -> None:
+        tool = SvnAutoTool.__new__(SvnAutoTool)
+        tree = Mock()
+        tree.identify_row.return_value = "0"
+        tool.folder_trees = {"left": tree}
+        tool.folder_groups = {
+            "left": [{"path": r"C:\trunk\doc", "enabled": True}],
+            "right": [],
+        }
+        event = SimpleNamespace(y=12, x_root=320, y_root=240)
+        menu = Mock()
+
+        with (
+            patch("svn_auto_tool.Menu", return_value=menu),
+            patch.object(tool, "_open_folder") as open_folder,
+        ):
+            tool._show_folder_context_menu(event, "left")
+            command = menu.add_command.call_args.kwargs["command"]
+            command()
+
+        tree.selection_set.assert_called_once_with("0")
+        tree.focus.assert_called_once_with("0")
+        menu.tk_popup.assert_called_once_with(320, 240)
+        menu.grab_release.assert_called_once_with()
+        open_folder.assert_called_once_with("left", 0)
+
+    @unittest.skipUnless(hasattr(os, "startfile"), "Windows folder opening only")
+    def test_open_folder_uses_windows_shell(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            folder = Path(temp_dir)
+            tool = SvnAutoTool.__new__(SvnAutoTool)
+            tool.folder_groups = {
+                "left": [{"path": str(folder), "enabled": True}],
+                "right": [],
+            }
+
+            with patch("svn_auto_tool.os.startfile") as startfile:
+                opened = tool._open_folder("left", 0)
+
+            self.assertTrue(opened)
+            startfile.assert_called_once_with(str(folder))
+
+
+class SvnRecoveryTests(unittest.TestCase):
+    def _build_tool(
+        self,
+        update_results: list[int],
+        cleanup_result: int = 0,
+    ) -> tuple[SvnAutoTool, list[str], list[tuple[str, str]]]:
+        tool = SvnAutoTool.__new__(SvnAutoTool)
+        tool.tortoise_proc = "TortoiseProc.exe"
+        calls: list[str] = []
+        records: list[tuple[str, str]] = []
+        remaining_updates = iter(update_results)
+
+        def run_tortoise(
+            _cwd: Path,
+            command: list[str],
+        ) -> tuple[int, str, str]:
+            if "/command:cleanup" in command:
+                calls.append("cleanup")
+                return cleanup_result, "", ""
+            calls.append("update")
+            return next(remaining_updates), "", ""
+
+        tool._run_tortoise_command = run_tortoise
+        tool._svn_cleanup_command = lambda _folder: [
+            "TortoiseProc.exe",
+            "/command:cleanup",
+        ]
+        tool._log = lambda *_args: None
+        tool._record = lambda _folder, _action, status, message: records.append(
+            (status, message)
+        )
+        return tool, calls, records
+
+    def test_failed_update_runs_cleanup_then_retries_once(self) -> None:
+        tool, calls, records = self._build_tool([4294967295, 0])
+
+        succeeded = tool._run_command(
+            Path(r"C:\trunk\doc"),
+            ["TortoiseProc.exe", "/command:update"],
+            "svn update",
+            auto_cleanup=True,
+        )
+
+        self.assertTrue(succeeded)
+        self.assertEqual(calls, ["update", "cleanup", "update"])
+        self.assertIn("自动恢复", [status for status, _message in records])
+        self.assertIn("重试", [status for status, _message in records])
+
+    def test_retry_failure_does_not_start_another_cleanup(self) -> None:
+        tool, calls, _records = self._build_tool([4294967295, 4294967295])
+
+        succeeded = tool._run_command(
+            Path(r"C:\trunk\doc"),
+            ["TortoiseProc.exe", "/command:update"],
+            "svn update",
+            auto_cleanup=True,
+        )
+
+        self.assertFalse(succeeded)
+        self.assertEqual(calls, ["update", "cleanup", "update"])
 
 
 @unittest.skipUnless(os.name == "nt", "Windows cmd.exe behavior only")
