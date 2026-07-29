@@ -8,6 +8,8 @@
 m目标物表.csv -> NPC表.csv -> m模型资源表.csv
 ```
 
+面向小组同事的操作说明见：[ConfigLinker 使用指南](USER_GUIDE.md)。
+
 ## 功能
 
 - 按目标物 ID、NPC ID 或模型资源 ID 精确查询

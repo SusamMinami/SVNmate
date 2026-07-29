@@ -56,6 +56,8 @@ ConfigLinker 缺失时点击“安装”，已安装时点击“打开”；“�
 
 KindleLarkStatus 源码仓当前为私有仓库，匿名读取 Windows 模块发布清单会返回 `404`。因此 Kindle 在线安装/更新暂不可用，但选择已有 EXE、打开和启动时联动不受影响。
 
+ConfigLinker 的完整操作说明见：[ConfigLinker 使用指南](config_id_lookup/USER_GUIDE.md)。
+
 模块配置只记录在 `svn_auto_tool_config.json`。SVNmate 不读取 ConfigLinker 的配置仓数据，也不读取 KindleLarkStatus 的 OAuth Token、SSH 私钥或运行时配置。
 
 ## 分享包

@@ -102,6 +102,8 @@ ConfigLinker 还可以在自身标题区点击更新圆点独立更新。SVNmate
 
 ## ConfigLinker 使用
 
+完整操作说明：[ConfigLinker 使用指南](https://github.com/SusamMinami/SVNmate/blob/main/config_id_lookup/USER_GUIDE.md)。
+
 1. 打开“配置关系检索器”。
 2. 点击“选择 doc 目录”，选择包含 `csvdir` 的配置仓 `doc` 根目录。
 3. 选择目标物 ID、NPC ID 或模型资源 ID，输入整数后搜索。
