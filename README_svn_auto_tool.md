@@ -7,15 +7,15 @@
 本版本新增独立工具模块体系：
 
 - 设置区调整为“执行与自动化”和“工具模块”两张卡片。
-- ConfigLinker 与 KindleLarkStatus 按需安装，不进入 SVNmate 主安装包。
-- 支持安装、打开、选择现有 EXE、检查版本和更新模块。
-- 两个模块使用独立固定 Release 通道，不会覆盖 SVNmate 主程序更新。
+- ConfigLinker 可按需安装；KindleLarkStatus 可选择已有 EXE，两者都不进入 SVNmate 主安装包。
+- 支持打开、选择现有 EXE 和检查模块；ConfigLinker 支持在线安装和更新。
+- ConfigLinker 使用独立固定 Release 通道，不会覆盖 SVNmate 主程序更新。
 - 下载前校验 manifest 模块 ID、HTTPS 地址、版本、入口文件和 SHA-256。
 - ZIP 解压拒绝目录穿越；替换只允许模块 EXE 和公开 `VERSION`。
 - 模块配置、日志、OAuth Token、SSH 私钥和其他运行文件不在更新白名单内。
 - 运行中的模块会在用户确认后关闭、替换并按原状态重启。
-- ConfigLinker `1.1.0` 修复高 DPI 字体和默认窗口尺寸，三栏关系图完整显示。
-- ConfigLinker 支持查询中心高亮、双击 ID 复制、长路径横滚/选择复制，以及坐标和旋转详情。
+- ConfigLinker `1.2.0` 使用独立关系网络图标，修复高 DPI 字体和默认窗口尺寸。
+- ConfigLinker 支持查询中心高亮、双击 ID 复制、长路径横滚/选择复制，坐标和旋转在选中详情中直接显示。
 - ConfigLinker 数据入口改为 `doc` 根目录，自动定位 `doc\csvdir` 下的三张 CSV。
 
 ## 启动方式
@@ -65,18 +65,17 @@ https://bytedance.larkoffice.com/docx/BdDod9tjIo4rPbx2oWHchVRUnwh
 Kindle 提示板（KindleLarkStatus）
 ```
 
-每行包含模块状态/版本、安装或打开、检查或更新、选择现有程序。
+每行包含模块状态/版本、安装或打开、检查或更新、选择现有程序。Kindle 行保留统一操作入口，但在线通道不可访问时会显示“检查失败”。
 
 ### 按需安装
 
-模块未安装时点击“安装”。SVNmate 会读取固定 manifest、下载 ZIP、校验 SHA-256，再安装到：
+ConfigLinker 未安装时点击“安装”。SVNmate 会读取固定 manifest、下载 ZIP、校验 SHA-256，再安装到：
 
 ```text
 modules\ConfigLinker\ConfigLinker.exe
-modules\KindleLarkStatus\KindleLarkStatus.exe
 ```
 
-模块不随 `SVNmate.zip` 预装。安装失败不会删除当前可用版本，也不会覆盖模块配置。
+模块不随 `SVNmate.zip` 预装。安装失败不会删除当前可用版本，也不会覆盖模块配置。Kindle 当前需通过“选择”接管已有 EXE。
 
 ### 选择已有程序
 
@@ -89,7 +88,7 @@ modules\KindleLarkStatus\KindleLarkStatus.exe
 
 ### 检查与更新
 
-SVNmate 启动后会后台检查两个模块。网络失败只把模块状态改为“检查失败”，不影响 SVN 更新和模块启动。
+SVNmate 启动后会后台检查两个模块。网络失败只把模块状态改为“检查失败”，不影响 SVN 更新和已安装模块启动。
 
 - 无更新时保持当前版本。
 - 有更新时“检查”变为“更新”。
@@ -99,7 +98,7 @@ SVNmate 启动后会后台检查两个模块。网络失败只把模块状态改
 
 ConfigLinker 还可以在自身标题区点击更新圆点独立更新。SVNmate、ConfigLinker 和 KindleLarkStatus Windows 模块拥有各自版本，互不覆盖。
 
-> Kindle Windows 模块交接状态（2026-07-28）：`KindleLarkStatus` 源码仓当前为私有仓库，匿名访问其 `windows-module-latest` manifest 会返回 `404`。因此“选择已有程序”和启动联动可用，但在线安装/更新要等后续维护者提供公开可访问的二进制通道，或为更新器设计明确的认证方案。待上传资产已保存在 `C:\Users\Admin\Downloads\提示板\KindleLarkStatus\dist\windows-module-release`，具体见该仓库的 `WINDOWS_MODULE_HANDOFF.md`。
+> Kindle Windows 模块当前限制：`KindleLarkStatus` 源码仓为私有仓库，匿名访问 `windows-module-latest` manifest 会返回 `404`。因此“选择已有程序”、打开和启动联动可用，在线安装/更新暂不可用。
 
 ## ConfigLinker 使用
 
@@ -109,7 +108,7 @@ ConfigLinker 还可以在自身标题区点击更新圆点独立更新。SVNmate
 4. 单击结果中的关系 ID 可切换查询中心，点击“返回上一步”可连续回退。
 5. 双击 ID 会复制完整数字并显示提示。
 6. 模型资源路径可横向滚动；下方只读输入框支持框选和 `Ctrl+C`。
-7. 目标物详情中的“位置详情”默认折叠，展开后可复制坐标和旋转。
+7. 选中目标物后，坐标和旋转会直接显示在“选中详情”中，双击字段可复制。
 
 程序自动读取：
 
@@ -127,7 +126,7 @@ doc\csvdir\m模型资源表.csv
 
 必须区分两种更新：
 
-- **更新 Windows 模块**：由 SVNmate 替换 `KindleLarkStatus.exe`，运行中的刷新服务会短暂中断并自动重启。
+- **更新 Windows 模块**：更新器负责替换 `KindleLarkStatus.exe`，但当前私有发布通道无法匿名下载，暂不可在线使用。
 - **更新 Kindle 端**：由 KindleLarkStatus 自身通过 SSH 更新 KUAL 元数据和 Kindle Shell 文件，不替换 Windows EXE。
 
 ## 系统托盘
@@ -141,7 +140,7 @@ SVNmate 启动后会在 Windows 通知区域显示 Metro 蓝色图标。
 
 ## 重新打包
 
-如果修改了 `svn_auto_tool.py`，双击下面的文件可以重新生成 exe：
+如果修改了 `svn_auto_tool.py`、`tool_modules.py`、`module_updates.py` 或相关资源，双击下面的文件可以重新生成 exe：
 
 ```bat
 build_exe.bat
@@ -163,14 +162,15 @@ dist\SVNAutoTool.exe
 
 ## 执行流程
 
-工具会按勾选顺序逐个处理文件夹，避免多个 SVN 工作副本操作同时抢锁。
+工具使用分阶段流水线，并保持同类任务串行：
 
-每个文件夹内部按以下顺序执行：
+1. 按勾选顺序逐个执行各文件夹的 `svn update`。
+2. `bin` 更新成功后，`Update.bat` 进入单线程后台队列，同时主流程继续后续文件夹的 `svn update`。
+3. 等待全部 SVN Update 和后台 `Update.bat` 完成。
+4. 按勾选顺序逐个执行 `svn cleanup`。
+5. 如果开启“Clean up完成后，自动运行res目录Build.bat”，则在对应 `res` 文件夹 cleanup 成功后执行 `Build.bat`。
 
-1. `svn update`
-2. 如果开启“每日更新主干Bin包”，并且当天还没有成功执行过，则识别 `bin\\WindowsNoEditor` 并在 `bin\\WindowsNoEditor` 文件夹内执行 `Update.bat`
-3. `svn cleanup`
-4. 如果开启“Clean up完成后，自动运行res目录Build.bat”，并识别到 `res` 文件夹，则在 `res` 文件夹内执行 `Build.bat`
+SVN Update 彼此不会并发，多个 `Update.bat` 也彼此串行；只有后台 `Update.bat` 会与后续文件夹的 SVN Update 重叠。
 
 如果 `svn update` 时 SVN 提示需要先执行 cleanup，工具会自动执行一次 `svn cleanup`，然后重试一次 `svn update`。
 

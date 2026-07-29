@@ -1,30 +1,32 @@
 # 一键更新SVN v1.4.0
 
-本版本新增工具模块管理，并发布 ConfigLinker `1.1.0`。
+本版本新增工具模块管理，并发布 ConfigLinker `1.2.0`。
 
 ## SVNmate
 
 - 设置区调整为“执行与自动化”和“工具模块”两张卡片。
-- 支持按需安装、打开、选择和独立更新 ConfigLinker 与 KindleLarkStatus。
+- 支持按需安装、打开、选择和独立更新 ConfigLinker。
+- KindleLarkStatus 支持选择已有 EXE、打开和启动时联动。
 - 模块启动时后台检查版本；网络失败不阻断 SVN 更新或模块启动。
 - 已选择的旧 `kindle_status_path` 自动迁移到 `tool_module_paths`。
 - KindleLarkStatus 继续支持“启动时联动”，并避免重复启动。
 - SVNmate 主程序仍使用 `SVNmate.zip` 和 `v1.4.0` Release 更新。
 
-## ConfigLinker 1.1.0
+## ConfigLinker 1.2.0
 
+- 使用独立的关系节点网络图标，不再复用 SVNmate 图标。
 - 修复高 DPI 和跨显示器场景下的字体缩放，扩大默认三栏窗口。
 - 模型资源卡片移除自动生成路径，配置路径支持横向滚动、选择和复制。
 - 双击目标物、NPC、资源 ID 可复制完整数字并显示提示。
 - 当前查询 ID 和查询中心有明确高亮，多级返回会恢复焦点。
-- 目标物坐标和旋转放入默认折叠的详情区，可单独复制。
+- 目标物坐标和旋转直接显示在选中详情中，可单独复制。
 - 数据入口改为选择配置仓 `doc` 根目录，并自动定位 `doc\csvdir`。
 - 支持从 SVNmate 更新，也支持标题区圆点独立检查和更新。
 
 ## KindleLarkStatus Windows 模块
 
-- SVNmate 可安装、启动和更新独立的 `KindleLarkStatus.exe`。
-- 更新 Windows 模块时，运行中的刷新服务会在确认后短暂停止并自动重启。
+- SVNmate 可选择、启动已有的 `KindleLarkStatus.exe`。
+- Windows 模块更新器已实现关闭、替换和重启流程，但当前私有 Release 无法匿名下载。
 - 应用内“更新 Kindle”仍只通过 SSH 更新 KUAL 和 Kindle 端 Shell 文件。
 - Windows 模块更新与 Kindle 端更新是两条独立链路。
 
@@ -34,10 +36,11 @@
 - ZIP 解压拒绝绝对路径和目录穿越。
 - 更新仅替换模块 EXE 与公开 `VERSION` 文件。
 - 不覆盖 ConfigLinker JSON 配置、KindleLarkStatus `%APPDATA%` 配置、Token、日志、缓存或 SSH 私钥。
-- ConfigLinker 与 KindleLarkStatus 使用各自固定 Release 通道，不覆盖 SVNmate 主程序的 latest Release。
+- ConfigLinker 使用独立固定 Release 通道，不覆盖 SVNmate 主程序的 latest Release。
+- KindleLarkStatus 当前私有发布清单匿名访问返回 `404`，在线安装/更新暂不可用。
 
 ## 安装
 
 从 GitHub Release 下载 `SVNmate.zip`，解压后运行 `SVNAutoTool.exe`。
 
-ConfigLinker 与 KindleLarkStatus 不预装。启动 SVNmate 后，在“工具模块”卡片中按需安装或选择已有 EXE。
+ConfigLinker 与 KindleLarkStatus 不预装。ConfigLinker 可在“工具模块”卡片中按需安装；Kindle 当前需选择已有 EXE。

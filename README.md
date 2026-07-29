@@ -1,6 +1,6 @@
 # 一键更新SVN
 
-一个 Windows 桌面小工具，用来批量执行 SVN 更新、清理和项目脚本。
+一个 Windows 桌面小工具，用来批量执行 SVN 更新、清理和项目脚本，并管理独立辅助工具。
 
 ## 功能
 
@@ -9,7 +9,8 @@
 - 支持每日更新 `bin\WindowsNoEditor\Update.bat`
 - 支持 cleanup 后自动运行 `res\Build.bat`
 - 支持手动选择 `Update.bat` 和 `Build.bat` 的位置
-- 支持按需安装、打开和独立更新 ConfigLinker 与 KindleLarkStatus
+- 支持按需安装、打开和独立更新 ConfigLinker
+- 支持选择已有 KindleLarkStatus EXE、打开和启动时联动
 - 支持启动时联动打开 KindleLarkStatus，并避免重复启动
 - 支持每天定时执行
 - Metro 风格紧凑界面，执行设置与工具模块分栏显示
@@ -35,14 +36,13 @@ SVNAutoTool.exe
 ## v1.4.0 更新摘要
 
 - 新增“工具模块”卡片，统一管理配置关系检索器和 Kindle 提示板。
-- 两个模块均按需下载安装，不随 SVNmate 主包预装。
-- 支持选择已有 EXE、查看本地版本、打开、检查和更新模块。
-- ConfigLinker 与 KindleLarkStatus Windows EXE 使用各自固定 Release 通道，版本不与 SVNmate 主版本绑定。
+- ConfigLinker 可按需下载安装；KindleLarkStatus 不随主包预装，可选择已有 EXE。
+- 支持选择已有 EXE、查看本地版本、打开和检查模块。
+- ConfigLinker 使用独立固定 Release 通道，版本不与 SVNmate 主版本绑定。
 - 模块下载执行 HTTPS、manifest 字段校验、SHA-256 校验和 ZIP 路径穿越防护。
 - 更新仅替换模块 EXE 和公开 `VERSION`，保留用户配置、日志、Token 和 SSH 私钥。
-- Kindle 提示板运行中更新会明确提示短暂中断刷新服务，完成后自动重启。
-- ConfigLinker 升级到 `1.1.0`：修复高 DPI 字体、扩大三栏窗口、增加查询高亮和双击复制。
-- ConfigLinker 模型路径支持横向滚动和选择复制，目标物坐标/旋转可折叠查看与复制。
+- ConfigLinker 升级到 `1.2.0`：使用独立关系网络图标，目标物坐标和旋转在选中详情中直接显示。
+- ConfigLinker 修复高 DPI 字体、扩大三栏窗口，并支持查询高亮、双击复制和长路径选择复制。
 - ConfigLinker 改为选择 `doc` 根目录，并自动读取 `doc\csvdir` 下三张配置表。
 
 ## 工具模块
@@ -52,7 +52,9 @@ SVNmate 的“工具模块”卡片包含：
 - **配置关系检索器**：目标物 ID、NPC ID 与模型资源 ID 的双向检索。
 - **Kindle 提示板**：Windows 桌面客户端，可保留“启动时联动”。
 
-模块缺失时点击“安装”；已安装时点击“打开”。“检查”会读取模块自己的固定发布清单，有新版后按钮变为“更新”。也可以点击“选择”接管已有的独立 EXE。
+ConfigLinker 缺失时点击“安装”，已安装时点击“打开”；“检查”会读取固定发布清单，有新版后按钮变为“更新”。两个模块都可以点击“选择”接管已有的独立 EXE。
+
+KindleLarkStatus 源码仓当前为私有仓库，匿名读取 Windows 模块发布清单会返回 `404`。因此 Kindle 在线安装/更新暂不可用，但选择已有 EXE、打开和启动时联动不受影响。
 
 模块配置只记录在 `svn_auto_tool_config.json`。SVNmate 不读取 ConfigLinker 的配置仓数据，也不读取 KindleLarkStatus 的 OAuth Token、SSH 私钥或运行时配置。
 
@@ -73,7 +75,7 @@ SVNmate 的“工具模块”卡片包含：
   README_svn_auto_tool.md
 ```
 
-ConfigLinker 与 KindleLarkStatus 不在分享包内，由“工具模块”卡片按需安装。
+ConfigLinker 与 KindleLarkStatus 不在分享包内。ConfigLinker 可由“工具模块”卡片按需安装；Kindle 当前需选择已有 EXE。
 
 ## 使用指南
 

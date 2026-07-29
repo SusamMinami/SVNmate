@@ -32,7 +32,7 @@ class UiSmokeTests(unittest.TestCase):
                 str(app.choose_doc_button.cget("text")),
                 "选择 doc 目录",
             )
-            self.assertEqual(app.version_text.get(), "v1.1.0")
+            self.assertEqual(app.version_text.get(), "v1.2.0")
         finally:
             root.destroy()
 
@@ -52,11 +52,11 @@ class UiSmokeTests(unittest.TestCase):
                 root,
                 config_path=Path("__missing_config_for_test__.json"),
                 auto_load=False,
-                app_version="1.1.0",
+                app_version="1.2.0",
                 update_controller=controller,
             )
             app.update_state = "ready"
-            app.update_manifest = SimpleNamespace(version="1.2.0")
+            app.update_manifest = SimpleNamespace(version="1.3.0")
 
             with patch(
                 "config_linker.ui.messagebox.askyesno",
@@ -134,7 +134,7 @@ class UiSmokeTests(unittest.TestCase):
             finally:
                 root.destroy()
 
-    def test_focus_copy_toast_and_collapsed_target_location_details(self) -> None:
+    def test_focus_copy_toast_and_visible_target_location_details(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             doc_directory = Path(temp_dir)
             write_fixture(doc_directory / "csvdir")
@@ -166,10 +166,9 @@ class UiSmokeTests(unittest.TestCase):
                     app.target_rotation_text.get(),
                     "(Pitch=0,Yaw=90,Roll=0)",
                 )
-                self.assertFalse(app.target_location_expanded)
-                app.toggle_target_location()
-                self.assertTrue(app.target_location_expanded)
+                self.assertEqual(app.target_detail_frame.winfo_manager(), "pack")
                 self.assertEqual(str(app.target_position_entry.cget("state")), "readonly")
+                self.assertEqual(str(app.target_rotation_entry.cget("state")), "readonly")
 
                 app._copy_text("1001", "目标物 ID 1001")
                 self.assertEqual(root.clipboard_get(), "1001")

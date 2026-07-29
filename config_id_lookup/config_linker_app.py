@@ -6,7 +6,7 @@ from config_linker.dpi import enable_windows_dpi_awareness
 
 enable_windows_dpi_awareness()
 
-from tkinter import Tk
+from tkinter import TclError, Tk
 
 from config_linker.ui import ConfigLinkerApp
 from config_linker.update_controller import ConfigLinkerUpdateController
@@ -27,8 +27,8 @@ def _app_version() -> str:
     try:
         version = version_file.read_text(encoding="utf-8").strip()
     except (OSError, UnicodeError):
-        return "1.1.0"
-    return version or "1.1.0"
+        return "1.2.0"
+    return version or "1.2.0"
 
 
 def main() -> None:
@@ -42,6 +42,12 @@ def main() -> None:
             work_dir=app_directory / "_updates" / "config-linker",
         )
     root = Tk()
+    icon_path = _resource_directory() / "config_linker.ico"
+    if icon_path.is_file():
+        try:
+            root.iconbitmap(default=str(icon_path))
+        except TclError:
+            pass
     ConfigLinkerApp(
         root,
         config_path=app_directory / "config_linker_config.json",

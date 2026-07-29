@@ -1,6 +1,6 @@
 # 配置关系检索器
 
-当前版本：`1.1.0`
+当前版本：`1.2.0`
 
 一个只读的 Windows 桌面工具，用于检索以下三张配置表之间的关系：
 
@@ -12,7 +12,7 @@ m目标物表.csv -> NPC表.csv -> m模型资源表.csv
 
 - 按目标物 ID、NPC ID 或模型资源 ID 精确查询
 - 显示目标物类型、描述和 NPC ID
-- 在详情区展开目标物坐标和旋转
+- 在选中详情中直接显示目标物坐标和旋转
 - 显示 NPC 备注、名称和资源 ID
 - 显示模型配置路径，支持横向滚动、选择和复制
 - 反查同一 NPC 下的其他目标物
@@ -23,6 +23,7 @@ m目标物表.csv -> NPC表.csv -> m模型资源表.csv
 - 刷新失败时保留上一份可用数据
 - 高 DPI 和跨显示器缩放
 - 独立检查和安装 ConfigLinker 更新
+- 使用独立的关系节点网络图标
 - Metro 风格浅色/暗色界面
 
 ## 数据目录
@@ -102,6 +103,12 @@ build_exe.bat
 
 ```text
 python -m PyInstaller --noconfirm ConfigLinker.spec
+```
+
+重新生成图标需要 Pillow：
+
+```text
+python generate_icon.py
 ```
 
 构建产物：

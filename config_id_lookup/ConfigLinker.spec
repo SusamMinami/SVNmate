@@ -4,13 +4,16 @@ from pathlib import Path
 
 
 project_dir = Path(SPECPATH).resolve()
-icon_path = project_dir.parent / "svnmate.ico"
+icon_path = project_dir / "config_linker.ico"
+datas = [(str(project_dir / "VERSION"), ".")]
+if icon_path.is_file():
+    datas.append((str(icon_path), "."))
 
 a = Analysis(
     ["config_linker_app.py"],
     pathex=[str(project_dir), str(project_dir.parent)],
     binaries=[],
-    datas=[(str(project_dir / "VERSION"), ".")],
+    datas=datas,
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

@@ -68,7 +68,7 @@ class ConfigLinkerApp:
         *,
         config_path: Path | None = None,
         auto_load: bool = True,
-        app_version: str = "1.1.0",
+        app_version: str = "1.2.0",
         update_controller: ConfigLinkerUpdateController | None = None,
     ) -> None:
         self.root = root
@@ -104,7 +104,6 @@ class ConfigLinkerApp:
         self.target_rotation_text = StringVar(value="")
         self.toast_text = StringVar(value="")
         self.version_text = StringVar(value=f"v{self.app_version}")
-        self.target_location_expanded = False
         self.toast_label: ttk.Label | None = None
         self.toast_job: str | None = None
         self.click_arbiter = ClickArbiter(self.root.after, self.root.after_cancel)
@@ -304,24 +303,13 @@ class ConfigLinkerApp:
         )
         self.resource_path_entry.pack(side=LEFT, fill=X, expand=True)
         self.target_detail_frame = ttk.Frame(detail_card, style="Card.TFrame")
-        self.target_location_button = ttk.Button(
-            self.target_detail_frame,
-            text="位置详情 ▸",
-            style="Subtle.TButton",
-            command=self.toggle_target_location,
-        )
-        self.target_location_button.pack(anchor="w")
-        self.target_location_frame = ttk.Frame(
-            self.target_detail_frame,
-            style="Card.TFrame",
-        )
         ttk.Label(
-            self.target_location_frame,
+            self.target_detail_frame,
             text="坐标",
             style="Muted.TLabel",
-        ).grid(row=0, column=0, sticky="w", padx=(0, 8), pady=(6, 3))
+        ).grid(row=0, column=0, sticky="w", padx=(0, 8), pady=(3, 3))
         self.target_position_entry = ttk.Entry(
-            self.target_location_frame,
+            self.target_detail_frame,
             textvariable=self.target_position_text,
             state="readonly",
         )
@@ -329,20 +317,20 @@ class ConfigLinkerApp:
             row=0,
             column=1,
             sticky="ew",
-            pady=(6, 3),
+            pady=(3, 3),
         )
         ttk.Label(
-            self.target_location_frame,
+            self.target_detail_frame,
             text="旋转",
             style="Muted.TLabel",
         ).grid(row=1, column=0, sticky="w", padx=(0, 8), pady=(3, 0))
         self.target_rotation_entry = ttk.Entry(
-            self.target_location_frame,
+            self.target_detail_frame,
             textvariable=self.target_rotation_text,
             state="readonly",
         )
         self.target_rotation_entry.grid(row=1, column=1, sticky="ew", pady=(3, 0))
-        self.target_location_frame.grid_columnconfigure(1, weight=1)
+        self.target_detail_frame.grid_columnconfigure(1, weight=1)
         self.target_position_entry.bind(
             "<Double-1>",
             lambda _event: self._copy_text(
@@ -894,12 +882,9 @@ class ConfigLinkerApp:
     def _show_record_detail(self, record: Any) -> None:
         self.resource_detail_frame.pack_forget()
         self.target_detail_frame.pack_forget()
-        self.target_location_frame.pack_forget()
         self.resource_path_text.set("")
         self.target_position_text.set("")
         self.target_rotation_text.set("")
-        self.target_location_expanded = False
-        self.target_location_button.configure(text="位置详情 ▸")
         if isinstance(record, TargetRecord):
             text = (
                 f"目标物 ID：{record.id}  |  类型：{record.target_type or '未填写'}  |  "
@@ -924,15 +909,6 @@ class ConfigLinkerApp:
         else:
             text = "选择任意结果行可查看完整信息"
         self.detail_text.set(text)
-
-    def toggle_target_location(self) -> None:
-        self.target_location_expanded = not self.target_location_expanded
-        if self.target_location_expanded:
-            self.target_location_button.configure(text="位置详情 ▾")
-            self.target_location_frame.pack(fill=X)
-        else:
-            self.target_location_button.configure(text="位置详情 ▸")
-            self.target_location_frame.pack_forget()
 
     def _copy_text(self, value: str, label: str) -> None:
         if not value:
