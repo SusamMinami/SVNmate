@@ -8,7 +8,7 @@
 
 - 设置区调整为“执行与自动化”和“工具模块”两张卡片。
 - ConfigLinker 可按需安装；KindleLarkStatus 已预留公共更新端点，两者都可选择已有 EXE，且不进入 SVNmate 主安装包。
-- 支持打开、选择现有 EXE 和检查模块；Kindle 在线安装将在公共通道首次发布后启用。
+- 支持打开、选择现有 EXE、检查和在线安装模块；Kindle 公共通道已经启用。
 - 两个模块使用各自的固定 Release 端点，不会覆盖 SVNmate 主程序更新。
 - 下载前校验 manifest 模块 ID、HTTPS 地址、版本、入口文件和 SHA-256。
 - ZIP 解压拒绝目录穿越；替换只允许模块 EXE 和公开 `VERSION`。
@@ -65,7 +65,7 @@ https://bytedance.larkoffice.com/docx/BdDod9tjIo4rPbx2oWHchVRUnwh
 Kindle 提示板（KindleLarkStatus）
 ```
 
-每行包含模块状态/版本、安装或打开、检查或更新、选择现有程序。Kindle 公共通道首次发布前仍会显示“检查失败”。
+每行包含模块状态/版本、安装或打开、检查或更新、选择现有程序。
 
 ### 按需安装
 
@@ -76,7 +76,7 @@ modules\ConfigLinker\ConfigLinker.exe
 modules\KindleLarkStatus\KindleLarkStatus.exe
 ```
 
-模块不随 `SVNmate.zip` 预装。安装失败不会删除当前可用版本，也不会覆盖模块配置。Kindle 公共通道首次发布前仍需通过“选择”接管已有 EXE。
+模块不随 `SVNmate.zip` 预装。安装失败不会删除当前可用版本，也不会覆盖模块配置。
 
 ### 选择已有程序
 
@@ -99,7 +99,7 @@ SVNmate 启动后会后台检查两个模块。网络失败只把模块状态改
 
 ConfigLinker 还可以在自身标题区点击更新圆点独立更新。SVNmate、ConfigLinker 和 KindleLarkStatus Windows 模块拥有各自版本，互不覆盖。
 
-KindleLarkStatus 源码仓保持私有；Windows 模块的公共端点已预留为 SVNmate 仓库的独立 `kindle-windows-latest` 通道。首次资产发布前该地址仍返回 `404`，后续步骤见 [Kindle 公共更新通道交接](https://github.com/SusamMinami/SVNmate/blob/main/KINDLE_PUBLIC_CHANNEL_HANDOFF.md)。
+KindleLarkStatus 源码仓保持私有；Windows 模块通过 SVNmate 仓库的独立 `kindle-windows-latest` 公共通道发布，可匿名读取 manifest、安装和更新。发布与验收记录见 [Kindle 公共更新通道交接](https://github.com/SusamMinami/SVNmate/blob/main/KINDLE_PUBLIC_CHANNEL_HANDOFF.md)。
 
 ## ConfigLinker 使用
 
@@ -129,7 +129,7 @@ doc\csvdir\m模型资源表.csv
 
 必须区分两种更新：
 
-- **更新 Windows 模块**：公共固定端点首次发布后，更新器可在线检查并替换 `KindleLarkStatus.exe`。
+- **更新 Windows 模块**：更新器通过公共固定端点在线检查并替换 `KindleLarkStatus.exe`。
 - **更新 Kindle 端**：由 KindleLarkStatus 自身通过 SSH 更新 KUAL 元数据和 Kindle Shell 文件，不替换 Windows EXE。
 
 ## 系统托盘

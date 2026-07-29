@@ -43,4 +43,4 @@
 
 从 GitHub Release 下载 `SVNmate.zip`，解压后运行 `SVNAutoTool.exe`。
 
-ConfigLinker 与 KindleLarkStatus 不预装。ConfigLinker 可按需安装；Kindle 公共通道首次发布前需选择已有 EXE。
+ConfigLinker 与 KindleLarkStatus 不预装，均可按需在线安装或选择已有 EXE。
