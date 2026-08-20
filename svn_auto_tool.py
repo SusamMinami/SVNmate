@@ -10,6 +10,7 @@ import time
 import urllib.parse
 import urllib.request
 import webbrowser
+from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -86,12 +87,20 @@ CONFIG_PATH = APP_DIR / "svn_auto_tool_config.json"
 LOG_DIR = APP_DIR / "logs"
 LOG_RETENTION_DAYS = 7
 MUSIC_EXTENSIONS = (".mp3", ".wav")
-APP_VERSION = "v1.4.1"
+APP_VERSION = "v1.4.2"
 LATEST_RELEASE_URL = "https://github.com/SusamMinami/SVNmate/releases/latest"
 RELEASE_DOWNLOAD_URL = "https://github.com/SusamMinami/SVNmate/releases/download/{tag}/{asset}"
 RELEASE_ASSET_NAME = "SVNmate.zip"
 KINDLE_STATUS_EXE_NAME = "KindleLarkStatus.exe"
 APP_ICON_PATH = RESOURCE_DIR / "svnmate.ico"
+APP_WINDOW_TITLE = "P6-文案小组SVN懒人更新工具"
+TRAY_WINDOW_TITLE = "SVNmate Tray Host"
+TRAY_WINDOW_CLASS_NAME = "SVNmate.SingleInstance.TrayWindow.v1"
+SINGLE_INSTANCE_MUTEX_NAME = r"Local\SVNmate.SingleInstance"
+ACTIVATE_INSTANCE_MESSAGE_NAME = "SVNmate.ActivateExistingInstance.v1"
+MAX_PENDING_LOG_ITEMS = 500
+MAX_LIVE_LOG_ROWS = 300
+MAX_LIVE_LOG_CHARS = 12000
 
 
 if os.name == "nt":
@@ -138,6 +147,83 @@ if os.name == "nt":
         ]
 
 
+class SingleInstanceGuard:
+    ERROR_ALREADY_EXISTS = 183
+    HWND_BROADCAST = 0xFFFF
+    MB_OK = 0x00000000
+    MB_ICONINFORMATION = 0x00000040
+    MB_SETFOREGROUND = 0x00010000
+
+    def __init__(self) -> None:
+        self.handle = 0
+        self.is_primary = True
+        if os.name != "nt":
+            return
+        kernel32 = ctypes.windll.kernel32
+        kernel32.CreateMutexW.argtypes = [
+            ctypes.c_void_p,
+            wintypes.BOOL,
+            wintypes.LPCWSTR,
+        ]
+        kernel32.CreateMutexW.restype = wintypes.HANDLE
+        kernel32.SetLastError(0)
+        self.handle = kernel32.CreateMutexW(
+            None,
+            False,
+            SINGLE_INSTANCE_MUTEX_NAME,
+        )
+        if self.handle:
+            self.is_primary = (
+                kernel32.GetLastError() != self.ERROR_ALREADY_EXISTS
+            )
+
+    def notify_existing_instance(self) -> None:
+        if os.name != "nt":
+            return
+        user32 = ctypes.windll.user32
+        user32.FindWindowW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR]
+        user32.FindWindowW.restype = wintypes.HWND
+        user32.RegisterWindowMessageW.argtypes = [wintypes.LPCWSTR]
+        user32.RegisterWindowMessageW.restype = wintypes.UINT
+        user32.PostMessageW.argtypes = [
+            wintypes.HWND,
+            wintypes.UINT,
+            wintypes.WPARAM,
+            wintypes.LPARAM,
+        ]
+        user32.MessageBoxW(
+            None,
+            "SVNmate 已在后台运行。\n\n点击“确定”后将打开现有窗口。",
+            "SVNmate 已在运行",
+            self.MB_OK | self.MB_ICONINFORMATION | self.MB_SETFOREGROUND,
+        )
+        activate_message = user32.RegisterWindowMessageW(
+            ACTIVATE_INSTANCE_MESSAGE_NAME
+        )
+        hwnd = user32.FindWindowW(TRAY_WINDOW_CLASS_NAME, None)
+        if hwnd:
+            process_id = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(
+                hwnd,
+                ctypes.byref(process_id),
+            )
+            if process_id.value:
+                user32.AllowSetForegroundWindow(process_id.value)
+            user32.PostMessageW(hwnd, activate_message, 0, 0)
+            return
+        user32.PostMessageW(
+            self.HWND_BROADCAST,
+            activate_message,
+            0,
+            0,
+        )
+
+    def close(self) -> None:
+        if os.name == "nt" and self.handle:
+            ctypes.windll.kernel32.CloseHandle(self.handle)
+            self.handle = 0
+
+
 class WindowsTrayIcon:
     NIM_ADD = 0
     NIM_DELETE = 2
@@ -154,20 +240,25 @@ class WindowsTrayIcon:
     LR_LOADFROMFILE = 0x0010
     ID_SHOW = 1001
     ID_RUN = 1002
-    ID_EXIT = 1003
+    ID_MODULE_BASE = 1100
+    ID_EXIT = 1200
 
     def __init__(
         self,
         root: Tk,
         on_show: object,
+        on_toggle: object,
         on_run: object,
         on_exit: object,
+        module_actions: dict[str, tuple[str, object]],
         icon_path: Path,
     ) -> None:
         self.root = root
         self.on_show = on_show
+        self.on_toggle = on_toggle
         self.on_run = on_run
         self.on_exit = on_exit
+        self.module_actions = module_actions
         self.icon_path = icon_path
         self.available = False
         self.hwnd = 0
@@ -178,8 +269,16 @@ class WindowsTrayIcon:
         self._thread: threading.Thread | None = None
         self._ready_event = threading.Event()
         self._actions: queue.Queue[str] = queue.Queue()
-        self._class_name = f"SVNmateTrayWindow_{os.getpid()}_{id(self)}"
+        self._class_name = TRAY_WINDOW_CLASS_NAME
         self._instance = 0
+        self._activate_message = 0
+        if os.name == "nt":
+            user32 = ctypes.windll.user32
+            user32.RegisterWindowMessageW.argtypes = [wintypes.LPCWSTR]
+            user32.RegisterWindowMessageW.restype = wintypes.UINT
+            self._activate_message = user32.RegisterWindowMessageW(
+                ACTIVATE_INSTANCE_MESSAGE_NAME
+            )
 
     def start(self) -> bool:
         if os.name != "nt" or self.available:
@@ -208,10 +307,14 @@ class WindowsTrayIcon:
                 action = self._actions.get_nowait()
                 if action == "show":
                     self.on_show()
+                elif action == "toggle":
+                    self.on_toggle()
                 elif action == "run":
                     self.on_run()
                 elif action == "exit":
                     self.on_exit()
+                elif action in self.module_actions:
+                    self.module_actions[action][1]()
         except queue.Empty:
             pass
 
@@ -271,7 +374,7 @@ class WindowsTrayIcon:
             self.hwnd = user32.CreateWindowExW(
                 0,
                 self._class_name,
-                "SVNmate Tray Host",
+                TRAY_WINDOW_TITLE,
                 0,
                 0,
                 0,
@@ -350,10 +453,13 @@ class WindowsTrayIcon:
         self.owns_icon = False
 
     def _window_proc(self, hwnd: int, message: int, wparam: int, lparam: int) -> int:
+        if self._activate_message and message == self._activate_message:
+            self._actions.put("show")
+            return 0
         if message == self.WM_TRAYICON:
             event = int(lparam) & 0xFFFF
             if event == self.WM_LBUTTONDBLCLK:
-                self._actions.put("show")
+                self._actions.put("toggle")
                 return 0
             if event in {self.WM_RBUTTONUP, self.WM_CONTEXTMENU}:
                 self._show_context_menu()
@@ -386,6 +492,15 @@ class WindowsTrayIcon:
         user32.AppendMenuW(menu, 0x0000, self.ID_SHOW, "打开 SVNmate")
         user32.AppendMenuW(menu, 0x0000, self.ID_RUN, "立即执行")
         user32.AppendMenuW(menu, 0x0800, 0, None)
+        module_commands: dict[int, str] = {}
+        for index, (action, (label, _callback)) in enumerate(
+            self.module_actions.items()
+        ):
+            command_id = self.ID_MODULE_BASE + index
+            module_commands[command_id] = action
+            user32.AppendMenuW(menu, 0x0000, command_id, label)
+        if module_commands:
+            user32.AppendMenuW(menu, 0x0800, 0, None)
         user32.AppendMenuW(menu, 0x0000, self.ID_EXIT, "退出")
         point = wintypes.POINT()
         user32.GetCursorPos(ctypes.byref(point))
@@ -406,13 +521,15 @@ class WindowsTrayIcon:
             self._actions.put("run")
         elif command == self.ID_EXIT:
             self._actions.put("exit")
+        elif command in module_commands:
+            self._actions.put(module_commands[command])
 
 
 class SvnAutoTool:
     def __init__(self, root: Tk) -> None:
         self.root = root
         self.current_dpi = _configure_tk_dpi(self.root)
-        self.root.title("P6-文案小组SVN懒人更新工具")
+        self.root.title(APP_WINDOW_TITLE)
         self._set_initial_window_geometry(self.current_dpi)
         if APP_ICON_PATH.is_file():
             try:
@@ -422,7 +539,10 @@ class SvnAutoTool:
 
         self.folder_groups: dict[str, list[dict[str, object]]] = {"left": [], "right": []}
         self.folder_trees: dict[str, ttk.Treeview] = {}
-        self.log_queue: queue.Queue[tuple[str, object]] = queue.Queue()
+        self.log_queue: queue.Queue[tuple[str, object]] = queue.Queue(
+            maxsize=MAX_PENDING_LOG_ITEMS
+        )
+        self.dropped_live_log_items = 0
         self.worker_thread: threading.Thread | None = None
         self.running = False
         self.last_scheduled_key = ""
@@ -482,8 +602,19 @@ class SvnAutoTool:
         self.tray_icon = WindowsTrayIcon(
             self.root,
             self._show_from_tray,
+            self._toggle_from_tray,
             self._run_from_tray,
             self._exit_application,
+            {
+                spec.module_id: (
+                    f"打开{spec.display_name}",
+                    lambda current=spec: self._launch_tool_module(
+                        current,
+                        manual=True,
+                    ),
+                )
+                for spec in TOOL_MODULES
+            },
             APP_ICON_PATH,
         )
 
@@ -2163,23 +2294,18 @@ class SvnAutoTool:
     ) -> bool:
         self._log(f"[开始] {action} | {cwd}")
         started = datetime.now()
+        output_already_logged = False
         try:
             if self._is_tortoise_command(command):
                 return_code, output, error = self._run_tortoise_command(cwd, command)
             elif visible_console:
                 return_code, output, error = self._run_visible_console_command(cwd, command)
             else:
-                process = subprocess.run(
+                return_code, output, error = self._run_streamed_command(
+                    cwd,
                     command,
-                    cwd=str(cwd),
-                    capture_output=True,
-                    text=True,
-                    shell=False,
-                    creationflags=self._creation_flags(),
                 )
-                return_code = process.returncode
-                output = (process.stdout or "").strip()
-                error = (process.stderr or "").strip()
+                output_already_logged = True
         except FileNotFoundError as exc:
             self._record(str(cwd), action, "失败", f"命令不存在：{exc.filename}")
             return False
@@ -2188,9 +2314,9 @@ class SvnAutoTool:
             return False
 
         elapsed = (datetime.now() - started).total_seconds()
-        if output:
+        if output and not output_already_logged:
             self._log(output)
-        if error:
+        if error and not output_already_logged:
             self._log(error)
 
         if return_code == 0:
@@ -2221,6 +2347,32 @@ class SvnAutoTool:
 
         self._record(str(cwd), action, "失败", message[:300])
         return False
+
+    def _run_streamed_command(
+        self,
+        cwd: Path,
+        command: list[str],
+    ) -> tuple[int, str, str]:
+        process = subprocess.Popen(
+            command,
+            cwd=str(cwd),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            errors="replace",
+            shell=False,
+            creationflags=self._creation_flags(),
+        )
+        output_tail: deque[str] = deque(maxlen=80)
+        if process.stdout is not None:
+            with process.stdout:
+                for raw_line in process.stdout:
+                    line = raw_line.rstrip()
+                    if not line:
+                        continue
+                    self._log(line)
+                    output_tail.append(line[-2000:])
+        return process.wait(), "\n".join(output_tail), ""
 
     def _run_visible_console_command(self, cwd: Path, command: list[str]) -> tuple[int, str, str]:
         console_title = f"SVNmate Build {int(time.time() * 1000)}"
@@ -2305,9 +2457,8 @@ class SvnAutoTool:
         process = subprocess.Popen(
             command,
             cwd=str(cwd),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
             shell=False,
             creationflags=self._creation_flags(),
         )
@@ -2315,9 +2466,8 @@ class SvnAutoTool:
             if self._click_tortoise_done_buttons(process.pid, require_completion=True):
                 self._log("已自动关闭 TortoiseSVN 完成提示窗口")
             time.sleep(0.5)
-        output, error = process.communicate()
         time.sleep(0.5)
-        return process.returncode or 0, (output or "").strip(), (error or "").strip()
+        return process.returncode or 0, "", ""
 
     def _click_tortoise_done_buttons(
         self,
@@ -2678,13 +2828,23 @@ class SvnAutoTool:
 
     def _log(self, line: str) -> None:
         timestamped = f"{datetime.now().strftime('%H:%M:%S')}  {line}"
-        self.log_queue.put(("log", timestamped))
         try:
             LOG_DIR.mkdir(parents=True, exist_ok=True)
             with self._current_log_path().open("a", encoding="utf-8") as fp:
                 fp.write(timestamped + "\n")
         except OSError:
             pass
+        if len(timestamped) > MAX_LIVE_LOG_CHARS:
+            visible_text = (
+                timestamped[:MAX_LIVE_LOG_CHARS]
+                + " ... [界面已截断，完整内容见日志文件]"
+            )
+        else:
+            visible_text = timestamped
+        try:
+            self.log_queue.put_nowait(("log", visible_text))
+        except queue.Full:
+            self.dropped_live_log_items += 1
 
     def _current_log_path(self) -> Path:
         return LOG_DIR / f"svn_auto_tool_{datetime.now().strftime('%Y-%m-%d')}.log"
@@ -2702,26 +2862,44 @@ class SvnAutoTool:
                 pass
 
     def _poll_log_queue(self) -> None:
+        log_payloads: list[object] = []
+        done_payloads: list[object] = []
         try:
             while True:
                 item_type, payload = self.log_queue.get_nowait()
                 if item_type == "log":
-                    self.live_log.insert("", END, values=(payload,))
-                    children = self.live_log.get_children()
-                    if len(children) > 300:
-                        self.live_log.delete(children[0])
-                    self.live_log.yview_moveto(1.0)
+                    log_payloads.append(payload)
                 elif item_type == "done":
-                    self.running = False
-                    self.run_button.configure(state="normal")
-                    self.status_text.set("已完成")
-                    self._save_config()
-                    self._log(f"========== {payload}结束：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ==========")
-                    self._log("全部任务已完成")
-                    self.live_log.configure(style="Completed.LiveLog.Treeview")
-                    self._fade_out_music_after_tasks()
+                    done_payloads.append(payload)
         except queue.Empty:
             pass
+        if self.dropped_live_log_items:
+            log_payloads.append(
+                f"实时日志过多，已省略 {self.dropped_live_log_items} 条；"
+                "完整内容仍保存在日志文件中。"
+            )
+            self.dropped_live_log_items = 0
+        for payload in log_payloads:
+            self.live_log.insert("", END, values=(payload,))
+        if log_payloads:
+            children = self.live_log.get_children()
+            excess = len(children) - MAX_LIVE_LOG_ROWS
+            if excess > 0:
+                self.live_log.delete(*children[:excess])
+            self.live_log.yview_moveto(1.0)
+        for payload in done_payloads:
+            self.running = False
+            self.worker_thread = None
+            self.run_button.configure(state="normal")
+            self.status_text.set("已完成")
+            self._save_config()
+            self._log(
+                f"========== {payload}结束："
+                f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} =========="
+            )
+            self._log("全部任务已完成")
+            self.live_log.configure(style="Completed.LiveLog.Treeview")
+            self._fade_out_music_after_tasks()
         self.root.after(200, self._poll_log_queue)
 
     def _open_log_folder(self) -> None:
@@ -2749,7 +2927,43 @@ class SvnAutoTool:
         self.root.deiconify()
         self.root.state("normal")
         self.root.lift()
+        if os.name == "nt":
+            try:
+                user32 = ctypes.windll.user32
+                user32.GetParent.argtypes = [ctypes.c_void_p]
+                user32.GetParent.restype = wintypes.HWND
+                user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+                user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+                child_hwnd = self.root.winfo_id()
+                hwnd = user32.GetParent(child_hwnd) or child_hwnd
+                user32.ShowWindow(hwnd, 9)
+                user32.SetForegroundWindow(hwnd)
+            except (AttributeError, OSError):
+                pass
         self.root.after(80, self.root.focus_force)
+
+    def _is_main_window_visible(self) -> bool:
+        if self.root.state() == "withdrawn":
+            return False
+        if os.name != "nt":
+            return True
+        try:
+            user32 = ctypes.windll.user32
+            user32.GetParent.argtypes = [ctypes.c_void_p]
+            user32.GetParent.restype = wintypes.HWND
+            user32.IsWindowVisible.argtypes = [wintypes.HWND]
+            user32.IsWindowVisible.restype = wintypes.BOOL
+            child_hwnd = self.root.winfo_id()
+            hwnd = user32.GetParent(child_hwnd) or child_hwnd
+            return bool(user32.IsWindowVisible(hwnd))
+        except (AttributeError, OSError):
+            return False
+
+    def _toggle_from_tray(self) -> None:
+        if self._is_main_window_visible():
+            self._hide_to_tray()
+            return
+        self._show_from_tray()
 
     def _run_from_tray(self) -> None:
         self._show_from_tray()
@@ -2916,13 +3130,23 @@ Start-Process -FilePath (Join-Path $appDir 'SVNAutoTool.exe')
 
 
 def main() -> None:
-    root = Tk()
+    instance_guard = SingleInstanceGuard()
+    if not instance_guard.is_primary:
+        try:
+            instance_guard.notify_existing_instance()
+        finally:
+            instance_guard.close()
+        return
     try:
-        ttk.Style().theme_use("clam")
-    except Exception:
-        pass
-    SvnAutoTool(root)
-    root.mainloop()
+        root = Tk()
+        try:
+            ttk.Style().theme_use("clam")
+        except Exception:
+            pass
+        SvnAutoTool(root)
+        root.mainloop()
+    finally:
+        instance_guard.close()
 
 
 if __name__ == "__main__":

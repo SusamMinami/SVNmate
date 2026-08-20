@@ -9,7 +9,15 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from svn_auto_tool import RELEASE_ASSET_NAME, RELEASE_DOWNLOAD_URL, SvnAutoTool
+from svn_auto_tool import (
+    APP_VERSION,
+    MAX_LIVE_LOG_CHARS,
+    RELEASE_ASSET_NAME,
+    RELEASE_DOWNLOAD_URL,
+    SingleInstanceGuard,
+    SvnAutoTool,
+    WindowsTrayIcon,
+)
 from tool_modules import CONFIG_LINKER, KINDLE_STATUS, ToolModuleManager
 
 
@@ -27,8 +35,8 @@ class _Value:
 class ReleaseConfigTests(unittest.TestCase):
     def test_release_asset_name_is_stable_and_url_safe(self) -> None:
         self.assertEqual(RELEASE_ASSET_NAME, "SVNmate.zip")
-        asset_url = RELEASE_DOWNLOAD_URL.format(tag="v1.4.1", asset=RELEASE_ASSET_NAME)
-        self.assertTrue(asset_url.endswith("/v1.4.1/SVNmate.zip"))
+        asset_url = RELEASE_DOWNLOAD_URL.format(tag=APP_VERSION, asset=RELEASE_ASSET_NAME)
+        self.assertTrue(asset_url.endswith("/v1.4.2/SVNmate.zip"))
 
 
 class ToolModuleIntegrationTests(unittest.TestCase):
@@ -65,6 +73,127 @@ class ToolModuleIntegrationTests(unittest.TestCase):
                 tool._resolve_tool_module_executable(KINDLE_STATUS),
                 external.resolve(),
             )
+
+
+class TrayInteractionTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "nt", "Windows named mutex only")
+    def test_named_mutex_allows_only_one_running_instance(self) -> None:
+        mutex_name = rf"Local\SVNmate.Test.{os.getpid()}.{time.time_ns()}"
+        with patch("svn_auto_tool.SINGLE_INSTANCE_MUTEX_NAME", mutex_name):
+            primary = SingleInstanceGuard()
+            duplicate = SingleInstanceGuard()
+            try:
+                self.assertTrue(primary.is_primary)
+                self.assertFalse(duplicate.is_primary)
+            finally:
+                duplicate.close()
+                primary.close()
+
+            restarted = SingleInstanceGuard()
+            try:
+                self.assertTrue(restarted.is_primary)
+            finally:
+                restarted.close()
+
+    def test_pending_actions_dispatch_without_opening_main_window(self) -> None:
+        tray = WindowsTrayIcon.__new__(WindowsTrayIcon)
+        tray._actions = queue.Queue()
+        tray.on_show = Mock()
+        tray.on_toggle = Mock()
+        tray.on_run = Mock()
+        tray.on_exit = Mock()
+        module_callback = Mock()
+        tray.module_actions = {
+            CONFIG_LINKER.module_id: (
+                "打开配置关系检索器",
+                module_callback,
+            )
+        }
+        for action in (
+            "show",
+            "toggle",
+            "run",
+            CONFIG_LINKER.module_id,
+            "exit",
+        ):
+            tray._actions.put(action)
+
+        tray.process_pending_actions()
+
+        tray.on_show.assert_called_once_with()
+        tray.on_toggle.assert_called_once_with()
+        tray.on_run.assert_called_once_with()
+        module_callback.assert_called_once_with()
+        tray.on_exit.assert_called_once_with()
+
+    def test_activation_message_queues_show_action(self) -> None:
+        tray = WindowsTrayIcon.__new__(WindowsTrayIcon)
+        tray._activate_message = 43210
+        tray._actions = queue.Queue()
+
+        result = tray._window_proc(0, 43210, 0, 0)
+
+        self.assertEqual(result, 0)
+        self.assertEqual(tray._actions.get_nowait(), "show")
+
+    def test_double_click_hides_window_when_it_is_visible(self) -> None:
+        tool = SvnAutoTool.__new__(SvnAutoTool)
+
+        with (
+            patch.object(tool, "_is_main_window_visible", return_value=True),
+            patch.object(tool, "_hide_to_tray") as hide,
+            patch.object(tool, "_show_from_tray") as show,
+        ):
+            tool._toggle_from_tray()
+
+        hide.assert_called_once_with()
+        show.assert_not_called()
+
+    def test_double_click_shows_window_when_it_is_hidden(self) -> None:
+        tool = SvnAutoTool.__new__(SvnAutoTool)
+
+        with (
+            patch.object(tool, "_is_main_window_visible", return_value=False),
+            patch.object(tool, "_hide_to_tray") as hide,
+            patch.object(tool, "_show_from_tray") as show,
+        ):
+            tool._toggle_from_tray()
+
+        show.assert_called_once_with()
+        hide.assert_not_called()
+
+
+class LiveLogMemoryTests(unittest.TestCase):
+    def test_long_live_log_entry_is_truncated_but_disk_log_is_complete(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            tool = SvnAutoTool.__new__(SvnAutoTool)
+            tool.log_queue = queue.Queue(maxsize=10)
+            tool.dropped_live_log_items = 0
+            long_line = "x" * (MAX_LIVE_LOG_CHARS + 500)
+
+            with patch("svn_auto_tool.LOG_DIR", Path(temp_dir)):
+                tool._log(long_line)
+                log_path = tool._current_log_path()
+
+            item_type, live_text = tool.log_queue.get_nowait()
+            self.assertEqual(item_type, "log")
+            self.assertIn("界面已截断", live_text)
+            self.assertLess(len(live_text), len(long_line))
+            self.assertIn(long_line, log_path.read_text(encoding="utf-8"))
+
+    def test_full_live_log_queue_drops_ui_item_without_losing_disk_log(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            tool = SvnAutoTool.__new__(SvnAutoTool)
+            tool.log_queue = queue.Queue(maxsize=1)
+            tool.log_queue.put(("log", "existing"))
+            tool.dropped_live_log_items = 0
+
+            with patch("svn_auto_tool.LOG_DIR", Path(temp_dir)):
+                tool._log("disk-only")
+                log_path = tool._current_log_path()
+
+            self.assertEqual(tool.dropped_live_log_items, 1)
+            self.assertIn("disk-only", log_path.read_text(encoding="utf-8"))
 
 
 class FolderInteractionTests(unittest.TestCase):
