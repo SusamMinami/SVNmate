@@ -62,7 +62,7 @@ SVNAutoTool.exe
 
 SVNmate 的“工具模块”卡片包含：
 
-- **配置关系检索器**：目标物 ID、NPC ID 与模型资源 ID 的双向检索。
+- **配置关系检索器**：目标物、NPC 与模型资源双向检索，并可联网查看命名角色档案。
 - **Kindle 提示板**：Windows 桌面客户端，可保留“启动时联动”。
 
 模块缺失时点击“安装”，已安装时点击“打开”；“检查”会读取固定发布清单，有新版后按钮变为“更新”。两个模块都可以点击“选择”接管已有的独立 EXE。Kindle 公共通道已经发布，可直接在线安装和更新。
@@ -70,6 +70,8 @@ SVNmate 的“工具模块”卡片包含：
 KindleLarkStatus 源码仓保持私有，Windows ZIP 与 manifest 发布在 SVNmate 仓库的独立 `kindle-windows-latest` 通道。发布与验收记录见 [Kindle 公共更新通道交接](KINDLE_PUBLIC_CHANNEL_HANDOFF.md)。
 
 ConfigLinker 的完整操作说明见：[ConfigLinker 使用指南](config_id_lookup/USER_GUIDE.md)。
+
+ConfigLinker `1.3.0` 增加命名角色资料：角色档案与 NPC 归属使用 `lark-cli` 从飞书 Base 只读同步并缓存在本机；任务、台词和剧情直接读取当前 `doc\csvdir`。通用角色和待确认角色不会展示。
 
 模块配置只记录在 `svn_auto_tool_config.json`。SVNmate 不读取 ConfigLinker 的配置仓数据，也不读取 KindleLarkStatus 的 OAuth Token、SSH 私钥或运行时配置。
 

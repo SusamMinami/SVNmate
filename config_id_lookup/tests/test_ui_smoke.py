@@ -1,15 +1,76 @@
 import os
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from tkinter import Tk
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from config_linker.character_catalog import (
+    CharacterDetails,
+    CharacterDialogue,
+    CharacterProfile,
+    CharacterStory,
+    CharacterTask,
+)
 from config_linker.models import NpcRecord, QueryKey, QueryKind, ResourceRecord, TargetRecord
 from config_linker.settings import AppSettings
 from config_linker.ui import CARD_COLUMNS, ConfigLinkerApp
 from tests.fixture_factory import write_fixture
+
+
+class FakeCharacterService:
+    def __init__(self) -> None:
+        self.cache = SimpleNamespace(profile_count=lambda: 1)
+        self.profile = CharacterProfile(
+            record_id="rec_role",
+            role_key="named:测试NPC甲",
+            name="测试NPC甲",
+            tags=("冷静", "谨慎"),
+            summary="角色摘要",
+            personality="性格分析",
+            story="故事经历",
+            evidence_level="中（3-19句）",
+            analysis_status="已生成",
+            dialogue_count=1,
+        )
+
+    def index_is_fresh(self) -> bool:
+        return True
+
+    def profile_for_npc(self, npc_id: int) -> CharacterProfile | None:
+        return self.profile if npc_id == 2001 else None
+
+    def npc_ids_for_character(self, character_id: str) -> tuple[int, ...]:
+        return (2001,) if character_id == self.profile.record_id else ()
+
+
+class FakeCharacterContentRepository:
+    def __init__(self) -> None:
+        self.directory = Path(r"C:\test\doc\csvdir")
+        self.report = SimpleNamespace(
+            dialogue_count=1,
+            story_count=1,
+            task_count=1,
+        )
+        self.details = CharacterDetails(
+            character_id="rec_role",
+            tasks=(CharacterTask("1000", "第一章主线", "任务简介", "100"),),
+            dialogues=(CharacterDialogue("100101", "1001", "测试台词"),),
+            stories=(CharacterStory("1001", "100100", "剧情简介"),),
+            loaded_at=datetime.now(timezone.utc),
+        )
+
+    def details_for_character(
+        self,
+        character_id: str,
+        npc_ids: tuple[int, ...],
+    ) -> CharacterDetails:
+        del npc_ids
+        if character_id != self.details.character_id:
+            raise LookupError(character_id)
+        return self.details
 
 
 @unittest.skipUnless(os.name == "nt", "Windows Tk smoke test")
@@ -32,7 +93,7 @@ class UiSmokeTests(unittest.TestCase):
                 str(app.choose_doc_button.cget("text")),
                 "选择 doc 目录",
             )
-            self.assertEqual(app.version_text.get(), "v1.2.1")
+            self.assertEqual(app.version_text.get(), "v1.3.0")
         finally:
             root.destroy()
 
@@ -52,7 +113,7 @@ class UiSmokeTests(unittest.TestCase):
                 root,
                 config_path=Path("__missing_config_for_test__.json"),
                 auto_load=False,
-                app_version="1.2.1",
+                app_version="1.3.0",
                 update_controller=controller,
             )
             app.update_state = "ready"
@@ -179,6 +240,66 @@ class UiSmokeTests(unittest.TestCase):
                 self.assertEqual(app.toast_text.get(), "已复制 目标物 ID 1001")
             finally:
                 root.destroy()
+
+    def test_character_button_only_appears_for_named_profile(self) -> None:
+        root = Tk()
+        root.withdraw()
+        try:
+            app = ConfigLinkerApp(
+                root,
+                config_path=Path("__missing_config_for_test__.json"),
+                auto_load=False,
+                character_service=FakeCharacterService(),
+                character_content_repository=FakeCharacterContentRepository(),
+                auto_refresh_characters=False,
+            )
+            app._show_record_detail(
+                NpcRecord(2001, "主线角色", "测试NPC甲", 3001, 3)
+            )
+            self.assertEqual(
+                app.character_detail_button.winfo_manager(),
+                "pack",
+            )
+
+            app._show_record_detail(
+                NpcRecord(2002, "通用角色", "测试NPC乙", 3001, 4)
+            )
+            self.assertEqual(
+                app.character_detail_button.winfo_manager(),
+                "",
+            )
+        finally:
+            root.destroy()
+
+    def test_character_window_is_role_focused_and_has_three_tabs(self) -> None:
+        root = Tk()
+        root.withdraw()
+        try:
+            app = ConfigLinkerApp(
+                root,
+                config_path=Path("__missing_config_for_test__.json"),
+                auto_load=False,
+                character_service=FakeCharacterService(),
+                character_content_repository=FakeCharacterContentRepository(),
+                auto_refresh_characters=False,
+            )
+            app._show_record_detail(
+                NpcRecord(2001, "主线角色", "测试NPC甲", 3001, 3)
+            )
+            app._open_character_detail()
+            root.update_idletasks()
+
+            window = app.character_window
+            self.assertIsNotNone(window)
+            self.assertEqual(window.window.title(), "测试NPC甲 · 角色档案")
+            self.assertEqual(
+                set(window.tab_buttons),
+                {"tasks", "dialogues", "stories"},
+            )
+            self.assertNotIn("2001", window.meta_label.cget("text"))
+            self.assertNotIn("3001", window.meta_label.cget("text"))
+        finally:
+            root.destroy()
 
 
 if __name__ == "__main__":

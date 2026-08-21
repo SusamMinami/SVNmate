@@ -29,3 +29,11 @@
 从 GitHub Release 下载 `SVNmate.zip`，解压后运行 `SVNAutoTool.exe`。
 
 ConfigLinker 与 KindleLarkStatus 不预装，均可按需在线安装或选择已有 EXE。
+
+## ConfigLinker 1.3.0
+
+- 只为飞书 Base 中的有效命名角色提供角色档案，排除通用、待确认和失效角色。
+- 角色页展示性格标签、设定摘要、性格分析和故事经历，不显示 NPC ID 或模型资源 ID。
+- 增加具体任务、台词、剧情三个可筛选栏目，内容直接来自当前 `doc\csvdir`。
+- 通过 `lark-cli` 用户身份只读同步角色档案和 NPC 归属，串行请求并对细粒度限流执行退避重试。
+- 使用本机 SQLite 缓存角色档案索引；任务、台词和剧情只建立本地内存索引。

@@ -1,11 +1,23 @@
 from datetime import datetime
 from pathlib import Path
 import threading
+import webbrowser
 from tkinter import BOTH, LEFT, RIGHT, X, Y, StringVar, Tk, filedialog, messagebox, ttk
 from typing import Any
 
+from .character_catalog import (
+    CharacterCatalogService,
+    CharacterIndex,
+    CharacterProfile,
+    LarkAuthenticationRequired,
+)
+from .character_detail import CharacterDetailWindow
 from .dpi import configure_tk_dpi, get_window_dpi, get_work_area, window_geometry
 from .interactions import ClickArbiter
+from .local_character_content import (
+    LocalCharacterContentError,
+    LocalCharacterContentRepository,
+)
 from .models import (
     NpcRecord,
     QueryKey,
@@ -68,8 +80,13 @@ class ConfigLinkerApp:
         *,
         config_path: Path | None = None,
         auto_load: bool = True,
-        app_version: str = "1.2.1",
+        app_version: str = "1.3.0",
         update_controller: ConfigLinkerUpdateController | None = None,
+        character_service: CharacterCatalogService | None = None,
+        character_content_repository: (
+            LocalCharacterContentRepository | None
+        ) = None,
+        auto_refresh_characters: bool | None = None,
     ) -> None:
         self.root = root
         self.current_dpi = configure_tk_dpi(self.root)
@@ -89,6 +106,21 @@ class ConfigLinkerApp:
         self.update_state = "idle"
         self.update_manifest: ModuleManifest | None = None
         self.update_error = ""
+        self.character_service = (
+            character_service
+            if character_service is not None
+            else (
+                CharacterCatalogService.create_default()
+                if auto_load
+                else None
+            )
+        )
+        self.character_refreshing = False
+        self.character_content_repository = character_content_repository
+        self.character_content_error = ""
+        self.selected_record: Any = None
+        self.selected_character_profile: CharacterProfile | None = None
+        self.character_window: CharacterDetailWindow | None = None
 
         self.style = ttk.Style()
         self.colors = configure_styles(self.root, self.style, self._should_use_dark_theme())
@@ -104,6 +136,9 @@ class ConfigLinkerApp:
         self.target_rotation_text = StringVar(value="")
         self.toast_text = StringVar(value="")
         self.version_text = StringVar(value=f"v{self.app_version}")
+        self.character_status_text = StringVar(
+            value=self._character_status_summary()
+        )
         self.toast_label: ttk.Label | None = None
         self.toast_job: str | None = None
         self.click_arbiter = ClickArbiter(self.root.after, self.root.after_cancel)
@@ -125,6 +160,20 @@ class ConfigLinkerApp:
         self.root.after(60_000, self._theme_tick)
         if self.update_controller is not None:
             self.root.after(1500, self._check_for_updates_async)
+        should_refresh_characters = (
+            auto_load
+            if auto_refresh_characters is None
+            else auto_refresh_characters
+        )
+        if (
+            should_refresh_characters
+            and self.character_service is not None
+            and not self.character_service.index_is_fresh()
+        ):
+            self.root.after(
+                2200,
+                lambda: self._refresh_character_index_async(notify=False),
+            )
 
         if settings_warning:
             self._set_message(settings_warning, "warning")
@@ -213,11 +262,25 @@ class ConfigLinkerApp:
             style="Subtle.TButton",
             command=self.copy_diagnostics,
         ).pack(side=LEFT, padx=(7, 0))
+        self.refresh_character_button = ttk.Button(
+            toolbar,
+            text="同步角色档案",
+            style="Subtle.TButton",
+            command=lambda: self._refresh_character_index_async(notify=True),
+        )
+        self.refresh_character_button.pack(side=LEFT, padx=(7, 0))
+        if self.character_service is None:
+            self.refresh_character_button.configure(state="disabled")
         ttk.Label(
             toolbar,
             textvariable=self.data_directory_text,
             style="AppMuted.TLabel",
         ).pack(side=RIGHT)
+        ttk.Label(
+            toolbar,
+            textvariable=self.character_status_text,
+            style="AppMuted.TLabel",
+        ).pack(side=RIGHT, padx=(0, 12))
 
         search_card = ttk.Frame(main, style="Card.TFrame", padding=(14, 11))
         search_card.pack(fill=X, pady=(0, 10))
@@ -281,7 +344,19 @@ class ConfigLinkerApp:
 
         detail_card = ttk.Frame(main, style="Card.TFrame", padding=(12, 8))
         detail_card.pack(fill=X)
-        ttk.Label(detail_card, text="选中详情", style="Section.TLabel").pack(anchor="w")
+        detail_header = ttk.Frame(detail_card, style="Card.TFrame")
+        detail_header.pack(fill=X)
+        ttk.Label(
+            detail_header,
+            text="选中详情",
+            style="Section.TLabel",
+        ).pack(side=LEFT)
+        self.character_detail_button = ttk.Button(
+            detail_header,
+            text="角色详情",
+            style="Accent.TButton",
+            command=self._open_character_detail,
+        )
         self.detail_label = ttk.Label(
             detail_card,
             textvariable=self.detail_text,
@@ -370,6 +445,143 @@ class ConfigLinkerApp:
             target=self._check_for_updates_worker,
             daemon=True,
         ).start()
+
+    def _refresh_character_index_async(self, *, notify: bool) -> None:
+        if self.character_service is None or self.character_refreshing:
+            return
+        self.character_refreshing = True
+        self.refresh_character_button.configure(state="disabled")
+        self.character_status_text.set("角色资料：正在同步...")
+        threading.Thread(
+            target=self._refresh_character_index_worker,
+            args=(notify,),
+            daemon=True,
+        ).start()
+
+    def _character_status_summary(
+        self,
+        *,
+        base_unavailable: bool = False,
+    ) -> str:
+        if self.character_service is None:
+            base_status = "档案未启用"
+        else:
+            count = self.character_service.cache.profile_count()
+            if count:
+                base_status = f"{count} 名"
+            elif base_unavailable:
+                base_status = "档案不可用"
+            else:
+                base_status = "档案未同步"
+        local_status = (
+            "本地内容就绪"
+            if self.character_content_repository is not None
+            else "本地内容未加载"
+        )
+        return f"角色资料：{base_status} · {local_status}"
+
+    def _refresh_character_index_worker(self, notify: bool) -> None:
+        if self.character_service is None:
+            return
+        try:
+            index = self.character_service.refresh_index()
+        except Exception as exc:
+            self.root.after(
+                0,
+                lambda error=exc: self._character_index_failed(error, notify),
+            )
+            return
+        self.root.after(
+            0,
+            lambda: self._character_index_ready(index, notify),
+        )
+
+    def _character_index_ready(
+        self,
+        index: CharacterIndex,
+        notify: bool,
+    ) -> None:
+        self.character_refreshing = False
+        self.refresh_character_button.configure(state="normal")
+        self.character_status_text.set(self._character_status_summary())
+        self._update_character_action(self.selected_record)
+        if notify:
+            self._set_message(
+                f"命名角色资料更新完成：{len(index.profiles)} 名",
+                "normal",
+            )
+
+    def _character_index_failed(
+        self,
+        error: Exception,
+        notify: bool,
+    ) -> None:
+        self.character_refreshing = False
+        self.refresh_character_button.configure(state="normal")
+        if (
+            self.character_service is not None
+            and self.character_service.cache.profile_count() > 0
+        ):
+            self.character_status_text.set(self._character_status_summary())
+        else:
+            self.character_status_text.set(
+                self._character_status_summary(base_unavailable=True)
+            )
+        if notify and isinstance(error, LarkAuthenticationRequired):
+            if messagebox.askyesno(
+                "连接飞书",
+                "角色资料需要飞书只读授权。是否打开授权页面？",
+                parent=self.root,
+            ):
+                self._authorize_character_access_async()
+            return
+        if notify:
+            self._set_message(f"角色资料刷新失败：{error}", "error")
+
+    def _authorize_character_access_async(self) -> None:
+        if self.character_service is None or self.character_refreshing:
+            return
+        self.character_refreshing = True
+        self.refresh_character_button.configure(state="disabled")
+        self.character_status_text.set("角色资料：等待飞书授权...")
+        threading.Thread(
+            target=self._authorize_character_access_worker,
+            daemon=True,
+        ).start()
+
+    def _authorize_character_access_worker(self) -> None:
+        if self.character_service is None:
+            return
+        try:
+            request = self.character_service.begin_login()
+            self.root.after(
+                0,
+                lambda: self._open_lark_authorization(
+                    request.verification_url
+                ),
+            )
+            self.character_service.complete_login(request.device_code)
+            index = self.character_service.refresh_index()
+        except Exception as exc:
+            self.root.after(
+                0,
+                lambda error=exc: self._character_index_failed(error, True),
+            )
+            return
+        self.root.after(
+            0,
+            lambda: self._character_index_ready(index, True),
+        )
+
+    def _open_lark_authorization(self, url: str) -> None:
+        opened = webbrowser.open(url)
+        message = (
+            "已在浏览器中打开飞书授权页面。完成授权后，"
+            "角色资料会自动刷新。"
+            if opened
+            else f"请在浏览器中打开以下地址完成授权：\n\n{url}"
+        )
+        messagebox.showinfo("飞书授权", message, parent=self.root)
 
     def _check_for_updates_worker(self) -> None:
         if self.update_controller is None:
@@ -536,7 +748,7 @@ class ConfigLinkerApp:
             columns=columns,
             show="headings",
             style="Result.Treeview",
-            height=13,
+            height=10,
             selectmode="browse",
         )
         for column_id, heading, width in CARD_COLUMNS[kind]:
@@ -615,6 +827,7 @@ class ConfigLinkerApp:
         self.query_type.set(KIND_TO_QUERY_LABEL[key.kind])
         self.query_value.set(str(key.value))
         self.detail_text.set("选择任意结果行可查看完整信息")
+        self._update_character_action(None)
         self._render_all_cards()
         self._update_back_button()
         if result.warnings:
@@ -636,8 +849,9 @@ class ConfigLinkerApp:
         self.status_text.set("正在加载数据...")
         self.status_label.configure(style="StatusWarn.TLabel")
         self.root.update_idletasks()
+        target_csv_directory = csv_directory(self.settings)
         try:
-            new_repository = CsvRepository.load(csv_directory(self.settings))
+            new_repository = CsvRepository.load(target_csv_directory)
         except (OSError, CsvDataError, UnicodeError) as exc:
             self.last_error = str(exc)
             if self.repository is None:
@@ -650,8 +864,31 @@ class ConfigLinkerApp:
             self._set_message(message, "error")
             return
 
+        content_error = ""
+        try:
+            new_character_content = LocalCharacterContentRepository.load(
+                target_csv_directory
+            )
+        except (
+            OSError,
+            UnicodeError,
+            LocalCharacterContentError,
+        ) as exc:
+            content_error = str(exc)
+            new_character_content = (
+                self.character_content_repository
+                if (
+                    self.character_content_repository is not None
+                    and self.character_content_repository.directory
+                    == target_csv_directory
+                )
+                else None
+            )
+
         self.repository = new_repository
         self.query_service = QueryService(new_repository)
+        self.character_content_repository = new_character_content
+        self.character_content_error = content_error
         self.last_error = ""
         report = new_repository.report
         self.status_text.set(
@@ -659,10 +896,19 @@ class ConfigLinkerApp:
         )
         self.status_label.configure(style="StatusGood.TLabel")
         self.data_directory_text.set(str(self.settings.doc_directory))
-        self._set_message(
-            f"数据加载成功：目标物 {report.target_count}，NPC {report.npc_count}，资源 {report.resource_count}",
-            "normal",
-        )
+        self.character_status_text.set(self._character_status_summary())
+        if content_error:
+            self._set_message(
+                "基础数据加载成功；角色本地内容不可用："
+                f"{content_error}",
+                "warning",
+            )
+        else:
+            self._set_message(
+                f"数据加载成功：目标物 {report.target_count}，"
+                f"NPC {report.npc_count}，资源 {report.resource_count}",
+                "normal",
+            )
         if self.history.current is not None:
             self._run_query(self.history.current, add_history=False)
 
@@ -670,7 +916,8 @@ class ConfigLinkerApp:
         messagebox.showinfo(
             "选择 doc 目录",
             "请选择配置仓的 doc 根目录。\n"
-            "程序会自动读取 doc\\csvdir 下的三张配置表。\n\n"
+            "程序会读取 doc\\csvdir 下的基础关系表；"
+            "角色页还会读取对话表、开始节点和任务表。\n\n"
             "如果误选 csvdir，程序也会自动识别。",
             parent=self.root,
         )
@@ -725,6 +972,19 @@ class ConfigLinkerApp:
             lines.append(f"当前查询：{key.kind.value} {key.value}")
             if self.current_result.warnings:
                 lines.append(f"查询告警：{'；'.join(self.current_result.warnings)}")
+        lines.append(f"角色资料：{self.character_status_text.get()}")
+        if self.character_content_repository is not None:
+            content_report = self.character_content_repository.report
+            lines.append(
+                "角色本地内容："
+                f"台词={content_report.dialogue_count}, "
+                f"剧情={content_report.story_count}, "
+                f"任务={content_report.task_count}"
+            )
+        if self.character_content_error:
+            lines.append(
+                f"角色本地内容错误：{self.character_content_error}"
+            )
         if self.last_error:
             lines.append(f"最近错误：{self.last_error}")
         return "\n".join(lines)
@@ -890,6 +1150,7 @@ class ConfigLinkerApp:
             self._show_record_detail(self.record_maps[kind].get(selected[0]))
 
     def _show_record_detail(self, record: Any) -> None:
+        self.selected_record = record
         self.resource_detail_frame.pack_forget()
         self.target_detail_frame.pack_forget()
         self.resource_path_text.set("")
@@ -919,6 +1180,63 @@ class ConfigLinkerApp:
         else:
             text = "选择任意结果行可查看完整信息"
         self.detail_text.set(text)
+        self._update_character_action(record)
+
+    def _update_character_action(self, record: Any) -> None:
+        self.character_detail_button.pack_forget()
+        self.selected_character_profile = None
+        if (
+            not isinstance(record, NpcRecord)
+            or not record.name.strip()
+            or self.character_service is None
+        ):
+            return
+        profile = self.character_service.profile_for_npc(record.id)
+        if profile is None:
+            return
+        self.selected_character_profile = profile
+        self.character_detail_button.pack(side=RIGHT)
+
+    def _open_character_detail(self) -> None:
+        profile = self.selected_character_profile
+        service = self.character_service
+        if profile is None or service is None:
+            return
+        if (
+            self.character_window is not None
+            and self.character_window.exists()
+            and self.character_window.profile.record_id == profile.record_id
+        ):
+            self.character_window.focus()
+            return
+        if self.character_window is not None and self.character_window.exists():
+            self.character_window.close()
+        window = CharacterDetailWindow(
+            self.root,
+            profile,
+            self.colors,
+            on_close=self._character_window_closed,
+        )
+        self.character_window = window
+        content_repository = self.character_content_repository
+        if content_repository is None:
+            window.set_error(
+                self.character_content_error
+                or "请确认 doc\\csvdir 中存在对话表、开始节点和任务表"
+            )
+            return
+        try:
+            details = content_repository.details_for_character(
+                profile.record_id,
+                service.npc_ids_for_character(profile.record_id),
+            )
+        except Exception as exc:
+            window.set_error(str(exc))
+            return
+        window.set_details(details)
+
+    def _character_window_closed(self) -> None:
+        self.character_window = None
 
     def _copy_text(self, value: str, label: str) -> None:
         if not value:

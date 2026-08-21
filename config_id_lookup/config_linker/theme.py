@@ -54,6 +54,37 @@ def configure_styles(root: Tk, style: ttk.Style, dark: bool) -> dict[str, str]:
     style.configure("Subtitle.TLabel", background=colors["bg"], foreground=colors["muted"], font=("Segoe UI", 9))
     style.configure("Section.TLabel", background=colors["card"], foreground=colors["text"], font=("Segoe UI Semibold", 12))
     style.configure(
+        "ProfileName.TLabel",
+        background=colors["bg"],
+        foreground=colors["text"],
+        font=("Segoe UI Semibold", 22),
+    )
+    style.configure(
+        "ProfileMeta.TLabel",
+        background=colors["bg"],
+        foreground=colors["muted"],
+        font=("Segoe UI Semibold", 9),
+    )
+    style.configure(
+        "ProfileSection.TLabel",
+        background=colors["bg"],
+        foreground=colors["text"],
+        font=("Segoe UI Semibold", 11),
+    )
+    style.configure(
+        "ProfileSectionCard.TLabel",
+        background=colors["card"],
+        foreground=colors["text"],
+        font=("Segoe UI Semibold", 11),
+    )
+    style.configure(
+        "Tag.TLabel",
+        background=colors["accent_soft"],
+        foreground=colors["accent"],
+        font=("Segoe UI Semibold", 9),
+        padding=(7, 3),
+    )
+    style.configure(
         "FocusBadge.TLabel",
         background=colors["accent_soft"],
         foreground=colors["accent"],
@@ -111,6 +142,33 @@ def configure_styles(root: Tk, style: ttk.Style, dark: bool) -> dict[str, str]:
         padding=(10, 6),
     )
     style.map("Subtle.TButton", background=[("active", colors["accent_soft"])])
+    style.configure(
+        "Segment.TButton",
+        background=colors["card"],
+        foreground=colors["text"],
+        bordercolor=colors["border"],
+        lightcolor=colors["border"],
+        darkcolor=colors["border"],
+        padding=(13, 6),
+        font=("Segoe UI Semibold", 9),
+    )
+    style.map(
+        "Segment.TButton",
+        background=[("active", colors["accent_soft"])],
+    )
+    style.configure(
+        "SegmentActive.TButton",
+        background=colors["accent"],
+        foreground="#FFFFFF",
+        borderwidth=0,
+        padding=(13, 6),
+        font=("Segoe UI Semibold", 9),
+    )
+    style.map(
+        "SegmentActive.TButton",
+        background=[("active", colors["accent_hover"])],
+        foreground=[("disabled", colors["muted"])],
+    )
     style.configure("TEntry", fieldbackground=colors["tree"], foreground=colors["text"], bordercolor=colors["border"])
     style.configure("TCombobox", fieldbackground=colors["tree"], foreground=colors["text"], bordercolor=colors["border"])
 
