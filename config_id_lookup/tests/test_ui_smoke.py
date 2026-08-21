@@ -93,7 +93,7 @@ class UiSmokeTests(unittest.TestCase):
                 str(app.choose_doc_button.cget("text")),
                 "选择 doc 目录",
             )
-            self.assertEqual(app.version_text.get(), "v1.3.0")
+            self.assertEqual(app.version_text.get(), "v1.3.1")
         finally:
             root.destroy()
 
@@ -113,11 +113,11 @@ class UiSmokeTests(unittest.TestCase):
                 root,
                 config_path=Path("__missing_config_for_test__.json"),
                 auto_load=False,
-                app_version="1.3.0",
+                app_version="1.3.1",
                 update_controller=controller,
             )
             app.update_state = "ready"
-            app.update_manifest = SimpleNamespace(version="1.3.0")
+            app.update_manifest = SimpleNamespace(version="1.3.1")
 
             with patch(
                 "config_linker.ui.messagebox.askyesno",
@@ -192,6 +192,51 @@ class UiSmokeTests(unittest.TestCase):
                 self.assertIn("仍使用旧数据", app.status_text.get())
                 app.visit_query(QueryKey(QueryKind.TARGET, 1001))
                 self.assertEqual(app.current_result.key.value, 1001)
+            finally:
+                root.destroy()
+
+    def test_npc_name_query_populates_the_middle_result_card(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            doc_directory = Path(temp_dir)
+            write_fixture(doc_directory / "csvdir")
+            root = Tk()
+            root.withdraw()
+            try:
+                app = ConfigLinkerApp(
+                    root,
+                    config_path=doc_directory / "settings.json",
+                    auto_load=False,
+                )
+                app.settings = AppSettings(doc_directory)
+                app.reload_data()
+                app.query_type.set("NPC 名称")
+                app.query_value.set("npc甲")
+
+                app.search_from_input()
+                root.update_idletasks()
+
+                self.assertEqual(
+                    app.current_result.key,
+                    QueryKey(QueryKind.NPC_NAME, "npc甲"),
+                )
+                self.assertEqual(app.query_type.get(), "NPC 名称")
+                self.assertEqual(app.query_value.get(), "npc甲")
+                npc_tree = app.result_trees[QueryKind.NPC]
+                npc_items = npc_tree.get_children()
+                self.assertEqual(
+                    [int(npc_tree.item(item, "values")[0]) for item in npc_items],
+                    [2001],
+                )
+                self.assertTrue(
+                    all(
+                        "focus" in npc_tree.item(item, "tags")
+                        for item in npc_items
+                    )
+                )
+                self.assertIn(
+                    "名称“npc甲”",
+                    app.card_focus[QueryKind.NPC].get(),
+                )
             finally:
                 root.destroy()
 

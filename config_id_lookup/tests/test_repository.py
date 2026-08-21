@@ -54,6 +54,23 @@ class RepositoryTests(unittest.TestCase):
             self.assertEqual(len(records), 2)
             self.assertEqual([record.row_number for record in records], [3, 4])
 
+    def test_npc_name_search_prioritizes_exact_prefix_and_substring(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            write_fixture(
+                Path(temp_dir),
+                npc_rows=[
+                    [2001, "", "Alpha", ""],
+                    [2002, "", "Alpha Guard", ""],
+                    [2003, "", "Guard Alpha", ""],
+                    [2004, "", "Other", ""],
+                ],
+            )
+            repository = CsvRepository.load(Path(temp_dir))
+
+            matches = repository.find_npcs_by_name("  ALPHA  ")
+
+            self.assertEqual([record.id for record in matches], [2001, 2002, 2003])
+
     def test_missing_file_reports_the_expected_filename(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             directory = Path(temp_dir)

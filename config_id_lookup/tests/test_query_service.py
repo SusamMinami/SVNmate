@@ -34,6 +34,27 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual({row.id for row in result.npcs}, {2001, 2002})
         self.assertEqual({row.id for row in result.resources}, {3001})
 
+    def test_npc_name_query_returns_matching_ids_and_relations(self) -> None:
+        result = self.service.search(QueryKey(QueryKind.NPC_NAME, "npc甲"))
+
+        self.assertEqual(result.key.value, "npc甲")
+        self.assertEqual({row.id for row in result.targets}, {1001, 1002})
+        self.assertEqual([row.id for row in result.npcs], [2001])
+        self.assertEqual({row.id for row in result.resources}, {3001})
+        self.assertEqual(result.warnings, ())
+
+    def test_npc_name_query_supports_multiple_partial_matches(self) -> None:
+        result = self.service.search(QueryKey(QueryKind.NPC_NAME, "测试NPC"))
+
+        self.assertEqual([row.id for row in result.npcs], [2001, 2002, 2003])
+        self.assertEqual({row.id for row in result.targets}, {1001, 1002, 1003})
+        self.assertEqual({row.id for row in result.resources}, {3001})
+        self.assertTrue(any("资源 ID 3999 未找到" in item for item in result.warnings))
+
+    def test_missing_npc_name_raises_not_found(self) -> None:
+        with self.assertRaisesRegex(NotFoundError, "NPC 名称.*不存在"):
+            self.service.search(QueryKey(QueryKind.NPC_NAME, "不存在"))
+
     def test_resource_query_includes_all_npcs_and_their_targets(self) -> None:
         result = self.service.search(QueryKey(QueryKind.RESOURCE, 3001))
 

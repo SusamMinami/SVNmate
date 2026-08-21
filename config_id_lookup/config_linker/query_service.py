@@ -57,6 +57,8 @@ class QueryService:
             return self._search_target(key)
         if key.kind == QueryKind.NPC:
             return self._search_npc(key)
+        if key.kind == QueryKind.NPC_NAME:
+            return self._search_npc_name(key)
         if key.kind == QueryKind.RESOURCE:
             return self._search_resource(key)
         raise ValueError(f"不支持的查询类型：{key.kind}")
@@ -104,6 +106,43 @@ class QueryService:
             key=key,
             targets=_unique(targets),
             npcs=_unique(npcs),
+            resources=_unique(resources),
+            warnings=tuple(dict.fromkeys(warnings)),
+        )
+
+    def _search_npc_name(self, key: QueryKey) -> QueryResult:
+        query = str(key.value).strip()
+        focus_npcs = self.repository.find_npcs_by_name(query)
+        if not focus_npcs:
+            raise NotFoundError(f"NPC 名称“{query}”未找到")
+
+        warnings: list[str] = []
+        targets: list[TargetRecord] = []
+        resources: list[ResourceRecord] = []
+
+        for npc in focus_npcs:
+            linked_targets = self.repository.targets_by_npc_id.get(npc.id, [])
+            if not linked_targets:
+                warnings.append(f"没有目标物使用 NPC ID {npc.id}")
+            targets.extend(linked_targets)
+
+            resource_id = _reference_for_lookup(
+                npc.resource_id,
+                "资源 ID",
+                f"NPC ID {npc.id}",
+                warnings,
+            )
+            if resource_id is None:
+                continue
+            linked_resources = self.repository.resources_by_id.get(resource_id, [])
+            if not linked_resources:
+                warnings.append(f"资源 ID {resource_id} 未找到")
+            resources.extend(linked_resources)
+
+        return QueryResult(
+            key=key,
+            targets=_unique(targets),
+            npcs=_unique(focus_npcs),
             resources=_unique(resources),
             warnings=tuple(dict.fromkeys(warnings)),
         )

@@ -7,13 +7,14 @@ from pathlib import Path
 class QueryKind(str, Enum):
     TARGET = "target"
     NPC = "npc"
+    NPC_NAME = "npc_name"
     RESOURCE = "resource"
 
 
 @dataclass(frozen=True)
 class QueryKey:
     kind: QueryKind
-    value: int
+    value: int | str
 
 
 @dataclass(frozen=True)

@@ -49,9 +49,15 @@ from .view_state import QueryHistory, ResultPager
 QUERY_LABEL_TO_KIND = {
     "目标物 ID": QueryKind.TARGET,
     "NPC ID": QueryKind.NPC,
+    "NPC 名称": QueryKind.NPC_NAME,
     "模型资源 ID": QueryKind.RESOURCE,
 }
 KIND_TO_QUERY_LABEL = {kind: label for label, kind in QUERY_LABEL_TO_KIND.items()}
+RESULT_KINDS = (
+    QueryKind.TARGET,
+    QueryKind.NPC,
+    QueryKind.RESOURCE,
+)
 
 CARD_COLUMNS = {
     QueryKind.TARGET: (
@@ -80,7 +86,7 @@ class ConfigLinkerApp:
         *,
         config_path: Path | None = None,
         auto_load: bool = True,
-        app_version: str = "1.3.0",
+        app_version: str = "1.3.1",
         update_controller: ConfigLinkerUpdateController | None = None,
         character_service: CharacterCatalogService | None = None,
         character_content_repository: (
@@ -129,7 +135,9 @@ class ConfigLinkerApp:
         self.query_value = StringVar(value="")
         self.status_text = StringVar(value="等待加载数据")
         self.data_directory_text = StringVar(value=str(self.settings.doc_directory))
-        self.message_text = StringVar(value=settings_warning or "输入任意一种 ID 开始查询")
+        self.message_text = StringVar(
+            value=settings_warning or "输入 ID 或 NPC 名称开始查询"
+        )
         self.detail_text = StringVar(value="选择任意结果行可查看完整信息")
         self.resource_path_text = StringVar(value="")
         self.target_position_text = StringVar(value="")
@@ -796,16 +804,24 @@ class ConfigLinkerApp:
         self.load_more_buttons[kind] = button
 
     def search_from_input(self) -> None:
+        kind = QUERY_LABEL_TO_KIND[self.query_type.get()]
         raw_value = self.query_value.get().strip()
         if not raw_value:
-            self._set_message("请输入 ID", "error")
+            message = (
+                "请输入 NPC 名称"
+                if kind == QueryKind.NPC_NAME
+                else "请输入 ID"
+            )
+            self._set_message(message, "error")
+            return
+        if kind == QueryKind.NPC_NAME:
+            self.visit_query(QueryKey(kind, raw_value))
             return
         try:
             value = int(raw_value)
         except ValueError:
             self._set_message("ID 必须是整数", "error")
             return
-        kind = QUERY_LABEL_TO_KIND[self.query_type.get()]
         self.visit_query(QueryKey(kind, value))
 
     def visit_query(self, key: QueryKey) -> None:
@@ -832,6 +848,12 @@ class ConfigLinkerApp:
         self._update_back_button()
         if result.warnings:
             self._set_message("；".join(result.warnings), "warning")
+        elif key.kind == QueryKind.NPC_NAME:
+            self._set_message(
+                f"名称匹配：NPC {len(result.npcs)}，"
+                f"目标物 {len(result.targets)}，资源 {len(result.resources)}",
+                "normal",
+            )
         else:
             self._set_message(
                 f"查询完成：目标物 {len(result.targets)}，NPC {len(result.npcs)}，资源 {len(result.resources)}",
@@ -969,7 +991,9 @@ class ConfigLinkerApp:
             )
         if self.current_result is not None:
             key = self.current_result.key
-            lines.append(f"当前查询：{key.kind.value} {key.value}")
+            lines.append(
+                f"当前查询：{KIND_TO_QUERY_LABEL[key.kind]} {key.value}"
+            )
             if self.current_result.warnings:
                 lines.append(f"查询告警：{'；'.join(self.current_result.warnings)}")
         lines.append(f"角色资料：{self.character_status_text.get()}")
@@ -990,15 +1014,24 @@ class ConfigLinkerApp:
         return "\n".join(lines)
 
     def _render_all_cards(self) -> None:
-        for kind in QueryKind:
+        active_kind = (
+            self._result_kind_for_query(self.current_result.key.kind)
+            if self.current_result is not None
+            else None
+        )
+        for kind in RESULT_KINDS:
             records = self._records_for_kind(kind)
             self.pagers[kind] = ResultPager(len(records))
             self._render_card(kind)
-            is_active = self.current_result is not None and self.current_result.key.kind == kind
+            is_active = active_kind == kind
             if is_active:
-                self.card_focus[kind].set(
-                    f"查询中心 · {self.current_result.key.value}"
+                key = self.current_result.key
+                focus_text = (
+                    f"查询中心 · 名称“{key.value}”"
+                    if key.kind == QueryKind.NPC_NAME
+                    else f"查询中心 · {key.value}"
                 )
+                self.card_focus[kind].set(focus_text)
             else:
                 self.card_focus[kind].set("")
             self.card_borders[kind].configure(
@@ -1016,11 +1049,7 @@ class ConfigLinkerApp:
         for index, record in enumerate(records[: pager.visible_count]):
             item_id = f"{kind.value}-{index}-{record.row_number}"
             tags = ()
-            if (
-                self.current_result is not None
-                and self.current_result.key.kind == kind
-                and record.id == self.current_result.key.value
-            ):
+            if self._is_query_focus_record(kind, record):
                 tags = ("focus",)
                 if not focus_item:
                     focus_item = item_id
@@ -1038,6 +1067,22 @@ class ConfigLinkerApp:
         self.load_more_buttons[kind].configure(
             state="normal" if pager.has_more else "disabled"
         )
+
+    @staticmethod
+    def _result_kind_for_query(kind: QueryKind) -> QueryKind:
+        return QueryKind.NPC if kind == QueryKind.NPC_NAME else kind
+
+    def _is_query_focus_record(
+        self,
+        kind: QueryKind,
+        record: Any,
+    ) -> bool:
+        if self.current_result is None:
+            return False
+        key = self.current_result.key
+        if key.kind == QueryKind.NPC_NAME:
+            return kind == QueryKind.NPC
+        return key.kind == kind and record.id == key.value
 
     def _records_for_kind(
         self,

@@ -29,6 +29,10 @@ def _normalize_member(value: str) -> str:
     return value.strip().removeprefix("##&")
 
 
+def _normalize_search_text(value: str) -> str:
+    return " ".join(value.split()).casefold()
+
+
 def _find_column(
     filename: str,
     members: list[str],
@@ -130,6 +134,11 @@ class CsvRepository:
         self.npcs_by_id: dict[int, list[NpcRecord]] = defaultdict(list)
         self.npcs_by_resource_id: dict[int, list[NpcRecord]] = defaultdict(list)
         self.resources_by_id: dict[int, list[ResourceRecord]] = defaultdict(list)
+        self._npc_name_search_rows: tuple[tuple[str, NpcRecord], ...] = tuple(
+            (_normalize_search_text(record.name), record)
+            for record in npcs
+            if _normalize_search_text(record.name)
+        )
 
         for record in targets:
             self.targets_by_id[record.id].append(record)
@@ -149,6 +158,26 @@ class CsvRepository:
             npc_count=len(npcs),
             resource_count=len(resources),
         )
+
+    def find_npcs_by_name(self, query: str) -> tuple[NpcRecord, ...]:
+        normalized_query = _normalize_search_text(query)
+        if not normalized_query:
+            return ()
+        matches = [
+            (normalized_name, record)
+            for normalized_name, record in self._npc_name_search_rows
+            if normalized_query in normalized_name
+        ]
+        matches.sort(
+            key=lambda item: (
+                item[0] != normalized_query,
+                not item[0].startswith(normalized_query),
+                len(item[0]),
+                item[1].id,
+                item[1].row_number,
+            )
+        )
+        return tuple(record for _normalized_name, record in matches)
 
     @classmethod
     def load(cls, directory: Path) -> "CsvRepository":

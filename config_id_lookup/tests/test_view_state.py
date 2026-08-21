@@ -25,6 +25,14 @@ class ViewStateTests(unittest.TestCase):
         self.assertEqual(history.current, key)
         self.assertFalse(history.can_go_back)
 
+    def test_history_preserves_npc_name_query_text(self) -> None:
+        history = QueryHistory()
+        name_query = QueryKey(QueryKind.NPC_NAME, "测试NPC")
+        history.visit(name_query)
+        history.visit(QueryKey(QueryKind.NPC, 2001))
+
+        self.assertEqual(history.back(), name_query)
+
     def test_back_without_history_returns_none(self) -> None:
         history = QueryHistory()
         history.visit(QueryKey(QueryKind.TARGET, 1001))
