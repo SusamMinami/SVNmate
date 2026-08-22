@@ -1,6 +1,6 @@
 {
   "schema_version": "shot-rules.v1",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "updated_at": "2026-08-22",
   "shot_size_order": ["EWS", "WS", "FS", "MFS", "MS", "MCU", "CU", "ECU"],
   "lark_fields": [
@@ -179,17 +179,17 @@
     },
     {
       "id": "CON-001",
-      "name": "保持 180 度轴线",
+      "name": "按当前互动关系建立动态轴线",
       "category": "连续性",
       "enforcement": "硬约束",
-      "applies_when": "连续对话且轴线未重建",
-      "requirement": "所有摄影机保持在角色行动轴同一侧，维持人物左右关系和空间方向。",
-      "machine_check": "sign(cross(axis,cameraA-axisOrigin)) === sign(cross(axis,cameraB-axisOrigin))",
-      "exception": "通过中性镜头、可见越轴运动或新建立镜头重建轴线。",
+      "applies_when": "所有单人、过肩和带群对话镜头",
+      "requirement": "关系轴连接当前 subject 与 look_target。多人场景允许同时存在多条角色对轴线，当前镜头只服从当前互动关系，不使用固定全场死线。",
+      "machine_check": "axisId === canonicalPair(subject, lookTarget) && subject !== lookTarget",
+      "exception": "独角戏使用角色与所看物体或运动方向形成的方向轴；群像建立镜头使用群像总轴。",
       "weight": 100,
       "enabled": true,
-      "source": "Adobe 180-Degree Rule；SJSU Editing",
-      "version": "1.0.0"
+      "source": "Cadrage 180-Degree Rule；Filmmakers Academy Axis of Action；《电影语言的语法》",
+      "version": "1.1.0"
     },
     {
       "id": "CON-002",
@@ -221,17 +221,45 @@
     },
     {
       "id": "CON-004",
-      "name": "轴线切换必须先重建空间",
+      "name": "新关系轴通过转折点建立",
+      "category": "连续性",
+      "enforcement": "软约束",
+      "applies_when": "多人场景从一个角色对切换到另一个角色对",
+      "requirement": "优先让新旧关系轴共享一个角色作为转折点，使注意中心沿角色视线自然转移。",
+      "machine_check": "axisChanged ? intersection(previousAxis.participants,currentAxis.participants).length >= 1 : true",
+      "exception": "已插入群像、轴上中性镜头、切出镜头或可见摄影机/角色运动。",
+      "weight": 95,
+      "enabled": true,
+      "source": "Cadrage 180-Degree Rule；Hollywood Camera Work Axis Planning",
+      "version": "1.1.0"
+    },
+    {
+      "id": "CON-005",
+      "name": "同一角色对保持同侧",
       "category": "连续性",
       "enforcement": "硬约束",
-      "applies_when": "候选机位准备跨越既有行动轴",
-      "requirement": "跨轴前必须插入轴上中性镜头、可见越轴运动或新的建立镜头，让观众理解空间关系变化。",
-      "machine_check": "axisSideChanged ? previousShot.establishesNewAxis || transition.showsCrossing : true",
+      "applies_when": "相邻或可连续剪接的镜头使用同一关系轴",
+      "requirement": "同一无序角色对的所有机位必须位于该关系轴同一侧，确保两人的银幕左右和视线方向稳定。",
+      "machine_check": "sameAxisId ? current.axisSide === storedAxisSide[axisId] : true",
+      "exception": "明确使用轴上中性镜头、可见越轴运动或 intentional_disorientation。",
+      "weight": 100,
+      "enabled": true,
+      "source": "Adobe 180-Degree Rule；Cadrage 180-Degree Rule",
+      "version": "1.1.0"
+    },
+    {
+      "id": "CON-006",
+      "name": "无共享角色的轴线切换需要重建",
+      "category": "连续性",
+      "enforcement": "硬约束",
+      "applies_when": "新旧关系轴没有共享角色",
+      "requirement": "切换前插入群像建立镜头、轴上中性镜头、切出镜头或可见运动，让观众重新理解空间。",
+      "machine_check": "axisChanged && noSharedParticipant ? hasAxisBridge : true",
       "exception": "明确以空间错乱为目的且标记 intentional_disorientation。",
       "weight": 100,
       "enabled": true,
-      "source": "Adobe 180-Degree Rule",
-      "version": "1.0.0"
+      "source": "Filmmakers Academy Axis of Action；Hollywood Camera Work Axis Planning",
+      "version": "1.1.0"
     },
     {
       "id": "REV-001",
@@ -460,6 +488,22 @@
     {
       "name": "Elements of Cinematography",
       "url": "https://pacevideofall2011.wordpress.com/wp-content/uploads/2011/09/02class-elementsofcinematog-copy-2.pdf"
+    },
+    {
+      "name": "Cadrage 180-Degree Rule",
+      "url": "https://www.cadrage.app/the-180-degree-rule-in-filmmaking/"
+    },
+    {
+      "name": "Filmmakers Academy Axis of Action",
+      "url": "https://www.filmmakersacademy.com/glossary/axis-of-action/"
+    },
+    {
+      "name": "Hollywood Camera Work Axis Planning",
+      "url": "https://www.bilibili.com/opus/1116831684757553170"
+    },
+    {
+      "name": "Cornell Spatial Relations Study",
+      "url": "https://ecommons.cornell.edu/items/7dd0b8a5-46fa-4219-a78e-e02eee532b2a/full"
     }
   ]
 }

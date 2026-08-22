@@ -16,9 +16,10 @@ describe("createShotPlan", () => {
   const sequence = findDialogueSequence(demoDatabase, "2048");
   const shots = createShotPlan(sequence);
 
-  it("opens with a master shot and stays on one side of the axis", () => {
+  it("opens with a master shot and stays on one side of each relationship axis", () => {
     expect(shots[0].kind).toBe("master");
-    expect(shots.every((shot) => shot.cameraPosition[2] > 0)).toBe(true);
+    expect(shots.every((shot) => shot.axis.id === "A-B")).toBe(true);
+    expect(shots.every((shot) => shot.axis.cameraSide === 1)).toBe(true);
   });
 
   it("does not cut only because the speaker changes", () => {
@@ -143,6 +144,35 @@ describe("createShotPlan", () => {
           index === 0 || value - sortedX[index - 1] >= 0.9,
       ),
     ).toBe(true);
+  });
+
+  it("changes relationship axes through a shared pivot in group dialogue", () => {
+    const groupSequence = findDialogueSequence(demoDatabase, "3099");
+    const groupShots = createShotPreview(groupSequence).shots;
+    const relationshipShots = groupShots.filter(
+      (shot) => shot.axis.kind === "relationship",
+    );
+
+    expect(relationshipShots.map((shot) => shot.axis.id)).toEqual([
+      "A-B",
+      "B-C",
+      "C-D",
+      "A-D",
+    ]);
+    for (let index = 1; index < relationshipShots.length; index += 1) {
+      expect(
+        relationshipShots[index - 1].axis.participantSlots.some((slot) =>
+          relationshipShots[index].axis.participantSlots.includes(slot),
+        ),
+      ).toBe(true);
+    }
+    for (const shot of relationshipShots.filter(
+      (candidate) => candidate.visualSubjectSlot !== null,
+    )) {
+      expect(shot.lookTargetSlot).not.toBeNull();
+      expect(shot.lookTargetSlot).not.toBe(shot.visualSubjectSlot);
+      expect(shot.facingOverrides[shot.visualSubjectSlot!]).toBeDefined();
+    }
   });
 
   it("keeps a departing character in the exit shot and removes it afterward", () => {

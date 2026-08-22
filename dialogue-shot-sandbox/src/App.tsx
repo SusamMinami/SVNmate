@@ -557,7 +557,7 @@ export default function App() {
           <div>
             <h1>镜头沙盘</h1>
           </div>
-          <span className="version">v0.11.0</span>
+          <span className="version">v0.12.0</span>
         </div>
 
         <div className="source-status">
@@ -763,7 +763,13 @@ export default function App() {
             </div>
             <div className="axis-status">
               <LocateFixed size={15} />
-              <span>轴线锁定</span>
+              <span>
+                {activeShot.axis.kind === "relationship"
+                  ? `关系轴 ${activeShot.axis.id}`
+                  : activeShot.axis.kind === "direction"
+                    ? `视线轴 ${activeShot.axis.id}`
+                    : "群像总轴"}
+              </span>
             </div>
           </div>
           <StageView
@@ -786,7 +792,7 @@ export default function App() {
                     ? "对话与本地分镜已显示，可继续浏览"
                     : directorMode === "mira"
                       ? "本地分镜已显示，AI 完成后将展示故事梗概"
-                    : "正在保持轴线与视线连续"}
+                    : "正在维护动态关系轴与视线连续"}
                 </small>
               </div>
             </div>
@@ -860,6 +866,21 @@ export default function App() {
               <div>
                 <dt>主体</dt>
                 <dd>{activeShot.speakerName}</dd>
+              </div>
+              <div>
+                <dt>对话对象</dt>
+                <dd>
+                  {activeShot.lookTargetSlot
+                    ? sequence.participants.find(
+                        (participant) =>
+                          participant.slot === activeShot.lookTargetSlot,
+                      )?.name ?? activeShot.lookTargetSlot
+                    : "群体中心"}
+                </dd>
+              </div>
+              <div>
+                <dt>当前轴线</dt>
+                <dd>{activeShot.axis.id}</dd>
               </div>
               <div>
                 <dt>实测景别</dt>
@@ -999,7 +1020,7 @@ export default function App() {
 
           <footer className="inspector-footer">
             <Users size={15} />
-            <span>支持 2-12 人动态进出场、群像站位与单侧轴线</span>
+            <span>支持 2-12 人动态进出场、群像站位与动态关系轴</span>
           </footer>
         </aside>
       </div>

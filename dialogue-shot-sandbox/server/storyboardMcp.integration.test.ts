@@ -64,13 +64,13 @@ function validPlan(
 ): Record<string, unknown> {
   const isGroupDialogue = input.participants.length > 2;
   return {
-    schema_version: "shot-plan.v1",
+    schema_version: "shot-plan.v2",
     request_id: input.request_id,
     status: "ready",
     scene_analysis: {
       dramatic_goal: "验证内部 TRAE MCP 任务闭环",
       emotional_progression: "从试探推进到合作",
-      visual_strategy: "建立空间后保持单侧轴线正反打",
+      visual_strategy: "建立空间后按当前对话关系切换轴线",
     },
     blocking: {
       formation: isGroupDialogue ? "arc" : "opposed_groups",
@@ -100,6 +100,12 @@ function validPlan(
             ? "group"
             : "both"
           : line.speaker,
+      look_target:
+        index === 0
+          ? "group_center"
+          : input.participants.find(
+              (participant) => participant.slot !== line.speaker,
+            )?.slot,
       lens_mm: index === 0 ? (isGroupDialogue ? 28 : 35) : 50,
       screen_position:
         index === 0
@@ -241,10 +247,20 @@ describe("internal storyboard MCP", () => {
           ]),
         );
 
-        const presence = await getStoryboardMcpPresence();
+        let presence = await getStoryboardMcpPresence();
+        for (
+          let attempt = 0;
+          attempt < 20 && !presence.connected;
+          attempt += 1
+        ) {
+          await new Promise((resolvePromise) =>
+            setTimeout(resolvePromise, 50),
+          );
+          presence = await getStoryboardMcpPresence();
+        }
         expect(presence.connected).toBe(true);
         expect(presence.compatible).toBe(true);
-        expect(presence.serverVersion).toBe("0.11.0");
+        expect(presence.serverVersion).toBe("0.12.0");
         expect(presence.transport).toBe("stdio");
 
         let claimed = await client.callTool({
@@ -290,7 +306,7 @@ describe("internal storyboard MCP", () => {
         await expect(response.json()).resolves.toMatchObject({
           ok: true,
           data: {
-            schema_version: "shot-plan.v1",
+            schema_version: "shot-plan.v2",
             request_id: input.request_id,
             status: "ready",
           },
@@ -397,6 +413,25 @@ describe("internal storyboard MCP", () => {
     await expect(
       completeStoryboardTask(input.request_id, plan),
     ).rejects.toThrow("position 不能重复");
+    expect((await getStoryboardTask(input.request_id))?.status).toBe("pending");
+  });
+
+  it("rejects a single shot whose relationship target is the subject", async () => {
+    temporaryRoot = await mkdtemp(join(tmpdir(), "storyboard-axis-"));
+    process.env.STORYBOARD_PROJECT_ROOT = temporaryRoot;
+    const sequence = findDialogueSequence(demoDatabase, "2048");
+    const input = createDirectorInput(sequence, "axis-validation-request");
+    await createStoryboardTask(input);
+    const plan = validPlan(input);
+    const shots = plan.shots as Array<{
+      subject: string;
+      look_target: string;
+    }>;
+    shots[1].look_target = shots[1].subject;
+
+    await expect(
+      completeStoryboardTask(input.request_id, plan),
+    ).rejects.toThrow("不能看向自己");
     expect((await getStoryboardTask(input.request_id))?.status).toBe("pending");
   });
 

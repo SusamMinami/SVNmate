@@ -333,6 +333,8 @@ function TopCamera({
       ]),
       [displayCamera.x, displayCamera.y],
       [shot.cameraTarget[0], shot.cameraTarget[2]],
+      [shot.axis.start[0], shot.axis.start[2]],
+      [shot.axis.end[0], shot.axis.end[2]],
     ];
     const xs = points.map((point) => point[0]);
     const zs = points.map((point) => point[1]);
@@ -346,7 +348,13 @@ function TopCamera({
       worldWidth: Math.max(8, maxX - minX + 2.4),
       worldDepth: Math.max(6, maxZ - minZ + 2.2),
     };
-  }, [participants, shot.cameraPosition, shot.cameraTarget]);
+  }, [
+    participants,
+    shot.axis.end,
+    shot.axis.start,
+    shot.cameraPosition,
+    shot.cameraTarget,
+  ]);
   useFrame(() => {
     const targetZoom = Math.max(
       12,
@@ -379,13 +387,6 @@ function TopStage({
   shot: ShotPlan;
   inset?: boolean;
 }) {
-  const axisExtent =
-    Math.max(
-      3.4,
-      ...participants.map(
-        (participant) => Math.abs(participant.position[0]) + 0.5,
-      ),
-    );
   return (
     <>
       <color attach="background" args={["#eef0f2"]} />
@@ -393,10 +394,7 @@ function TopStage({
       <ambientLight intensity={2} />
       <StageFloor compact />
       <Line
-        points={[
-          [-axisExtent, 0.04, 0],
-          [axisExtent, 0.04, 0],
-        ]}
+        points={[shot.axis.start, shot.axis.end]}
         color="#dc5c45"
         lineWidth={2}
         dashed
@@ -453,6 +451,14 @@ export function StageView({ participants, shot }: StageViewProps) {
       ),
     [participants, shot.dialogueEndIndex],
   );
+  const stagedParticipants = useMemo(
+    () =>
+      visibleParticipants.map((participant) => {
+        const facingTarget = shot.facingOverrides[participant.slot];
+        return facingTarget ? { ...participant, facingTarget } : participant;
+      }),
+    [visibleParticipants, shot.facingOverrides],
+  );
 
   return (
     <div className={`stage-view stage-view--${viewMode}`}>
@@ -470,7 +476,7 @@ export function StageView({ participants, shot }: StageViewProps) {
               camera={{ position: [...shot.cameraPosition], fov: 42 }}
               gl={{ antialias: true }}
             >
-              <MainStage participants={visibleParticipants} shot={shot} />
+              <MainStage participants={stagedParticipants} shot={shot} />
             </Canvas>
           ) : (
             <Canvas
@@ -480,7 +486,7 @@ export function StageView({ participants, shot }: StageViewProps) {
               dpr={[1, 1.5]}
               gl={{ antialias: true }}
             >
-              <TopStage participants={visibleParticipants} shot={shot} />
+              <TopStage participants={stagedParticipants} shot={shot} />
             </Canvas>
           )}
 
@@ -491,7 +497,7 @@ export function StageView({ participants, shot }: StageViewProps) {
             <strong>
               {showingShot
                 ? `${shot.focalLength} mm`
-                : `${visibleParticipants.length} 人站位`}
+                : `${stagedParticipants.length} 人站位`}
             </strong>
           </div>
         </div>
@@ -526,7 +532,7 @@ export function StageView({ participants, shot }: StageViewProps) {
               gl={{ antialias: true }}
             >
               <TopStage
-                participants={visibleParticipants}
+                participants={stagedParticipants}
                 shot={shot}
                 inset
               />
@@ -540,7 +546,7 @@ export function StageView({ participants, shot }: StageViewProps) {
               gl={{ antialias: true }}
             >
               <MainStage
-                participants={visibleParticipants}
+                participants={stagedParticipants}
                 shot={shot}
                 inset
               />

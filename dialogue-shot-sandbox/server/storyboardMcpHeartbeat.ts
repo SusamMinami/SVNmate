@@ -12,7 +12,7 @@ import { storyboardRuntimeRoot } from "./storyboardRuntime";
 
 const HEARTBEAT_INTERVAL_MS = 5_000;
 const HEARTBEAT_STALE_MS = 15_000;
-export const STORYBOARD_MCP_VERSION = "0.11.0";
+export const STORYBOARD_MCP_VERSION = "0.12.0";
 
 interface StoryboardMcpHeartbeat {
   pid: number;

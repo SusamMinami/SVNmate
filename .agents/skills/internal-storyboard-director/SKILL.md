@@ -6,7 +6,7 @@ description: "Designs UE4 dialogue storyboards through the local storyboard MCP 
 # 内部 TRAE 分镜导演
 
 使用当前内部 TRAE 模型处理“镜头沙盘”提交的待办任务，并通过 MCP
-返回严格的 `shot-plan.v1`。
+返回严格的 `shot-plan.v2`。
 
 ## 触发场景
 
@@ -28,7 +28,7 @@ description: "Designs UE4 dialogue storyboards through the local storyboard MCP 
    - `constraints.supported_templates`：允许的镜头模板
 4. 分析戏剧目标、情绪推进、关系变化、信息揭示和视觉节奏。
 5. 根据角色关系、权力状态和当前事件设计语义站位。
-6. 生成满足下述要求的 `shot-plan.v1`。
+6. 生成满足下述要求的 `shot-plan.v2`。
 7. 调用 `storyboard_submit_plan` 提交结果。
 8. 只有 MCP 返回 `accepted=true` 才计为完成；随后再次调用
    `storyboard_get_pending_request`，继续处理下一项。
@@ -48,7 +48,11 @@ description: "Designs UE4 dialogue storyboards through the local storyboard MCP 
   `master_group_shot`。
 - 多人任务中需要突出当前说话者并保留关系背景时，使用
   `speaker_group_medium` 和该说话者的槽位。
-- 保持 180 度轴线连续、视线方向连续和人物站位稳定。
+- 轴线按当前互动关系动态建立。单人或带群镜头的关系轴连接
+  `subject` 与 `look_target`，不能把多人场面简化为一条固定全场轴线。
+- 同一角色对的连续镜头必须保持在该关系轴同一侧，并保持相反视线方向。
+- 对话焦点切换到新角色对时，优先让前后两条轴共享一个角色作为转折点；
+  若两条轴不共享角色，先用群像、轴上中性镜头或可见运动重建空间。
 - 以 16:9 为主构图，并检查叠加 21:9 画框后的安全区域。
 - 关键人物的眼睛、表情、手势和叙事动作不得被 21:9 上下裁切。
 - 预判每个镜头中的人物投影，避免重要角色互相遮挡或堆叠。
@@ -84,6 +88,8 @@ description: "Designs UE4 dialogue storyboards through the local storyboard MCP 
 - 相邻对话只用于理解前因后果，不能把其中的 `dialogue_id` 放进当前 shots。
 - 每个角色必须使用不同的 `position`，不能让角色面向自己。
 - `facing` 只能使用实际角色槽位或 `group_center`。
+- 每个 shot 必须设置 `look_target`。单人和带群镜头填写当前主体交流或
+  注视的实际角色槽位；双人和群像建立镜头填写 `group_center`。
 - 站位必须服务于关系和事件：主导者、被孤立者、防守者、行动目标和
   对峙分组应在阵型中清晰可读。
 - 不要为了变化而频繁切镜头。镜头变化必须对应叙事节点。
@@ -99,7 +105,7 @@ description: "Designs UE4 dialogue storyboards through the local storyboard MCP 
 
 ```json
 {
-  "schema_version": "shot-plan.v1",
+  "schema_version": "shot-plan.v2",
   "request_id": "必须与任务一致",
   "status": "ready",
   "scene_analysis": {
@@ -134,6 +140,7 @@ description: "Designs UE4 dialogue storyboards through the local storyboard MCP 
       "dialogue_ids": ["对话节点 ID"],
       "template": "master_group_shot",
       "subject": "group",
+      "look_target": "group_center",
       "lens_mm": 50,
       "screen_position": "left_third",
       "camera_height": "eye",
@@ -164,7 +171,7 @@ far_left, far_right, rear_center
 
 ```json
 {
-  "schema_version": "shot-plan.v1",
+  "schema_version": "shot-plan.v2",
   "request_id": "必须与任务一致",
   "status": "need_context",
   "required_context": ["npc_relationship"],

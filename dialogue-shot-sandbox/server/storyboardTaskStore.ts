@@ -29,7 +29,7 @@ export interface StoryboardTask {
 }
 
 const PROCESSING_LEASE_MS = 20 * 60_000;
-export const STORYBOARD_CACHE_POLICY = "shot-plan.v1:cinematic-geometry-v1";
+export const STORYBOARD_CACHE_POLICY = "shot-plan.v2:dynamic-axis-v1";
 
 function taskDirectory(): string {
   return join(storyboardRuntimeRoot(), ".storyboard-data", "tasks");
@@ -418,6 +418,28 @@ export async function completeStoryboardTask(
       ) {
         throw new Error(
           `镜头 ${index + 1} 的主体 ${shot.subject} 尚未登场或已经离场`,
+        );
+      }
+      const groupSubject =
+        shot.subject === "both" || shot.subject === "group";
+      if (groupSubject && shot.look_target !== "group_center") {
+        throw new Error(
+          `镜头 ${index + 1} 的群体镜头必须面向 group_center`,
+        );
+      }
+      if (!groupSubject && shot.look_target === shot.subject) {
+        throw new Error(
+          `镜头 ${index + 1} 的主体 ${shot.subject} 不能看向自己`,
+        );
+      }
+      if (
+        !groupSubject &&
+        activeCount > 1 &&
+        (shot.look_target === "group_center" ||
+          !activeSlots.includes(shot.look_target))
+      ) {
+        throw new Error(
+          `镜头 ${index + 1} 的关系轴目标 ${shot.look_target} 无效`,
         );
       }
       if (

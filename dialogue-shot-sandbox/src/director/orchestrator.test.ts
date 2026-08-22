@@ -77,7 +77,7 @@ describe("designShots", () => {
         JSON.stringify({
           ok: true,
           data: {
-            schema_version: "shot-plan.v1",
+            schema_version: "shot-plan.v2",
             request_id: input!.request_id,
             status: "ready",
             scene_analysis: {
@@ -121,6 +121,12 @@ describe("designShots", () => {
                   : sequence.participants.find(
                         (participant) => participant.id === row.npcId,
                       )?.slot,
+              look_target:
+                index === 0
+                  ? "group_center"
+                  : row.npcId === sequence.participants[0].id
+                    ? "B"
+                    : "A",
               lens_mm: index === 0 ? 35 : 50,
               screen_position:
                 index === 0

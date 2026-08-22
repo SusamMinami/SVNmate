@@ -41,12 +41,18 @@ Adobe 将中近景定义为头顶至胸部附近，将近景描述为由面部�
 
 ### 连续性
 
-- 同一场连续对话默认保持在行动轴同一侧。
+- 单人镜头的关系轴由当前 `subject` 与 `look_target` 的位置动态建立。
+- 多人场景可以同时存在多条角色对轴线，不使用一条固定全场轴线约束所有对话。
+- 同一角色对的连续镜头保持在其关系轴同一侧。
+- 切换角色对时，优先让前后关系轴共享一个角色，形成转折点或枢轴过渡。
+- 两条关系轴没有共享角色时，先用群像、轴上中性镜头、切出镜头或可见运动重建空间。
 - 正反打中的两人应保持相反的屏幕视线方向。
 - 连续拍摄同一主体时，机位方位变化优先不小于 30°。
-- 越轴前使用中性镜头、可见的越轴运动或新建立镜头重建空间。
+- 角色移动会改变关系轴；只有观众看见移动过程，后续机位才可按新轴线重新布置。
 
-SJSU 的剪辑课程资料把 180°系统、视线匹配、正反打和 30°规则列为连续性剪辑的核心工具。[来源](https://www.sjsu.edu/people/drew.todd/courses/c1/s0/editing.pdf)
+轴线是当前互动双方或角色与目标之间的关系线。Cadrage 对多人桌边场景的说明明确指出：当角色转向另一位对象交谈时，会在新的两人之间建立新关系线；Filmmakers Academy 也指出角色移动后轴线可以重建。多人场面因此需要管理一组关系轴，而不是锁定一条世界坐标线。[Cadrage](https://www.cadrage.app/the-180-degree-rule-in-filmmaking/) [Filmmakers Academy](https://www.filmmakersacademy.com/glossary/axis-of-action/)
+
+康奈尔关于电影空间认知的研究显示，180°规则有助于观众更快判断角色位置，建立镜头则用于持续刷新空间关系。这意味着动态轴线不能只做数学换线，还必须保留观众可理解的过渡。[Cornell](https://ecommons.cornell.edu/items/7dd0b8a5-46fa-4219-a78e-e02eee532b2a/full)
 
 ### 正反打
 
@@ -82,24 +88,19 @@ Adobe 将正反打定义为先展示角色，再切到该角色所看的人或�
 
 ```json
 {
+  "schema_version": "shot-plan.v2",
   "dialogue_ids": ["204803", "204804"],
-  "shot_size": "MCU",
-  "coverage": "clean_single",
+  "template": "reverse_medium",
   "subject": "B",
   "look_target": "A",
-  "horizontal_angle": "three_quarter_front",
   "camera_height": "eye",
   "screen_position": "right_third",
   "lens_mm": 50,
-  "axis_id": "axis-A-B-01",
-  "pair_id": "pair-01",
-  "focus_role": "listener",
-  "focus_reason": "追问后保留林澈的迟疑反应",
-  "transition_intent": "matching_reverse"
+  "intent": "在 A 的近景后切到 B，形成同一 A-B 关系轴上的匹配反打。"
 }
 ```
 
-Three.js 负责把语义转成候选机位并做投影验证。大模型决定“为什么拍、拍谁、希望是什么画面”，几何求解器决定“摄影机具体放在哪里”。
+大模型必须声明 `subject` 和 `look_target`，Three.js 据此生成稳定的无序关系轴 ID（例如 `A-B`）、同侧机位、逐镜头朝向覆盖和投影验收。景别和画面构成由模板提出、由投影结果确认。大模型决定“为什么拍、拍谁、看向谁”，几何求解器决定“轴线在哪里、摄影机具体放在哪里”。
 
 ## 推荐执行管线
 

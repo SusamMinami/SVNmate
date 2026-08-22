@@ -126,6 +126,15 @@ export interface ShotProjectionValidation {
   warnings: string[];
 }
 
+export interface ShotAxis {
+  id: string;
+  kind: "relationship" | "direction" | "group";
+  participantSlots: ParticipantSlot[];
+  start: Vec3;
+  end: Vec3;
+  cameraSide: -1 | 0 | 1;
+}
+
 export interface ShotPlan {
   id: string;
   index: number;
@@ -145,5 +154,8 @@ export interface ShotPlan {
   composition: string;
   rationale: string;
   visualSubjectSlot: ParticipantSlot | null;
+  lookTargetSlot: ParticipantSlot | null;
+  facingOverrides: Partial<Record<ParticipantSlot, Vec3>>;
+  axis: ShotAxis;
   projection: ShotProjectionValidation;
 }

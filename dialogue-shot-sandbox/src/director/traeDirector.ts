@@ -54,7 +54,7 @@ export class TraeDirectorProvider implements ShotDirectorProvider {
     const parsed = MiraDirectorResponseSchema.safeParse(payload.data);
     if (!parsed.success) {
       throw new Error(
-        `内部 TRAE 返回格式不符合 shot-plan.v1：${parsed.error.issues[0]?.message ?? "未知错误"}`,
+        `内部 TRAE 返回格式不符合 shot-plan.v2：${parsed.error.issues[0]?.message ?? "未知错误"}`,
       );
     }
     if (parsed.data.request_id !== input.request_id) {

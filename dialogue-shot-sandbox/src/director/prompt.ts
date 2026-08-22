@@ -21,11 +21,14 @@ export function buildDirectorPrompt(
     "只允许输出一个 JSON 对象，不要 Markdown 代码块，不要解释文字。",
     `request_id 必须原样返回：${input.request_id}`,
     "必须覆盖输入中的每一个 dialogue_id，且每个 ID 只能出现一次。",
-    "可以把连续台词合并到一个镜头，但不得改写台词、增删角色或越过对话轴线。",
+    "可以把连续台词合并到一个镜头，但不得改写台词或增删角色。",
     "按约每秒 4-5 个汉字估算台词时长；普通镜头至少覆盖连续两句台词，不能仅因说话人变化就切镜。常规镜头尽量保持 4-8 秒；若新镜头不足两句或预计不足 4 秒，优先与相邻台词合并并保留当前机位，除非遇到进出场边界或明确的重大情绪、动作、信息转折。",
     "不要输出 XYZ 坐标，软件会根据语义模板计算机位。",
     "blocking 必须覆盖所有参与角色，每个角色只能出现一次，position 不能重复。",
     "facing 可以是另一个实际角色槽位或 group_center；不要让角色面向自己。",
+    "每个 shot 必须设置 look_target。单人和带群镜头填写当前主体正在交流或注视的实际角色槽位；双人、群像建立镜头填写 group_center。",
+    "轴线按当前互动关系动态建立：单人镜头的关系轴连接 subject 与 look_target，不得把多人场面简化为一条永远不变的全场轴线。",
+    "同一角色对的连续镜头必须保持在该关系轴同一侧。切换到新的角色对时，优先让前后两条轴共享一个角色作为转折点；不共享角色时，先用群像、轴上中性镜头或可见运动重建空间。",
     "每个 placement 必须给出 entry_dialogue_id。它可以早于角色的 first_dialogue_id，但不能晚于首次发言。",
     "每个 placement 必须给出 exit_dialogue_id。没有提前离场时填 null；有离场时填角色仍在画面中的最后一个当前 dialogue_id，角色从下一节点起消失。",
     "exit_dialogue_id 不能早于 entry_dialogue_id，也不能早于角色的 last_dialogue_id。只有文本或上下文明确支持离场时才设置，不能仅因角色不再发言就推断其离场。",
@@ -48,7 +51,7 @@ export function buildDirectorPrompt(
     "ready 格式：",
     JSON.stringify(
       {
-        schema_version: "shot-plan.v1",
+        schema_version: "shot-plan.v2",
         request_id: input.request_id,
         status: "ready",
         scene_analysis: {
@@ -77,6 +80,7 @@ export function buildDirectorPrompt(
                 ? "master_group_shot"
                 : "master_two_shot",
             subject: input.participants.length > 2 ? "group" : "both",
+            look_target: "group_center",
             lens_mm: 35,
             screen_position: "balanced",
             camera_height: "eye",
@@ -90,7 +94,7 @@ export function buildDirectorPrompt(
     "need_context 格式：",
     JSON.stringify(
       {
-        schema_version: "shot-plan.v1",
+        schema_version: "shot-plan.v2",
         request_id: input.request_id,
         status: "need_context",
         required_context: ["npc_relationship"],

@@ -78,6 +78,7 @@ export interface ProjectionAssessment {
 
 interface SingleCameraRequest {
   subject: DialogueParticipant;
+  lookTarget?: DialogueParticipant;
   participants: DialogueParticipant[];
   lensMm: number;
   cameraHeight: number;
@@ -161,7 +162,14 @@ function sceneCameraSide(participants: DialogueParticipant[]): Vec2 {
 function subjectFacing(
   subject: DialogueParticipant,
   participants: DialogueParticipant[],
+  lookTarget?: DialogueParticipant,
 ): Vec2 {
+  if (lookTarget) {
+    return normalize({
+      x: lookTarget.position[0] - subject.position[0],
+      z: lookTarget.position[2] - subject.position[2],
+    });
+  }
   const explicit = {
     x: subject.facingTarget[0] - subject.position[0],
     z: subject.facingTarget[2] - subject.position[2],
@@ -190,11 +198,14 @@ function subjectFacing(
 
 function cameraDirectionForSubject(
   subject: DialogueParticipant,
+  lookTarget: DialogueParticipant | undefined,
   participants: DialogueParticipant[],
   faceAngleDegrees: number,
 ): Vec2 {
-  const facing = subjectFacing(subject, participants);
-  const preferredSide = sceneCameraSide(participants);
+  const facing = subjectFacing(subject, participants, lookTarget);
+  const preferredSide = lookTarget
+    ? sceneCameraSide([subject, lookTarget])
+    : sceneCameraSide(participants);
   let localSide = normalize({ x: -facing.z, z: facing.x });
   if (dot(localSide, preferredSide) < 0) {
     localSide = scale(localSide, -1);
@@ -329,6 +340,7 @@ export function assessProjection(
   lensMm: number,
   expectedShotSize: ShotSize,
   coverage: ShotCoverage,
+  lookTarget?: DialogueParticipant,
 ): ProjectionAssessment {
   const camera = cameraFor(geometry.position, geometry.target, lensMm);
   const projected = participants.map((participant) =>
@@ -367,7 +379,7 @@ export function assessProjection(
     ]),
   ) as Partial<Record<ParticipantSlot, number>>;
   const measuredShotSize = measureShotSize(camera, subject);
-  const facing = subjectFacing(subject, participants);
+  const facing = subjectFacing(subject, participants, lookTarget);
   const cameraDirection = normalize({
     x: geometry.position[0] - subject.position[0],
     z: geometry.position[2] - subject.position[2],
@@ -509,6 +521,7 @@ export function solveSingleCamera(
   for (const faceAngle of angleCandidates) {
     const cameraDirection = cameraDirectionForSubject(
       request.subject,
+      request.lookTarget,
       request.participants,
       faceAngle,
     );
@@ -536,6 +549,7 @@ export function solveSingleCamera(
           request.lensMm,
           request.shotSize,
           request.coverage,
+          request.lookTarget,
         );
         const otherVisibleCount = assessment.visibleParticipantSlots.filter(
           (slot) => slot !== request.subject.slot,
@@ -559,7 +573,7 @@ export function solveSingleCamera(
             : 0) +
           (!assessment.subjectSafeForUltrawide ? 180 : 0) +
           Math.max(0, assessment.subjectFaceAngle - 45) * 20 +
-          Math.max(0, 30 - viewDelta) * 4 +
+          Math.max(0, 30 - viewDelta) * 16 +
           Math.abs(faceAngle - preferredAngle) +
           Math.abs(distanceScale - 1) * 12 +
           (screenPosition === request.screenPosition ? 0 : 24);

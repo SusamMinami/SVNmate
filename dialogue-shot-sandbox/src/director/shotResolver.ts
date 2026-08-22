@@ -1,6 +1,7 @@
 import type {
   DialogueParticipant,
   DialogueSequence,
+  ShotAxis,
   ShotCoverage,
   ShotKind,
   ShotPlan,
@@ -42,6 +43,83 @@ interface Geometry {
   assessment: ProjectionAssessment;
 }
 
+function createShotAxis(
+  participants: DialogueParticipant[],
+  subject: DialogueParticipant,
+  lookTarget: DialogueParticipant | null,
+  cameraPosition: Vec3,
+): ShotAxis {
+  const isDirectionAxis = !lookTarget && participants.length === 1;
+  const isTwoPersonAxis = !lookTarget && participants.length === 2;
+  let pair: DialogueParticipant[];
+  if (lookTarget) {
+    pair = [subject, lookTarget].sort((left, right) =>
+      left.slot.localeCompare(right.slot),
+    );
+  } else if (isDirectionAxis) {
+    pair = [
+      subject,
+      {
+        ...subject,
+        position: subject.facingTarget,
+      },
+    ];
+  } else if (isTwoPersonAxis) {
+    pair = [...participants].sort((left, right) =>
+      left.slot.localeCompare(right.slot),
+    );
+  } else {
+    pair = [...participants].sort(
+      (left, right) =>
+        left.position[0] - right.position[0] ||
+        left.position[2] - right.position[2],
+    );
+  }
+  const first = pair[0];
+  const last = pair.at(-1) ?? first;
+  const dx = last.position[0] - first.position[0];
+  const dz = last.position[2] - first.position[2];
+  const length = Math.hypot(dx, dz) || 1;
+  const unitX = dx / length;
+  const unitZ = dz / length;
+  const extension = 1.2;
+  const start: Vec3 = [
+    first.position[0] - unitX * extension,
+    0.04,
+    first.position[2] - unitZ * extension,
+  ];
+  const end: Vec3 = [
+    last.position[0] + unitX * extension,
+    0.04,
+    last.position[2] + unitZ * extension,
+  ];
+  const sideValue =
+    dx * (cameraPosition[2] - first.position[2]) -
+    dz * (cameraPosition[0] - first.position[0]);
+  return {
+    id: lookTarget || isTwoPersonAxis
+      ? `${first.slot}-${last.slot}`
+      : isDirectionAxis
+        ? `${subject.slot}-look`
+        : "group",
+    kind:
+      lookTarget || isTwoPersonAxis
+        ? "relationship"
+        : isDirectionAxis
+          ? "direction"
+          : "group",
+    participantSlots:
+      lookTarget || isTwoPersonAxis
+        ? [first.slot, last.slot]
+        : isDirectionAxis
+          ? [subject.slot]
+          : participants.map((participant) => participant.slot),
+    start,
+    end,
+    cameraSide: sideValue > 0.001 ? 1 : sideValue < -0.001 ? -1 : 0,
+  };
+}
+
 function adjustedSingleLabel(
   template: DirectorDecision["template"],
   subjectLabel: string,
@@ -76,6 +154,7 @@ function adjustedSingleLabel(
 function geometryFor(
   decision: DirectorDecision,
   participant: DialogueParticipant,
+  lookTarget: DialogueParticipant | null,
   participants: DialogueParticipant[],
   previousGeometry?: CameraGeometry,
 ): Geometry {
@@ -122,9 +201,10 @@ function geometryFor(
     shotSize: ShotSize,
     coverage: Extract<ShotCoverage, "single" | "group-medium">,
     fallbackHeight: number,
-  ) =>
-    solveSingleCamera({
+  ) => {
+    return solveSingleCamera({
       subject: participant,
+      lookTarget: lookTarget ?? undefined,
       participants,
       lensMm: decision.lens_mm,
       cameraHeight: cameraHeight(decision.camera_height, fallbackHeight),
@@ -133,6 +213,7 @@ function geometryFor(
       coverage,
       previousGeometry,
     });
+  };
 
   switch (decision.template) {
     case "master_two_shot": {
@@ -272,7 +353,9 @@ export function resolveShotDecisions(
   const coveredIds = new Set<string>();
   let previousGeometry: CameraGeometry | undefined;
   let previousVisualSubjectSlot: DialogueParticipant["slot"] | null = null;
+  let previousLookTargetSlot: DialogueParticipant["slot"] | null = null;
   let previousCoverage: ShotCoverage | null = null;
+  let previousAxis: ShotAxis | null = null;
 
   const shots = decisions.map((decision, index) => {
     const rows = decision.dialogue_ids.map((dialogueId) => {
@@ -320,12 +403,50 @@ export function resolveShotDecisions(
       decision.subject === "both" || decision.subject === "group"
         ? firstSpeaker
         : participantsBySlot.get(decision.subject);
+    let lookTarget: DialogueParticipant | null =
+      decision.look_target === "group_center"
+        ? null
+        : (participantsBySlot.get(decision.look_target) ?? null);
     if (!firstSpeaker || !subject) {
       throw new Error(`镜头 ${index + 1} 无法解析主体 ${decision.subject}`);
     }
     if (!activeParticipants.some((participant) => participant.id === subject.id)) {
       throw new Error(
         `镜头 ${index + 1} 的主体 ${subject.slot} 尚未登场或已经离场`,
+      );
+    }
+    if (
+      groupSubject &&
+      decision.look_target !== "group_center"
+    ) {
+      throw new Error(`镜头 ${index + 1} 的群体镜头必须面向 group_center`);
+    }
+    if (!groupSubject && activeParticipants.length > 1) {
+      const lookTargetIsActive =
+        lookTarget &&
+        lookTarget.id !== subject.id &&
+        activeParticipants.some(
+          (participant) => participant.id === lookTarget?.id,
+        );
+      if (!lookTargetIsActive) {
+        lookTarget =
+          activeParticipants.find(
+            (participant) => participant.id !== subject.id,
+          ) ?? null;
+      }
+      if (!lookTarget) {
+        throw new Error(
+          `镜头 ${index + 1} 无法建立主体 ${subject.slot} 的关系轴`,
+        );
+      }
+    }
+    if (
+      !groupSubject &&
+      activeParticipants.length > 1 &&
+      decision.look_target === subject.slot
+    ) {
+      throw new Error(
+        `镜头 ${index + 1} 的主体 ${subject.slot} 不能看向自己`,
       );
     }
     if (
@@ -372,8 +493,15 @@ export function resolveShotDecisions(
     const geometry = geometryFor(
       decision,
       subject,
+      lookTarget,
       activeParticipants,
       previousGeometry,
+    );
+    const axis = createShotAxis(
+      activeParticipants,
+      subject,
+      groupSubject ? null : lookTarget,
+      geometry.position,
     );
     const hardProjectionWarnings = geometry.assessment.warnings.filter(
       (warning) =>
@@ -410,7 +538,10 @@ export function resolveShotDecisions(
         resolvedCoverage === "over-the-shoulder") &&
       previousWasSingleCoverage &&
       previousVisualSubjectSlot !== null &&
-      previousVisualSubjectSlot !== subject.slot;
+      previousVisualSubjectSlot !== subject.slot &&
+      previousAxis?.id === axis.id &&
+      previousLookTargetSlot === subject.slot &&
+      lookTarget?.slot === previousVisualSubjectSlot;
     const projectionWarnings = [...geometry.assessment.warnings];
     if (decision.template === "reverse_medium" && !formsReversePair) {
       projectionWarnings.push("当前镜头没有可配对的前置反打镜头，已按实测画面降级");
@@ -422,6 +553,27 @@ export function resolveShotDecisions(
           `与上一镜的水平视角变化仅 ${viewDelta.toFixed(1)}°`,
         );
       }
+    }
+    if (
+      previousAxis?.kind === "relationship" &&
+      axis.kind === "relationship" &&
+      previousAxis.id === axis.id &&
+      previousAxis.cameraSide !== 0 &&
+      axis.cameraSide !== previousAxis.cameraSide
+    ) {
+      throw new Error(`镜头 ${index + 1} 越过了关系轴 ${axis.id}`);
+    }
+    if (
+      previousAxis?.kind === "relationship" &&
+      axis.kind === "relationship" &&
+      previousAxis.id !== axis.id &&
+      !previousAxis.participantSlots.some((slot) =>
+        axis.participantSlots.includes(slot),
+      )
+    ) {
+      projectionWarnings.push(
+        `关系轴从 ${previousAxis.id} 切换到 ${axis.id}，缺少共享角色或群像重建`,
+      );
     }
     const content = rows
       .map((row) => {
@@ -463,6 +615,15 @@ export function resolveShotDecisions(
       composition: geometry.composition,
       rationale: decision.intent,
       visualSubjectSlot: groupSubject ? null : subject.slot,
+      lookTargetSlot: lookTarget?.slot ?? null,
+      facingOverrides:
+        groupSubject || !lookTarget
+          ? {}
+          : {
+              [subject.slot]: lookTarget.position,
+              [lookTarget.slot]: subject.position,
+            },
+      axis,
       projection: {
         expectedShotSize: geometry.shotSize,
         measuredShotSize: geometry.assessment.measuredShotSize,
@@ -485,7 +646,9 @@ export function resolveShotDecisions(
       target: shot.cameraTarget,
     };
     previousVisualSubjectSlot = shot.visualSubjectSlot;
+    previousLookTargetSlot = shot.lookTargetSlot;
     previousCoverage = shot.projection.coverage;
+    previousAxis = shot.axis;
     return shot;
   });
 

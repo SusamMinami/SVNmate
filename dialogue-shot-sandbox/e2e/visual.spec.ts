@@ -74,15 +74,18 @@ test("renders every participant in a multi-character dialogue", async ({
   }
   await expect(page.getByText(/支持 2-12 人动态进出场/)).toBeVisible();
   await expect(page.locator(".cast-row")).toHaveCount(4);
+  await expect(page.locator(".axis-status")).toContainText("关系轴 A-B");
   await expect(
     page.locator(".actor-label--on-body:not(.actor-label--below)"),
   ).toHaveCount(2);
 
   await page.getByRole("button", { name: /C C 带群中景/ }).click();
+  await expect(page.locator(".axis-status")).toContainText("关系轴 B-C");
   await expect(
     page.locator(".actor-label--on-body:not(.actor-label--below)"),
   ).toHaveCount(3);
   await page.getByRole("button", { name: /D D 带群中景/ }).click();
+  await expect(page.locator(".axis-status")).toContainText("关系轴 C-D");
   await expect(
     page.locator(".actor-label--on-body:not(.actor-label--below)"),
   ).toHaveCount(4);
@@ -109,8 +112,8 @@ test("removes a character after the AI-directed exit node", async ({
           configured: true,
           connected: true,
           versionMismatch: false,
-          expectedVersion: "0.11.0",
-          serverVersion: "0.11.0",
+          expectedVersion: "0.12.0",
+          serverVersion: "0.12.0",
           lastSeenAt: "2026-08-22T00:00:00.000Z",
           mcpName: "internal-storyboard-collaboration",
           mcpConfigPath: "C:\\workspace\\.trae\\mcp.json",
@@ -141,7 +144,7 @@ test("removes a character after the AI-directed exit node", async ({
       body: JSON.stringify({
         ok: true,
         data: {
-          schema_version: "shot-plan.v1",
+          schema_version: "shot-plan.v2",
           request_id: input.request_id,
           status: "ready",
           scene_analysis: {
@@ -176,6 +179,12 @@ test("removes a character after the AI-directed exit node", async ({
                   ? "reverse_medium"
                   : "speaker_group_medium",
             subject: index === 0 ? "both" : line.speaker,
+            look_target:
+              index === 0
+                ? "group_center"
+                : line.speaker === "A"
+                  ? "B"
+                  : "A",
             lens_mm: index === 0 ? 35 : 50,
             screen_position: index === 0 ? "balanced" : "center",
             camera_height: "eye",
@@ -264,8 +273,8 @@ test("shows local content immediately and presents the AI story brief before app
           configured: true,
           connected: true,
           versionMismatch: false,
-          expectedVersion: "0.11.0",
-          serverVersion: "0.11.0",
+          expectedVersion: "0.12.0",
+          serverVersion: "0.12.0",
           lastSeenAt: "2026-08-22T00:00:00.000Z",
           mcpName: "internal-storyboard-collaboration",
           mcpConfigPath: "C:\\workspace\\.trae\\mcp.json",
@@ -290,7 +299,7 @@ test("shows local content immediately and presents the AI story brief before app
       body: JSON.stringify({
         ok: true,
         data: {
-          schema_version: "shot-plan.v1",
+          schema_version: "shot-plan.v2",
           request_id: input.request_id,
           status: "ready",
           scene_analysis: {
@@ -324,6 +333,7 @@ test("shows local content immediately and presents the AI story brief before app
             dialogue_ids: [line.dialogue_id],
             template: "close_up",
             subject: line.speaker,
+            look_target: line.speaker === "A" ? "B" : "A",
             lens_mm: 55,
             screen_position:
               line.speaker === "A" ? "left_third" : "right_third",
@@ -370,8 +380,8 @@ test("previews shared and local plans before resolving a library conflict", asyn
           configured: true,
           connected: true,
           versionMismatch: false,
-          expectedVersion: "0.11.0",
-          serverVersion: "0.11.0",
+          expectedVersion: "0.12.0",
+          serverVersion: "0.12.0",
           transport: "http",
           lastSeenAt: "2026-08-22T00:00:00.000Z",
           mcpName: "internal-storyboard-collaboration",
@@ -399,7 +409,7 @@ test("previews shared and local plans before resolving a library conflict", asyn
       ),
     };
     const makePlan = (requestId: string, lens: number, goal: string) => ({
-      schema_version: "shot-plan.v1",
+      schema_version: "shot-plan.v2",
       request_id: requestId,
       status: "ready",
       scene_analysis: {
@@ -413,6 +423,7 @@ test("previews shared and local plans before resolving a library conflict", asyn
           dialogue_ids: [line.dialogue_id],
           template: "close_up",
           subject: line.speaker,
+          look_target: line.speaker === "A" ? "B" : "A",
           lens_mm: lens,
           screen_position:
             line.speaker === "A" ? "left_third" : "right_third",

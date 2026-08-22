@@ -38,6 +38,39 @@ function screenPositionFor(
   return speakerIndex < midpoint ? "left_third" : "right_third";
 }
 
+function lookTargetFor(
+  speaker: ParticipantSlot,
+  index: number,
+  previousSpeaker: ParticipantSlot | null,
+  activeParticipants: DirectorInput["participants"],
+  input: DirectorInput,
+): DirectorDecision["look_target"] {
+  if (
+    previousSpeaker &&
+    previousSpeaker !== speaker &&
+    activeParticipants.some(
+      (participant) => participant.slot === previousSpeaker,
+    )
+  ) {
+    return previousSpeaker;
+  }
+  const nextSpeaker = input.dialogue
+    .slice(index + 1)
+    .find(
+      (line) =>
+        line.speaker !== speaker &&
+        activeParticipants.some(
+          (participant) => participant.slot === line.speaker,
+        ),
+    )?.speaker;
+  return (
+    nextSpeaker ??
+    activeParticipants.find((participant) => participant.slot !== speaker)
+      ?.slot ??
+    "group_center"
+  );
+}
+
 function decisionFor(
   row: DirectorInput["dialogue"][number],
   index: number,
@@ -68,12 +101,20 @@ function decisionFor(
         row.dialogue_id &&
       index > 0,
   );
+  const lookTarget = lookTargetFor(
+    row.speaker,
+    index,
+    previousSpeaker,
+    activeParticipants,
+    input,
+  );
   if (index === 0) {
     if (activeParticipants.length === 1) {
       return {
         dialogue_ids: [row.dialogue_id],
         template: "close_up",
         subject: row.speaker,
+        look_target: "group_center",
         lens_mm: 50,
         screen_position: "center",
         camera_height: "eye",
@@ -87,6 +128,7 @@ function decisionFor(
           ? "master_group_shot"
           : "master_two_shot",
       subject: activeParticipants.length > 2 ? "group" : "both",
+      look_target: "group_center",
       lens_mm: activeParticipants.length > 4 ? 28 : 38,
       screen_position: "balanced",
       camera_height: "eye",
@@ -104,6 +146,7 @@ function decisionFor(
           ? "speaker_group_medium"
           : "reverse_medium",
       subject: row.speaker,
+      look_target: lookTarget,
       lens_mm: 42,
       screen_position: screenPosition,
       camera_height: "eye",
@@ -115,6 +158,7 @@ function decisionFor(
       dialogue_ids: [row.dialogue_id],
       template: "reaction_closeup",
       subject: row.speaker,
+      look_target: lookTarget,
       lens_mm: 78,
       screen_position: screenPosition,
       camera_height: "eye",
@@ -126,6 +170,7 @@ function decisionFor(
       dialogue_ids: [row.dialogue_id],
       template: "close_up",
       subject: row.speaker,
+      look_target: lookTarget,
       lens_mm: 68,
       screen_position: screenPosition,
       camera_height: "eye",
@@ -139,6 +184,7 @@ function decisionFor(
         ? "speaker_group_medium"
         : "reverse_medium",
     subject: row.speaker,
+    look_target: lookTarget,
     lens_mm: input.participants.length > 2 ? 42 : 50,
     screen_position: screenPosition,
     camera_height: "eye",
@@ -323,9 +369,11 @@ export function createRuleDecisions(input: DirectorInput): DirectorDecision[] {
             );
           });
           if (activeAlternative) {
+            const previousSubject = selected.subject;
             selected = {
               ...selected,
               subject: activeAlternative.slot,
+              look_target: previousSubject,
               template:
                 input.participants.length > 2
                   ? "speaker_group_medium"
