@@ -1,0 +1,465 @@
+{
+  "schema_version": "shot-rules.v1",
+  "version": "1.0.0",
+  "updated_at": "2026-08-22",
+  "shot_size_order": ["EWS", "WS", "FS", "MFS", "MS", "MCU", "CU", "ECU"],
+  "lark_fields": [
+    { "type": "text", "name": "规则ID" },
+    { "type": "text", "name": "规则名称" },
+    {
+      "type": "select",
+      "name": "分类",
+      "multiple": false,
+      "options": [
+        { "name": "构图" },
+        { "name": "角色朝向" },
+        { "name": "连续性" },
+        { "name": "景别转换" },
+        { "name": "正反打" },
+        { "name": "节奏" },
+        { "name": "群像" },
+        { "name": "系统校验" }
+      ]
+    },
+    {
+      "type": "select",
+      "name": "约束级别",
+      "multiple": false,
+      "options": [
+        { "name": "硬约束" },
+        { "name": "软约束" },
+        { "name": "风格偏好" }
+      ]
+    },
+    { "type": "text", "name": "适用条件" },
+    { "type": "text", "name": "规则描述" },
+    { "type": "text", "name": "机器判定" },
+    { "type": "text", "name": "例外条件" },
+    {
+      "type": "number",
+      "name": "权重",
+      "style": {
+        "type": "plain",
+        "precision": 0,
+        "percentage": false,
+        "thousands_separator": false
+      }
+    },
+    { "type": "checkbox", "name": "启用" },
+    { "type": "text", "name": "来源" },
+    { "type": "text", "name": "版本" },
+    { "type": "updated_at", "name": "更新时间" }
+  ],
+  "rules": [
+    {
+      "id": "SYS-001",
+      "name": "标签必须匹配实际画面",
+      "category": "系统校验",
+      "enforcement": "硬约束",
+      "applies_when": "所有镜头",
+      "requirement": "镜头标签必须由最终摄影机投影结果确认，不能仅由语义模板直接命名。",
+      "machine_check": "resolved_label === classifyProjection(camera, visibleActors)",
+      "exception": "无；不匹配时重新求解或降级为实测标签。",
+      "weight": 100,
+      "enabled": true,
+      "source": "项目缺陷 2048；项目质量约束",
+      "version": "1.0.0"
+    },
+    {
+      "id": "SYS-002",
+      "name": "几何求解后统一验收",
+      "category": "系统校验",
+      "enforcement": "硬约束",
+      "applies_when": "镜头方案生成完成后",
+      "requirement": "在输出方案前统一检查主体、景别、入画人数、遮挡、安全框、轴线、视线和相邻镜头变化。",
+      "machine_check": "hardViolationCount === 0",
+      "exception": "创作性破例必须携带 exception_code 和明确意图，不能静默跳过。",
+      "weight": 100,
+      "enabled": true,
+      "source": "项目质量约束",
+      "version": "1.0.0"
+    },
+    {
+      "id": "FRM-001",
+      "name": "按身体关键点判定景别",
+      "category": "构图",
+      "enforcement": "硬约束",
+      "applies_when": "所有人物镜头",
+      "requirement": "WS/FS 应见完整身体，MS 约腰部以上，MCU 约胸部以上，CU 约肩部以上，ECU 只呈面部局部；焦距不能单独决定景别。",
+      "machine_check": "按头顶、下巴、肩、胸、腰、膝、脚的 NDC 投影和裁切边界分类。",
+      "exception": "动作或遮挡造成的有意裁切必须显式标记。",
+      "weight": 100,
+      "enabled": true,
+      "source": "Adobe Camera Shots；Adobe Medium Close-up；Prague Film Institute",
+      "version": "1.0.0"
+    },
+    {
+      "id": "FRM-002",
+      "name": "洁净单人镜头只保留一个主体",
+      "category": "构图",
+      "enforcement": "硬约束",
+      "applies_when": "coverage=clean_single 或标签包含单人",
+      "requirement": "除主体外，不允许其他角色的头部或躯干形成可识别的主要画面元素。",
+      "machine_check": "visiblePrimaryActors === [subject]；其他角色屏幕占比 < 0.03。",
+      "exception": "若保留他人肩背，应改为 dirty_ots，不能继续标为洁净单人。",
+      "weight": 100,
+      "enabled": true,
+      "source": "Adobe Shot/Reverse Shot；Adobe Over-the-Shoulder；项目缺陷反馈",
+      "version": "1.0.0"
+    },
+    {
+      "id": "FRM-003",
+      "name": "过肩镜头必须显式标记",
+      "category": "构图",
+      "enforcement": "硬约束",
+      "applies_when": "前景包含另一角色肩部或头部",
+      "requirement": "焦点主体位于背景，前景角色只作为空间锚点；标签使用过肩或脏单人，不得标为单人近景。",
+      "machine_check": "coverage=dirty_ots && foregroundActor!=subject && foregroundOccupancy in [0.05,0.33]",
+      "exception": "前景只出现不可识别的小面积肢体且占比低于阈值。",
+      "weight": 100,
+      "enabled": true,
+      "source": "Adobe Over-the-Shoulder；Prague Film Institute",
+      "version": "1.0.0"
+    },
+    {
+      "id": "FRM-004",
+      "name": "16:9 构图兼容 21:9 安全框",
+      "category": "构图",
+      "enforcement": "硬约束",
+      "applies_when": "所有镜头",
+      "requirement": "主体眼睛、表情、手势和叙事动作需保留在 21:9 中央安全区域，头顶与下巴不得被意外裁切。",
+      "machine_check": "criticalLandmarks.every(point => insideUltrawideSafeFrame(point))",
+      "exception": "ECU 或有意越框构图必须记录创作意图。",
+      "weight": 100,
+      "enabled": true,
+      "source": "镜头沙盘既有项目约束",
+      "version": "1.0.0"
+    },
+    {
+      "id": "ANG-001",
+      "name": "说话人正面或四分之三正面优先",
+      "category": "角色朝向",
+      "enforcement": "软约束",
+      "applies_when": "普通对话的单人、近景、中近景",
+      "requirement": "摄影机相对角色面部正方向的水平夹角优先为 0°-45°，以清晰读取表情。",
+      "machine_check": "faceToCameraAngle <= 45",
+      "exception": "明确需要疏离、隐藏、对峙或观察感时可使用侧面。",
+      "weight": 95,
+      "enabled": true,
+      "source": "Adobe Camera Shots and Angles；项目风格要求",
+      "version": "1.0.0"
+    },
+    {
+      "id": "ANG-002",
+      "name": "侧面角度需要叙事动机",
+      "category": "角色朝向",
+      "enforcement": "软约束",
+      "applies_when": "faceToCameraAngle >= 70",
+      "requirement": "接近侧面的机位不得作为普通对话默认值，应服务于对峙、疏离、遮蔽或轮廓表达。",
+      "machine_check": "faceToCameraAngle < 70 || intentTags intersects [confrontation,distance,secrecy,profile]",
+      "exception": "双人 50/50 侧面对峙镜头。",
+      "weight": 80,
+      "enabled": true,
+      "source": "Adobe Profile Shot；Freelance Video Collective Shot-Reverse Shot",
+      "version": "1.0.0"
+    },
+    {
+      "id": "ANG-003",
+      "name": "平视作为普通对话默认机位",
+      "category": "角色朝向",
+      "enforcement": "软约束",
+      "applies_when": "没有明确权力或情绪意图",
+      "requirement": "普通对话优先让摄影机光轴接近角色眼高；俯拍和仰拍需承担脆弱、压迫或权力语义。",
+      "machine_check": "abs(cameraHeight-subjectEyeHeight) <= 0.25 || hasVerticalAngleIntent",
+      "exception": "建立镜头、身高差视线匹配或明确权力表达。",
+      "weight": 65,
+      "enabled": true,
+      "source": "Adobe Camera Shots and Angles",
+      "version": "1.0.0"
+    },
+    {
+      "id": "CON-001",
+      "name": "保持 180 度轴线",
+      "category": "连续性",
+      "enforcement": "硬约束",
+      "applies_when": "连续对话且轴线未重建",
+      "requirement": "所有摄影机保持在角色行动轴同一侧，维持人物左右关系和空间方向。",
+      "machine_check": "sign(cross(axis,cameraA-axisOrigin)) === sign(cross(axis,cameraB-axisOrigin))",
+      "exception": "通过中性镜头、可见越轴运动或新建立镜头重建轴线。",
+      "weight": 100,
+      "enabled": true,
+      "source": "Adobe 180-Degree Rule；SJSU Editing",
+      "version": "1.0.0"
+    },
+    {
+      "id": "CON-002",
+      "name": "正反打视线方向互补",
+      "category": "连续性",
+      "enforcement": "硬约束",
+      "applies_when": "双人对话的成对单人或过肩镜头",
+      "requirement": "A 与 B 在画面中的水平视线方向必须相反，并与建立镜头中的人物关系一致。",
+      "machine_check": "screenLookDirection(A) === -screenLookDirection(B) && eyelineHeightDelta <= tolerance",
+      "exception": "角色主动避开视线或面向第三目标。",
+      "weight": 100,
+      "enabled": true,
+      "source": "Adobe Continuity Editing；StudioBinder Eyeline Match",
+      "version": "1.0.0"
+    },
+    {
+      "id": "CON-003",
+      "name": "同主体切换至少改变 30 度",
+      "category": "连续性",
+      "enforcement": "软约束",
+      "applies_when": "相邻镜头拍摄同一主体且属于连续时空",
+      "requirement": "相邻机位绕主体的水平角度变化至少 30°，避免近似机位造成跳切。",
+      "machine_check": "sameSubject ? azimuthDelta >= 30 : true",
+      "exception": "刻意跳切、连续摄影机运动、动作匹配或插入镜头。",
+      "weight": 95,
+      "enabled": true,
+      "source": "SJSU Editing；30-Degree Rule",
+      "version": "1.0.0"
+    },
+    {
+      "id": "CON-004",
+      "name": "轴线切换必须先重建空间",
+      "category": "连续性",
+      "enforcement": "硬约束",
+      "applies_when": "候选机位准备跨越既有行动轴",
+      "requirement": "跨轴前必须插入轴上中性镜头、可见越轴运动或新的建立镜头，让观众理解空间关系变化。",
+      "machine_check": "axisSideChanged ? previousShot.establishesNewAxis || transition.showsCrossing : true",
+      "exception": "明确以空间错乱为目的且标记 intentional_disorientation。",
+      "weight": 100,
+      "enabled": true,
+      "source": "Adobe 180-Degree Rule",
+      "version": "1.0.0"
+    },
+    {
+      "id": "REV-001",
+      "name": "反打必须存在互补镜头",
+      "category": "正反打",
+      "enforcement": "硬约束",
+      "applies_when": "template 或标签声明为反打",
+      "requirement": "反打是镜头间关系：必须关联一个拍摄对方或对方所见对象的前置镜头，不能把孤立单镜头称为反打。",
+      "machine_check": "pairId!=null && pair.subject!=subject && pair.axisId===axisId && complementaryView(pair,current)",
+      "exception": "无配对镜头时降级命名为单人中近景。",
+      "weight": 100,
+      "enabled": true,
+      "source": "Adobe Shot/Reverse Shot；StudioBinder Shot Reverse Shot",
+      "version": "1.0.0"
+    },
+    {
+      "id": "REV-002",
+      "name": "标准正反打保持匹配规格",
+      "category": "正反打",
+      "enforcement": "软约束",
+      "applies_when": "中性对话的正反打镜头对",
+      "requirement": "镜头对优先保持相同景别、相近焦距、相近眼高和互补构图，以维持连续性。",
+      "machine_check": "shotSizeDelta<=1 && abs(lensA-lensB)<=10 && eyeHeightDelta<=0.1",
+      "exception": "权力、情绪或信息不对称时允许有意失配。",
+      "weight": 85,
+      "enabled": true,
+      "source": "StudioBinder Eyeline Match；Adobe Shot/Reverse Shot",
+      "version": "1.0.0"
+    },
+    {
+      "id": "SIZE-001",
+      "name": "同主体景别变化必须明确",
+      "category": "景别转换",
+      "enforcement": "软约束",
+      "applies_when": "相邻镜头拍摄同一主体",
+      "requirement": "避免只变化一个很小景别等级的犹豫剪辑；若角度变化不足，应至少跨两个景别等级。",
+      "machine_check": "sameSubject && azimuthDelta<30 ? abs(shotSizeIndexDelta)>=2 : true",
+      "exception": "连续推拉、动作匹配或故意跳切。",
+      "weight": 85,
+      "enabled": true,
+      "source": "Elements of Cinematography 教学资料；项目风格要求",
+      "version": "1.0.0"
+    },
+    {
+      "id": "SIZE-002",
+      "name": "收紧景别优先逐级推进",
+      "category": "景别转换",
+      "enforcement": "风格偏好",
+      "applies_when": "从建立镜头进入普通对话",
+      "requirement": "优先按全景到中景/中近景再到近景推进，避免无动机地从全景直接跳到近景或特写。",
+      "machine_check": "towardCloseup && abs(shotSizeIndexDelta)>2 ? hasMajorBeat : true",
+      "exception": "震惊、揭示、惊吓或强烈主观转折可使用冲击式跳切。",
+      "weight": 75,
+      "enabled": true,
+      "source": "Elements of Cinematography 教学资料；项目风格要求",
+      "version": "1.0.0"
+    },
+    {
+      "id": "SIZE-003",
+      "name": "特写后匹配特写或释放到远景",
+      "category": "景别转换",
+      "enforcement": "风格偏好",
+      "applies_when": "上一镜为 CU 或 ECU",
+      "requirement": "下一镜优先切至其他角色的匹配单人特写，或回到全景/远景重新建立空间；避免无动机回落到普通中景。",
+      "machine_check": "prev in [CU,ECU] ? (matchingPeerCloseup || next in [EWS,WS,FS] || hasTransitionIntent) : true",
+      "exception": "动作连续、场面调度变化或导演明确要求渐退。",
+      "weight": 80,
+      "enabled": true,
+      "source": "项目风格要求",
+      "version": "1.0.0"
+    },
+    {
+      "id": "SIZE-004",
+      "name": "特写使用需要情绪预算",
+      "category": "景别转换",
+      "enforcement": "软约束",
+      "applies_when": "计划使用 CU 或 ECU",
+      "requirement": "近景和特写应对应重要表情、信息揭示或情绪节点，避免连续滥用导致强调失效。",
+      "machine_check": "shotSize in [CU,ECU] ? hasEmotionalOrInformationBeat : true",
+      "exception": "作品整体采用持续亲密或压迫性的视觉风格。",
+      "weight": 70,
+      "enabled": true,
+      "source": "Adobe Medium Close-up；Prague Film Institute",
+      "version": "1.0.0"
+    },
+    {
+      "id": "RHY-001",
+      "name": "普通镜头保持 4 到 8 秒",
+      "category": "节奏",
+      "enforcement": "风格偏好",
+      "applies_when": "非进出场边界、非重大转折的普通对话镜头",
+      "requirement": "按每秒约 4-5 个汉字估时，普通镜头目标 4-8 秒且原则上覆盖至少两句台词。",
+      "machine_check": "isOrdinary ? duration in [4,8] && dialogueCount>=2 : true",
+      "exception": "明确动作、进出场、停顿、揭示或情绪转折。",
+      "weight": 90,
+      "enabled": true,
+      "source": "镜头沙盘既有项目约束",
+      "version": "1.0.0"
+    },
+    {
+      "id": "RHY-002",
+      "name": "按叙事节拍切镜",
+      "category": "节奏",
+      "enforcement": "风格偏好",
+      "applies_when": "连续对话",
+      "requirement": "切镜由信息、情绪、动作或权力变化驱动，不因说话人变化自动切镜。",
+      "machine_check": "cutPoint.hasNarrativeBeat || hardBoundary",
+      "exception": "快速争执、喜剧节奏或明确交替问答。",
+      "weight": 90,
+      "enabled": true,
+      "source": "镜头沙盘既有项目约束",
+      "version": "1.0.0"
+    },
+    {
+      "id": "RHY-003",
+      "name": "合并台词后重新选择视觉主体",
+      "category": "节奏",
+      "enforcement": "硬约束",
+      "applies_when": "一个镜头覆盖多句或多位说话者",
+      "requirement": "台词分段完成后重新选择说话者、听者反应或双人关系作为视觉主体，禁止无条件沿用第一句的临时模板。",
+      "machine_check": "segment.focusDecisionCreatedAfterSegmentation === true",
+      "exception": "长时间有意保持同一角色反应时需写明 reaction_hold。",
+      "weight": 100,
+      "enabled": true,
+      "source": "项目缺陷 2048",
+      "version": "1.0.0"
+    },
+    {
+      "id": "RHY-004",
+      "name": "重要反应可优先于说话者",
+      "category": "节奏",
+      "enforcement": "软约束",
+      "applies_when": "台词引发明显情绪或关系变化",
+      "requirement": "允许镜头停留在听者反应上，但主体和意图必须显式标记，不能仅由当前说话者推断。",
+      "machine_check": "focusRole in [speaker,listener,group] && focusReason!=null",
+      "exception": "信息交代优先且听者无有效反应。",
+      "weight": 75,
+      "enabled": true,
+      "source": "StudioBinder Reaction Shots；Adobe Shot/Reverse Shot",
+      "version": "1.0.0"
+    },
+    {
+      "id": "RHY-005",
+      "name": "空间变化后重新建立",
+      "category": "节奏",
+      "enforcement": "软约束",
+      "applies_when": "角色移动、进出场、轴线改变或连续紧景使空间关系可能模糊",
+      "requirement": "插入双人或群像建立镜头，重新说明人物位置和视线关系。",
+      "machine_check": "geographyChanged || tightShotRun>=3 ? hasReestablishingShot : true",
+      "exception": "故意维持幽闭或主观限制视角。",
+      "weight": 75,
+      "enabled": true,
+      "source": "Adobe Continuity Editing；项目风格要求",
+      "version": "1.0.0"
+    },
+    {
+      "id": "GRP-001",
+      "name": "群像主体轮廓必须分离",
+      "category": "群像",
+      "enforcement": "硬约束",
+      "applies_when": "双人或多人镜头",
+      "requirement": "重要角色头部和躯干投影不得重叠成一个轮廓，需保持横向间距和前后层次。",
+      "machine_check": "importantActorOverlapRatio < 0.2 && headCentersDistance >= threshold",
+      "exception": "拥抱、打斗或明确遮挡构图。",
+      "weight": 100,
+      "enabled": true,
+      "source": "镜头沙盘既有项目约束",
+      "version": "1.0.0"
+    },
+    {
+      "id": "GRP-002",
+      "name": "镜头声明人数与画面一致",
+      "category": "群像",
+      "enforcement": "硬约束",
+      "applies_when": "标签声明单人、双人或群像",
+      "requirement": "主要可见角色数量必须与 coverage 声明一致，前景肩背按过肩类型单独计数。",
+      "machine_check": "classifyCoverage(projectedActors) === declaredCoverage",
+      "exception": "无；应重新构图或修正标签。",
+      "weight": 100,
+      "enabled": true,
+      "source": "项目缺陷反馈",
+      "version": "1.0.0"
+    }
+  ],
+  "sources": [
+    {
+      "name": "Adobe Camera Shots and Angles",
+      "url": "https://www.adobe.com/in/creativecloud/video/production/cinematography/camera-shots-and-angles.html"
+    },
+    {
+      "name": "Adobe Medium Close-up",
+      "url": "https://www.adobe.com/ng/creativecloud/video/production/cinematography/camera-shots-and-angles/medium-close-up-shot.html"
+    },
+    {
+      "name": "Adobe Over-the-Shoulder",
+      "url": "https://www.adobe.com/mena_en/creativecloud/video/production/cinematography/camera-shots-and-angles/over-the-shoulder-shot.html"
+    },
+    {
+      "name": "Adobe Shot/Reverse Shot",
+      "url": "https://www.adobe.com/creativecloud/video/production/cinematography/camera-shots-and-angles/reverse-shot.html"
+    },
+    {
+      "name": "Adobe 180-Degree Rule",
+      "url": "https://www.adobe.com/ph_en/creativecloud/video/discover/what-is-the-180-degree-rule.html"
+    },
+    {
+      "name": "Adobe Continuity Editing",
+      "url": "https://www.adobe.com/creativecloud/video/hub/ideas/what-is-continuity-editing-in-film.html"
+    },
+    {
+      "name": "StudioBinder Eyeline Match",
+      "url": "https://www.studiobinder.com/blog/what-is-an-eyeline-match"
+    },
+    {
+      "name": "StudioBinder Shot Reverse Shot",
+      "url": "https://www.studiobinder.com/blog/shot-reverse-shot-cutaways-coverage"
+    },
+    {
+      "name": "Prague Film Institute Shot Size",
+      "url": "https://www.praguefilminstitute.cz/shot-size-camera-framing-in-film/"
+    },
+    {
+      "name": "SJSU Editing",
+      "url": "https://www.sjsu.edu/people/drew.todd/courses/c1/s0/editing.pdf"
+    },
+    {
+      "name": "Elements of Cinematography",
+      "url": "https://pacevideofall2011.wordpress.com/wp-content/uploads/2011/09/02class-elementsofcinematog-copy-2.pdf"
+    }
+  ]
+}

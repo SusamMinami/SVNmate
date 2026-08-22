@@ -1,0 +1,98 @@
+{
+  "name": "dialogue-shot-sandbox",
+  "private": true,
+  "version": "0.11.0",
+  "description": "面向 UE4 对话制作的 AI 分镜与角色调度工具",
+  "author": "Shot Sandbox Team",
+  "main": "desktop-dist/main.cjs",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "build:desktop": "npm run build && node scripts/build-desktop.mjs",
+    "desktop": "npm run build:desktop && electron .",
+    "dist:win": "npm run build:desktop && electron-builder --win nsis portable --publish never",
+    "mcp:storyboard": "tsx mcp/storyboardServer.ts",
+    "test": "vitest run src server",
+    "test:e2e": "playwright test",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@react-three/drei": "^10.7.6",
+    "@react-three/fiber": "^9.4.0",
+    "electron-updater": "^6.8.9",
+    "lucide-react": "^0.468.0",
+    "papaparse": "^5.5.3",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "three": "^0.181.2",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1",
+    "@types/node": "^26.2.0",
+    "@types/papaparse": "^5.3.16",
+    "@types/pngjs": "^6.0.5",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
+    "@types/three": "^0.181.0",
+    "@vitejs/plugin-react": "^5.1.1",
+    "electron": "^43.4.1",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.28.2",
+    "pngjs": "^7.0.0",
+    "tsx": "^4.23.12",
+    "typescript": "~5.9.3",
+    "vite": "^7.2.2",
+    "vitest": "^4.0.8"
+  },
+  "build": {
+    "appId": "cn.trae.shotsandbox",
+    "productName": "镜头沙盘",
+    "asar": true,
+    "electronDist": "node_modules/electron/dist",
+    "directories": {
+      "output": "artifacts"
+    },
+    "files": [
+      "dist/**/*",
+      "desktop-dist/**/*",
+      "package.json"
+    ],
+    "win": {
+      "icon": "build/icon.png",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "artifactName": "Shot-Sandbox-Setup-${version}-${arch}.${ext}",
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "镜头沙盘"
+    },
+    "portable": {
+      "artifactName": "Shot-Sandbox-Portable-${version}-${arch}.${ext}"
+    },
+    "publish": [
+      {
+        "provider": "generic",
+        "url": "https://github.com/SusamMinami/SVNmate/releases/download/shot-sandbox-update"
+      }
+    ]
+  }
+}

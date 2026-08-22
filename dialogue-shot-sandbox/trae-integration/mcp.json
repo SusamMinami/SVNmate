@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "internal-storyboard-collaboration": {
+      "command": "node",
+      "args": [
+        "${workspaceFolder}/dialogue-shot-sandbox/node_modules/tsx/dist/cli.mjs",
+        "${workspaceFolder}/dialogue-shot-sandbox/mcp/storyboardServer.ts"
+      ],
+      "env": {
+        "STORYBOARD_PROJECT_ROOT": "${workspaceFolder}/dialogue-shot-sandbox",
+        "START_MCP_TIMEOUT_MS": "60000",
+        "RUN_MCP_TIMEOUT_MS": "60000"
+      }
+    }
+  }
+}

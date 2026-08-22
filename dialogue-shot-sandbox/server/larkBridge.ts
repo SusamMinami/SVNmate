@@ -1,0 +1,655 @@
+import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { mkdir, readFile, rm } from "node:fs/promises";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import { join } from "node:path";
+import { promisify } from "node:util";
+import type { Plugin, ViteDevServer, PreviewServer } from "vite";
+import {
+  DirectorInputSchema,
+  MiraDirectorResponseSchema,
+  type DirectorInput,
+} from "../src/director/contracts";
+import { buildDirectorPrompt } from "../src/director/prompt";
+
+const execFileAsync = promisify(execFile);
+const REQUIRED_SCOPES = ["search:bot", "im:message.send_as_user"] as const;
+const MIRA_QUERY = process.env.MIRA_BOT_QUERY || "Mira";
+const COMMAND_TIMEOUT_MS = 30_000;
+const MIRA_REPLY_TIMEOUT_MS = 55_000;
+const AUTH_FALLBACK_TTL_MS = 5 * 60_000;
+
+interface LarkCommandError {
+  type?: string;
+  subtype?: string;
+  message?: string;
+  hint?: string;
+  missing_scopes?: string[];
+}
+
+interface LarkCommandEnvelope {
+  ok?: boolean;
+  data?: unknown;
+  error?: LarkCommandError;
+  [key: string]: unknown;
+}
+
+interface MiraBot {
+  openId: string;
+  name: string;
+  description: string;
+  chatId: string;
+}
+
+interface PendingAuth {
+  deviceCode: string;
+  verificationUrl: string;
+  qrDataUrl: string;
+  scopes: string[];
+  expiresAt: number;
+}
+
+interface AuthStatusSnapshot {
+  cliAvailable: true;
+  authorized: boolean;
+  identity: string;
+  userName: string;
+  openId: string;
+  userStatus: string;
+  missingScopes: string[];
+  miraBot: MiraBot | null;
+}
+
+const state: {
+  pendingAuth: PendingAuth | null;
+  authCompletion: Promise<AuthStatusSnapshot> | null;
+  miraBot: MiraBot | null;
+  activeMiraRequest: string | null;
+} = {
+  pendingAuth: null,
+  authCompletion: null,
+  miraBot: null,
+  activeMiraRequest: null,
+};
+
+function larkCliEntry(): string {
+  const appData = process.env.APPDATA;
+  if (!appData) {
+    throw new Error("当前环境缺少 APPDATA，无法定位 lark-cli");
+  }
+  return join(
+    appData,
+    "npm",
+    "node_modules",
+    "@larksuite",
+    "cli",
+    "scripts",
+    "run.js",
+  );
+}
+
+function larkEnvironment(): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
+    LARKSUITE_CLI_NO_UPDATE_NOTIFIER: "1",
+    LARKSUITE_CLI_NO_SKILLS_NOTIFIER: "1",
+  };
+}
+
+function parseJsonOutput(text: string): LarkCommandEnvelope {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return {};
+  }
+  try {
+    return JSON.parse(trimmed) as LarkCommandEnvelope;
+  } catch {
+    const firstBrace = trimmed.indexOf("{");
+    const lastBrace = trimmed.lastIndexOf("}");
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+      return JSON.parse(trimmed.slice(firstBrace, lastBrace + 1)) as LarkCommandEnvelope;
+    }
+    throw new Error("lark-cli 返回了无法解析的内容");
+  }
+}
+
+export async function runLark(
+  args: string[],
+  timeout = COMMAND_TIMEOUT_MS,
+  cwd = process.cwd(),
+): Promise<LarkCommandEnvelope> {
+  try {
+    const result = await execFileAsync(process.execPath, [larkCliEntry(), ...args], {
+      windowsHide: true,
+      timeout,
+      maxBuffer: 4 * 1024 * 1024,
+      cwd,
+      env: larkEnvironment(),
+    });
+    return parseJsonOutput(result.stdout);
+  } catch (error) {
+    const commandError = error as {
+      stdout?: string;
+      stderr?: string;
+      code?: number | string;
+      killed?: boolean;
+    };
+    const output = commandError.stdout || commandError.stderr || "";
+    if (output.trim()) {
+      return parseJsonOutput(output);
+    }
+    if (commandError.killed) {
+      throw new Error("lark-cli 调用超时");
+    }
+    throw new Error(`无法执行 lark-cli（${String(commandError.code ?? "unknown")}）`);
+  }
+}
+
+async function generateQrDataUrl(verificationUrl: string): Promise<string> {
+  const directory = ".lark-auth";
+  const relativePath = `${directory}/auth-${randomUUID()}.png`;
+  const absolutePath = join(process.cwd(), relativePath);
+  await mkdir(join(process.cwd(), directory), { recursive: true });
+  try {
+    await execFileAsync(
+      process.execPath,
+      [
+        larkCliEntry(),
+        "auth",
+        "qrcode",
+        verificationUrl,
+        "--output",
+        relativePath,
+        "--size",
+        "260",
+      ],
+      {
+        windowsHide: true,
+        timeout: COMMAND_TIMEOUT_MS,
+        maxBuffer: 1024 * 1024,
+        cwd: process.cwd(),
+        env: larkEnvironment(),
+      },
+    );
+    return `data:image/png;base64,${(await readFile(absolutePath)).toString("base64")}`;
+  } finally {
+    await rm(absolutePath, { force: true }).catch(() => undefined);
+  }
+}
+
+export function unwrapData<T>(envelope: LarkCommandEnvelope): T {
+  if (envelope.ok === false || envelope.error) {
+    const error = new Error(
+      envelope.error?.message || "飞书请求失败",
+    ) as Error & { code?: string; missingScopes?: string[]; hint?: string };
+    error.code = envelope.error?.subtype || envelope.error?.type;
+    error.missingScopes = envelope.error?.missing_scopes;
+    error.hint = envelope.error?.hint;
+    throw error;
+  }
+  return ((envelope.data ?? envelope) as unknown) as T;
+}
+
+function sendJson(
+  response: ServerResponse,
+  status: number,
+  body: unknown,
+): void {
+  response.statusCode = status;
+  response.setHeader("Content-Type", "application/json; charset=utf-8");
+  response.setHeader("Cache-Control", "no-store");
+  response.end(JSON.stringify(body));
+}
+
+async function readJson(request: IncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of request) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += buffer.length;
+    if (size > 1_000_000) {
+      throw new Error("请求体超过 1MB 限制");
+    }
+    chunks.push(buffer);
+  }
+  return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+}
+
+function normalizeError(error: unknown) {
+  const typed = error as Error & {
+    code?: string;
+    missingScopes?: string[];
+    hint?: string;
+  };
+  const missingScopes = typed.missingScopes ?? [];
+  const deviceCodeExpired = /device_code is invalid/i.test(typed.message || "");
+  const code = deviceCodeExpired
+    ? "AUTH_CODE_EXPIRED"
+    : typed.code || "LARK_BRIDGE_ERROR";
+  return {
+    code,
+    message:
+      deviceCodeExpired
+        ? "本次授权码已失效，请使用新生成的二维码重新授权"
+        : code === "missing_scope" && missingScopes.length > 0
+        ? `飞书缺少权限：${missingScopes.join("、")}`
+        : typed.message || "飞书通信失败",
+    missing_scopes: missingScopes,
+    hint: typed.hint,
+  };
+}
+
+async function authStatus(): Promise<AuthStatusSnapshot> {
+  const envelope = await runLark(["auth", "status", "--json", "--verify"]);
+  const data = unwrapData<{
+    identity?: string;
+    verified?: boolean;
+    identities?: {
+      user?: {
+        status?: string;
+        verified?: boolean;
+        userName?: string;
+        openId?: string;
+        scope?: string;
+      };
+    };
+  }>(envelope);
+  const user = data.identities?.user;
+  const scopes = new Set((user?.scope || "").split(/\s+/).filter(Boolean));
+  const missingScopes = REQUIRED_SCOPES.filter((scope) => !scopes.has(scope));
+  return {
+    cliAvailable: true as const,
+    authorized: Boolean(data.verified && user?.verified),
+    identity: data.identity || "unknown",
+    userName: user?.userName || "",
+    openId: user?.openId || "",
+    userStatus: user?.status || "unknown",
+    missingScopes,
+    miraBot: state.miraBot,
+  };
+}
+
+function normalizeBots(payload: unknown): MiraBot[] {
+  const root = payload as {
+    bots?: unknown[];
+  };
+  return (root.bots ?? []).flatMap((raw) => {
+    const bot = raw as {
+      open_id?: string;
+      name?: string;
+      description?: string;
+      chat_id?: string;
+    };
+    if (!bot.open_id) {
+      return [];
+    }
+    return [
+      {
+        openId: bot.open_id,
+        name: bot.name || bot.open_id,
+        description: bot.description || "",
+        chatId: bot.chat_id || "",
+      },
+    ];
+  });
+}
+
+async function discoverMira(): Promise<{
+  selected: MiraBot | null;
+  candidates: MiraBot[];
+}> {
+  const configuredId = process.env.MIRA_BOT_OPEN_ID;
+  if (configuredId) {
+    state.miraBot = {
+      openId: configuredId,
+      name: process.env.MIRA_BOT_NAME || "Mira",
+      description: "由 MIRA_BOT_OPEN_ID 配置",
+      chatId: process.env.MIRA_CHAT_ID || "",
+    };
+    return { selected: state.miraBot, candidates: [state.miraBot] };
+  }
+  const envelope = await runLark([
+    "contact",
+    "+search-bot",
+    "--query",
+    MIRA_QUERY,
+    "--as",
+    "user",
+    "--format",
+    "json",
+  ]);
+  const candidates = normalizeBots(unwrapData<unknown>(envelope));
+  const exact = candidates.filter(
+    (candidate) => candidate.name.localeCompare(MIRA_QUERY, undefined, {
+      sensitivity: "accent",
+    }) === 0,
+  );
+  const selected =
+    exact.length === 1
+      ? exact[0]
+      : candidates.length === 1
+        ? candidates[0]
+        : null;
+  state.miraBot = selected;
+  return { selected, candidates };
+}
+
+function messageArray(payload: unknown): Array<Record<string, unknown>> {
+  const root = payload as { messages?: Array<Record<string, unknown>> };
+  return root.messages ?? [];
+}
+
+function messageContent(message: Record<string, unknown>): string {
+  const content = message.content;
+  if (typeof content === "string") {
+    return content;
+  }
+  return JSON.stringify(content ?? "");
+}
+
+function extractJsonObject(text: string): unknown {
+  const cleaned = text.replace(/```(?:json)?/gi, "").replace(/```/g, "").trim();
+  const first = cleaned.indexOf("{");
+  const last = cleaned.lastIndexOf("}");
+  if (first < 0 || last <= first) {
+    throw new Error("Mira 回复中没有 JSON 对象");
+  }
+  return JSON.parse(cleaned.slice(first, last + 1));
+}
+
+async function waitForMiraReply(
+  bot: MiraBot,
+  input: DirectorInput,
+  startIso: string,
+): Promise<unknown> {
+  const deadline = Date.now() + MIRA_REPLY_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const envelope = await runLark([
+      "im",
+      "+chat-messages-list",
+      "--user-id",
+      bot.openId,
+      "--start",
+      startIso,
+      "--order",
+      "desc",
+      "--page-size",
+      "20",
+      "--no-reactions",
+      "--as",
+      "user",
+      "--format",
+      "json",
+    ]);
+    const messages = messageArray(unwrapData<unknown>(envelope));
+    for (const message of messages) {
+      const sender = message.sender as
+        | { id?: string; open_id?: string; name?: string }
+        | undefined;
+      const isMira =
+        sender?.id === bot.openId ||
+        sender?.open_id === bot.openId ||
+        sender?.name === bot.name;
+      if (!isMira) {
+        continue;
+      }
+      const content = messageContent(message);
+      if (!content.includes(input.request_id)) {
+        continue;
+      }
+      const parsed = extractJsonObject(content);
+      return MiraDirectorResponseSchema.parse(parsed);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+  }
+  const timeoutError = new Error(
+    `等待 Mira 回复超时（${MIRA_REPLY_TIMEOUT_MS / 1000} 秒）`,
+  ) as Error & { code?: string };
+  timeoutError.code = "MIRA_TIMEOUT";
+  throw timeoutError;
+}
+
+async function analyzeWithMira(input: DirectorInput): Promise<unknown> {
+  if (state.activeMiraRequest) {
+    const busyError = new Error("已有 Mira 分析任务正在进行") as Error & {
+      code?: string;
+    };
+    busyError.code = "MIRA_BUSY";
+    throw busyError;
+  }
+  state.activeMiraRequest = input.request_id;
+  try {
+    const discovery = state.miraBot
+      ? { selected: state.miraBot, candidates: [state.miraBot] }
+      : await discoverMira();
+    if (!discovery.selected) {
+      const error = new Error(
+        discovery.candidates.length === 0
+          ? "没有找到可见的 Mira 机器人"
+          : `找到多个 Mira 候选：${discovery.candidates.map((item) => item.name).join("、")}`,
+      ) as Error & { code?: string };
+      error.code =
+        discovery.candidates.length === 0 ? "MIRA_NOT_FOUND" : "MIRA_AMBIGUOUS";
+      throw error;
+    }
+
+    const prompt = buildDirectorPrompt(input, "Mira AI 导演");
+    const startIso = new Date(Date.now() - 5_000).toISOString();
+    unwrapData(
+      await runLark([
+        "im",
+        "+messages-send",
+        "--user-id",
+        discovery.selected.openId,
+        "--text",
+        prompt,
+        "--idempotency-key",
+        input.request_id.slice(0, 50),
+        "--as",
+        "user",
+        "--format",
+        "json",
+      ]),
+    );
+    return await waitForMiraReply(discovery.selected, input, startIso);
+  } finally {
+    state.activeMiraRequest = null;
+  }
+}
+
+export async function routeLarkRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+): Promise<boolean> {
+  const url = new URL(request.url || "/", "http://localhost");
+  if (!url.pathname.startsWith("/api/")) {
+    return false;
+  }
+
+  try {
+    if (request.method === "GET" && url.pathname === "/api/lark/status") {
+      sendJson(response, 200, { ok: true, data: await authStatus() });
+      return true;
+    }
+    if (request.method === "GET" && url.pathname === "/api/lark/mira/discover") {
+      sendJson(response, 200, { ok: true, data: await discoverMira() });
+      return true;
+    }
+    if (request.method === "POST" && url.pathname === "/api/lark/auth/start") {
+      const currentStatus = await authStatus();
+      const scopes = currentStatus.missingScopes;
+      if (scopes.length === 0) {
+        sendJson(response, 200, {
+          ok: true,
+          data: {
+            alreadyAuthorized: true,
+            status: currentStatus,
+          },
+        });
+        return true;
+      }
+      if (
+        state.pendingAuth &&
+        Date.now() < state.pendingAuth.expiresAt &&
+        state.pendingAuth.scopes.join(" ") === scopes.join(" ")
+      ) {
+        sendJson(response, 200, {
+          ok: true,
+          data: {
+            verificationUrl: state.pendingAuth.verificationUrl,
+            qrDataUrl: state.pendingAuth.qrDataUrl,
+            expiresAt: state.pendingAuth.expiresAt,
+            scopes: state.pendingAuth.scopes,
+          },
+        });
+        return true;
+      }
+      state.pendingAuth = null;
+      const envelope = await runLark([
+        "auth",
+        "login",
+        "--scope",
+        scopes.join(" "),
+        "--no-wait",
+        "--json",
+      ]);
+      const data = unwrapData<{
+        device_code?: string;
+        verification_url?: string;
+        verification_uri_complete?: string;
+        expires_in?: number;
+      }>(envelope);
+      const deviceCode = data.device_code;
+      const verificationUrl =
+        data.verification_url || data.verification_uri_complete;
+      if (!deviceCode || !verificationUrl) {
+        throw new Error("飞书未返回授权链接或 device_code");
+      }
+      const expiresAt =
+        Date.now() +
+        (Number.isFinite(data.expires_in)
+          ? Number(data.expires_in) * 1_000
+          : AUTH_FALLBACK_TTL_MS);
+      state.pendingAuth = {
+        deviceCode,
+        verificationUrl,
+        qrDataUrl: await generateQrDataUrl(verificationUrl),
+        scopes,
+        expiresAt,
+      };
+      sendJson(response, 200, {
+        ok: true,
+        data: {
+          verificationUrl: state.pendingAuth.verificationUrl,
+          qrDataUrl: state.pendingAuth.qrDataUrl,
+          expiresAt: state.pendingAuth.expiresAt,
+          scopes: state.pendingAuth.scopes,
+        },
+      });
+      return true;
+    }
+    if (request.method === "POST" && url.pathname === "/api/lark/auth/finish") {
+      if (state.authCompletion) {
+        sendJson(response, 200, {
+          ok: true,
+          data: await state.authCompletion,
+        });
+        return true;
+      }
+      const pendingAuth = state.pendingAuth;
+      if (!pendingAuth) {
+        const currentStatus = await authStatus();
+        if (currentStatus.missingScopes.length === 0) {
+          sendJson(response, 200, { ok: true, data: currentStatus });
+          return true;
+        }
+        const missingError = new Error(
+          "授权会话不存在或服务已重启，请重新点击授权",
+        ) as Error & { code?: string };
+        missingError.code = "AUTH_SESSION_MISSING";
+        throw missingError;
+      }
+      if (Date.now() >= pendingAuth.expiresAt) {
+        state.pendingAuth = null;
+        const expiredError = new Error(
+          "本次授权码已失效，请使用新生成的二维码重新授权",
+        ) as Error & { code?: string };
+        expiredError.code = "AUTH_CODE_EXPIRED";
+        throw expiredError;
+      }
+
+      // Consume the code before awaiting so rapid double-clicks share one completion.
+      state.pendingAuth = null;
+      const completion = (async (): Promise<AuthStatusSnapshot> => {
+        try {
+          unwrapData(
+            await runLark(
+              ["auth", "login", "--device-code", pendingAuth.deviceCode],
+              120_000,
+            ),
+          );
+          state.miraBot = null;
+          return await authStatus();
+        } catch (completionError) {
+          const currentStatus = await authStatus().catch(() => null);
+          const requestedScopesGranted =
+            currentStatus &&
+            pendingAuth.scopes.every(
+              (scope) => !currentStatus.missingScopes.includes(scope),
+            );
+          if (currentStatus && requestedScopesGranted) {
+            return currentStatus;
+          }
+          throw completionError;
+        } finally {
+          state.authCompletion = null;
+        }
+      })();
+      state.authCompletion = completion;
+      sendJson(response, 200, { ok: true, data: await completion });
+      return true;
+    }
+    if (request.method === "POST" && url.pathname === "/api/director/mira") {
+      const input = DirectorInputSchema.parse(await readJson(request));
+      sendJson(response, 200, { ok: true, data: await analyzeWithMira(input) });
+      return true;
+    }
+    sendJson(response, 404, {
+      ok: false,
+      error: { code: "NOT_FOUND", message: "未知本地 API" },
+    });
+    return true;
+  } catch (error) {
+    const normalized = normalizeError(error);
+    const status =
+      normalized.code === "missing_scope" ||
+      normalized.code === "authorization"
+        ? 401
+        : 503;
+    sendJson(response, status, { ok: false, error: normalized });
+    return true;
+  }
+}
+
+function installMiddleware(
+  server: ViteDevServer | PreviewServer,
+): void {
+  server.middlewares.use(async (request, response, next) => {
+    if (!(await routeLarkRequest(request, response))) {
+      next();
+    }
+  });
+}
+
+export function larkBridgePlugin(): Plugin {
+  return {
+    name: "local-lark-mira-bridge",
+    configureServer(server) {
+      installMiddleware(server);
+    },
+    configurePreviewServer(server) {
+      installMiddleware(server);
+    },
+  };
+}
