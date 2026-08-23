@@ -16,15 +16,35 @@ interface ApiEnvelope<T> {
   error?: { message?: string };
 }
 
-async function fetchUe(path: string, init: RequestInit): Promise<Response> {
+const FORMATION_LOOKUP_TIMEOUT_MS = 10_000;
+
+async function fetchUe(
+  path: string,
+  init: RequestInit,
+  timeoutMs?: number,
+): Promise<Response> {
   let lastError: unknown;
   for (let attempt = 0; attempt < 2; attempt += 1) {
+    const controller = timeoutMs ? new AbortController() : null;
+    const timeout = controller
+      ? window.setTimeout(() => controller.abort(), timeoutMs)
+      : null;
     try {
-      return await fetch(path, init);
+      return await fetch(path, {
+        ...init,
+        signal: controller?.signal ?? init.signal,
+      });
     } catch (error) {
       lastError = error;
+      if (error instanceof DOMException && error.name === "AbortError") {
+        throw error;
+      }
       if (attempt === 0) {
         await new Promise((resolve) => window.setTimeout(resolve, 600));
+      }
+    } finally {
+      if (timeout !== null) {
+        window.clearTimeout(timeout);
       }
     }
   }
@@ -45,15 +65,22 @@ export async function getBlueprintFormation(input: {
 }): Promise<BlueprintFormationLookup> {
   let response: Response;
   try {
-    response = await fetchUe("/api/ue/formation/read", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(input),
-    });
-  } catch {
+    response = await fetchUe(
+      "/api/ue/formation/read",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      },
+      FORMATION_LOOKUP_TIMEOUT_MS,
+    );
+  } catch (error) {
     return {
       status: "unavailable",
-      message: `${bridgeUnavailableMessage()}，已使用自动站位`,
+      message:
+        error instanceof DOMException && error.name === "AbortError"
+          ? "Blueprint 查询超时"
+          : bridgeUnavailableMessage(),
     };
   }
   const body = (await response.json().catch(() => null)) as

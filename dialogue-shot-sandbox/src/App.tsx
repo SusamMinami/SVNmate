@@ -123,6 +123,12 @@ function formationLabel(formation: DirectorBlocking["formation"]): string {
   return labels[formation];
 }
 
+function skippedBlueprintMessage(message: string): string {
+  return message.includes("自动站位")
+    ? message
+    : `${message}，已跳过 BP 并使用自动站位`;
+}
+
 function shotSizeLabel(shotSize: ShotSize): string {
   const labels: Record<ShotSize, string> = {
     full: "全景",
@@ -582,8 +588,8 @@ export default function App() {
       if (formationRunId !== formationRunRef.current) {
         return;
       }
-      setFormationStatus(lookup.message);
       if (lookup.status === "found" && lookup.snapshot) {
+        setFormationStatus(lookup.message);
         const imported = applyBlueprintFormation(
           nextDatabase,
           nextSequence,
@@ -601,15 +607,18 @@ export default function App() {
         });
         return;
       }
+      setFormationStatus(skippedBlueprintMessage(lookup.message));
       await applySequence(nextSequence, requestedMode);
     } catch (formationError) {
       if (formationRunId !== formationRunRef.current) {
         return;
       }
       setFormationStatus(
-        formationError instanceof Error
-          ? `${formationError.message}，已使用自动站位`
-          : "BP 站位读取失败，已使用自动站位",
+        skippedBlueprintMessage(
+          formationError instanceof Error
+            ? formationError.message
+            : "BP 站位读取失败",
+        ),
       );
       await applySequence(nextSequence, requestedMode);
     } finally {
@@ -816,7 +825,7 @@ export default function App() {
           <div>
             <h1>镜头沙盘</h1>
           </div>
-          <span className="version">v0.16.0</span>
+          <span className="version">v0.16.1</span>
         </div>
 
         <div className="source-status">

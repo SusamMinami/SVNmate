@@ -232,8 +232,8 @@ test("removes a character after the AI-directed exit node", async ({
           configured: true,
           connected: true,
           versionMismatch: false,
-          expectedVersion: "0.16.0",
-          serverVersion: "0.16.0",
+          expectedVersion: "0.16.1",
+          serverVersion: "0.16.1",
           lastSeenAt: "2026-08-22T00:00:00.000Z",
           mcpName: "internal-storyboard-collaboration",
           mcpConfigPath: "C:\\workspace\\.trae\\mcp.json",
@@ -448,8 +448,8 @@ test("shows local content immediately and presents the AI story brief before app
           configured: true,
           connected: true,
           versionMismatch: false,
-          expectedVersion: "0.16.0",
-          serverVersion: "0.16.0",
+          expectedVersion: "0.16.1",
+          serverVersion: "0.16.1",
           lastSeenAt: "2026-08-22T00:00:00.000Z",
           mcpName: "internal-storyboard-collaboration",
           mcpConfigPath: "C:\\workspace\\.trae\\mcp.json",
@@ -585,8 +585,8 @@ test("previews shared and local plans before resolving a library conflict", asyn
           configured: true,
           connected: true,
           versionMismatch: false,
-          expectedVersion: "0.16.0",
-          serverVersion: "0.16.0",
+          expectedVersion: "0.16.1",
+          serverVersion: "0.16.1",
           transport: "http",
           lastSeenAt: "2026-08-22T00:00:00.000Z",
           mcpName: "internal-storyboard-collaboration",
@@ -833,7 +833,7 @@ test("explains that an old MCP must be restarted inside TRAE", async ({
           configured: true,
           connected: false,
           versionMismatch: true,
-          expectedVersion: "0.16.0",
+          expectedVersion: "0.16.1",
           serverVersion: "0.13.0",
           transport: "stdio",
           lastSeenAt: "2026-08-23T04:19:22.608Z",
@@ -852,7 +852,7 @@ test("explains that an old MCP must be restarted inside TRAE", async ({
 
   await expect(page.getByText("MCP 仍在运行旧版本")).toBeVisible();
   await expect(
-    page.getByText(/当前 0\.13\.0 · 需要 0\.16\.0；请在 TRAE 中停用后重新启用/),
+    page.getByText(/当前 0\.13\.0 · 需要 0\.16\.1；请在 TRAE 中停用后重新启用/),
   ).toBeVisible();
   await expect(
     page.getByRole("button", { name: "配置内部 TRAE MCP" }),
@@ -1142,17 +1142,19 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
   page,
 }, testInfo) => {
   let loadRequests = 0;
+  let formationRequests = 0;
   let loadedTaskId = "";
   let loadedTargetIds: string[] = [];
   await page.route("**/api/ue/formation/read", async (route) => {
+    formationRequests += 1;
     await route.fulfill({
       status: 200,
       contentType: "application/json",
       body: JSON.stringify({
         ok: true,
         data: {
-          status: "unavailable",
-          message: "测试中跳过 Blueprint 站位",
+          status: "not_found",
+          message: "未找到 BP_735000",
         },
       }),
     });
@@ -1264,6 +1266,13 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
 
   await page.goto("/");
   await page.locator('input[type="file"]').setInputFiles(fixtureDirectory);
+  await expect(page.getByText("目标物测试", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText(/未找到 BP_735000，已跳过 BP 并使用自动站位/),
+  ).toBeVisible();
+  await expect(page.getByText(/实际：规则导演/)).toBeVisible();
+  await expect(page.locator(".shot-row")).toHaveCount(1);
+  expect(formationRequests).toBe(1);
   await page.getByRole("button", { name: "任务目标物" }).click();
   const dialog = page.getByRole("dialog", { name: "任务目标物" });
 

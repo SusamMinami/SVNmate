@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { MissionTargetPreviewPlan } from "../src/types";
 import {
   loadMissionTargetPreview,
+  readBlueprintFormation,
   resetMissionTargetPreviewState,
   type UnrealInvoker,
 } from "./ueBridge";
@@ -16,17 +17,23 @@ class FakeUnrealConnection implements UnrealInvoker {
   currentMaps: string[];
   dirtyMaps: string[];
   assetExists: boolean;
+  blueprintResult: unknown;
 
   constructor(options?: {
     currentMaps?: string[];
     dirtyMaps?: string[];
     assetExists?: boolean;
+    blueprintResult?: unknown;
   }) {
     this.currentMaps = options?.currentMaps ?? [
       "/Game/Seria/Maps/Test/Test",
     ];
     this.dirtyMaps = options?.dirtyMaps ?? [];
     this.assetExists = options?.assetExists ?? true;
+    this.blueprintResult =
+      options && "blueprintResult" in options
+        ? options.blueprintResult
+        : true;
   }
 
   async connect(): Promise<void> {
@@ -49,6 +56,9 @@ class FakeUnrealConnection implements UnrealInvoker {
     }
     if (action === "asset.get_asset_by_path") {
       return this.assetExists ? "Blueprint_Test" : null;
+    }
+    if (action === "bp.get_blueprint_by_path") {
+      return this.blueprintResult;
     }
     if (action === "world.spawn_actor") {
       return `Actor_${String(args.ActorName)}`;
@@ -203,4 +213,34 @@ describe("mission target UE preview", () => {
       ),
     ).toHaveLength(2);
   });
+});
+
+describe("Blueprint formation lookup", () => {
+  it.each(["", "None", "null", "nullptr", "0", null, false])(
+    "treats Unreal empty object value %p as a missing Blueprint",
+    async (blueprintResult) => {
+      const connection = new FakeUnrealConnection({ blueprintResult });
+
+      const result = await readBlueprintFormation(
+        {
+          dialogueId: "7350",
+          startId: "735000",
+          formationClassPath:
+            "/Game/Seria/Task/Mod/MainQuest/Cha9/BP_735000.BP_735000_C",
+        },
+        () => connection,
+      );
+
+      expect(result).toMatchObject({
+        status: "not_found",
+        message: expect.stringContaining("UE 中未找到"),
+      });
+      expect(
+        connection.calls.some(
+          (call) => call.action === "reflect.read_object_property",
+        ),
+      ).toBe(false);
+      expect(connection.closed).toBe(true);
+    },
+  );
 });

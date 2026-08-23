@@ -211,6 +211,18 @@ function blueprintClassPath(assetPath: string): string {
   return match ? `${match[1]}.${match[2]}_C` : `${assetPath}_C`;
 }
 
+function hasUnrealObjectReference(value: unknown): boolean {
+  if (value === null || value === undefined || value === false) {
+    return false;
+  }
+  if (typeof value !== "string") {
+    return true;
+  }
+  return !["", "none", "null", "nullptr", "0"].includes(
+    value.trim().toLowerCase(),
+  );
+}
+
 function assetPathFromSearch(value: string): string | null {
   return value.match(/\[([^\]]+)\]\s*$/)?.[1] ?? null;
 }
@@ -238,7 +250,7 @@ function rotator(
 }
 
 async function resolveAssetPath(
-  connection: UnrealMcpConnection,
+  connection: UnrealInvoker,
   startId: string,
   formationClassPath: string,
 ): Promise<string | null> {
@@ -258,7 +270,7 @@ async function resolveAssetPath(
 }
 
 async function readProperty(
-  connection: UnrealMcpConnection,
+  connection: UnrealInvoker,
   object: string,
   propertyName: string,
 ): Promise<unknown> {
@@ -268,12 +280,15 @@ async function readProperty(
   });
 }
 
-export async function readBlueprintFormation(input: {
-  dialogueId: string;
-  startId: string;
-  formationClassPath?: string;
-}): Promise<BlueprintFormationLookup> {
-  const connection = new UnrealMcpConnection();
+export async function readBlueprintFormation(
+  input: {
+    dialogueId: string;
+    startId: string;
+    formationClassPath?: string;
+  },
+  connectionFactory: () => UnrealInvoker = () => new UnrealMcpConnection(),
+): Promise<BlueprintFormationLookup> {
+  const connection = connectionFactory();
   try {
     await connection.connect();
   } catch {
@@ -297,7 +312,7 @@ export async function readBlueprintFormation(input: {
     const loaded = await connection.invoke("bp.get_blueprint_by_path", {
       AssetPath: assetPath,
     });
-    if (!loaded) {
+    if (!hasUnrealObjectReference(loaded)) {
       return {
         status: "not_found",
         message: `UE 中未找到 ${assetPath}`,
@@ -336,7 +351,7 @@ export async function readBlueprintFormation(input: {
       if (
         !/^\d+$/.test(String(variableName)) ||
         !String(componentClass).endsWith("ChildActorComponent") ||
-        !componentTemplate
+        !hasUnrealObjectReference(componentTemplate)
       ) {
         continue;
       }
@@ -539,7 +554,7 @@ export async function loadMissionTargetPreview(
       const asset = await connection.invoke("asset.get_asset_by_path", {
         AssetPath: blueprintAssetPath(target.modelClassPath),
       });
-      if (!asset) {
+      if (!hasUnrealObjectReference(asset)) {
         throw new Error(
           `目标物 ${target.targetId} 的模型资产不存在：${target.modelClassPath}`,
         );
@@ -602,7 +617,7 @@ export async function loadMissionTargetPreview(
           Z: target.transform.scale.z,
         },
       });
-      if (!actor) {
+      if (!hasUnrealObjectReference(actor)) {
         throw new Error(`目标物 ${target.targetId} 生成预览对象失败`);
       }
       const actorReference = String(actor);
