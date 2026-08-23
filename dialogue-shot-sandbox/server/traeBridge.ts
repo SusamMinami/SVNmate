@@ -95,17 +95,17 @@ export function storyboardMcpConfigTemplate() {
       },
     };
   }
+  const sourceRoot = appRoot();
   return {
     mcpServers: {
       "internal-storyboard-collaboration": {
-        command: "node",
+        command: process.execPath,
         args: [
-          "${workspaceFolder}/dialogue-shot-sandbox/node_modules/tsx/dist/cli.mjs",
-          "${workspaceFolder}/dialogue-shot-sandbox/mcp/storyboardServer.ts",
+          join(sourceRoot, "node_modules", "tsx", "dist", "cli.mjs"),
+          join(sourceRoot, "mcp", "storyboardServer.ts"),
         ],
         env: {
-          STORYBOARD_PROJECT_ROOT:
-            "${workspaceFolder}/dialogue-shot-sandbox",
+          STORYBOARD_PROJECT_ROOT: sourceRoot,
           START_MCP_TIMEOUT_MS: "60000",
           RUN_MCP_TIMEOUT_MS: "60000",
         },

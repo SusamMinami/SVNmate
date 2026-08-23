@@ -135,11 +135,10 @@ export function createDefaultBlocking(
       subject: participant.slot,
       position: positions[index],
       facing: "group_center",
-      entry_dialogue_id: defaultEntryDialogueId(
-        input,
-        participant.first_dialogue_id,
-      ),
-      exit_dialogue_id: null,
+      entry_dialogue_id:
+        participant.entry_dialogue_id ??
+        defaultEntryDialogueId(input, participant.first_dialogue_id),
+      exit_dialogue_id: participant.exit_dialogue_id ?? null,
       intent:
         index === 0
           ? "主导角色占据易读位置，便于建立场面。"
@@ -164,6 +163,7 @@ export function resolveBlocking(
   participants: DialogueParticipant[],
   blocking: DirectorBlocking,
   dialogueIds: string[],
+  options: { preserveInputPositions?: boolean } = {},
 ): DialogueParticipant[] {
   const expectedSlots = participants.map((participant) => participant.slot);
   const actualSlots = blocking.placements.map(
@@ -202,50 +202,54 @@ export function resolveBlocking(
     }
     positionBySlot.set(
       participant.slot,
-      POSITION_COORDINATES[placement.position],
+      options.preserveInputPositions
+        ? participant.position
+        : POSITION_COORDINATES[placement.position],
     );
   }
 
-  const orderedPositions = participants
-    .map((participant) => ({
-      slot: participant.slot,
-      position: positionBySlot.get(participant.slot) ?? [0, 0, 0],
-    }))
-    .sort((left, right) => left.position[0] - right.position[0]);
-  const originalCenterX =
-    orderedPositions.reduce(
-      (total, item) => total + item.position[0],
-      0,
-    ) / orderedPositions.length;
-  const separated = orderedPositions.map((item, index) => {
-    const previous = index === 0 ? null : orderedPositions[index - 1];
-    const previousSeparated = index === 0 ? null : positionBySlot.get(
-      orderedPositions[index - 1].slot,
-    );
-    const minimumX =
-      previous && previousSeparated
-        ? previousSeparated[0] + MINIMUM_HORIZONTAL_SEPARATION
-        : item.position[0];
-    const position: Vec3 = [
-      Math.max(item.position[0], minimumX),
-      item.position[1],
-      item.position[2],
-    ];
-    positionBySlot.set(item.slot, position);
-    return { ...item, position };
-  });
-  const separatedCenterX =
-    separated.reduce((total, item) => total + item.position[0], 0) /
-    separated.length;
-  const centerOffset = originalCenterX - separatedCenterX;
-  for (const item of separated) {
-    const position = positionBySlot.get(item.slot);
-    if (position) {
-      positionBySlot.set(item.slot, [
-        Number((position[0] + centerOffset).toFixed(2)),
-        position[1],
-        position[2],
-      ]);
+  if (!options.preserveInputPositions) {
+    const orderedPositions = participants
+      .map((participant) => ({
+        slot: participant.slot,
+        position: positionBySlot.get(participant.slot) ?? [0, 0, 0],
+      }))
+      .sort((left, right) => left.position[0] - right.position[0]);
+    const originalCenterX =
+      orderedPositions.reduce(
+        (total, item) => total + item.position[0],
+        0,
+      ) / orderedPositions.length;
+    const separated = orderedPositions.map((item, index) => {
+      const previous = index === 0 ? null : orderedPositions[index - 1];
+      const previousSeparated = index === 0 ? null : positionBySlot.get(
+        orderedPositions[index - 1].slot,
+      );
+      const minimumX =
+        previous && previousSeparated
+          ? previousSeparated[0] + MINIMUM_HORIZONTAL_SEPARATION
+          : item.position[0];
+      const position: Vec3 = [
+        Math.max(item.position[0], minimumX),
+        item.position[1],
+        item.position[2],
+      ];
+      positionBySlot.set(item.slot, position);
+      return { ...item, position };
+    });
+    const separatedCenterX =
+      separated.reduce((total, item) => total + item.position[0], 0) /
+      separated.length;
+    const centerOffset = originalCenterX - separatedCenterX;
+    for (const item of separated) {
+      const position = positionBySlot.get(item.slot);
+      if (position) {
+        positionBySlot.set(item.slot, [
+          Number((position[0] + centerOffset).toFixed(2)),
+          position[1],
+          position[2],
+        ]);
+      }
     }
   }
 
@@ -275,8 +279,9 @@ export function resolveBlocking(
     if (placement.facing === placement.subject) {
       throw new Error(`角色 ${participant.slot} 不能面向自己`);
     }
-    const facingTarget =
-      placement.facing === "group_center"
+    const facingTarget = options.preserveInputPositions
+      ? participant.facingTarget
+      : placement.facing === "group_center"
         ? groupCenter
         : positionBySlot.get(placement.facing);
     if (
@@ -290,12 +295,16 @@ export function resolveBlocking(
     if (!facingTarget) {
       throw new Error(`角色 ${participant.slot} 的朝向无法解析`);
     }
-    const entryIndex = dialogueIndexById.get(
-      placement.entry_dialogue_id,
-    );
+    const entryDialogueId = options.preserveInputPositions
+      ? participant.entryDialogueId
+      : placement.entry_dialogue_id;
+    const exitDialogueId = options.preserveInputPositions
+      ? participant.exitDialogueId
+      : placement.exit_dialogue_id;
+    const entryIndex = dialogueIndexById.get(entryDialogueId);
     if (entryIndex === undefined) {
       throw new Error(
-        `角色 ${participant.slot} 的登场节点不存在：${placement.entry_dialogue_id}`,
+        `角色 ${participant.slot} 的登场节点不存在：${entryDialogueId}`,
       );
     }
     if (entryIndex > participant.firstDialogueIndex) {
@@ -304,17 +313,17 @@ export function resolveBlocking(
       );
     }
     const exitIndex =
-      placement.exit_dialogue_id === null
+      exitDialogueId === null
         ? null
-        : dialogueIndexById.get(placement.exit_dialogue_id);
+        : dialogueIndexById.get(exitDialogueId);
     if (exitIndex === undefined) {
       throw new Error(
-        `角色 ${participant.slot} 的离场节点不存在：${placement.exit_dialogue_id}`,
+        `角色 ${participant.slot} 的离场节点不存在：${exitDialogueId}`,
       );
     }
     if (exitIndex !== null && exitIndex < entryIndex) {
       throw new Error(
-        `角色 ${participant.slot} 的离场不能早于登场 ${placement.entry_dialogue_id}`,
+        `角色 ${participant.slot} 的离场不能早于登场 ${entryDialogueId}`,
       );
     }
     if (exitIndex !== null && exitIndex < participant.lastDialogueIndex) {
@@ -326,13 +335,16 @@ export function resolveBlocking(
       ...participant,
       position,
       facingTarget,
+      positionSource: options.preserveInputPositions
+        ? participant.positionSource
+        : "generated",
       firstDialogueId: participant.firstDialogueId,
       firstDialogueIndex: participant.firstDialogueIndex,
       lastDialogueId: participant.lastDialogueId,
       lastDialogueIndex: participant.lastDialogueIndex,
-      entryDialogueId: placement.entry_dialogue_id,
+      entryDialogueId,
       entryIndex,
-      exitDialogueId: placement.exit_dialogue_id,
+      exitDialogueId,
       exitIndex,
     };
   });

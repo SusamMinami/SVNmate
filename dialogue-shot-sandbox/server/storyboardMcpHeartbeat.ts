@@ -12,7 +12,7 @@ import { storyboardRuntimeRoot } from "./storyboardRuntime";
 
 const HEARTBEAT_INTERVAL_MS = 5_000;
 const HEARTBEAT_STALE_MS = 15_000;
-export const STORYBOARD_MCP_VERSION = "0.15.2";
+export const STORYBOARD_MCP_VERSION = "0.16.0";
 
 interface StoryboardMcpHeartbeat {
   pid: number;
@@ -130,6 +130,9 @@ export async function getStoryboardMcpPresence(): Promise<StoryboardMcpPresence>
       Boolean(presence),
     );
     const selected = presences.sort((left, right) => {
+      if (left.compatible !== right.compatible) {
+        return Number(right.compatible) - Number(left.compatible);
+      }
       if (left.connected !== right.connected) {
         return Number(right.connected) - Number(left.connected);
       }

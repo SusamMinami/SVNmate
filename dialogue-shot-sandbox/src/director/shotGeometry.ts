@@ -221,7 +221,7 @@ function subjectFacing(
     return normalize(explicit);
   }
   const nearest = participants
-    .filter((participant) => participant.id !== subject.id)
+    .filter((participant) => participant.slot !== subject.slot)
     .map((participant) => ({
       participant,
       distance: Math.hypot(

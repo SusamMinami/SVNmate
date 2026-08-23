@@ -12,7 +12,7 @@ import {
   PARTICIPANT_SLOTS,
 } from "../types";
 
-const PARTICIPANT_COLORS = [
+export const PARTICIPANT_COLORS = [
   "#e85d47",
   "#268bd2",
   "#2f9d68",
@@ -43,6 +43,7 @@ function profileFor(database: DialogueDatabase, npcId: number): NpcProfile {
       name: "玩家",
       note: "玩家角色",
       introduction: "由玩家控制的对话参与者",
+      resourceId: null,
     };
   }
   return (
@@ -51,6 +52,7 @@ function profileFor(database: DialogueDatabase, npcId: number): NpcProfile {
       name: `NPC ${npcId}`,
       note: "未在 NPC 表中找到",
       introduction: "",
+      resourceId: null,
     }
   );
 }
@@ -231,10 +233,13 @@ export function findDialogueSequence(
     const entryIndex = firstDialogueIndex <= 1 ? 0 : firstDialogueIndex;
     return {
       ...profileFor(database, npcId),
+      instanceId: `npc:${npcId}`,
       slot,
       color: PARTICIPANT_COLORS[index],
       position: positionFor(index, selectedIds.length),
       facingTarget: [0, 0, -0.2],
+      modelIndex: null,
+      positionSource: "generated",
       firstDialogueId: chain.rows[firstDialogueIndex].id,
       firstDialogueIndex,
       lastDialogueId: chain.rows[lastDialogueIndex].id,
@@ -245,12 +250,24 @@ export function findDialogueSequence(
       exitIndex: null,
     };
   });
+  const participantByNpcId = new Map(
+    participants.map((participant) => [participant.id, participant]),
+  );
+  const sequenceRows = chain.rows
+    .filter((row) => selectedIds.includes(row.npcId ?? -1))
+    .map((row) => ({
+      ...row,
+      speakerSlot:
+        row.npcId === null
+          ? null
+          : (participantByNpcId.get(row.npcId)?.slot ?? null),
+    }));
 
   return {
     prefix,
     startId,
     outline: starts[0]?.outline ?? "",
-    rows: chain.rows.filter((row) => selectedIds.includes(row.npcId ?? -1)),
+    rows: sequenceRows,
     participants,
     adjacentContext: {
       previous: contextForPrefix(
@@ -260,5 +277,12 @@ export function findDialogueSequence(
       next: contextForPrefix(database, adjacentPrefix(prefix, 1)),
     },
     warnings,
+    formation:
+      starts[0]?.formationClassPath || starts[0]?.modelNames.length
+        ? {
+            classPath: starts[0]?.formationClassPath ?? "",
+            modelNames: starts[0]?.modelNames ?? [],
+          }
+        : null,
   };
 }

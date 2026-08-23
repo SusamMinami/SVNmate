@@ -18,7 +18,10 @@ export function createShotPlan(sequence: DialogueSequence): ShotPlan[] {
   return createShotPreview(sequence).shots;
 }
 
-export function createShotPreview(sequence: DialogueSequence): {
+export function createShotPreview(
+  sequence: DialogueSequence,
+  options: { preserveInputPositions?: boolean } = {},
+): {
   sequence: DialogueSequence;
   shots: ShotPlan[];
   blocking: ReturnType<typeof createDefaultBlocking>;
@@ -30,6 +33,7 @@ export function createShotPreview(sequence: DialogueSequence): {
     sequence.participants,
     blocking,
     sequence.rows.map((row) => row.id),
+    options,
   );
   const stagedSequence = { ...sequence, participants };
   return {

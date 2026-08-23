@@ -1,4 +1,4 @@
-import { ArrowRight, BookOpen, Move3d } from "lucide-react";
+import { ArrowRight, BookOpen, Move3d, Undo2 } from "lucide-react";
 import type {
   DirectorBlocking,
   DirectorSceneAnalysis,
@@ -11,6 +11,7 @@ interface StoryBriefModalProps {
   blocking: DirectorBlocking;
   source?: "generated" | "local-cache" | "shared-library";
   onContinue: () => void;
+  onKeepCurrent: () => void;
 }
 
 const FORMATION_LABELS: Record<DirectorBlocking["formation"], string> = {
@@ -21,13 +22,38 @@ const FORMATION_LABELS: Record<DirectorBlocking["formation"], string> = {
   leader_front: "主导者前置",
 };
 
+type BlockingPosition = DirectorBlocking["placements"][number]["position"];
+
+const POSITION_LABELS: Record<BlockingPosition, string> = {
+  front_center: "前排中央",
+  front_left: "前排左侧",
+  front_right: "前排右侧",
+  mid_center: "中排中央",
+  mid_left: "中排左侧",
+  mid_right: "中排右侧",
+  back_center: "后排中央",
+  back_left: "后排左侧",
+  back_right: "后排右侧",
+  far_left: "外围左侧",
+  far_right: "外围右侧",
+  rear_center: "纵深后方",
+};
+
 export function StoryBriefModal({
   sequence,
   analysis,
   blocking,
   source,
   onContinue,
+  onKeepCurrent,
 }: StoryBriefModalProps) {
+  const participantNames = new Map(
+    sequence.participants.map((participant) => [
+      participant.slot,
+      participant.name,
+    ]),
+  );
+
   return (
     <div className="modal-backdrop story-brief-backdrop" role="presentation">
       <section
@@ -60,7 +86,7 @@ export function StoryBriefModal({
             <p>{sequence.outline || analysis.dramaticGoal}</p>
             <div className="story-brief-modal__cast" aria-label="本场角色">
               {sequence.participants.map((participant) => (
-                <span key={participant.id}>
+                <span key={participant.instanceId}>
                   <i style={{ backgroundColor: participant.color }}>
                     {participant.slot}
                   </i>
@@ -92,10 +118,27 @@ export function StoryBriefModal({
           <section className="story-brief-modal__blocking">
             <div>
               <Move3d size={16} />
-              <span>站位策略</span>
+              <span>AI 站位建议</span>
               <strong>{FORMATION_LABELS[blocking.formation]}</strong>
             </div>
             <p>{blocking.intent}</p>
+            <div className="story-brief-modal__placements">
+              {blocking.placements.map((placement) => (
+                <span key={placement.subject}>
+                  <b>
+                    {participantNames.get(placement.subject) ??
+                      placement.subject}
+                  </b>
+                  <small>
+                    {POSITION_LABELS[placement.position]} · 面向{" "}
+                    {placement.facing === "group_center"
+                      ? "群体中心"
+                      : participantNames.get(placement.facing) ??
+                        placement.facing}
+                  </small>
+                </span>
+              ))}
+            </div>
           </section>
         </div>
 
@@ -103,14 +146,20 @@ export function StoryBriefModal({
           <span>
             {sequence.rows.length} 条台词 · {sequence.participants.length} 位角色
           </span>
-          <button
-            className="button button--primary"
-            type="button"
-            onClick={onContinue}
-          >
-            进入分镜
-            <ArrowRight size={16} />
-          </button>
+          <div>
+            <button className="button" type="button" onClick={onKeepCurrent}>
+              <Undo2 size={15} />
+              保留当前方案
+            </button>
+            <button
+              className="button button--primary"
+              type="button"
+              onClick={onContinue}
+            >
+              采用 AI 方案
+              <ArrowRight size={16} />
+            </button>
+          </div>
         </footer>
       </section>
     </div>

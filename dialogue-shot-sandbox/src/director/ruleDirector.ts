@@ -96,6 +96,7 @@ function createAttendanceContext(
       input.participants.map((participant) => {
         const entryId =
           placementBySlot.get(participant.slot)?.entry_dialogue_id ??
+          participant.entry_dialogue_id ??
           defaultEntryDialogueId(input, participant.first_dialogue_id);
         return [
           participant.slot,
@@ -106,7 +107,9 @@ function createAttendanceContext(
     exitIndexBySlot: new Map(
       input.participants.map((participant) => {
         const exitId =
-          placementBySlot.get(participant.slot)?.exit_dialogue_id ?? null;
+          placementBySlot.get(participant.slot)?.exit_dialogue_id ??
+          participant.exit_dialogue_id ??
+          null;
         return [
           participant.slot,
           exitId === null ? null : (dialogueIndexById.get(exitId) ?? null),

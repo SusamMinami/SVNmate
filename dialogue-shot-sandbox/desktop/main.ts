@@ -21,6 +21,7 @@ import {
   runStoryboardMcpServer,
 } from "../mcp/storyboardServer";
 import { routeLarkRequest } from "../server/larkBridge";
+import { routeUeRequest } from "../server/ueBridge";
 import {
   getStoryboardMcpPresence,
   STORYBOARD_MCP_VERSION,
@@ -423,6 +424,9 @@ async function startLocalServer(): Promise<number> {
       return;
     }
     if (await routeTraeRequest(request, response)) {
+      return;
+    }
+    if (await routeUeRequest(request, response)) {
       return;
     }
     if (await routeLarkRequest(request, response)) {

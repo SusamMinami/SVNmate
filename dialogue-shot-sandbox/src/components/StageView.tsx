@@ -320,7 +320,7 @@ function MainStage({
       <StageFloor />
       {participants.map((participant) => (
         <Character
-          key={participant.id}
+          key={participant.instanceId}
           participant={participant}
           compact={inset || participants.length > 6}
           slotOnly={inset && participants.length > 3}
@@ -448,24 +448,15 @@ function CameraMotionPath({ shot }: { shot: ShotPlan }) {
 
 function TopCamera({
   participants,
-  shot,
 }: {
   participants: DialogueParticipant[];
-  shot: ShotPlan;
 }) {
   const { camera, size } = useThree();
   const frame = useMemo(() => {
-    const displayCamera = diagramCameraPosition(shot, participants);
-    const points = [
-      ...participants.map((participant) => [
-        participant.position[0],
-        participant.position[2],
-      ]),
-      [displayCamera.x, displayCamera.y],
-      [shot.cameraTarget[0], shot.cameraTarget[2]],
-      [shot.axis.start[0], shot.axis.start[2]],
-      [shot.axis.end[0], shot.axis.end[2]],
-    ];
+    const points = participants.map((participant) => [
+      participant.position[0],
+      participant.position[2],
+    ]);
     const xs = points.map((point) => point[0]);
     const zs = points.map((point) => point[1]);
     const minX = Math.min(...xs);
@@ -475,16 +466,10 @@ function TopCamera({
     return {
       centerX: (minX + maxX) / 2,
       centerZ: (minZ + maxZ) / 2,
-      worldWidth: Math.max(8, maxX - minX + 2.4),
-      worldDepth: Math.max(6, maxZ - minZ + 2.2),
+      worldWidth: Math.max(13, maxX - minX + 11),
+      worldDepth: Math.max(11, maxZ - minZ + 11),
     };
-  }, [
-    participants,
-    shot.axis.end,
-    shot.axis.start,
-    shot.cameraPosition,
-    shot.cameraTarget,
-  ]);
+  }, [participants]);
   useFrame(() => {
     const targetZoom = Math.max(
       12,
@@ -510,17 +495,19 @@ function TopCamera({
 
 function TopStage({
   participants,
+  frameParticipants = participants,
   shot,
   inset = false,
 }: {
   participants: DialogueParticipant[];
+  frameParticipants?: DialogueParticipant[];
   shot: ShotPlan;
   inset?: boolean;
 }) {
   return (
     <>
       <color attach="background" args={["#eef0f2"]} />
-      <TopCamera participants={participants} shot={shot} />
+      <TopCamera participants={frameParticipants} />
       <ambientLight intensity={2} />
       <StageFloor compact />
       <Line
@@ -533,7 +520,7 @@ function TopStage({
       />
       {participants.map((participant) => (
         <Character
-          key={participant.id}
+          key={participant.instanceId}
           participant={participant}
           compact={inset}
           labelPlacement="below"
@@ -682,7 +669,11 @@ export function StageView({ participants, shot }: StageViewProps) {
               dpr={[1, 1.5]}
               gl={{ antialias: true }}
             >
-              <TopStage participants={blockingParticipants} shot={shot} />
+              <TopStage
+                participants={blockingParticipants}
+                frameParticipants={participants}
+                shot={shot}
+              />
             </Canvas>
           )}
 
@@ -733,6 +724,7 @@ export function StageView({ participants, shot }: StageViewProps) {
             >
               <TopStage
                 participants={blockingParticipants}
+                frameParticipants={participants}
                 shot={shot}
                 inset
               />

@@ -26,6 +26,9 @@ export function buildDirectorPrompt(
     "可以把连续台词合并到一个镜头，但不得改写台词或增删角色。",
     "按约每秒 4-5 个汉字估算台词时长；普通镜头至少覆盖连续两句台词，不能仅因说话人变化就切镜。常规镜头尽量保持 4-8 秒；若新镜头不足两句或预计不足 4 秒，优先与相邻台词合并并保留当前机位，除非遇到进出场边界或明确的重大情绪、动作、信息转折。",
     "不要输出 XYZ 坐标，软件会根据语义模板计算机位。",
+    input.constraints.preserve_input_formation
+      ? "输入角色包含从 UE Blueprint 读取的 initial_position 与 initial_facing_target。必须以这些现有站位分析遮挡、关系轴和镜头，不得假设 blocking.position 会改变实际坐标。"
+      : "角色初始坐标由软件根据 blocking.position 的语义站位确定。",
     "blocking 必须覆盖所有参与角色，每个角色只能出现一次，position 不能重复。",
     "facing 可以是另一个实际角色槽位或 group_center；不要让角色面向自己。",
     "每个 shot 必须设置 look_target。单人和带群镜头填写当前主体正在交流或注视的实际角色槽位；双人、群像建立镜头填写 group_center。",

@@ -1,3 +1,4 @@
+import { mkdir, writeFile } from "node:fs/promises";
 import { expect, test } from "@playwright/test";
 import { PNG } from "pngjs";
 
@@ -49,6 +50,19 @@ function changedPixelRatio(before: Buffer, after: Buffer): number {
   }
 
   return changed / sampled;
+}
+
+async function writeDirectoryFixture(
+  directory: string,
+  files: Array<{ name: string; content: string }>,
+): Promise<string> {
+  await mkdir(directory, { recursive: true });
+  await Promise.all(
+    files.map((file) =>
+      writeFile(`${directory}/${file.name}`, file.content, "utf8"),
+    ),
+  );
+  return directory;
 }
 
 test("renders nonblank shot and blocking canvases without horizontal overflow", async ({
@@ -123,7 +137,7 @@ test("renders every participant in a multi-character dialogue", async ({
 }) => {
   await page.goto("/");
   await page.getByLabel("四位数对话 ID").fill("3099");
-  await page.getByRole("button", { name: "查找并生成分镜" }).click();
+  await page.getByRole("button", { name: "分析对话与站位" }).click();
 
   await expect(page.getByText("双人建立镜头").first()).toBeVisible();
   for (const name of ["岑队长", "洛安", "弥莎", "赫克"]) {
@@ -165,7 +179,7 @@ test("previews future entrants as transparent blocking markers", async ({
 }) => {
   await page.goto("/");
   await page.getByLabel("四位数对话 ID").fill("3099");
-  await page.getByRole("button", { name: "查找并生成分镜" }).click();
+  await page.getByRole("button", { name: "分析对话与站位" }).click();
 
   await expect(page.locator(".stage-main .actor-label")).toHaveCount(2);
   await expect(page.locator(".top-view .actor-label")).toHaveCount(4);
@@ -218,8 +232,8 @@ test("removes a character after the AI-directed exit node", async ({
           configured: true,
           connected: true,
           versionMismatch: false,
-          expectedVersion: "0.15.2",
-          serverVersion: "0.15.2",
+          expectedVersion: "0.16.0",
+          serverVersion: "0.16.0",
           lastSeenAt: "2026-08-22T00:00:00.000Z",
           mcpName: "internal-storyboard-collaboration",
           mcpConfigPath: "C:\\workspace\\.trae\\mcp.json",
@@ -325,12 +339,12 @@ test("removes a character after the AI-directed exit node", async ({
   });
 
   await page.goto("/");
-  await page.getByRole("button", { name: "TRAE 协作" }).click();
   await page.getByLabel("四位数对话 ID").fill("3099");
-  await page.getByRole("button", { name: "查找并生成分镜" }).click();
+  await page.getByRole("button", { name: "TRAE 协作" }).click();
+  await page.getByRole("button", { name: "分析对话与站位" }).click();
   await page
     .getByRole("dialog", { name: "故事梗概" })
-    .getByRole("button", { name: "进入分镜" })
+    .getByRole("button", { name: "采用 AI 方案" })
     .click();
 
   await page
@@ -374,6 +388,19 @@ test("switches the main canvas between shot and blocking views", async ({
   await expect(shotPreview).toBeVisible();
   await expect(page.locator(".shot-hud")).toContainText("俯视调度");
   await expect(page.locator(".actor-label--below")).toHaveCount(2);
+  const firstActorBefore = await page
+    .locator(".stage-main .actor-label--below")
+    .first()
+    .boundingBox();
+  await page.locator(".shot-row").nth(1).click();
+  const firstActorAfter = await page
+    .locator(".stage-main .actor-label--below")
+    .first()
+    .boundingBox();
+  expect(firstActorBefore).not.toBeNull();
+  expect(firstActorAfter).not.toBeNull();
+  expect(firstActorAfter!.x).toBeCloseTo(firstActorBefore!.x, 1);
+  expect(firstActorAfter!.y).toBeCloseTo(firstActorBefore!.y, 1);
   const switchedCanvases = page.locator("canvas");
   await expect(switchedCanvases).toHaveCount(2);
   const insetFrame = await page.locator(".top-view__canvas").boundingBox();
@@ -392,6 +419,7 @@ test("switches the main canvas between shot and blocking views", async ({
     expect(metrics.luminanceSpan).toBeGreaterThan(24);
     expect(metrics.sampledColors).toBeGreaterThan(18);
   }
+  await page.locator(".shot-row").first().click();
   await shotPreview.click();
 
   await expect(
@@ -402,7 +430,9 @@ test("switches the main canvas between shot and blocking views", async ({
 
 test("shows local content immediately and presents the AI story brief before applying it", async ({
   page,
-}) => {
+}, testInfo) => {
+  let formationRequests = 0;
+  let directorRequests = 0;
   let releaseDirector!: () => void;
   const directorGate = new Promise<void>((resolve) => {
     releaseDirector = resolve;
@@ -418,8 +448,8 @@ test("shows local content immediately and presents the AI story brief before app
           configured: true,
           connected: true,
           versionMismatch: false,
-          expectedVersion: "0.15.2",
-          serverVersion: "0.15.2",
+          expectedVersion: "0.16.0",
+          serverVersion: "0.16.0",
           lastSeenAt: "2026-08-22T00:00:00.000Z",
           mcpName: "internal-storyboard-collaboration",
           mcpConfigPath: "C:\\workspace\\.trae\\mcp.json",
@@ -430,6 +460,7 @@ test("shows local content immediately and presents the AI story brief before app
     });
   });
   await page.route("**/api/director/trae", async (route) => {
+    directorRequests += 1;
     const input = route.request().postDataJSON() as {
       request_id: string;
       dialogue: Array<{
@@ -499,15 +530,27 @@ test("shows local content immediately and presents the AI story brief before app
       }),
     });
   });
+  await page.route("**/api/ue/formation/read", async (route) => {
+    formationRequests += 1;
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: { status: "not_found", message: "未找到测试 BP" },
+      }),
+    });
+  });
 
   await page.goto("/");
   await page.getByRole("button", { name: "TRAE 协作" }).click();
-  await page.getByRole("button", { name: "查找并生成分镜" }).click();
 
   await expect(page.locator(".section-label--sticky")).toContainText(
     "本地预览",
   );
   await expect(page.getByText(/围绕失踪的钥匙互相试探/)).toBeVisible();
+  expect(directorRequests).toBe(1);
+  expect(formationRequests).toBe(0);
 
   releaseDirector();
   const dialog = page.getByRole("dialog", { name: "故事梗概" });
@@ -515,7 +558,14 @@ test("shows local content immediately and presents the AI story brief before app
   await expect(dialog.getByText("迫使隐瞒者说明钥匙真相。")).toBeVisible();
   await expect(dialog.getByText("对峙分组")).toBeVisible();
 
-  await dialog.getByRole("button", { name: "进入分镜" }).click();
+  await expect(dialog.getByText("AI 站位建议")).toBeVisible();
+  await expect(
+    dialog.getByRole("button", { name: "保留当前方案" }),
+  ).toBeVisible();
+  await dialog.screenshot({
+    path: testInfo.outputPath("ai-story-and-formation-review.png"),
+  });
+  await dialog.getByRole("button", { name: "采用 AI 方案" }).click();
   await expect(dialog).toBeHidden();
   await expect(page.getByText(/实际：内部 TRAE/)).toBeVisible();
   await expect(page.getByText("A 单人近景").first()).toBeVisible();
@@ -535,8 +585,8 @@ test("previews shared and local plans before resolving a library conflict", asyn
           configured: true,
           connected: true,
           versionMismatch: false,
-          expectedVersion: "0.15.2",
-          serverVersion: "0.15.2",
+          expectedVersion: "0.16.0",
+          serverVersion: "0.16.0",
           transport: "http",
           lastSeenAt: "2026-08-22T00:00:00.000Z",
           mcpName: "internal-storyboard-collaboration",
@@ -634,7 +684,6 @@ test("previews shared and local plans before resolving a library conflict", asyn
 
   await page.goto("/");
   await page.getByRole("button", { name: "TRAE 协作" }).click();
-  await page.getByRole("button", { name: "查找并生成分镜" }).click();
 
   const dialog = page.getByRole("dialog", {
     name: "预览并选择分镜方案",
@@ -716,7 +765,7 @@ test("switches to Mira and visibly degrades when the bridge fails", async ({
 
   await page.goto("/");
   await page.getByRole("button", { name: "Mira AI" }).click();
-  await page.getByRole("button", { name: "查找并生成分镜" }).click();
+  await page.getByRole("button", { name: "分析对话与站位" }).click();
 
   await expect(
     page.getByText(/已自动使用规则导演：模拟 Mira 超时/),
@@ -763,7 +812,6 @@ test("switches to internal TRAE and visibly degrades when collaboration fails", 
   await page.goto("/");
   await page.getByRole("button", { name: "TRAE 协作" }).click();
   await expect(page.getByText(/内部 TRAE MCP 已连接/)).toBeVisible();
-  await page.getByRole("button", { name: "查找并生成分镜" }).click();
 
   await expect(
     page.getByText(/已自动使用规则导演：模拟内部 TRAE 协作超时/),
@@ -785,7 +833,7 @@ test("explains that an old MCP must be restarted inside TRAE", async ({
           configured: true,
           connected: false,
           versionMismatch: true,
-          expectedVersion: "0.15.2",
+          expectedVersion: "0.16.0",
           serverVersion: "0.13.0",
           transport: "stdio",
           lastSeenAt: "2026-08-23T04:19:22.608Z",
@@ -799,11 +847,12 @@ test("explains that an old MCP must be restarted inside TRAE", async ({
   });
 
   await page.goto("/");
+  await page.getByLabel("四位数对话 ID").fill("3099");
   await page.getByRole("button", { name: "TRAE 协作" }).click();
 
   await expect(page.getByText("MCP 仍在运行旧版本")).toBeVisible();
   await expect(
-    page.getByText(/当前 0\.13\.0 · 需要 0\.15\.2；请在 TRAE 中停用后重新启用/),
+    page.getByText(/当前 0\.13\.0 · 需要 0\.16\.0；请在 TRAE 中停用后重新启用/),
   ).toBeVisible();
   await expect(
     page.getByRole("button", { name: "配置内部 TRAE MCP" }),
@@ -857,6 +906,7 @@ test("shows the internal TRAE MCP configuration guide", async ({ page }) => {
   });
 
   await page.goto("/");
+  await page.getByLabel("四位数对话 ID").fill("3099");
   await page.getByRole("button", { name: "TRAE 协作" }).click();
   await page.getByRole("button", { name: "配置内部 TRAE MCP" }).click();
 
@@ -969,4 +1019,283 @@ test("opens the incremental Feishu authorization dialog", async ({ page }) => {
     page.getByRole("dialog", { name: "连接 Mira AI 导演" }),
   ).toBeHidden();
   expect(finishRequests).toBe(1);
+});
+
+test("offers the detected Blueprint formation before designing shots", async ({
+  page,
+}, testInfo) => {
+  let releaseFormation!: () => void;
+  const formationGate = new Promise<void>((resolve) => {
+    releaseFormation = resolve;
+  });
+  await page.route("**/api/ue/formation/read", async (route) => {
+    await formationGate;
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          status: "found",
+          message: "已读取 2 个 BP 站位槽",
+          snapshot: {
+            dialogueId: "7350",
+            blueprintAssetPath:
+              "/Game/Seria/Task/Mod/MainQuest/Cha9/BP_735000.BP_735000",
+            blueprintClassPath:
+              "/Game/Seria/Task/Mod/MainQuest/Cha9/BP_735000.BP_735000_C",
+            warnings: [],
+            slots: [
+              {
+                modelIndex: 0,
+                componentName: "ChildActorComponent_0_GEN_VARIABLE",
+                componentGuid: "player-guid",
+                modelClassPath:
+                  "/Game/Seria/Characters/Eric/BP_Eric.BP_Eric_C",
+                transform: {
+                  location: { x: -300, y: 120, z: 92 },
+                  rotation: { pitch: 0, yaw: -90, roll: 0 },
+                  scale: { x: 1, y: 1, z: 1 },
+                },
+              },
+              {
+                modelIndex: 1,
+                componentName: "ChildActorComponent_1_GEN_VARIABLE",
+                componentGuid: "guard-guid",
+                modelClassPath:
+                  "/Game/Seria/NPC/M63_Cityguard/BP_M63_Cityguard_NPC.BP_M63_Cityguard_NPC_C",
+                transform: {
+                  location: { x: 260, y: -140, z: 92 },
+                  rotation: { pitch: 0, yaw: 90, roll: 0 },
+                  scale: { x: 1, y: 1, z: 1 },
+                },
+              },
+            ],
+          },
+        },
+      }),
+    });
+  });
+  await page.goto("/");
+  const fixtureDirectory = await writeDirectoryFixture(
+    testInfo.outputPath("csvdir"),
+    [
+    {
+      name: "对话表.csv",
+      content: [
+        "##&Dialog.id,Dialog.NPCID,Dialog.Content,Dialog.NextID,Dialog.End,Dialog.CharacterBehaviourString,Dialog.RelativeTransformsString",
+        "##对话ID,人物,内容,下一ID,结束,动作,相对位置",
+        "735000,,,735001,false,,",
+        '735001,1,你来了。,735002,false,"0.000000,AM_Talk,0,0,0,0,0,0,0,0;",',
+        '735002,101968,请止步。,,true,";0.000000,AM_Talk,0,0,0,0,0,0,0,0",',
+      ].join("\n"),
+    },
+    {
+      name: "对话表_开始节点.csv",
+      content: [
+        "##&DialogStart.id,DialogStart.Outline,DialogStart.Formation,DialogStart.Model",
+        "##对话ID,剧情梗概,模板,模型",
+        "735000,测试 BP 站位,/Game/Seria/Task/Mod/MainQuest/Cha9/BP_735000.BP_735000_C,player;M63_Cityguard",
+      ].join("\n"),
+    },
+    {
+      name: "NPC表.csv",
+      content: [
+        "##&NPC.id,NPC.name,NPC.npcintroduce,NPC.resource_id",
+        "##id,名称,介绍,资源",
+        "1,玩家,玩家,",
+        "101968,商会安保,守卫,200135",
+      ].join("\n"),
+    },
+    {
+      name: "m模型资源表.csv",
+      content: [
+        "##&Model.id,,Model.path",
+        "##id,配置填写在此列，Model.path保存时自动生成，由程序调用,生成路径",
+        "200135,/Game/Seria/NPC/M63_Cityguard/BP_M63_Cityguard_NPC,/Game/Seria/NPC/M63_Cityguard/BP_M63_Cityguard_NPC.BP_M63_Cityguard_NPC_C",
+      ].join("\n"),
+      },
+    ],
+  );
+  await page.locator('input[type="file"]').setInputFiles(fixtureDirectory);
+  await expect(
+    page.getByRole("button", { name: "分析对话与站位" }),
+  ).toBeDisabled();
+  await expect(page.getByText(/围绕失踪的钥匙互相试探/)).toBeVisible();
+  releaseFormation();
+
+  const dialog = page.getByRole("dialog", {
+    name: "选择镜头分析使用的站位",
+  });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText("BP 已映射")).toBeVisible();
+  await dialog.screenshot({
+    path: testInfo.outputPath("blueprint-formation-choice.png"),
+  });
+  await dialog.getByRole("button", { name: "使用此站位" }).click();
+  await expect(dialog).toBeHidden();
+  await expect(page.getByText(/正在使用 .*BP_735000/)).toBeVisible();
+  await expect(page.locator(".cast-row")).toHaveCount(2);
+});
+
+test("previews mission targets and blocks mixed MapIDs before UE loading", async ({
+  page,
+}, testInfo) => {
+  let loadRequests = 0;
+  let loadedTaskId = "";
+  let loadedTargetIds: string[] = [];
+  await page.route("**/api/ue/formation/read", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          status: "unavailable",
+          message: "测试中跳过 Blueprint 站位",
+        },
+      }),
+    });
+  });
+  await page.route("**/api/ue/mission-targets/load", async (route) => {
+    loadRequests += 1;
+    const request = route.request().postDataJSON();
+    loadedTaskId = request.taskId;
+    loadedTargetIds = request.targets.map(
+      (target: { targetId: string }) => target.targetId,
+    );
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          status: "loaded",
+          taskId: loadedTaskId,
+          mapId: "1204",
+          mapAssetPath:
+            "/Game/Seria/Maps/08_01_UrbanArea/08_01_UrbanArea",
+          autoOpenedMap: true,
+          spawnedCount: loadedTargetIds.length,
+          assetCount: 1,
+          markerCount: Math.max(0, loadedTargetIds.length - 1),
+        },
+      }),
+    });
+  });
+
+  const fixtureDirectory = await writeDirectoryFixture(
+    testInfo.outputPath("fixture", "csvdir"),
+    [
+      {
+        name: "对话表.csv",
+        content: [
+          "##&Dialog.id,Dialog.NPCID,Dialog.Content,Dialog.NextID,Dialog.End",
+          "##对话ID,人物,内容,下一ID,结束",
+          "735000,,,735001,false",
+          "735001,1,你来了。,735002,false",
+          "735002,101968,请止步。,,true",
+        ].join("\n"),
+      },
+      {
+        name: "对话表_开始节点.csv",
+        content: [
+          "##&DialogStart.id,DialogStart.Outline",
+          "##对话ID,剧情梗概",
+          "735000,目标物测试",
+        ].join("\n"),
+      },
+      {
+        name: "NPC表.csv",
+        content: [
+          "##&NPC.id,NPC.name,NPC.npcintroduce,NPC.resource_id",
+          "##id,名称,介绍,资源",
+          "1,玩家,玩家,",
+          "101968,商会安保,守卫,200135",
+        ].join("\n"),
+      },
+      {
+        name: "m模型资源表.csv",
+        content: [
+          "##&Model.id,,Model.path",
+          "##id,配置路径,生成路径",
+          "200135,/Game/Seria/NPC/Guard/BP_Guard,/Game/Seria/NPC/Guard/BP_Guard.BP_Guard_C",
+        ].join("\n"),
+      },
+      {
+        name: "任务表.csv",
+        content: [
+          "##&字段标记,Mission.id,Mission.Name,Mission.ShowNPC",
+          "##任务类型,任务ID,任务名称,显示目标物",
+          ',900001,同地图任务,"500001,500002"',
+          ',900002,错误地图任务,"500001,500003"',
+        ].join("\n"),
+      },
+      {
+        name: "m目标物表.csv",
+        content: [
+          "##&MissionPosition.ID,,,MissionPosition.type,MissionPosition.NPCID,MissionPosition.ItemID,MissionPosition.BluePrint,MissionPosition.MapID,MissionPosition.Position,MissionPosition.Rotation",
+          "##ID,类型,描述,坐标类型,NPCID,物品ID,蓝图路径,地图ID,座标,旋转",
+          '500001,剧情NPC,商会安保,1,101968,0,,1204,"(X=10,Y=20,Z=30)","(Pitch=0,Yaw=90,Roll=0)"',
+          '500002,触发器,抵达区域,3,0,0,,1204,"(X=40,Y=50,Z=60)","(Pitch=0,Yaw=0,Roll=0)"',
+          '500003,触发器,错误地图,3,0,0,,1205,"(X=70,Y=80,Z=90)","(Pitch=0,Yaw=0,Roll=0)"',
+        ].join("\n"),
+      },
+      {
+        name: "d地图配置表.csv",
+        content: [
+          "##&MapConfig.id,MapConfig.name,,,MapConfig.resourceid",
+          "##ID,地图名称,地图备注,地图资源（注释用）,资源ID",
+          "1204,上城区,,,100128",
+          "1205,其他地图,,,100129",
+        ].join("\n"),
+      },
+      {
+        name: "d地图资源表.csv",
+        content: [
+          "##&Scene.id,Scene.path",
+          "##id,path",
+          "100128,/Game/Seria/Maps/08_01_UrbanArea/08_01_UrbanArea",
+          "100129,/Game/Seria/Maps/Other/Other",
+        ].join("\n"),
+      },
+    ],
+  );
+
+  await page.goto("/");
+  await page.locator('input[type="file"]').setInputFiles(fixtureDirectory);
+  await page.getByRole("button", { name: "任务目标物" }).click();
+  const dialog = page.getByRole("dialog", { name: "任务目标物" });
+
+  await dialog.getByLabel("任务节点 ID").fill("900001");
+  await dialog.getByRole("button", { name: "解析任务目标物" }).click();
+  await expect(dialog.getByText("同地图任务")).toBeVisible();
+  await expect(dialog.getByText("上城区 · 1204")).toBeVisible();
+  await expect(dialog.locator(".mission-target-table tbody tr")).toHaveCount(2);
+  await expect(dialog.getByText("0°, 90°, 0°")).toBeVisible();
+  await dialog.getByLabel("选择目标物 500002").uncheck();
+  await expect(dialog.getByText(/已选择 1 \/ 2 个目标物/)).toBeVisible();
+  const modalBounds = await dialog.boundingBox();
+  const footerBounds = await dialog.locator("footer").boundingBox();
+  expect(modalBounds).not.toBeNull();
+  expect(footerBounds).not.toBeNull();
+  expect(footerBounds!.y + footerBounds!.height).toBeLessThanOrEqual(
+    modalBounds!.y + modalBounds!.height + 1,
+  );
+  await dialog.screenshot({
+    path: testInfo.outputPath("mission-target-selection.png"),
+  });
+  await dialog.getByRole("button", { name: "加载到 UE" }).click();
+  await expect(dialog.getByText(/已自动打开\s*上城区/)).toBeVisible();
+  expect(loadRequests).toBe(1);
+  expect(loadedTaskId).toBe("900001");
+  expect(loadedTargetIds).toEqual(["500001"]);
+
+  await dialog.getByLabel("任务节点 ID").fill("900002");
+  await dialog.getByRole("button", { name: "解析任务目标物" }).click();
+  await expect(dialog.getByText(/目标物 MapID 不一致/)).toBeVisible();
+  await expect(
+    dialog.getByRole("button", { name: "加载到 UE" }),
+  ).toBeDisabled();
+  expect(loadRequests).toBe(1);
 });

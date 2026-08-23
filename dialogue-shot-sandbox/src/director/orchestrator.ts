@@ -48,6 +48,11 @@ export interface DirectorRunResult {
   sharedConflict?: SharedStoryboardConflict;
 }
 
+interface DirectorRunOptions {
+  preserveInputPositions?: boolean;
+  fallbackPreserveInputPositions?: boolean;
+}
+
 const providers = {
   rule: new RuleDirectorProvider(),
   trae: new TraeDirectorProvider(),
@@ -57,13 +62,17 @@ const providers = {
 async function runProvider(
   sequence: DialogueSequence,
   mode: DirectorMode,
+  options: DirectorRunOptions = {},
 ): Promise<Omit<DirectorRunResult, "requestedMode" | "fallbackReason">> {
-  const input = createDirectorInput(sequence);
+  const input = createDirectorInput(sequence, undefined, {
+    preserveInputFormation: options.preserveInputPositions,
+  });
   const providerResult = await providers[mode].design(input);
   const participants = resolveBlocking(
     sequence.participants,
     providerResult.blocking,
     sequence.rows.map((row) => row.id),
+    options,
   );
   const stagedSequence = { ...sequence, participants };
   const shots = resolveShotDecisions(
@@ -89,10 +98,11 @@ async function runProvider(
 export async function designShots(
   sequence: DialogueSequence,
   requestedMode: DirectorMode,
+  options: DirectorRunOptions = {},
 ): Promise<DirectorRunResult> {
   if (requestedMode === "rule") {
     return {
-      ...(await runProvider(sequence, "rule")),
+      ...(await runProvider(sequence, "rule", options)),
       requestedMode,
       fallbackReason: null,
     };
@@ -100,7 +110,7 @@ export async function designShots(
 
   try {
     return {
-      ...(await runProvider(sequence, requestedMode)),
+      ...(await runProvider(sequence, requestedMode, options)),
       requestedMode,
       fallbackReason: null,
     };
@@ -110,7 +120,11 @@ export async function designShots(
         ? error.message
         : `${requestedMode === "trae" ? "TRAE" : "Mira"} AI 导演调用失败`;
     return {
-      ...(await runProvider(sequence, "rule")),
+      ...(await runProvider(sequence, "rule", {
+        preserveInputPositions:
+          options.fallbackPreserveInputPositions ??
+          options.preserveInputPositions,
+      })),
       requestedMode,
       fallbackReason,
     };
@@ -135,6 +149,10 @@ function sequenceFromDirectorInput(input: DirectorInput): DialogueSequence {
       nextId: input.dialogue[index + 1]?.dialogue_id ?? null,
       isEnd: index === input.dialogue.length - 1,
       rowNumber: index + 1,
+      speakerSlot: line.speaker,
+      speakerModelIndex: null,
+      relativeTransformsString: "",
+      characterBehaviourString: "",
     })),
     participants: input.participants.map((participant, index) => {
       const firstDialogueIndex = input.dialogue.findIndex(
@@ -148,10 +166,15 @@ function sequenceFromDirectorInput(input: DirectorInput): DialogueSequence {
         name: participant.name,
         note: participant.background,
         introduction: participant.background,
+        resourceId: null,
+        instanceId: participant.instance_id ?? `shared:${participant.slot}`,
         slot: participant.slot as ParticipantSlot,
         color: SHARED_PREVIEW_COLORS[index],
-        position: [0, 0, 0] as const,
-        facingTarget: [0, 0, 0] as const,
+        position: participant.initial_position ?? ([0, 0, 0] as const),
+        facingTarget:
+          participant.initial_facing_target ?? ([0, 0, 0] as const),
+        modelIndex: participant.model_index ?? null,
+        positionSource: participant.position_source ?? "generated",
         firstDialogueId: participant.first_dialogue_id,
         firstDialogueIndex,
         lastDialogueId: participant.last_dialogue_id,
@@ -191,6 +214,7 @@ function sequenceFromDirectorInput(input: DirectorInput): DialogueSequence {
         : null,
     },
     warnings: [],
+    formation: null,
   };
 }
 
@@ -206,6 +230,10 @@ export function createSharedPlanPreview(
     sequence.participants,
     plan.blocking,
     sequence.rows.map((row) => row.id),
+    {
+      preserveInputPositions:
+        input.constraints.preserve_input_formation === true,
+    },
   );
   const stagedSequence = { ...sequence, participants };
   return {

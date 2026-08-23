@@ -1,6 +1,7 @@
 import {
   AlertTriangle,
   Bot,
+  Boxes,
   Camera,
   ChevronLeft,
   ChevronRight,
@@ -9,6 +10,7 @@ import {
   FolderOpen,
   LoaderCircle,
   LocateFixed,
+  MapPinned,
   Search,
   Settings,
   Users,
@@ -16,12 +18,15 @@ import {
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { DesktopSetupModal } from "./components/DesktopSetupModal";
+import { BlueprintFormationModal } from "./components/BlueprintFormationModal";
 import { DirectorControl } from "./components/DirectorControl";
+import { MissionTargetModal } from "./components/MissionTargetModal";
 import { SharedPlanCompareModal } from "./components/SharedPlanCompareModal";
 import { StageView } from "./components/StageView";
 import { StoryBriefModal } from "./components/StoryBriefModal";
 import { TraeCollaborationModal } from "./components/TraeCollaborationModal";
 import { loadDocDirectory, loadDocFiles } from "./data/csv";
+import { applyBlueprintFormation } from "./data/blueprintFormation";
 import { demoDatabase } from "./data/demo";
 import { findDialogueSequence } from "./data/dialogueRepository";
 import type {
@@ -50,7 +55,9 @@ import {
   type TraeCollaborationStatus,
   type TraeMcpConfig,
 } from "./trae/client";
+import { getBlueprintFormation } from "./ue/client";
 import type {
+  BlueprintFormationSnapshot,
   CameraMovement,
   DepthOfField,
   DialogueDatabase,
@@ -81,6 +88,21 @@ interface SharedComparisonPresentation {
   recordId: string;
   local: PendingDirectorPresentation;
   shared: PendingDirectorPresentation;
+}
+
+interface FormationChoicePresentation {
+  blueprint: ReturnType<typeof createShotPreview>;
+  generated: ReturnType<typeof createShotPreview>;
+  snapshot: BlueprintFormationSnapshot;
+  mappedSlotCount: number;
+  requestedMode: DirectorMode;
+  sourceSequence: DialogueSequence;
+}
+
+interface ApplySequenceOptions {
+  preserveInputPositions?: boolean;
+  fallbackPreserveInputPositions?: boolean;
+  keepCurrentPreview?: boolean;
 }
 
 function directorLabel(mode: DirectorMode): string {
@@ -270,9 +292,17 @@ export default function App() {
     useState<SharedComparisonPresentation | null>(null);
   const [sharedComparisonBusy, setSharedComparisonBusy] = useState(false);
   const [sharedComparisonError, setSharedComparisonError] = useState("");
+  const [formationChoice, setFormationChoice] =
+    useState<FormationChoicePresentation | null>(null);
+  const [formationChecking, setFormationChecking] = useState(false);
+  const [formationStatus, setFormationStatus] = useState("");
+  const [activeFormationSource, setActiveFormationSource] = useState<
+    "blueprint" | "generated"
+  >("generated");
   const [desktopSetup, setDesktopSetup] =
     useState<DesktopSetupStatus | null>(null);
   const [showDesktopSetup, setShowDesktopSetup] = useState(false);
+  const [showMissionTargets, setShowMissionTargets] = useState(false);
   const [traeStatus, setTraeStatus] =
     useState<TraeCollaborationStatus | null>(null);
   const [traeLoading, setTraeLoading] = useState(false);
@@ -285,6 +315,7 @@ export default function App() {
   const [authFinishing, setAuthFinishing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const directorRunRef = useRef(0);
+  const formationRunRef = useRef(0);
   const authFinishingRef = useRef(false);
 
   const activeShot = shots[activeIndex] ?? shots[0];
@@ -377,20 +408,29 @@ export default function App() {
   async function applySequence(
     nextSequence: DialogueSequence,
     requestedMode: DirectorMode,
+    options: ApplySequenceOptions = {},
   ) {
+    const {
+      preserveInputPositions = false,
+      keepCurrentPreview = false,
+    } = options;
     const runId = ++directorRunRef.current;
-    const preview = createShotPreview(nextSequence);
-    setSequence(preview.sequence);
-    setShots(preview.shots);
-    setAppliedDirector("rule");
+    const preview = createShotPreview(nextSequence, {
+      preserveInputPositions,
+    });
     setFallbackReason(null);
-    setDirectorAnalysis(preview.analysis);
-    setDirectorBlocking(preview.blocking);
     setPendingDirectorResult(null);
     setSharedComparison(null);
     setSharedComparisonError("");
-    setActiveIndex(0);
     setError("");
+    if (!keepCurrentPreview || requestedMode === "rule") {
+      setSequence(preview.sequence);
+      setShots(preview.shots);
+      setAppliedDirector("rule");
+      setDirectorAnalysis(preview.analysis);
+      setDirectorBlocking(preview.blocking);
+      setActiveIndex(0);
+    }
 
     if (requestedMode === "rule") {
       setDirectorLoading(false);
@@ -399,7 +439,11 @@ export default function App() {
 
     setDirectorLoading(true);
     try {
-      const result = await designShots(nextSequence, requestedMode);
+      const result = await designShots(nextSequence, requestedMode, {
+        preserveInputPositions,
+        fallbackPreserveInputPositions:
+          options.fallbackPreserveInputPositions,
+      });
       if (runId !== directorRunRef.current) {
         return;
       }
@@ -452,6 +496,9 @@ export default function App() {
     sourceSequence: DialogueSequence,
     result: DirectorRunResult,
   ) {
+    const usesBlueprintFormation = result.participants.every(
+      (participant) => participant.positionSource === "blueprint",
+    );
     setSequence({
       ...sourceSequence,
       participants: result.participants,
@@ -461,6 +508,12 @@ export default function App() {
     setFallbackReason(result.fallbackReason);
     setDirectorAnalysis(result.analysis);
     setDirectorBlocking(result.blocking);
+    setActiveFormationSource(
+      usesBlueprintFormation ? "blueprint" : "generated",
+    );
+    if (!usesBlueprintFormation && result.appliedMode !== "rule") {
+      setFormationStatus(`已采用 ${directorLabel(result.appliedMode)} 建议站位`);
+    }
     setActiveIndex(0);
     setError("");
   }
@@ -503,7 +556,89 @@ export default function App() {
     requestedMode = directorMode,
   ) {
     const nextSequence = findDialogueSequence(nextDatabase, prefix);
-    await applySequence(nextSequence, requestedMode);
+    const formationRunId = ++formationRunRef.current;
+    directorRunRef.current += 1;
+    setFormationChoice(null);
+    setPendingDirectorResult(null);
+    setSharedComparison(null);
+    setDirectorLoading(false);
+    setFallbackReason(null);
+    setError("");
+    setActiveFormationSource("generated");
+    setFormationStatus("正在检查 UE Blueprint 站位...");
+    if (nextDatabase.sourceName === "内置演示数据") {
+      setFormationStatus("");
+      await applySequence(nextSequence, requestedMode);
+      return;
+    }
+
+    setFormationChecking(true);
+    try {
+      const lookup = await getBlueprintFormation({
+        dialogueId: prefix,
+        startId: nextSequence.startId,
+        formationClassPath: nextSequence.formation?.classPath,
+      });
+      if (formationRunId !== formationRunRef.current) {
+        return;
+      }
+      setFormationStatus(lookup.message);
+      if (lookup.status === "found" && lookup.snapshot) {
+        const imported = applyBlueprintFormation(
+          nextDatabase,
+          nextSequence,
+          lookup.snapshot,
+        );
+        setFormationChoice({
+          blueprint: createShotPreview(imported.sequence, {
+            preserveInputPositions: true,
+          }),
+          generated: createShotPreview(nextSequence),
+          snapshot: lookup.snapshot,
+          mappedSlotCount: imported.mappedSlotCount,
+          requestedMode,
+          sourceSequence: nextSequence,
+        });
+        return;
+      }
+      await applySequence(nextSequence, requestedMode);
+    } catch (formationError) {
+      if (formationRunId !== formationRunRef.current) {
+        return;
+      }
+      setFormationStatus(
+        formationError instanceof Error
+          ? `${formationError.message}，已使用自动站位`
+          : "BP 站位读取失败，已使用自动站位",
+      );
+      await applySequence(nextSequence, requestedMode);
+    } finally {
+      if (formationRunId === formationRunRef.current) {
+        setFormationChecking(false);
+      }
+    }
+  }
+
+  function chooseFormation(choice: "blueprint" | "generated") {
+    if (!formationChoice) {
+      return;
+    }
+    const useBlueprint = choice === "blueprint";
+    const selected = useBlueprint
+      ? formationChoice.blueprint.sequence
+      : formationChoice.sourceSequence;
+    setFormationChoice(null);
+    setActiveFormationSource(choice);
+    setFormationStatus(
+      useBlueprint
+        ? `正在使用 ${formationChoice.snapshot.blueprintAssetPath} 的初始站位`
+        : "已允许当前导演重新安排角色站位",
+    );
+    void applySequence(
+      selected,
+      formationChoice.requestedMode,
+      { preserveInputPositions: useBlueprint },
+    );
   }
 
   function submitSearch(event: FormEvent) {
@@ -525,14 +660,31 @@ export default function App() {
   }
 
   function changeDirectorMode(mode: DirectorMode) {
+    if (mode === directorMode && mode !== "trae") {
+      return;
+    }
     setDirectorMode(mode);
     setFallbackReason(null);
     if (mode === "mira") {
       void refreshLarkConnection(true);
     } else if (mode === "trae") {
       void refreshTraeConnection();
+      if (
+        query === sequence.prefix &&
+        !formationChecking &&
+        !formationChoice &&
+        !directorLoading
+      ) {
+        void applySequence(sequence, "trae", {
+          keepCurrentPreview: true,
+          preserveInputPositions: false,
+          fallbackPreserveInputPositions: true,
+        });
+      }
     } else {
-      void applySequence(sequence, "rule");
+      void applySequence(sequence, "rule", {
+        preserveInputPositions: activeFormationSource === "blueprint",
+      });
     }
   }
 
@@ -664,7 +816,7 @@ export default function App() {
           <div>
             <h1>镜头沙盘</h1>
           </div>
-          <span className="version">v0.15.2</span>
+          <span className="version">v0.16.0</span>
         </div>
 
         <div className="source-status">
@@ -676,6 +828,14 @@ export default function App() {
         </div>
 
         <div className="header-actions">
+          <button
+            className="button"
+            type="button"
+            onClick={() => setShowMissionTargets(true)}
+          >
+            <MapPinned size={17} />
+            任务目标物
+          </button>
           {desktopSetup && (
             <button
               className="icon-button"
@@ -731,24 +891,36 @@ export default function App() {
                   placeholder="例如 1001"
                 />
                 <button
-                  className="icon-button"
+                  className="button button--primary query-analysis-button"
                   type="submit"
-                  title="查找并生成分镜"
-                  aria-label="查找并生成分镜"
-                  disabled={directorLoading}
+                  title="分析对话与站位"
+                  aria-label="分析对话与站位"
+                  disabled={
+                    directorLoading || formationChecking || query.length !== 4
+                  }
                 >
-                  {directorLoading ? (
+                  {directorLoading || formationChecking ? (
                     <LoaderCircle className="spin" size={18} />
                   ) : (
                     <Search size={18} />
                   )}
+                  <span>分析</span>
                 </button>
               </div>
             </form>
+            {formationStatus && (
+              <div
+                className={`formation-status formation-status--${activeFormationSource}`}
+                role="status"
+              >
+                <Boxes size={15} />
+                <span>{formationStatus}</span>
+              </div>
+            )}
             <DirectorControl
               mode={directorMode}
               appliedMode={appliedDirector}
-              loading={directorLoading}
+              loading={directorLoading || formationChecking}
               traeLoading={traeLoading}
               traeStatus={traeStatus}
               traeError={traeError}
@@ -798,7 +970,7 @@ export default function App() {
             <p>{sequence.outline || "该对话没有填写剧情梗概。"}</p>
             <div className="cast-list">
               {sequence.participants.map((participant) => (
-                <div className="cast-row" key={participant.id}>
+                <div className="cast-row" key={participant.instanceId}>
                   <span
                     className="cast-row__slot"
                     style={{ backgroundColor: participant.color }}
@@ -1236,7 +1408,19 @@ export default function App() {
         />
       )}
 
-      {pendingDirectorResult?.result.analysis && !sharedComparison && (
+      {formationChoice && !sharedComparison && (
+        <BlueprintFormationModal
+          blueprint={formationChoice.blueprint}
+          generated={formationChoice.generated}
+          snapshot={formationChoice.snapshot}
+          mappedSlotCount={formationChoice.mappedSlotCount}
+          onChoose={chooseFormation}
+        />
+      )}
+
+      {pendingDirectorResult?.result.analysis &&
+        !sharedComparison &&
+        !formationChoice && (
         <StoryBriefModal
           sequence={{
             ...pendingDirectorResult.sequence,
@@ -1252,6 +1436,7 @@ export default function App() {
             );
             setPendingDirectorResult(null);
           }}
+          onKeepCurrent={() => setPendingDirectorResult(null)}
         />
       )}
 
@@ -1260,6 +1445,13 @@ export default function App() {
           initialStatus={desktopSetup}
           onClose={() => setShowDesktopSetup(false)}
           onRefreshTrae={() => void refreshTraeConnection()}
+        />
+      )}
+
+      {showMissionTargets && (
+        <MissionTargetModal
+          database={database}
+          onClose={() => setShowMissionTargets(false)}
         />
       )}
 

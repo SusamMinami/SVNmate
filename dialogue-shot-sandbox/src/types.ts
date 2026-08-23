@@ -26,12 +26,18 @@ export interface DialogueRow {
   nextId: string | null;
   isEnd: boolean;
   rowNumber: number;
+  speakerSlot: ParticipantSlot | null;
+  speakerModelIndex: number | null;
+  relativeTransformsString: string;
+  characterBehaviourString: string;
 }
 
 export interface DialogueStart {
   id: string;
   outline: string;
   rowNumber: number;
+  formationClassPath: string | null;
+  modelNames: string[];
 }
 
 export interface NpcProfile {
@@ -39,20 +45,64 @@ export interface NpcProfile {
   name: string;
   note: string;
   introduction: string;
+  resourceId: number | null;
+}
+
+export interface ModelResource {
+  id: number;
+  configuredPath: string;
+  generatedClassPath: string;
+  rowNumber: number;
+}
+
+export interface MissionTaskRow {
+  id: string;
+  name: string;
+  source: "任务表" | "副本任务表";
+  showTargetIds: string;
+  rowNumber: number;
+}
+
+export interface MissionPositionRow {
+  id: string;
+  type: number | null;
+  description: string;
+  npcId: number | null;
+  itemId: number | null;
+  blueprintModelId: number | null;
+  mapId: string;
+  positionText: string;
+  rotationText: string;
+  rowNumber: number;
+}
+
+export interface MapConfigRow {
+  id: string;
+  name: string;
+  resourceId: string;
+  assetPath: string;
+  rowNumber: number;
 }
 
 export interface DialogueDatabase {
   dialogueRows: DialogueRow[];
   starts: DialogueStart[];
   npcs: Map<number, NpcProfile>;
+  models: Map<number, ModelResource>;
+  missionRows: MissionTaskRow[];
+  missionPositions: MissionPositionRow[];
+  mapConfigs: MapConfigRow[];
   sourceName: string;
 }
 
 export interface DialogueParticipant extends NpcProfile {
+  instanceId: string;
   slot: ParticipantSlot;
   color: string;
   position: Vec3;
   facingTarget: Vec3;
+  modelIndex: number | null;
+  positionSource: "generated" | "blueprint";
   firstDialogueId: string;
   firstDialogueIndex: number;
   lastDialogueId: string;
@@ -86,6 +136,69 @@ export interface DialogueSequence {
     next: AdjacentDialogueContext | null;
   };
   warnings: string[];
+  formation: {
+    classPath: string;
+    modelNames: string[];
+  } | null;
+}
+
+export interface UnrealTransform {
+  location: { x: number; y: number; z: number };
+  rotation: { pitch: number; yaw: number; roll: number };
+  scale: { x: number; y: number; z: number };
+}
+
+export interface BlueprintFormationSlot {
+  modelIndex: number;
+  componentName: string;
+  componentGuid: string;
+  modelClassPath: string;
+  transform: UnrealTransform;
+}
+
+export interface BlueprintFormationSnapshot {
+  dialogueId: string;
+  blueprintAssetPath: string;
+  blueprintClassPath: string;
+  slots: BlueprintFormationSlot[];
+  warnings: string[];
+}
+
+export interface MissionTargetPreviewTarget {
+  targetId: string;
+  type: number | null;
+  description: string;
+  npcId: number | null;
+  npcName: string;
+  modelId: number | null;
+  modelClassPath: string;
+  itemId: number | null;
+  blueprintModelId: number | null;
+  mapId: string;
+  previewKind: "asset" | "marker";
+  transform: UnrealTransform;
+}
+
+export interface MissionTargetPreviewPlan {
+  taskId: string;
+  taskName: string;
+  taskSource: MissionTaskRow["source"];
+  mapId: string;
+  mapName: string;
+  mapAssetPath: string;
+  targets: MissionTargetPreviewTarget[];
+  warnings: string[];
+}
+
+export interface MissionTargetPreviewLoadResult {
+  status: "loaded";
+  taskId: string;
+  mapId: string;
+  mapAssetPath: string;
+  autoOpenedMap: boolean;
+  spawnedCount: number;
+  assetCount: number;
+  markerCount: number;
 }
 
 export type ShotKind =

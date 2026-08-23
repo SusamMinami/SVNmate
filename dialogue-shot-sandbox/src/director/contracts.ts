@@ -2,8 +2,10 @@ import { z } from "zod";
 import {
   MAX_DIALOGUE_PARTICIPANTS,
   PARTICIPANT_SLOTS,
+  type DialogueParticipant,
   type DialogueSequence,
   type ParticipantSlot,
+  type Vec3,
 } from "../types";
 
 export const DIRECTOR_TEMPLATES = [
@@ -313,10 +315,19 @@ export const DirectorInputSchema = z.object({
       z.object({
         slot: ParticipantSlotSchema,
         npc_id: z.number().int().positive(),
+        instance_id: z.string().min(1).optional(),
+        model_index: z.number().int().nonnegative().nullable().optional(),
         name: z.string().min(1),
         background: z.string(),
+        initial_position: z.tuple([z.number(), z.number(), z.number()]).optional(),
+        initial_facing_target: z
+          .tuple([z.number(), z.number(), z.number()])
+          .optional(),
+        position_source: z.enum(["generated", "blueprint"]).optional(),
         first_dialogue_id: z.string().min(1),
         last_dialogue_id: z.string().min(1),
+        entry_dialogue_id: z.string().min(1).optional(),
+        exit_dialogue_id: z.string().min(1).nullable().optional(),
       }),
     )
     .min(2)
@@ -372,6 +383,7 @@ export const DirectorInputSchema = z.object({
     primary_aspect_ratio: z.literal("16:9"),
     overlay_aspect_ratio: z.literal("21:9"),
     avoid_character_overlap: z.literal(true),
+    preserve_input_formation: z.boolean().optional(),
     supported_templates: z.array(z.enum(DIRECTOR_TEMPLATES)).min(1),
     supported_camera_movements: z
       .array(z.enum(CAMERA_MOVEMENTS))
@@ -404,10 +416,17 @@ export interface DirectorInput {
   participants: Array<{
     slot: ParticipantSlot;
     npc_id: number;
+    instance_id?: string;
+    model_index?: number | null;
     name: string;
     background: string;
+    initial_position?: Vec3;
+    initial_facing_target?: Vec3;
+    position_source?: "generated" | "blueprint";
     first_dialogue_id: string;
     last_dialogue_id: string;
+    entry_dialogue_id?: string;
+    exit_dialogue_id?: string | null;
   }>;
   dialogue: Array<{
     dialogue_id: string;
@@ -448,6 +467,7 @@ export interface DirectorInput {
     primary_aspect_ratio: "16:9";
     overlay_aspect_ratio: "21:9";
     avoid_character_overlap: true;
+    preserve_input_formation?: boolean;
     supported_templates: ReadonlyArray<(typeof DIRECTOR_TEMPLATES)[number]>;
     supported_camera_movements: ReadonlyArray<
       (typeof CAMERA_MOVEMENTS)[number]
@@ -497,10 +517,17 @@ export interface ShotDirectorProvider {
 export function createDirectorInput(
   sequence: DialogueSequence,
   requestId = `${sequence.prefix}-${Date.now()}`,
+  options: { preserveInputFormation?: boolean } = {},
 ): DirectorInput {
-  const participantById = new Map(
-    sequence.participants.map((participant) => [participant.id, participant]),
+  const participantById = new Map<number, DialogueParticipant>();
+  const participantBySlot = new Map(
+    sequence.participants.map((participant) => [participant.slot, participant]),
   );
+  for (const participant of sequence.participants) {
+    if (!participantById.has(participant.id)) {
+      participantById.set(participant.id, participant);
+    }
+  }
   return {
     request_id: requestId,
     schema_version: "shot-plan.v5",
@@ -510,15 +537,25 @@ export function createDirectorInput(
     participants: sequence.participants.map((participant) => ({
       slot: participant.slot,
       npc_id: participant.id,
+      instance_id: participant.instanceId,
+      model_index: participant.modelIndex,
       name: participant.name,
       background:
         participant.introduction || participant.note || "暂无补充角色背景",
+      initial_position: participant.position,
+      initial_facing_target: participant.facingTarget,
+      position_source: participant.positionSource,
       first_dialogue_id: participant.firstDialogueId,
       last_dialogue_id: participant.lastDialogueId,
+      entry_dialogue_id: participant.entryDialogueId,
+      exit_dialogue_id: participant.exitDialogueId,
     })),
     dialogue: sequence.rows.flatMap((row) => {
       const participant =
-        row.npcId === null ? undefined : participantById.get(row.npcId);
+        (row.speakerSlot
+          ? participantBySlot.get(row.speakerSlot)
+          : undefined) ??
+        (row.npcId === null ? undefined : participantById.get(row.npcId));
       if (!participant) {
         return [];
       }
@@ -572,6 +609,11 @@ export function createDirectorInput(
       primary_aspect_ratio: "16:9",
       overlay_aspect_ratio: "21:9",
       avoid_character_overlap: true,
+      preserve_input_formation:
+        options.preserveInputFormation ??
+        sequence.participants.every(
+          (participant) => participant.positionSource === "blueprint",
+        ),
       supported_templates: DIRECTOR_TEMPLATES,
       supported_camera_movements: CAMERA_MOVEMENTS,
       supported_lens_intents: LENS_INTENTS,

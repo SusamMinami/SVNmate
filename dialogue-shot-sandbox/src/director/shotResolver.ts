@@ -502,9 +502,12 @@ export function resolveShotDecisions(
   const rowIndexById = new Map(
     sequence.rows.map((row, index) => [row.id, index]),
   );
-  const participantsById = new Map(
-    sequence.participants.map((participant) => [participant.id, participant]),
-  );
+  const participantsById = new Map<number, DialogueParticipant>();
+  for (const participant of sequence.participants) {
+    if (!participantsById.has(participant.id)) {
+      participantsById.set(participant.id, participant);
+    }
+  }
   const participantsBySlot = new Map(
     sequence.participants.map((participant) => [participant.slot, participant]),
   );
@@ -555,7 +558,10 @@ export function resolveShotDecisions(
           participant.exitIndex >= dialogueEndIndex),
     );
     const firstSpeaker =
-      firstRow.npcId === null ? undefined : participantsById.get(firstRow.npcId);
+      (firstRow.speakerSlot
+        ? participantsBySlot.get(firstRow.speakerSlot)
+        : undefined) ??
+      (firstRow.npcId === null ? undefined : participantsById.get(firstRow.npcId));
     const groupSubject =
       decision.subject === "both" || decision.subject === "group";
     const subject =
@@ -569,7 +575,11 @@ export function resolveShotDecisions(
     if (!firstSpeaker || !subject) {
       throw new Error(`镜头 ${index + 1} 无法解析主体 ${decision.subject}`);
     }
-    if (!activeParticipants.some((participant) => participant.id === subject.id)) {
+    if (
+      !activeParticipants.some(
+        (participant) => participant.slot === subject.slot,
+      )
+    ) {
       throw new Error(
         `镜头 ${index + 1} 的主体 ${subject.slot} 尚未登场或已经离场`,
       );
@@ -583,14 +593,14 @@ export function resolveShotDecisions(
     if (!groupSubject && activeParticipants.length > 1) {
       const lookTargetIsActive =
         lookTarget &&
-        lookTarget.id !== subject.id &&
+        lookTarget.slot !== subject.slot &&
         activeParticipants.some(
-          (participant) => participant.id === lookTarget?.id,
+          (participant) => participant.slot === lookTarget?.slot,
         );
       if (!lookTargetIsActive) {
         lookTarget =
           activeParticipants.find(
-            (participant) => participant.id !== subject.id,
+            (participant) => participant.slot !== subject.slot,
           ) ?? null;
       }
       if (!lookTarget) {
@@ -832,7 +842,10 @@ export function resolveShotDecisions(
     const content = rows
       .map((row) => {
         const speaker =
-          row.npcId === null ? undefined : participantsById.get(row.npcId);
+          (row.speakerSlot
+            ? participantsBySlot.get(row.speakerSlot)
+            : undefined) ??
+          (row.npcId === null ? undefined : participantsById.get(row.npcId));
         return `${speaker?.name ?? "未知"}：${row.content}`;
       })
       .join(" ");
