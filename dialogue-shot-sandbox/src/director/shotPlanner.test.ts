@@ -29,6 +29,33 @@ describe("createShotPlan", () => {
     expect(shots[1].duration).toBeGreaterThanOrEqual(4);
   });
 
+  it("balances relationship coverage with motivated singles", () => {
+    expect(shots.slice(0, 3).some((shot) => shot.kind === "master")).toBe(
+      true,
+    );
+    expect(
+      shots.filter((shot) =>
+        ["two-shot", "group", "group-medium"].includes(
+          shot.projection.coverage,
+        ),
+      ),
+    ).toHaveLength(2);
+    expect(
+      shots.filter((shot) => shot.projection.coverage === "single"),
+    ).toHaveLength(2);
+    expect(
+      shots
+        .filter((shot) => shot.projection.coverage === "single")
+        .every((shot) =>
+          [
+            "individual_perspective",
+            "individual_emphasis",
+            "reaction",
+          ].includes(shot.coverageIntent),
+        ),
+    ).toBe(true);
+  });
+
   it("turns pauses into reaction close-ups", () => {
     const reaction = shots.find((shot) => shot.content.includes("……"));
     expect(reaction?.kind).toBe("reaction");
@@ -43,7 +70,6 @@ describe("createShotPlan", () => {
     expect(singleShots.map((shot) => shot.visualSubjectSlot)).toEqual([
       "B",
       "A",
-      "B",
     ]);
     for (const shot of singleShots) {
       expect(shot.projection.subjectFaceAngle).toBeLessThanOrEqual(45);
@@ -56,8 +82,8 @@ describe("createShotPlan", () => {
       expect(shot.projection.subjectSafeForUltrawide).toBe(true);
       expect(shot.projection.valid).toBe(true);
     }
-    expect(shots.at(-1)?.label).toBe("B 反打中近景");
-    expect(shots.at(-1)?.speakerSlot).toBe("B");
+    expect(shots.at(-1)?.label).toBe("双人关系全景");
+    expect(shots.at(-1)?.coverageIntent).toBe("relationship");
   });
 
   it("keeps adjacent 2048 camera directions at least 30 degrees apart", () => {
@@ -81,12 +107,10 @@ describe("createShotPlan", () => {
       "symmetry",
       "golden_ratio",
       "negative_space",
-      "rule_of_thirds",
+      "asymmetrical_balance",
     ]);
     expect(shots[0].compositionPlan.transition).toBe("recenter");
-    expect(shots.at(-1)?.compositionPlan.transition).toBe(
-      "mirror_reverse",
-    );
+    expect(shots.at(-1)?.compositionPlan.transition).toBe("match_eye_trace");
 
     for (const shot of shots) {
       expect(shot.projection.anchorDistance).toBeLessThanOrEqual(0.18);
@@ -147,15 +171,20 @@ describe("createShotPlan", () => {
 
     expect(groupShots[0].kind).toBe("master");
     expect(groupShots[0].label).toBe("双人建立镜头");
-    expect(groupShots.slice(1).some((shot) => shot.kind === "group-medium"))
+    expect(groupShots.slice(0, 3).every((shot) => shot.kind === "master"))
       .toBe(true);
+    expect(groupShots.map((shot) => shot.coverageIntent)).toEqual([
+      "establish_geography",
+      "reestablish_geography",
+      "reestablish_geography",
+    ]);
     expect(groupPreview.sequence.participants.map((participant) => participant.entryIndex))
       .toEqual([0, 0, 2, 3]);
-    const participantCEntry = groupShots.find(
-      (shot) => shot.speakerSlot === "C",
+    const participantCEntry = groupShots.find((shot) =>
+      shot.dialogueIds.includes("309903"),
     );
-    const participantDEntry = groupShots.find(
-      (shot) => shot.speakerSlot === "D",
+    const participantDEntry = groupShots.find((shot) =>
+      shot.dialogueIds.includes("309904"),
     );
     expect(participantCEntry?.rationale).toContain("新角色");
     expect(participantDEntry?.rationale).toContain("新角色");
@@ -173,17 +202,33 @@ describe("createShotPlan", () => {
 
   it("changes relationship axes through a shared pivot in group dialogue", () => {
     const groupSequence = findDialogueSequence(demoDatabase, "3099");
-    const groupShots = createShotPreview(groupSequence).shots;
+    const input = createDirectorInput(groupSequence, "group-axis-test");
+    const blocking = createDefaultBlocking(input);
+    for (const placement of blocking.placements) {
+      placement.entry_dialogue_id = input.dialogue[0].dialogue_id;
+    }
+    const participants = resolveBlocking(
+      groupSequence.participants,
+      blocking,
+      groupSequence.rows.map((row) => row.id),
+    );
+    const groupShots = resolveShotDecisions(
+      { ...groupSequence, participants },
+      createRuleDecisions(input, blocking),
+    );
     const relationshipShots = groupShots.filter(
       (shot) => shot.axis.kind === "relationship",
     );
 
     expect(relationshipShots.map((shot) => shot.axis.id)).toEqual([
-      "A-B",
-      "B-C",
       "C-D",
       "A-D",
     ]);
+    expect(
+      relationshipShots.every(
+        (shot) => shot.projection.coverage === "group-medium",
+      ),
+    ).toBe(true);
     for (let index = 1; index < relationshipShots.length; index += 1) {
       expect(
         relationshipShots[index - 1].axis.participantSlots.some((slot) =>
@@ -214,7 +259,10 @@ describe("createShotPlan", () => {
 
     expect(participants[2].exitIndex).toBe(2);
     expect(() =>
-      resolveShotDecisions(stagedSequence, createRuleDecisions(input)),
+      resolveShotDecisions(
+        stagedSequence,
+        createRuleDecisions(input, blocking),
+      ),
     ).not.toThrow();
     expect(
       participants.filter(
@@ -230,5 +278,19 @@ describe("createShotPlan", () => {
           (participant.exitIndex === null || participant.exitIndex >= 3),
       ).map((participant) => participant.slot),
     ).toEqual(["A", "B", "D"]);
+    const departureShots = resolveShotDecisions(
+      stagedSequence,
+      createRuleDecisions(input, blocking),
+    );
+    const shotAfterExit = departureShots.find((shot) =>
+      shot.dialogueIds.includes("309904"),
+    );
+    expect(shotAfterExit?.kind).toBe("master");
+    expect(shotAfterExit?.coverageIntent).toBe("reestablish_geography");
+    expect(shotAfterExit?.projection.visibleParticipantSlots).toEqual([
+      "A",
+      "B",
+      "D",
+    ]);
   });
 });

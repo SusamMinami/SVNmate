@@ -232,9 +232,15 @@ function geometryFor(
   switch (decision.template) {
     case "master_two_shot": {
       const result = groupGeometry("full", "two-shot");
+      const label =
+        decision.coverage_intent === "reestablish_geography"
+          ? "双人重建全景"
+          : decision.coverage_intent === "establish_geography"
+            ? "双人建立镜头"
+            : "双人关系全景";
       return {
         kind: "master",
-        label: "双人建立镜头",
+        label,
         position: result.geometry.position,
         target: result.geometry.target,
         composition: `两人同框，${framing}，先建立空间和人物距离`,
@@ -258,9 +264,15 @@ function geometryFor(
     }
     case "master_group_shot": {
       const result = groupGeometry("full", "group");
+      const label =
+        decision.coverage_intent === "reestablish_geography"
+          ? `${participants.length}人群像重建全景`
+          : decision.coverage_intent === "establish_geography"
+            ? `${participants.length}人群像建立镜头`
+            : `${participants.length}人群像关系全景`;
       return {
         kind: "master",
-        label: `${participants.length}人群像建立镜头`,
+        label,
         position: result.geometry.position,
         target: result.geometry.target,
         composition: `${groupLabel}完整同框，${framing}，建立站位层次与多人视线关系`,
@@ -662,6 +674,7 @@ export function resolveShotDecisions(
       duration: estimateShotDuration(rows.map((row) => row.content)),
       cameraPosition: geometry.position,
       cameraTarget: geometry.target,
+      coverageIntent: decision.coverage_intent,
       compositionPlan: {
         mode: decision.composition_mode,
         visualAnchor: decision.visual_anchor,

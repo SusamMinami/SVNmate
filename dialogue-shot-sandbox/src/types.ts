@@ -144,6 +144,15 @@ export type CompositionTransition =
   | "progressive_shift"
   | "contrast";
 
+export type CoverageIntent =
+  | "establish_geography"
+  | "reestablish_geography"
+  | "relationship"
+  | "shared_reaction"
+  | "individual_perspective"
+  | "individual_emphasis"
+  | "reaction";
+
 export interface ShotComposition {
   mode: CompositionMode;
   visualAnchor: VisualAnchor;
@@ -198,6 +207,7 @@ export interface ShotPlan {
   duration: number;
   cameraPosition: Vec3;
   cameraTarget: Vec3;
+  coverageIntent: CoverageIntent;
   compositionPlan: ShotComposition;
   composition: string;
   rationale: string;

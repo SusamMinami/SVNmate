@@ -77,7 +77,7 @@ describe("designShots", () => {
         JSON.stringify({
           ok: true,
           data: {
-            schema_version: "shot-plan.v3",
+            schema_version: "shot-plan.v4",
             request_id: input!.request_id,
             status: "ready",
             scene_analysis: {
@@ -139,6 +139,10 @@ describe("designShots", () => {
               negative_space: index === 0 ? "balanced" : "look_room",
               composition_transition:
                 index === 0 ? "recenter" : "mirror_reverse",
+              coverage_intent:
+                index === 0
+                  ? "establish_geography"
+                  : "individual_perspective",
               camera_height: index === 4 ? "low" : "eye",
               intent: `测试镜头 ${index + 1}`,
             })),

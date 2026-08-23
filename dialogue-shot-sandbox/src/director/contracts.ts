@@ -76,6 +76,16 @@ export const COMPOSITION_TRANSITIONS = [
   "contrast",
 ] as const;
 
+export const COVERAGE_INTENTS = [
+  "establish_geography",
+  "reestablish_geography",
+  "relationship",
+  "shared_reaction",
+  "individual_perspective",
+  "individual_emphasis",
+  "reaction",
+] as const;
+
 export const ParticipantSlotSchema = z.enum(PARTICIPANT_SLOTS);
 
 export const DirectorBlockingSchema = z.object({
@@ -124,12 +134,13 @@ export const DirectorDecisionSchema = z.object({
   visual_anchor: z.enum(VISUAL_ANCHORS),
   negative_space: z.enum(NEGATIVE_SPACE_MODES),
   composition_transition: z.enum(COMPOSITION_TRANSITIONS),
+  coverage_intent: z.enum(COVERAGE_INTENTS),
   camera_height: z.enum(["low", "eye", "high"]),
   intent: z.string().min(2).max(240),
 });
 
 export const MiraReadyResponseSchema = z.object({
-  schema_version: z.literal("shot-plan.v3"),
+  schema_version: z.literal("shot-plan.v4"),
   request_id: z.string().min(1),
   status: z.literal("ready"),
   scene_analysis: z.object({
@@ -142,7 +153,7 @@ export const MiraReadyResponseSchema = z.object({
 });
 
 export const MiraNeedContextResponseSchema = z.object({
-  schema_version: z.literal("shot-plan.v3"),
+  schema_version: z.literal("shot-plan.v4"),
   request_id: z.string().min(1),
   status: z.literal("need_context"),
   required_context: z.array(z.enum(REQUIRED_CONTEXTS)).min(1),
@@ -156,7 +167,7 @@ export const MiraDirectorResponseSchema = z.discriminatedUnion("status", [
 
 export const DirectorInputSchema = z.object({
   request_id: z.string().min(1),
-  schema_version: z.literal("shot-plan.v3"),
+  schema_version: z.literal("shot-plan.v4"),
   dialogue_prefix: z.string().regex(/^\d{4}$/),
   start_id: z.string().min(4),
   outline: z.string(),
@@ -218,6 +229,7 @@ export const DirectorInputSchema = z.object({
   constraints: z.object({
     dynamic_relationship_axis: z.literal(true),
     composition_projection_validation: z.literal(true),
+    relationship_coverage: z.literal(true),
     primary_aspect_ratio: z.literal("16:9"),
     overlay_aspect_ratio: z.literal("21:9"),
     avoid_character_overlap: z.literal(true),
@@ -239,7 +251,7 @@ export type AppliedDirector = DirectorMode;
 
 export interface DirectorInput {
   request_id: string;
-  schema_version: "shot-plan.v3";
+  schema_version: "shot-plan.v4";
   dialogue_prefix: string;
   start_id: string;
   outline: string;
@@ -284,6 +296,7 @@ export interface DirectorInput {
   constraints: {
     dynamic_relationship_axis: true;
     composition_projection_validation: true;
+    relationship_coverage: true;
     primary_aspect_ratio: "16:9";
     overlay_aspect_ratio: "21:9";
     avoid_character_overlap: true;
@@ -333,7 +346,7 @@ export function createDirectorInput(
   );
   return {
     request_id: requestId,
-    schema_version: "shot-plan.v3",
+    schema_version: "shot-plan.v4",
     dialogue_prefix: sequence.prefix,
     start_id: sequence.startId,
     outline: sequence.outline,
@@ -396,6 +409,7 @@ export function createDirectorInput(
     constraints: {
       dynamic_relationship_axis: true,
       composition_projection_validation: true,
+      relationship_coverage: true,
       primary_aspect_ratio: "16:9",
       overlay_aspect_ratio: "21:9",
       avoid_character_overlap: true,

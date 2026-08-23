@@ -6,7 +6,7 @@ description: "Designs UE4 dialogue storyboards through the local storyboard MCP 
 # 内部 TRAE 分镜导演
 
 使用当前内部 TRAE 模型处理“镜头沙盘”提交的待办任务，并通过 MCP
-返回严格的 `shot-plan.v3`。
+返回严格的 `shot-plan.v4`。
 
 ## 触发场景
 
@@ -28,7 +28,7 @@ description: "Designs UE4 dialogue storyboards through the local storyboard MCP 
    - `constraints.supported_templates`：允许的镜头模板
 4. 分析戏剧目标、情绪推进、关系变化、信息揭示和视觉节奏。
 5. 根据角色关系、权力状态和当前事件设计语义站位。
-6. 生成满足下述要求的 `shot-plan.v3`。
+6. 生成满足下述要求的 `shot-plan.v4`。
 7. 调用 `storyboard_submit_plan` 提交结果。
 8. 只有 MCP 返回 `accepted=true` 才计为完成；随后再次调用
    `storyboard_get_pending_request`，继续处理下一项。
@@ -48,6 +48,21 @@ description: "Designs UE4 dialogue storyboards through the local storyboard MCP 
   `master_group_shot`。
 - 多人任务中需要突出当前说话者并保留关系背景时，使用
   `speaker_group_medium` 和该说话者的槽位。
+- 每个 shot 必须设置 `coverage_intent`，说明该镜头为何选择单人、双人、
+  带群或群像，不能仅因说话人变化自动切成单人。
+- 前三个镜头中必须至少有一个交代当前在场角色关系和站位的全景：
+  两人在场时使用 `master_two_shot`，三人及以上使用
+  `master_group_shot`。
+- 新角色进入后，或角色离场后的下一镜，只要仍有至少两人在场，都必须
+  使用双人或群像全景重新建立人物位置、视线和关系。
+- 双人镜头用于冲突、连接、谈判、共同利益、共同反应和身体语言；当一个
+  镜头覆盖双方连续台词且没有重大个人转折时，优先保留双方同框。
+- 三人以上的普通互动优先用 `speaker_group_medium` 保留主体与关系背景；
+  群像全景用于社会结构、阵营、集体反应和空间变化。
+- 单人镜头用于个人视角、重要台词、决定、隐瞒、脆弱、孤立或关键反应；
+  `close_up` 和 `reaction_closeup` 不作为普通对话的默认覆盖。
+- 连续三个紧景后，若下一节点不是必须继续紧景的重大情绪点，应回到双人
+  或群像全景重建空间。
 - 轴线按当前互动关系动态建立。单人或带群镜头的关系轴连接
   `subject` 与 `look_target`，不能把多人场面简化为一条固定全场轴线。
 - 同一角色对的连续镜头必须保持在该关系轴同一侧，并保持相反视线方向。
@@ -114,7 +129,7 @@ description: "Designs UE4 dialogue storyboards through the local storyboard MCP 
 
 ```json
 {
-  "schema_version": "shot-plan.v3",
+  "schema_version": "shot-plan.v4",
   "request_id": "必须与任务一致",
   "status": "ready",
   "scene_analysis": {
@@ -155,6 +170,7 @@ description: "Designs UE4 dialogue storyboards through the local storyboard MCP 
       "visual_anchor": "left_third",
       "negative_space": "look_room",
       "composition_transition": "mirror_reverse",
+      "coverage_intent": "relationship",
       "camera_height": "eye",
       "intent": "该镜头推动叙事的原因"
     }
@@ -202,13 +218,20 @@ balanced, look_room, isolation, pressure
 recenter, match_eye_trace, mirror_reverse, progressive_shift, contrast
 ```
 
+`coverage_intent` 只能使用：
+
+```text
+establish_geography, reestablish_geography, relationship,
+shared_reaction, individual_perspective, individual_emphasis, reaction
+```
+
 ## 信息不足
 
 仅在确实无法设计时提交：
 
 ```json
 {
-  "schema_version": "shot-plan.v3",
+  "schema_version": "shot-plan.v4",
   "request_id": "必须与任务一致",
   "status": "need_context",
   "required_context": ["npc_relationship"],

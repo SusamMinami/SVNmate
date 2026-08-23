@@ -30,7 +30,7 @@ export interface StoryboardTask {
 
 const PROCESSING_LEASE_MS = 20 * 60_000;
 export const STORYBOARD_CACHE_POLICY =
-  "shot-plan.v3:dynamic-axis-composition-v1";
+  "shot-plan.v4:relationship-coverage-v1";
 
 function taskDirectory(): string {
   return join(storyboardRuntimeRoot(), ".storyboard-data", "tasks");
@@ -307,6 +307,10 @@ export async function completeStoryboardTask(
       (typeof expectedSlots)[number],
       number | null
     >();
+    const validatedShots: Array<{
+      activeCount: number;
+      isRelationshipWide: boolean;
+    }> = [];
     for (const placement of result.blocking.placements) {
       if (
         placement.facing !== "group_center" &&
@@ -412,6 +416,50 @@ export async function completeStoryboardTask(
         );
       });
       const activeCount = activeSlots.length;
+      const isRelationshipWide =
+        shot.template === "master_two_shot" ||
+        shot.template === "master_group_shot";
+      const hasEntranceAtStart =
+        shotStartIndex > 0 &&
+        expectedSlots.some(
+          (slot) => entryIndexBySlot.get(slot) === shotStartIndex,
+        );
+      const hasExitBeforeStart =
+        shotStartIndex > 0 &&
+        expectedSlots.some(
+          (slot) => exitIndexBySlot.get(slot) === shotStartIndex - 1,
+        );
+      if (
+        activeCount >= 2 &&
+        (hasEntranceAtStart || hasExitBeforeStart) &&
+        !isRelationshipWide
+      ) {
+        throw new Error(
+          `镜头 ${index + 1} 位于角色进出场边界，必须使用全景重新建立空间`,
+        );
+      }
+      if (
+        isRelationshipWide &&
+        ![
+          "establish_geography",
+          "reestablish_geography",
+          "relationship",
+        ].includes(shot.coverage_intent)
+      ) {
+        throw new Error(
+          `镜头 ${index + 1} 的全景模板与 coverage_intent 不匹配`,
+        );
+      }
+      if (
+        !isRelationshipWide &&
+        ["establish_geography", "reestablish_geography"].includes(
+          shot.coverage_intent,
+        )
+      ) {
+        throw new Error(
+          `镜头 ${index + 1} 声明建立空间，但没有使用双人或群像全景模板`,
+        );
+      }
       if (
         shot.subject !== "both" &&
         shot.subject !== "group" &&
@@ -488,6 +536,7 @@ export async function completeStoryboardTask(
           `镜头 ${index + 1} 的带群中景要求至少两位角色在场并指定单个主体`,
         );
       }
+      validatedShots.push({ activeCount, isRelationshipWide });
     }
     const expectedIds = task.input.dialogue.map((line) => line.dialogue_id);
     const actualIds = result.shots.flatMap((shot) => shot.dialogue_ids);
@@ -497,6 +546,15 @@ export async function completeStoryboardTask(
     ) {
       throw new Error(
         "shots 必须按原顺序覆盖所有 dialogue_id，且每个 ID 只能出现一次",
+      );
+    }
+    const openingShots = validatedShots.slice(0, 3);
+    if (
+      openingShots.some((shot) => shot.activeCount >= 2) &&
+      !openingShots.some((shot) => shot.isRelationshipWide)
+    ) {
+      throw new Error(
+        "前三个镜头必须至少包含一个交代当前角色关系与站位的双人或群像全景",
       );
     }
   }

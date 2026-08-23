@@ -56,7 +56,7 @@ export class MiraDirectorProvider implements ShotDirectorProvider {
     const parsed = MiraDirectorResponseSchema.safeParse(payload.data);
     if (!parsed.success) {
       throw new MiraDirectorError(
-        `Mira 返回格式不符合 shot-plan.v3：${parsed.error.issues[0]?.message ?? "未知错误"}`,
+        `Mira 返回格式不符合 shot-plan.v4：${parsed.error.issues[0]?.message ?? "未知错误"}`,
         "INVALID_SCHEMA",
       );
     }

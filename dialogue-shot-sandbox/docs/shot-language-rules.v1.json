@@ -1,6 +1,6 @@
 {
   "schema_version": "shot-rules.v1",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "updated_at": "2026-08-23",
   "shot_size_order": ["EWS", "WS", "FS", "MFS", "MS", "MCU", "CU", "ECU"],
   "lark_fields": [
@@ -680,6 +680,118 @@
       "enabled": true,
       "source": "项目风格要求；StudioBinder Composition",
       "version": "1.2.0"
+    },
+    {
+      "id": "COV-001",
+      "name": "前三镜必须建立人物关系",
+      "category": "群像",
+      "enforcement": "硬约束",
+      "applies_when": "前三个镜头内已有至少两位角色在场",
+      "requirement": "前三个镜头至少包含一个覆盖全部当前在场角色的双人或群像全景，用于交代站位、视线和人物关系。",
+      "machine_check": "firstThree.some(shot => shot.template in [master_two_shot,master_group_shot] && shot.coversAllActiveActors)",
+      "exception": "前三镜始终只有一位角色在场时，在第二位角色进入的节点立即建立关系全景。",
+      "weight": 100,
+      "enabled": true,
+      "source": "Adobe Master Shot；项目导演规范",
+      "version": "1.3.0"
+    },
+    {
+      "id": "COV-002",
+      "name": "进出场后重新建立空间",
+      "category": "群像",
+      "enforcement": "硬约束",
+      "applies_when": "新角色进入，或角色离场后的下一镜且仍有至少两人在场",
+      "requirement": "使用双人或群像全景覆盖全部当前在场角色，重新交代位置、视线、阵营和可行动空间。",
+      "machine_check": "attendanceChanged && activeCount>=2 ? isRelationshipWide && coversAllActiveActors : true",
+      "exception": "角色移动和新位置在同一连续镜头中完整可见时可不另切全景。",
+      "weight": 100,
+      "enabled": true,
+      "source": "Adobe Master Shot；Master Scene Method；项目进出场约束",
+      "version": "1.3.0"
+    },
+    {
+      "id": "COV-003",
+      "name": "双人镜头优先表现关系",
+      "category": "群像",
+      "enforcement": "软约束",
+      "applies_when": "两位角色的冲突、连接、谈判、共同利益或身体语言是当前重点",
+      "requirement": "优先让双方同框，使距离、姿态和同步反应可被同时读取；普通来回对话不必全部拆成单人正反打。",
+      "machine_check": "relationshipBeat && activeCount===2 ? coverage in [two-shot,over-the-shoulder] : true",
+      "exception": "个人秘密、决定、脆弱或强烈主观体验需要隔离角色时使用单人。",
+      "weight": 92,
+      "enabled": true,
+      "source": "StudioBinder Two Shot；Adobe Camera Shot Types",
+      "version": "1.3.0"
+    },
+    {
+      "id": "COV-004",
+      "name": "群像镜头用于社会结构与集体反应",
+      "category": "群像",
+      "enforcement": "软约束",
+      "applies_when": "三人以上的阵营、权力层级、集体决定、共同反应或空间调度",
+      "requirement": "使用群像全景或带群中景呈现集体结构；群像全景负责整体关系，带群中景负责主体与关系背景。",
+      "machine_check": "collectiveBeat && activeCount>=3 ? coverage in [group,group-medium] : true",
+      "exception": "集体场景中的决定性个人反应可切单人，再在后续镜头恢复群体关系。",
+      "weight": 90,
+      "enabled": true,
+      "source": "StudioBinder Two Shot / Group Shot；Adobe Master Shot",
+      "version": "1.3.0"
+    },
+    {
+      "id": "COV-005",
+      "name": "单人镜头必须服务个人信息",
+      "category": "群像",
+      "enforcement": "软约束",
+      "applies_when": "计划使用洁净单人、单人近景或反应近景",
+      "requirement": "单人镜头应服务于个人视角、重要台词、决定、隐瞒、脆弱、孤立或关键反应，而不是仅因该角色正在说话。",
+      "machine_check": "coverage=single ? coverageIntent in [individual_perspective,individual_emphasis,reaction] : true",
+      "exception": "明确采用持续主观视角的整场风格。",
+      "weight": 94,
+      "enabled": true,
+      "source": "StudioBinder Single Shot；Adobe Camera Shot Types",
+      "version": "1.3.0"
+    },
+    {
+      "id": "COV-006",
+      "name": "共同反应保留同框",
+      "category": "群像",
+      "enforcement": "风格偏好",
+      "applies_when": "同一信息同时影响两位或多位角色",
+      "requirement": "优先使用双人、带群或群像镜头保留同步反应和人物间即时反馈，避免切分后损失关系信息。",
+      "machine_check": "sharedReaction ? coverageIntent=shared_reaction && visiblePrimaryActors>=2 : true",
+      "exception": "其中一人的反应是唯一叙事重点时可切单人。",
+      "weight": 82,
+      "enabled": true,
+      "source": "StudioBinder Two Shot；Adobe Reaction Shot guidance",
+      "version": "1.3.0"
+    },
+    {
+      "id": "COV-007",
+      "name": "连续紧景后恢复空间",
+      "category": "群像",
+      "enforcement": "软约束",
+      "applies_when": "连续三个单人中近景、近景或特写之后",
+      "requirement": "下一普通节点优先回到双人或群像全景，提醒观众人物位置并让视觉节奏呼吸。",
+      "machine_check": "tightSingleRun>=3 && !majorBeat ? next.coverage in [two-shot,group,group-medium] : true",
+      "exception": "持续幽闭、审讯或主观限制视角具有明确风格动机。",
+      "weight": 86,
+      "enabled": true,
+      "source": "Adobe Master Shot；项目节奏规范",
+      "version": "1.3.0"
+    },
+    {
+      "id": "COV-008",
+      "name": "覆盖意图必须结构化声明",
+      "category": "系统校验",
+      "enforcement": "硬约束",
+      "applies_when": "所有镜头",
+      "requirement": "每个镜头必须用 coverage_intent 声明建立空间、重建空间、关系、共同反应、个人视角、个人强调或关键反应。",
+      "machine_check": "coverageIntent in allowedCoverageIntents && templateCompatibleWithCoverageIntent",
+      "exception": "无；缺失或与模板冲突时拒绝方案。",
+      "weight": 100,
+      "enabled": true,
+      "source": "项目机器协议 shot-plan.v4",
+      "version": "1.3.0"
     }
   ],
   "sources": [
@@ -774,6 +886,22 @@
     {
       "name": "Ohio State Film Cinematography",
       "url": "https://ohiostate.pressbooks.pub/introfilm/chapter/cinematography-i/"
+    },
+    {
+      "name": "Adobe Master Shot",
+      "url": "https://www.adobe.com/sa_en/creativecloud/video/production/cinematography/camera-shots-and-angles/master-shot.html"
+    },
+    {
+      "name": "Adobe Camera Shot Types",
+      "url": "https://www.adobe.com/cy_en/creativecloud/video/discover/types-of-shots-in-films.html"
+    },
+    {
+      "name": "StudioBinder Two Shot",
+      "url": "https://www.studiobinder.com/camera-shots/framing/two-shot/"
+    },
+    {
+      "name": "StudioBinder Single Shot",
+      "url": "https://www.studiobinder.com/camera-shots/framing/single-shot/"
     }
   ]
 }

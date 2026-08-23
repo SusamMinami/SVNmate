@@ -1,4 +1,5 @@
 import type {
+  DirectorBlocking,
   DirectorDecision,
   DirectorInput,
   DirectorProviderResult,
@@ -15,6 +16,23 @@ import {
   MINIMUM_SHOT_DURATION_SECONDS,
   PREFERRED_MAXIMUM_SHOT_DURATION_SECONDS,
 } from "./shotTiming";
+
+interface AttendanceContext {
+  entryIndexBySlot: Map<ParticipantSlot, number>;
+  exitIndexBySlot: Map<ParticipantSlot, number | null>;
+}
+
+const TIGHT_SINGLE_TEMPLATES = new Set<DirectorDecision["template"]>([
+  "reverse_medium",
+  "close_up",
+  "reaction_closeup",
+  "low_angle_closeup",
+  "high_angle_closeup",
+]);
+
+const RELATIONSHIP_WIDE_TEMPLATES = new Set<
+  DirectorDecision["template"]
+>(["master_two_shot", "master_group_shot"]);
 
 function isPause(content: string): boolean {
   return /^[.…·\s]{2,}/.test(content);
@@ -36,6 +54,96 @@ function visualAnchorFor(
     return "center";
   }
   return speakerIndex < midpoint ? "left_third" : "right_third";
+}
+
+function createAttendanceContext(
+  input: DirectorInput,
+  blocking: DirectorBlocking,
+): AttendanceContext {
+  const dialogueIndexById = new Map(
+    input.dialogue.map((line, index) => [line.dialogue_id, index]),
+  );
+  const placementBySlot = new Map(
+    blocking.placements.map((placement) => [
+      placement.subject,
+      placement,
+    ]),
+  );
+  return {
+    entryIndexBySlot: new Map(
+      input.participants.map((participant) => {
+        const entryId =
+          placementBySlot.get(participant.slot)?.entry_dialogue_id ??
+          defaultEntryDialogueId(input, participant.first_dialogue_id);
+        return [
+          participant.slot,
+          dialogueIndexById.get(entryId) ?? Number.POSITIVE_INFINITY,
+        ];
+      }),
+    ),
+    exitIndexBySlot: new Map(
+      input.participants.map((participant) => {
+        const exitId =
+          placementBySlot.get(participant.slot)?.exit_dialogue_id ?? null;
+        return [
+          participant.slot,
+          exitId === null ? null : (dialogueIndexById.get(exitId) ?? null),
+        ];
+      }),
+    ),
+  };
+}
+
+function activeParticipantsAt(
+  index: number,
+  input: DirectorInput,
+  attendance: AttendanceContext,
+): DirectorInput["participants"] {
+  return input.participants.filter((participant) => {
+    const entryIndex =
+      attendance.entryIndexBySlot.get(participant.slot) ??
+      Number.POSITIVE_INFINITY;
+    const exitIndex = attendance.exitIndexBySlot.get(participant.slot);
+    return (
+      entryIndex <= index &&
+      (exitIndex === null || exitIndex === undefined || exitIndex >= index)
+    );
+  });
+}
+
+function relationshipWideDecision(
+  dialogueId: string,
+  activeParticipants: DirectorInput["participants"],
+  coverageIntent: Extract<
+    DirectorDecision["coverage_intent"],
+    "establish_geography" | "reestablish_geography" | "relationship"
+  >,
+  reason: string,
+): DirectorDecision {
+  const isGroup = activeParticipants.length > 2;
+  return {
+    dialogue_ids: [dialogueId],
+    template: isGroup ? "master_group_shot" : "master_two_shot",
+    subject: isGroup ? "group" : "both",
+    look_target: "group_center",
+    lens_mm: isGroup
+      ? activeParticipants.length > 4
+        ? 28
+        : 32
+      : 38,
+    composition_mode:
+      activeParticipants.length === 3
+        ? "triangular"
+        : isGroup
+          ? "layered_depth"
+          : "symmetry",
+    visual_anchor: "balanced",
+    negative_space: "balanced",
+    composition_transition: "recenter",
+    coverage_intent: coverageIntent,
+    camera_height: "eye",
+    intent: reason,
+  };
 }
 
 function lookTargetFor(
@@ -76,29 +184,13 @@ function decisionFor(
   index: number,
   previousSpeaker: ParticipantSlot | null,
   input: DirectorInput,
+  attendance: AttendanceContext,
 ): DirectorDecision {
   const screenPosition = visualAnchorFor(row.speaker, input);
-  const dialogueIndexById = new Map(
-    input.dialogue.map((line, dialogueIndex) => [
-      line.dialogue_id,
-      dialogueIndex,
-    ]),
-  );
-  const activeParticipants = input.participants.filter((participant) => {
-    const entryDialogueId = defaultEntryDialogueId(
-      input,
-      participant.first_dialogue_id,
-    );
-    return (
-      (dialogueIndexById.get(entryDialogueId) ?? Number.POSITIVE_INFINITY) <=
-      index
-    );
-  });
-  const enteringParticipant = input.participants.find(
+  const activeParticipants = activeParticipantsAt(index, input, attendance);
+  const hasEntrance = input.participants.some(
     (participant) =>
-      participant.slot === row.speaker &&
-      defaultEntryDialogueId(input, participant.first_dialogue_id) ===
-        row.dialogue_id &&
+      attendance.entryIndexBySlot.get(participant.slot) === index &&
       index > 0,
   );
   const lookTarget = lookTargetFor(
@@ -120,51 +212,27 @@ function decisionFor(
         visual_anchor: "center",
         negative_space: "balanced",
         composition_transition: "recenter",
+        coverage_intent: "individual_perspective",
         camera_height: "eye",
         intent: "先建立当前在场角色，并为后续角色登场保留空间。",
       };
     }
-    return {
-      dialogue_ids: [row.dialogue_id],
-      template:
-        activeParticipants.length > 2
-          ? "master_group_shot"
-          : "master_two_shot",
-      subject: activeParticipants.length > 2 ? "group" : "both",
-      look_target: "group_center",
-      lens_mm: activeParticipants.length > 4 ? 28 : 38,
-      composition_mode:
-        activeParticipants.length > 2 ? "triangular" : "symmetry",
-      visual_anchor: "balanced",
-      negative_space: "balanced",
-      composition_transition: "recenter",
-      camera_height: "eye",
-      intent:
-        activeParticipants.length > 2
-          ? "先交代群像站位、视线关系与主要发言者位置，为后续单人镜头建立空间依据。"
-          : "先交代人物距离与对话轴线，为后续正反打建立空间关系。",
-    };
+    return relationshipWideDecision(
+      row.dialogue_id,
+      activeParticipants,
+      "establish_geography",
+      activeParticipants.length > 2
+        ? "先交代群像站位、视线关系与主要发言者位置，为后续单人镜头建立空间依据。"
+        : "先交代人物距离与对话轴线，为后续正反打建立空间关系。",
+    );
   }
-  if (enteringParticipant) {
-    return {
-      dialogue_ids: [row.dialogue_id],
-      template:
-        activeParticipants.length > 2
-          ? "speaker_group_medium"
-          : "reverse_medium",
-      subject: row.speaker,
-      look_target: lookTarget,
-      lens_mm: 42,
-      composition_mode:
-        activeParticipants.length > 2
-          ? "layered_depth"
-          : "asymmetrical_balance",
-      visual_anchor: screenPosition,
-      negative_space: "look_room",
-      composition_transition: "progressive_shift",
-      camera_height: "eye",
-      intent: "新角色在该台词节点进入场面，镜头明确其位置并更新群体关系。",
-    };
+  if (hasEntrance && activeParticipants.length > 1) {
+    return relationshipWideDecision(
+      row.dialogue_id,
+      activeParticipants,
+      "reestablish_geography",
+      "新角色在该节点进入场面，使用全景重新交代全部在场角色的位置、关系和视线。",
+    );
   }
   if (isPause(row.content)) {
     return {
@@ -182,6 +250,7 @@ function decisionFor(
             : "center",
       negative_space: "isolation",
       composition_transition: "contrast",
+      coverage_intent: "reaction",
       camera_height: "eye",
       intent: "停顿构成情绪节点，收紧景别读取角色没有说出口的反应。",
     };
@@ -202,6 +271,7 @@ function decisionFor(
             : "center",
       negative_space: "pressure",
       composition_transition: "progressive_shift",
+      coverage_intent: "individual_emphasis",
       camera_height: "eye",
       intent: "台词包含追问或强调信息，使用近景集中注意力并提高情绪权重。",
     };
@@ -223,6 +293,10 @@ function decisionFor(
       previousSpeaker && previousSpeaker !== row.speaker
         ? "mirror_reverse"
         : "match_eye_trace",
+    coverage_intent:
+      input.participants.length > 2
+        ? "relationship"
+        : "individual_perspective",
     camera_height: "eye",
     intent:
       input.participants.length > 2
@@ -235,9 +309,10 @@ export class RuleDirectorProvider implements ShotDirectorProvider {
   readonly id = "rule" as const;
 
   async design(input: DirectorInput): Promise<DirectorProviderResult> {
+    const blocking = createDefaultBlocking(input);
     return {
-      decisions: createRuleDecisions(input),
-      blocking: createDefaultBlocking(input),
+      decisions: createRuleDecisions(input, blocking),
+      blocking,
       analysis: createRuleAnalysis(input),
     };
   }
@@ -251,28 +326,37 @@ export function createRuleAnalysis(
     dramaticGoal: "规则导演未进行深层剧情推理",
     emotionalProgression: "根据句长、停顿、标点和说话人切换判断节奏",
     visualStrategy: isGroupDialogue
-      ? "先建立完整群像，普通镜头至少承载两句台词，不因说话人变化立即切镜，并在强调处收紧至单人近景"
-      : "建立镜头后使用轴线内正反打，普通镜头至少承载两句台词，不因说话人变化立即切镜",
+      ? "前三镜建立关系全景，进出场后重新建立空间；普通关系段优先带群或群像，重要情绪才收紧为单人"
+      : "先用双人镜头建立关系，共同反应保留同框，重要台词与内心反应再切单人，并在连续紧景后回到双人空间",
   };
 }
 
-export function createRuleDecisions(input: DirectorInput): DirectorDecision[] {
+export function createRuleDecisions(
+  input: DirectorInput,
+  blocking = createDefaultBlocking(input),
+): DirectorDecision[] {
   let previousSpeaker: ParticipantSlot | null = null;
-  const dialogueIndexById = new Map(
-    input.dialogue.map((line, index) => [line.dialogue_id, index]),
-  );
+  const attendance = createAttendanceContext(input, blocking);
   const rawDecisions = input.dialogue.map((row, index) => {
-    const decision = decisionFor(row, index, previousSpeaker, input);
+    const decision = decisionFor(
+      row,
+      index,
+      previousSpeaker,
+      input,
+      attendance,
+    );
     previousSpeaker = row.speaker;
     return decision;
   });
   const entryDialogueIds = new Set(
-    input.participants.map((participant) =>
-      defaultEntryDialogueId(input, participant.first_dialogue_id),
-    ),
+    [...attendance.entryIndexBySlot.values()]
+      .filter(Number.isFinite)
+      .map((index) => input.dialogue[index].dialogue_id),
   );
-  const lastDialogueIds = new Set(
-    input.participants.map((participant) => participant.last_dialogue_id),
+  const exitDialogueIds = new Set(
+    [...attendance.exitIndexBySlot.values()]
+      .filter((index): index is number => index !== null)
+      .map((index) => input.dialogue[index].dialogue_id),
   );
   const drafts: Array<{
     decision: DirectorDecision;
@@ -285,7 +369,7 @@ export function createRuleDecisions(input: DirectorInput): DirectorDecision[] {
   const hasHardBoundaryBefore = (index: number): boolean =>
     index > 0 &&
     (entryDialogueIds.has(input.dialogue[index].dialogue_id) ||
-      lastDialogueIds.has(input.dialogue[index - 1].dialogue_id));
+      exitDialogueIds.has(input.dialogue[index - 1].dialogue_id));
 
   const appendToCurrent = (
     draft: (typeof drafts)[number],
@@ -364,9 +448,37 @@ export function createRuleDecisions(input: DirectorInput): DirectorDecision[] {
   }
 
   let previousVisualSubject: ParticipantSlot | null = null;
+  let previousRelationshipPair: ParticipantSlot[] | null = null;
+  let tightSingleRun = 0;
+  let relationshipWideInOpening = false;
   return drafts.map(
-    ({ decision, retainedForTiming, startIndex, endIndex }) => {
+    ({ decision, retainedForTiming, startIndex, endIndex }, shotIndex) => {
       const segmentDecisions = rawDecisions.slice(startIndex, endIndex + 1);
+      const segmentRows = input.dialogue.slice(startIndex, endIndex + 1);
+      const activeParticipants = activeParticipantsAt(
+        endIndex,
+        input,
+        attendance,
+      );
+      const hasPauseBeat = segmentRows.some((row) => isPause(row.content));
+      const hasEmphasisBeat = segmentRows.some((row) =>
+        isEmphatic(row.content),
+      );
+      const segmentSpeakers = new Set(
+        segmentRows.map((row) => row.speaker),
+      );
+      const hasEntranceAtStart = input.participants.some(
+        (participant) =>
+          attendance.entryIndexBySlot.get(participant.slot) === startIndex &&
+          startIndex > 0,
+      );
+      const hasExitBeforeStart =
+        startIndex > 0 &&
+        input.participants.some(
+          (participant) =>
+            attendance.exitIndexBySlot.get(participant.slot) ===
+            startIndex - 1,
+        );
       const keepsGroupComposition = [
         "master_two_shot",
         "profile_two_shot",
@@ -393,17 +505,10 @@ export function createRuleDecisions(input: DirectorInput): DirectorDecision[] {
         if (differentSegmentDecision) {
           selected = differentSegmentDecision;
         } else {
-          const activeAlternative = input.participants.find((participant) => {
-            const entryId = defaultEntryDialogueId(
-              input,
-              participant.first_dialogue_id,
-            );
-            return (
-              participant.slot !== previousVisualSubject &&
-              (dialogueIndexById.get(entryId) ?? Number.POSITIVE_INFINITY) <=
-                endIndex
-            );
-          });
+          const activeAlternative = activeParticipants.find(
+            (participant) =>
+              participant.slot !== previousVisualSubject,
+          );
           if (activeAlternative) {
             const previousSubject = selected.subject;
             selected = {
@@ -426,10 +531,108 @@ export function createRuleDecisions(input: DirectorInput): DirectorDecision[] {
                 activeAlternative.slot,
                 input,
               ),
+              coverage_intent:
+                input.participants.length > 2
+                  ? "shared_reaction"
+                  : selected.coverage_intent,
               intent: `${selected.intent} 保留另一位在场角色的反应，避免连续镜头重复同一主体。`,
             };
           }
         }
+      }
+
+      const currentRelationshipPair =
+        selected.subject !== "both" &&
+        selected.subject !== "group" &&
+        selected.look_target !== "group_center"
+          ? [selected.subject, selected.look_target]
+          : null;
+      const relationshipChangedWithoutSharedActor =
+        previousRelationshipPair !== null &&
+        currentRelationshipPair !== null &&
+        !previousRelationshipPair.some((slot) =>
+          currentRelationshipPair.includes(slot),
+        );
+      const needsOpeningRelationshipWide =
+        shotIndex < 3 &&
+        !relationshipWideInOpening &&
+        activeParticipants.length >= 2;
+      const needsWideAfterTightRun =
+        tightSingleRun >= 3 &&
+        !hasPauseBeat &&
+        !hasEmphasisBeat &&
+        activeParticipants.length >= 2;
+      const needsRelationshipWide =
+        activeParticipants.length >= 2 &&
+        (hasEntranceAtStart ||
+          hasExitBeforeStart ||
+          relationshipChangedWithoutSharedActor ||
+          needsOpeningRelationshipWide ||
+          needsWideAfterTightRun);
+      const needsClosingRelationshipShot =
+        shotIndex === drafts.length - 1 &&
+        tightSingleRun >= 2 &&
+        !hasPauseBeat &&
+        !hasEmphasisBeat &&
+        activeParticipants.length === 2;
+
+      if (needsRelationshipWide) {
+        const reason = hasEntranceAtStart
+          ? "新角色进入场面，使用全景重新交代全部在场角色的位置、关系和视线。"
+          : hasExitBeforeStart
+            ? "角色离场后使用全景重新交代剩余角色的位置和新的空间关系。"
+            : relationshipChangedWithoutSharedActor
+              ? "当前互动双方改变且新旧关系轴没有共享角色，使用全景重建空间。"
+              : needsWideAfterTightRun
+                ? "连续紧景已达到三镜，回到关系全景让观众重新确认人物位置。"
+                : "在前三个镜头内建立全部当前在场角色的关系和站位。";
+        selected = relationshipWideDecision(
+          input.dialogue[startIndex].dialogue_id,
+          activeParticipants,
+          shotIndex === 0
+            ? "establish_geography"
+            : "reestablish_geography",
+          reason,
+        );
+      } else if (
+        activeParticipants.length === 2 &&
+        (segmentSpeakers.size >= 2 || needsClosingRelationshipShot) &&
+        !hasPauseBeat &&
+        !hasEmphasisBeat
+      ) {
+        selected = {
+          ...selected,
+          template: "master_two_shot",
+          subject: "both",
+          look_target: "group_center",
+          lens_mm: 42,
+          composition_mode: "asymmetrical_balance",
+          visual_anchor: "balanced",
+          negative_space: "balanced",
+          composition_transition: "match_eye_trace",
+          coverage_intent: "relationship",
+          intent: needsClosingRelationshipShot
+            ? "连续紧景后在段落结尾回到双人镜头，交代双方共享结果并恢复关系空间。"
+            : "当前段落的重点是双方互动和共同反应，使用双人镜头保留身体语言并避免机械正反打。",
+        };
+      } else if (
+        activeParticipants.length > 2 &&
+        segmentSpeakers.size >= 2 &&
+        TIGHT_SINGLE_TEMPLATES.has(selected.template) &&
+        !hasPauseBeat &&
+        !hasEmphasisBeat
+      ) {
+        selected = {
+          ...selected,
+          template: "speaker_group_medium",
+          lens_mm: 42,
+          composition_mode: "layered_depth",
+          negative_space: "look_room",
+          composition_transition: "match_eye_trace",
+          coverage_intent: "shared_reaction",
+          intent:
+            "当前段落包含多位角色互动，保留主体与关系角色的共同反应和空间背景。",
+        };
       }
 
       const selectedSubject =
@@ -437,6 +640,22 @@ export function createRuleDecisions(input: DirectorInput): DirectorDecision[] {
           ? null
           : selected.subject;
       previousVisualSubject = selectedSubject;
+      if (RELATIONSHIP_WIDE_TEMPLATES.has(selected.template)) {
+        if (shotIndex < 3) {
+          relationshipWideInOpening = true;
+        }
+        previousRelationshipPair = null;
+      } else {
+        previousRelationshipPair =
+          selected.subject !== "both" &&
+          selected.subject !== "group" &&
+          selected.look_target !== "group_center"
+            ? [selected.subject, selected.look_target]
+            : null;
+      }
+      tightSingleRun = TIGHT_SINGLE_TEMPLATES.has(selected.template)
+        ? tightSingleRun + 1
+        : 0;
       return {
         ...selected,
         dialogue_ids: [...decision.dialogue_ids],

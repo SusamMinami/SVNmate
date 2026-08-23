@@ -49,6 +49,13 @@ export function buildDirectorPrompt(
     "三人及以上群像优先考虑 triangular 或 layered_depth；通过前中后景和三角视觉关系分离角色轮廓。",
     "上下镜 composition_transition：正反打优先 mirror_reverse；希望观众视线停留在相近屏幕区域时使用 match_eye_trace；收紧情绪时使用 progressive_shift；重新建立空间时使用 recenter；有意制造冲击时才使用 contrast。",
     "构图连续性优先匹配主体眼睛或主要视觉重心，而不是机械保持完全相同画面；连续多镜也要避免所有主体始终落在同一侧造成单调。",
+    "每个 shot 必须设置 coverage_intent，明确该镜为何选择单人、双人、带群或群像，而不是只按当前说话者机械切换。",
+    "前三个镜头中必须至少有一个交代当前在场角色关系和站位的全景：恰有两人在场时使用 master_two_shot，至少三人在场时使用 master_group_shot。",
+    "任何角色进入后，或角色离场后的下一镜，只要仍有至少两人在场，都必须使用双人或群像全景重新建立位置与关系。",
+    "双人镜头用于关系、共同反应、身体语言、距离和共同利益；当一个镜头覆盖双方连续台词且没有重大个人情绪转折时，优先保留双方同框，避免机械正反打。",
+    "三人以上的普通互动优先使用 speaker_group_medium 保留主体和关系背景；群像全景用于社会结构、阵营、集体反应和空间变化。",
+    "单人镜头用于个人视角、重要台词、决定、隐瞒、脆弱、孤立或关键反应；close_up 和 reaction_closeup 不应成为普通对话的默认覆盖。",
+    "连续三个紧景后，若下一个节点不是必须保持紧景的重大情绪点，应回到双人或群像全景重建空间。",
     "正面群像中避免同时选择同侧且前后相邻的位置组合（如 mid_right + back_right）；优先用左右错列或对角站位分离轮廓。",
     "群像镜头应形成前后层次和横向间距；单人镜头不必强行容纳所有角色。",
     input.participants.length > 2
@@ -58,7 +65,7 @@ export function buildDirectorPrompt(
     "ready 格式：",
     JSON.stringify(
       {
-        schema_version: "shot-plan.v3",
+        schema_version: "shot-plan.v4",
         request_id: input.request_id,
         status: "ready",
         scene_analysis: {
@@ -94,6 +101,7 @@ export function buildDirectorPrompt(
             visual_anchor: "balanced",
             negative_space: "balanced",
             composition_transition: "recenter",
+            coverage_intent: "establish_geography",
             camera_height: "eye",
             intent: "这个镜头如何推动叙事",
           },
@@ -105,7 +113,7 @@ export function buildDirectorPrompt(
     "need_context 格式：",
     JSON.stringify(
       {
-        schema_version: "shot-plan.v3",
+        schema_version: "shot-plan.v4",
         request_id: input.request_id,
         status: "need_context",
         required_context: ["npc_relationship"],
@@ -122,6 +130,7 @@ export function buildDirectorPrompt(
     "允许的 visual_anchor：center, left_third, right_third, left_golden, right_golden, balanced",
     "允许的 negative_space：balanced, look_room, isolation, pressure",
     "允许的 composition_transition：recenter, match_eye_trace, mirror_reverse, progressive_shift, contrast",
+    "允许的 coverage_intent：establish_geography, reestablish_geography, relationship, shared_reaction, individual_perspective, individual_emphasis, reaction",
     "允许的 camera_height：low, eye, high",
     "允许的 required_context：npc_background, npc_relationship, scene_layout, story_before, story_after",
     "输入数据：",

@@ -55,6 +55,7 @@ import type {
   DialogueSequence,
   CompositionMode,
   CompositionTransition,
+  CoverageIntent,
   ShotCoverage,
   ShotPlan,
   ShotSize,
@@ -144,6 +145,19 @@ function compositionTransitionLabel(
     contrast: "对比切换",
   };
   return labels[transition];
+}
+
+function coverageIntentLabel(intent: CoverageIntent): string {
+  const labels: Record<CoverageIntent, string> = {
+    establish_geography: "建立空间",
+    reestablish_geography: "重建空间",
+    relationship: "人物关系",
+    shared_reaction: "共同反应",
+    individual_perspective: "个人视角",
+    individual_emphasis: "个人强调",
+    reaction: "关键反应",
+  };
+  return labels[intent];
 }
 
 function blockingPositionLabel(
@@ -586,7 +600,7 @@ export default function App() {
           <div>
             <h1>镜头沙盘</h1>
           </div>
-          <span className="version">v0.13.0</span>
+          <span className="version">v0.14.0</span>
         </div>
 
         <div className="source-status">
@@ -926,6 +940,10 @@ export default function App() {
               <div>
                 <dt>画面构成</dt>
                 <dd>{shotCoverageLabel(activeShot.projection.coverage)}</dd>
+              </div>
+              <div>
+                <dt>覆盖意图</dt>
+                <dd>{coverageIntentLabel(activeShot.coverageIntent)}</dd>
               </div>
               <div>
                 <dt>构图原则</dt>

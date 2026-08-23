@@ -36,7 +36,7 @@ export function createShotPreview(sequence: DialogueSequence): {
     sequence: stagedSequence,
     shots: resolveShotDecisions(
       stagedSequence,
-      createRuleDecisions(input),
+      createRuleDecisions(input, blocking),
     ),
     blocking,
     analysis: createRuleAnalysis(input),

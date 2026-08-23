@@ -52,6 +52,7 @@ test("renders nonblank shot and blocking canvases without horizontal overflow", 
   await expect(page.locator(".golden")).toHaveCount(4);
   await expect(page.getByText("黄金分割", { exact: true })).toBeVisible();
   await expect(page.getByText("渐进转移", { exact: true })).toBeVisible();
+  await expect(page.getByText("个人强调", { exact: true })).toBeVisible();
 
   const hasHorizontalOverflow = await page.evaluate(
     () => document.documentElement.scrollWidth > window.innerWidth + 1,
@@ -82,13 +83,17 @@ test("renders every participant in a multi-character dialogue", async ({
     page.locator(".actor-label--on-body:not(.actor-label--below)"),
   ).toHaveCount(2);
 
-  await page.getByRole("button", { name: /C C 带群中景/ }).click();
-  await expect(page.locator(".axis-status")).toContainText("关系轴 B-C");
+  await page
+    .getByRole("button", { name: /C 3人群像重建全景/ })
+    .click();
+  await expect(page.locator(".axis-status")).toContainText("群像总轴");
   await expect(
     page.locator(".actor-label--on-body:not(.actor-label--below)"),
   ).toHaveCount(3);
-  await page.getByRole("button", { name: /D D 带群中景/ }).click();
-  await expect(page.locator(".axis-status")).toContainText("关系轴 C-D");
+  await page
+    .getByRole("button", { name: /D 4人群像重建全景/ })
+    .click();
+  await expect(page.locator(".axis-status")).toContainText("群像总轴");
   await expect(
     page.locator(".actor-label--on-body:not(.actor-label--below)"),
   ).toHaveCount(4);
@@ -115,8 +120,8 @@ test("removes a character after the AI-directed exit node", async ({
           configured: true,
           connected: true,
           versionMismatch: false,
-          expectedVersion: "0.13.0",
-          serverVersion: "0.13.0",
+          expectedVersion: "0.14.0",
+          serverVersion: "0.14.0",
           lastSeenAt: "2026-08-22T00:00:00.000Z",
           mcpName: "internal-storyboard-collaboration",
           mcpConfigPath: "C:\\workspace\\.trae\\mcp.json",
@@ -147,7 +152,7 @@ test("removes a character after the AI-directed exit node", async ({
       body: JSON.stringify({
         ok: true,
         data: {
-          schema_version: "shot-plan.v3",
+          schema_version: "shot-plan.v4",
           request_id: input.request_id,
           status: "ready",
           scene_analysis: {
@@ -180,10 +185,17 @@ test("removes a character after the AI-directed exit node", async ({
                 ? "master_two_shot"
                 : index === 1
                   ? "reverse_medium"
-                  : "speaker_group_medium",
-            subject: index === 0 ? "both" : line.speaker,
-            look_target:
+                  : index === 2 || index === 3
+                    ? "master_group_shot"
+                    : "speaker_group_medium",
+            subject:
               index === 0
+                ? "both"
+                : index === 2 || index === 3
+                  ? "group"
+                  : line.speaker,
+            look_target:
+              index === 0 || index === 2 || index === 3
                 ? "group_center"
                 : line.speaker === "A"
                   ? "B"
@@ -194,6 +206,12 @@ test("removes a character after the AI-directed exit node", async ({
             negative_space: index === 0 ? "balanced" : "look_room",
             composition_transition:
               index === 0 ? "recenter" : "match_eye_trace",
+            coverage_intent:
+              index === 0
+                ? "establish_geography"
+                : index === 2 || index === 3
+                  ? "reestablish_geography"
+                  : "individual_perspective",
             camera_height: "eye",
             intent: `覆盖进出场节点 ${line.dialogue_id}`,
           })),
@@ -211,7 +229,9 @@ test("removes a character after the AI-directed exit node", async ({
     .getByRole("button", { name: "进入分镜" })
     .click();
 
-  await page.getByRole("button", { name: /03 C C 带群中景/ }).click();
+  await page
+    .getByRole("button", { name: /03 C 3人群像重建全景/ })
+    .click();
   await expect(
     page.locator(".stage-main .actor-label", { hasText: "弥莎" }),
   ).toHaveCount(1);
@@ -219,7 +239,9 @@ test("removes a character after the AI-directed exit node", async ({
     page.locator(".stage-main .actor-label", { hasText: "赫克" }),
   ).toHaveCount(0);
 
-  await page.getByRole("button", { name: /04 D D 带群中景/ }).click();
+  await page
+    .getByRole("button", { name: /04 D 3人群像重建全景/ })
+    .click();
   await expect(
     page.locator(".stage-main .actor-label", { hasText: "弥莎" }),
   ).toHaveCount(0);
@@ -280,8 +302,8 @@ test("shows local content immediately and presents the AI story brief before app
           configured: true,
           connected: true,
           versionMismatch: false,
-          expectedVersion: "0.13.0",
-          serverVersion: "0.13.0",
+          expectedVersion: "0.14.0",
+          serverVersion: "0.14.0",
           lastSeenAt: "2026-08-22T00:00:00.000Z",
           mcpName: "internal-storyboard-collaboration",
           mcpConfigPath: "C:\\workspace\\.trae\\mcp.json",
@@ -306,7 +328,7 @@ test("shows local content immediately and presents the AI story brief before app
       body: JSON.stringify({
         ok: true,
         data: {
-          schema_version: "shot-plan.v3",
+          schema_version: "shot-plan.v4",
           request_id: input.request_id,
           status: "ready",
           scene_analysis: {
@@ -347,6 +369,7 @@ test("shows local content immediately and presents the AI story brief before app
               line.speaker === "A" ? "left_third" : "right_third",
             negative_space: "look_room",
             composition_transition: "mirror_reverse",
+            coverage_intent: "individual_perspective",
             camera_height: "eye",
             intent: "测试 AI 镜头。",
           })),
@@ -390,8 +413,8 @@ test("previews shared and local plans before resolving a library conflict", asyn
           configured: true,
           connected: true,
           versionMismatch: false,
-          expectedVersion: "0.13.0",
-          serverVersion: "0.13.0",
+          expectedVersion: "0.14.0",
+          serverVersion: "0.14.0",
           transport: "http",
           lastSeenAt: "2026-08-22T00:00:00.000Z",
           mcpName: "internal-storyboard-collaboration",
@@ -419,7 +442,7 @@ test("previews shared and local plans before resolving a library conflict", asyn
       ),
     };
     const makePlan = (requestId: string, lens: number, goal: string) => ({
-      schema_version: "shot-plan.v3",
+      schema_version: "shot-plan.v4",
       request_id: requestId,
       status: "ready",
       scene_analysis: {
@@ -440,6 +463,7 @@ test("previews shared and local plans before resolving a library conflict", asyn
             line.speaker === "A" ? "left_third" : "right_third",
           negative_space: "look_room",
           composition_transition: "mirror_reverse",
+          coverage_intent: "individual_perspective",
           camera_height: "eye",
           intent: goal,
         }),

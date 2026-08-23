@@ -1,4 +1,4 @@
-# 镜头沙盘镜头语言规则库 v1.2
+# 镜头沙盘镜头语言规则库 v1.3
 
 本规则库用于三个环节：
 
@@ -80,7 +80,37 @@ Adobe 将正反打定义为先展示角色，再切到该角色所看的人或�
 - 多句台词分段后，再决定镜头应拍说话者、听者反应还是双人关系。
 - 角色进出场、移动、轴线改变或连续三个紧景后，评估是否需要重新建立空间。
 
-反应镜头不是次要素材。正反打可以在说话者和听者反应之间组织意义，因此模型输出必须显式给出 `focus_role` 和 `focus_reason`，不能把第一句说话者永久当作整个合并镜头的主体。[来源](https://www.studiobinder.com/blog/shot-reverse-shot-cutaways-coverage)
+反应镜头不是次要素材。正反打可以在说话者和听者反应之间组织意义，因此模型输出必须显式给出 `coverage_intent` 和镜头意图，不能把第一句说话者永久当作整个合并镜头的主体。[来源](https://www.studiobinder.com/blog/shot-reverse-shot-cutaways-coverage)
+
+## 单人、双人和群像覆盖
+
+镜头人数不是景别的同义词。单人镜头可以是全景或近景，双人镜头也可以是中近景；规则导演先判断当前叙事重点属于个人还是关系，再选择覆盖人数与景别。
+
+| 覆盖意图 | 优先画面 | 使用条件 |
+| --- | --- | --- |
+| `establish_geography` | 双人或群像全景 | 场景开始；前三镜至少出现一次 |
+| `reestablish_geography` | 双人或群像全景 | 角色加入、角色离场后的下一镜、无共享角色换轴、连续紧景后 |
+| `relationship` | 双人镜头或带群中景 | 冲突、连接、谈判、共同利益、身体语言 |
+| `shared_reaction` | 双人、带群或群像 | 同一信息同时影响多位角色 |
+| `individual_perspective` | 单人或过肩 | 明确采用某一角色视角 |
+| `individual_emphasis` | 单人近景或特写 | 重要台词、决定、隐瞒、脆弱或权力转折 |
+| `reaction` | 单人反应或必要时共同反应 | 沉默、迟疑、情绪变化和听者反应 |
+
+Adobe 将主镜头定义为覆盖人物、动作与空间关系的全景，并指出它可在任何时刻帮助观众重新定位场景地理。项目因此规定：前三个镜头内只要已有至少两人在场，就必须有一个覆盖全部当前角色的关系全景；角色进入或离场改变空间关系后也必须重新建立。[Adobe Master Shot](https://www.adobe.com/sa_en/creativecloud/video/production/cinematography/camera-shots-and-angles/master-shot.html)
+
+双人镜头不是单人正反打的过渡素材。它让观众同时读取距离、姿态、共同反应和权力变化，适合关系本身是重点的段落；群像则把重点扩大到社会结构、阵营和集体能量。[StudioBinder Two Shot](https://www.studiobinder.com/camera-shots/framing/two-shot/)
+
+单人镜头把其他角色排除在画外，会强化人物内心、决定、孤立和情绪暴露。因此普通说话行为不足以单独构成使用单人的理由，必须具有 `individual_perspective`、`individual_emphasis` 或 `reaction` 意图。[StudioBinder Single Shot](https://www.studiobinder.com/camera-shots/framing/single-shot/)
+
+规则导演的默认序列策略：
+
+1. 场景开端用双人或群像全景建立当前人物关系。
+2. 普通双方互动优先双人镜头；三人以上优先带群中景。
+3. 重要个人节点才收紧为单人近景或反应镜头。
+4. 新角色进入时立即用全景展示全部当前角色。
+5. 离场镜头仍保留离场角色，下一镜用全景展示剩余角色。
+6. 连续三个紧景后，下一普通节点回到关系全景。
+7. 短场景若以连续单人结束，结尾优先回到双人关系镜头表达共享结果。
 
 ## 构图语法
 
@@ -139,7 +169,7 @@ Adobe 将正反打定义为先展示角色，再切到该角色所看的人或�
 
 ```json
 {
-  "schema_version": "shot-plan.v3",
+  "schema_version": "shot-plan.v4",
   "dialogue_ids": ["204803", "204804"],
   "template": "reverse_medium",
   "subject": "B",
@@ -149,17 +179,18 @@ Adobe 将正反打定义为先展示角色，再切到该角色所看的人或�
   "visual_anchor": "right_third",
   "negative_space": "look_room",
   "composition_transition": "mirror_reverse",
+  "coverage_intent": "individual_perspective",
   "lens_mm": 50,
   "intent": "在 A 的近景后切到 B，形成同一 A-B 关系轴上的匹配反打。"
 }
 ```
 
-大模型必须声明 `subject`、`look_target` 和四个构图字段。Three.js 据此生成稳定的无序关系轴 ID（例如 `A-B`）、同侧机位、逐镜头朝向覆盖、视觉落点和投影验收。景别和画面构成由模板提出、由投影结果确认。大模型决定“为什么拍、拍谁、看向谁、怎样组织画面”，几何求解器决定“轴线在哪里、摄影机具体放在哪里、实际构图是否成立”。
+大模型必须声明 `subject`、`look_target`、`coverage_intent` 和四个构图字段。Three.js 据此生成稳定的无序关系轴 ID（例如 `A-B`）、同侧机位、逐镜头朝向覆盖、视觉落点和投影验收。景别和画面构成由模板提出、由投影结果确认。大模型决定“为什么拍、拍谁、看向谁、采用个人还是关系覆盖、怎样组织画面”，几何求解器决定“轴线在哪里、摄影机具体放在哪里、实际构图是否成立”。
 
 ## 推荐执行管线
 
 1. 按进出场和叙事节拍划分镜头段。
-2. 为每段确定视觉主体与镜头功能。
+2. 为每段确定覆盖意图、视觉主体和镜头功能。
 3. 基于角色朝向、行动轴和目标景别生成多组机位候选。
 4. 将角色关键点投影到 16:9 和 21:9 画框。
 5. 硬约束过滤不合格候选。

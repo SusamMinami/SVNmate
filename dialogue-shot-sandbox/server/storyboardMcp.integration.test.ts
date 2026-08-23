@@ -64,7 +64,7 @@ function validPlan(
 ): Record<string, unknown> {
   const isGroupDialogue = input.participants.length > 2;
   return {
-    schema_version: "shot-plan.v3",
+    schema_version: "shot-plan.v4",
     request_id: input.request_id,
     status: "ready",
     scene_analysis: {
@@ -122,6 +122,12 @@ function validPlan(
       negative_space: index === 0 ? "balanced" : "look_room",
       composition_transition:
         index === 0 ? "recenter" : "mirror_reverse",
+      coverage_intent:
+        index === 0
+          ? "establish_geography"
+          : isGroupDialogue
+            ? "relationship"
+            : "individual_perspective",
       camera_height: "eye",
       intent: `覆盖台词节点 ${line.dialogue_id}`,
     })),
@@ -269,7 +275,7 @@ describe("internal storyboard MCP", () => {
         }
         expect(presence.connected).toBe(true);
         expect(presence.compatible).toBe(true);
-        expect(presence.serverVersion).toBe("0.13.0");
+        expect(presence.serverVersion).toBe("0.14.0");
         expect(presence.transport).toBe("stdio");
 
         let claimed = await client.callTool({
@@ -315,7 +321,7 @@ describe("internal storyboard MCP", () => {
         await expect(response.json()).resolves.toMatchObject({
           ok: true,
           data: {
-            schema_version: "shot-plan.v3",
+            schema_version: "shot-plan.v4",
             request_id: input.request_id,
             status: "ready",
           },
@@ -414,11 +420,55 @@ describe("internal storyboard MCP", () => {
     const input = createDirectorInput(sequence, "composition-schema-request");
     await createStoryboardTask(input);
     const plan = validPlan(input);
-    plan.schema_version = "shot-plan.v2";
+    plan.schema_version = "shot-plan.v3";
 
     await expect(
       completeStoryboardTask(input.request_id, plan),
     ).rejects.toThrow();
+    expect((await getStoryboardTask(input.request_id))?.status).toBe("pending");
+  });
+
+  it("rejects plans without a relationship wide shot in the first three shots", async () => {
+    temporaryRoot = await mkdtemp(join(tmpdir(), "storyboard-opening-wide-"));
+    process.env.STORYBOARD_PROJECT_ROOT = temporaryRoot;
+    const sequence = findDialogueSequence(demoDatabase, "2048");
+    const input = createDirectorInput(sequence, "opening-wide-request");
+    await createStoryboardTask(input);
+    const plan = validPlan(input);
+    const shots = plan.shots as Array<Record<string, unknown>>;
+    Object.assign(shots[0], {
+      template: "close_up",
+      subject: "A",
+      look_target: "B",
+      coverage_intent: "individual_perspective",
+    });
+
+    await expect(
+      completeStoryboardTask(input.request_id, plan),
+    ).rejects.toThrow("前三个镜头必须至少包含一个");
+    expect((await getStoryboardTask(input.request_id))?.status).toBe("pending");
+  });
+
+  it("rejects a tight shot when a new character enters", async () => {
+    temporaryRoot = await mkdtemp(join(tmpdir(), "storyboard-entry-wide-"));
+    process.env.STORYBOARD_PROJECT_ROOT = temporaryRoot;
+    const sequence = findDialogueSequence(demoDatabase, "3099");
+    const input = createDirectorInput(sequence, "entry-wide-request");
+    await createStoryboardTask(input);
+    const plan = validPlan(input);
+    const blocking = plan.blocking as {
+      placements: Array<{
+        subject: string;
+        entry_dialogue_id: string;
+      }>;
+    };
+    blocking.placements.find(
+      (placement) => placement.subject === "C",
+    )!.entry_dialogue_id = "309903";
+
+    await expect(
+      completeStoryboardTask(input.request_id, plan),
+    ).rejects.toThrow("位于角色进出场边界");
     expect((await getStoryboardTask(input.request_id))?.status).toBe("pending");
   });
 
@@ -524,6 +574,26 @@ describe("internal storyboard MCP", () => {
       (placement) => placement.subject === "C",
     );
     participantC!.exit_dialogue_id = "309903";
+    const shots = plan.shots as Array<{
+      template: string;
+      subject: string;
+      look_target: string;
+      composition_mode: string;
+      visual_anchor: string;
+      negative_space: string;
+      composition_transition: string;
+      coverage_intent: string;
+    }>;
+    Object.assign(shots[3], {
+      template: "master_group_shot",
+      subject: "group",
+      look_target: "group_center",
+      composition_mode: "triangular",
+      visual_anchor: "balanced",
+      negative_space: "balanced",
+      composition_transition: "recenter",
+      coverage_intent: "reestablish_geography",
+    });
 
     const task = await completeStoryboardTask(input.request_id, plan);
 
