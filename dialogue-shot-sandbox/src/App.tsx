@@ -53,6 +53,8 @@ import {
 import type {
   DialogueDatabase,
   DialogueSequence,
+  CompositionMode,
+  CompositionTransition,
   ShotCoverage,
   ShotPlan,
   ShotSize,
@@ -115,6 +117,33 @@ function shotCoverageLabel(coverage: ShotCoverage): string {
     "group-medium": "带群",
   };
   return labels[coverage];
+}
+
+function compositionModeLabel(mode: CompositionMode): string {
+  const labels: Record<CompositionMode, string> = {
+    center: "中心构图",
+    rule_of_thirds: "三分法",
+    golden_ratio: "黄金分割",
+    symmetry: "对称构图",
+    asymmetrical_balance: "不对称平衡",
+    triangular: "三角构图",
+    negative_space: "负空间",
+    layered_depth: "纵深层次",
+  };
+  return labels[mode];
+}
+
+function compositionTransitionLabel(
+  transition: CompositionTransition,
+): string {
+  const labels: Record<CompositionTransition, string> = {
+    recenter: "重建中心",
+    match_eye_trace: "注视点匹配",
+    mirror_reverse: "左右互补",
+    progressive_shift: "渐进转移",
+    contrast: "对比切换",
+  };
+  return labels[transition];
 }
 
 function blockingPositionLabel(
@@ -557,7 +586,7 @@ export default function App() {
           <div>
             <h1>镜头沙盘</h1>
           </div>
-          <span className="version">v0.12.0</span>
+          <span className="version">v0.13.0</span>
         </div>
 
         <div className="source-status">
@@ -897,6 +926,34 @@ export default function App() {
               <div>
                 <dt>画面构成</dt>
                 <dd>{shotCoverageLabel(activeShot.projection.coverage)}</dd>
+              </div>
+              <div>
+                <dt>构图原则</dt>
+                <dd>{compositionModeLabel(activeShot.compositionPlan.mode)}</dd>
+              </div>
+              <div>
+                <dt>构图衔接</dt>
+                <dd>
+                  {compositionTransitionLabel(
+                    activeShot.compositionPlan.transition,
+                  )}
+                </dd>
+              </div>
+              <div>
+                <dt>视觉落点</dt>
+                <dd>
+                  {activeShot.projection.visualAnchor
+                    .map((value) => value.toFixed(2))
+                    .join(", ")}
+                </dd>
+              </div>
+              <div>
+                <dt>注视点偏移</dt>
+                <dd>
+                  {activeShot.projection.eyeTraceDelta === null
+                    ? "首镜"
+                    : activeShot.projection.eyeTraceDelta.toFixed(2)}
+                </dd>
               </div>
               <div>
                 <dt>投影验收</dt>

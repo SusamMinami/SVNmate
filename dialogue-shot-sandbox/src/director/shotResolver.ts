@@ -163,14 +163,26 @@ function geometryFor(
   const groupLabel =
     participants.length === 2 ? "双人" : `${participants.length}人群像`;
   const subjectLabel = groupSubject ? groupLabel : participant.slot;
-  const framing =
-    decision.screen_position === "balanced"
-      ? "平衡构图"
-      : decision.screen_position === "center"
-        ? "中央构图"
-        : decision.screen_position === "left_third"
-          ? "左侧三分线"
-          : "右侧三分线";
+  const framingLabels: Record<
+    DirectorDecision["composition_mode"],
+    string
+  > = {
+    center: "中心构图",
+    rule_of_thirds: "三分法构图",
+    golden_ratio: "黄金分割构图",
+    symmetry: "对称构图",
+    asymmetrical_balance: "不对称平衡构图",
+    triangular: "三角构图",
+    negative_space: "负空间构图",
+    layered_depth: "纵深层次构图",
+  };
+  const framing = framingLabels[decision.composition_mode];
+  const compositionPlan = {
+    mode: decision.composition_mode,
+    visualAnchor: decision.visual_anchor,
+    negativeSpace: decision.negative_space,
+    transition: decision.composition_transition,
+  } as const;
 
   const groupGeometry = (
     shotSize: Extract<ShotSize, "full" | "medium-full">,
@@ -184,6 +196,7 @@ function geometryFor(
       lensMm: decision.lens_mm,
       cameraHeight: cameraHeight(decision.camera_height, 1.72),
       shotSize,
+      composition: compositionPlan,
     });
     return {
       geometry,
@@ -194,6 +207,7 @@ function geometryFor(
         decision.lens_mm,
         shotSize,
         coverage,
+        compositionPlan,
       ),
     };
   };
@@ -208,7 +222,7 @@ function geometryFor(
       participants,
       lensMm: decision.lens_mm,
       cameraHeight: cameraHeight(decision.camera_height, fallbackHeight),
-      screenPosition: decision.screen_position,
+      composition: compositionPlan,
       shotSize,
       coverage,
       previousGeometry,
@@ -356,6 +370,7 @@ export function resolveShotDecisions(
   let previousLookTargetSlot: DialogueParticipant["slot"] | null = null;
   let previousCoverage: ShotCoverage | null = null;
   let previousAxis: ShotAxis | null = null;
+  let previousVisualAnchor: readonly [number, number] | null = null;
 
   const shots = decisions.map((decision, index) => {
     const rows = decision.dialogue_ids.map((dialogueId) => {
@@ -506,7 +521,8 @@ export function resolveShotDecisions(
     const hardProjectionWarnings = geometry.assessment.warnings.filter(
       (warning) =>
         !warning.startsWith("单人镜头偏离角色正面") &&
-        !warning.startsWith("单人镜头包含其他主要可见角色"),
+        !warning.startsWith("单人镜头包含其他主要可见角色") &&
+        !warning.startsWith("构图"),
     );
     if (hardProjectionWarnings.length > 0) {
       throw new Error(
@@ -543,6 +559,40 @@ export function resolveShotDecisions(
       previousLookTargetSlot === subject.slot &&
       lookTarget?.slot === previousVisualSubjectSlot;
     const projectionWarnings = [...geometry.assessment.warnings];
+    const eyeTraceDelta = previousVisualAnchor
+      ? Math.abs(
+          geometry.assessment.visualAnchor[0] - previousVisualAnchor[0],
+        )
+      : null;
+    if (
+      eyeTraceDelta !== null &&
+      decision.composition_transition === "match_eye_trace" &&
+      eyeTraceDelta > 0.35
+    ) {
+      projectionWarnings.push(
+        `上下镜注视落点偏移 ${eyeTraceDelta.toFixed(2)} NDC`,
+      );
+    }
+    if (
+      previousVisualAnchor &&
+      decision.composition_transition === "mirror_reverse"
+    ) {
+      const previousX = previousVisualAnchor[0];
+      const currentX = geometry.assessment.visualAnchor[0];
+      const mirrored =
+        Math.sign(previousX) !== 0 &&
+        Math.sign(currentX) !== 0 &&
+        Math.sign(previousX) !== Math.sign(currentX);
+      if (!mirrored || Math.abs(Math.abs(previousX) - Math.abs(currentX)) > 0.2) {
+        projectionWarnings.push("正反打构图未形成左右互补落点");
+      }
+    }
+    if (
+      decision.composition_transition === "recenter" &&
+      Math.abs(geometry.assessment.visualAnchor[0]) > 0.18
+    ) {
+      projectionWarnings.push("重新建立空间的镜头未回到中央视觉重心");
+    }
     if (decision.template === "reverse_medium" && !formsReversePair) {
       projectionWarnings.push("当前镜头没有可配对的前置反打镜头，已按实测画面降级");
     }
@@ -612,6 +662,12 @@ export function resolveShotDecisions(
       duration: estimateShotDuration(rows.map((row) => row.content)),
       cameraPosition: geometry.position,
       cameraTarget: geometry.target,
+      compositionPlan: {
+        mode: decision.composition_mode,
+        visualAnchor: decision.visual_anchor,
+        negativeSpace: decision.negative_space,
+        transition: decision.composition_transition,
+      },
       composition: geometry.composition,
       rationale: decision.intent,
       visualSubjectSlot: groupSubject ? null : subject.slot,
@@ -637,6 +693,17 @@ export function resolveShotDecisions(
           : geometry.assessment.subjectFaceAngle,
         subjectSafeForUltrawide:
           geometry.assessment.subjectSafeForUltrawide,
+        visualAnchor: geometry.assessment.visualAnchor,
+        targetAnchor: geometry.assessment.targetAnchor,
+        anchorDistance: geometry.assessment.anchorDistance,
+        headroom: geometry.assessment.headroom,
+        lookRoom: geometry.assessment.lookRoom,
+        visualWeightBias: geometry.assessment.visualWeightBias,
+        projectedTriangleArea:
+          geometry.assessment.projectedTriangleArea,
+        depthSpread: geometry.assessment.depthSpread,
+        eyeTraceDelta:
+          eyeTraceDelta === null ? null : Number(eyeTraceDelta.toFixed(3)),
         valid: projectionWarnings.length === 0,
         warnings: projectionWarnings,
       },
@@ -649,6 +716,7 @@ export function resolveShotDecisions(
     previousLookTargetSlot = shot.lookTargetSlot;
     previousCoverage = shot.projection.coverage;
     previousAxis = shot.axis;
+    previousVisualAnchor = shot.projection.visualAnchor;
     return shot;
   });
 

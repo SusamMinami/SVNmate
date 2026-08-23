@@ -77,7 +77,7 @@ describe("designShots", () => {
         JSON.stringify({
           ok: true,
           data: {
-            schema_version: "shot-plan.v2",
+            schema_version: "shot-plan.v3",
             request_id: input!.request_id,
             status: "ready",
             scene_analysis: {
@@ -128,12 +128,17 @@ describe("designShots", () => {
                     ? "B"
                     : "A",
               lens_mm: index === 0 ? 35 : 50,
-              screen_position:
+              composition_mode:
+                index === 0 ? "symmetry" : "rule_of_thirds",
+              visual_anchor:
                 index === 0
                   ? "balanced"
                   : row.npcId === sequence.participants[0].id
                     ? "left_third"
                     : "right_third",
+              negative_space: index === 0 ? "balanced" : "look_room",
+              composition_transition:
+                index === 0 ? "recenter" : "mirror_reverse",
               camera_height: index === 4 ? "low" : "eye",
               intent: `测试镜头 ${index + 1}`,
             })),

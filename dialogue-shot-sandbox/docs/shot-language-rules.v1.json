@@ -1,7 +1,7 @@
 {
   "schema_version": "shot-rules.v1",
-  "version": "1.1.0",
-  "updated_at": "2026-08-22",
+  "version": "1.2.0",
+  "updated_at": "2026-08-23",
   "shot_size_order": ["EWS", "WS", "FS", "MFS", "MS", "MCU", "CU", "ECU"],
   "lark_fields": [
     { "type": "text", "name": "规则ID" },
@@ -442,6 +442,244 @@
       "enabled": true,
       "source": "项目缺陷反馈",
       "version": "1.0.0"
+    },
+    {
+      "id": "FRM-005",
+      "name": "每镜构图必须声明叙事意图",
+      "category": "构图",
+      "enforcement": "硬约束",
+      "applies_when": "所有镜头",
+      "requirement": "镜头必须声明构图模式、视觉落点、负空间用途和与前镜的构图衔接，不能只给左右位置。",
+      "machine_check": "compositionMode && visualAnchor && negativeSpace && compositionTransition",
+      "exception": "无；缺失时拒绝方案。",
+      "weight": 100,
+      "enabled": true,
+      "source": "StudioBinder Composition Techniques；项目可执行构图规范",
+      "version": "1.2.0"
+    },
+    {
+      "id": "FRM-006",
+      "name": "三分法用于自然对话与视线空间",
+      "category": "构图",
+      "enforcement": "风格偏好",
+      "applies_when": "普通单人对话、过肩、环境人物镜头",
+      "requirement": "主体眼睛优先接近上三分交点，并在注视或运动方向保留空间，形成自然且有方向性的画面。",
+      "machine_check": "mode=rule_of_thirds ? abs(subjectEye.x-targetAnchor.x)<=0.18 && lookRoom>=0.14 : true",
+      "exception": "中心对峙、对称环境或明确失衡意图。",
+      "weight": 90,
+      "enabled": true,
+      "source": "Adobe Photography Composition；StudioBinder Rule of Thirds",
+      "version": "1.2.0"
+    },
+    {
+      "id": "FRM-007",
+      "name": "中心构图用于直接强调",
+      "category": "构图",
+      "enforcement": "软约束",
+      "applies_when": "正面揭示、权力宣告、仪式、孤立或强制观众直视主体",
+      "requirement": "主体视觉中心接近画面中轴；中心构图必须承担秩序、正面冲击、压迫或孤立语义。",
+      "machine_check": "mode=center ? abs(visualAnchor.x)<=0.18 && hasIntent([reveal,power,ritual,isolation,confrontation]) : true",
+      "exception": "建立镜头可仅用于重新锚定空间。",
+      "weight": 80,
+      "enabled": true,
+      "source": "Adobe 15 Composition Techniques；StudioBinder Composition",
+      "version": "1.2.0"
+    },
+    {
+      "id": "FRM-008",
+      "name": "黄金分割用于细腻情绪与有机流动",
+      "category": "构图",
+      "enforcement": "风格偏好",
+      "applies_when": "情绪近景、静态观察、主体与环境需要更柔和关系",
+      "requirement": "主体眼睛或关键视觉点接近 0.382/0.618 分割点，作为比三分法更细腻的非中心落点。",
+      "machine_check": "mode=golden_ratio ? abs(subjectEye.x-targetPhiAnchor.x)<=0.18 : true",
+      "exception": "快速动作或几何秩序明确的场景优先使用更直接的构图。",
+      "weight": 72,
+      "enabled": true,
+      "source": "StudioBinder Golden Ratio；Adobe Composition",
+      "version": "1.2.0"
+    },
+    {
+      "id": "FRM-009",
+      "name": "对称构图表达秩序与控制",
+      "category": "构图",
+      "enforcement": "软约束",
+      "applies_when": "群体秩序、仪式、权力中心、封闭空间或刻意人工感",
+      "requirement": "主要视觉重量围绕画面中轴近似平衡；破坏既有对称可作为关系失衡或威胁出现的叙事节点。",
+      "machine_check": "mode=symmetry ? abs(visualWeightBias)<=0.12 : true",
+      "exception": "明确以破坏对称制造转折时切换为 intentional imbalance。",
+      "weight": 85,
+      "enabled": true,
+      "source": "StudioBinder Symmetrical Balance；Adobe Composition",
+      "version": "1.2.0"
+    },
+    {
+      "id": "FRM-010",
+      "name": "不对称平衡表达关系张力",
+      "category": "构图",
+      "enforcement": "风格偏好",
+      "applies_when": "权力不均、关系试探、主体与环境或空白形成对话",
+      "requirement": "主体可偏离中心，但另一侧必须由关系角色、环境信息或有意义负空间形成可读的视觉平衡。",
+      "machine_check": "mode=asymmetrical_balance ? abs(visualWeightBias)<=0.42 && counterWeightPresent : true",
+      "exception": "故意失衡用于焦虑、危险或失控。",
+      "weight": 78,
+      "enabled": true,
+      "source": "StudioBinder Asymmetrical Balance；Adobe Composition",
+      "version": "1.2.0"
+    },
+    {
+      "id": "FRM-011",
+      "name": "负空间必须指向叙事含义",
+      "category": "构图",
+      "enforcement": "软约束",
+      "applies_when": "孤独、缺席、等待、威胁、悬念或环境压倒人物",
+      "requirement": "空白区域应位于视线、行动或潜在事件方向；主体缩小或偏置必须强化指定情绪，而不是偶然留空。",
+      "machine_check": "mode=negative_space ? negativeSpace in [look_room,isolation,pressure] && intentExplainsVoid : true",
+      "exception": "极简风格可把空白作为全片统一语法。",
+      "weight": 84,
+      "enabled": true,
+      "source": "StudioBinder Negative Space；Adobe Composition",
+      "version": "1.2.0"
+    },
+    {
+      "id": "FRM-012",
+      "name": "保留视线空间并控制头部空间",
+      "category": "构图",
+      "enforcement": "软约束",
+      "applies_when": "人物单人、过肩及运动镜头",
+      "requirement": "普通镜头在角色注视或运动方向保留足够空间；头部空间随景别收紧，不能无意贴边或悬空。",
+      "machine_check": "negativeSpace=look_room ? lookRoom>=0.14 : true; headroom in shotSizeRange",
+      "exception": "pressure 可故意压缩视线空间，ECU 可有意裁切头顶。",
+      "weight": 92,
+      "enabled": true,
+      "source": "StudioBinder Rule of Thirds；Headroom / Lead Room cinematography guidance",
+      "version": "1.2.0"
+    },
+    {
+      "id": "FRM-013",
+      "name": "三角构图组织三人以上关系",
+      "category": "构图",
+      "enforcement": "软约束",
+      "applies_when": "三人及以上群像或三方权力关系",
+      "requirement": "主要角色头部或身体中心形成具有面积的三角形，顶点可突出主导者，底边维持群体稳定。",
+      "machine_check": "mode=triangular ? visibleActors>=3 && projectedTriangleArea>=threshold : true",
+      "exception": "队列、审判席或严格对称站位可采用线性或对称构图。",
+      "weight": 88,
+      "enabled": true,
+      "source": "Adobe 15 Composition Techniques；经典群像构图",
+      "version": "1.2.0"
+    },
+    {
+      "id": "FRM-014",
+      "name": "前中后景建立空间层次",
+      "category": "构图",
+      "enforcement": "软约束",
+      "applies_when": "多人场面、环境叙事、建立镜头",
+      "requirement": "利用前景锚点、中景主体和背景关系形成纵深，重要人物轮廓仍需分离。",
+      "machine_check": "mode=layered_depth ? distinctDepthBands>=2 && importantActorOverlapRatio<0.2 : true",
+      "exception": "图形式平面构图或明确压缩空间的长焦风格。",
+      "weight": 82,
+      "enabled": true,
+      "source": "StudioBinder Depth and Foreground；Ohio State Film Cinematography",
+      "version": "1.2.0"
+    },
+    {
+      "id": "FRM-015",
+      "name": "对角线构图用于运动与不稳定",
+      "category": "构图",
+      "enforcement": "风格偏好",
+      "applies_when": "动作、冲突升级、追逐、失衡或方向性强的场景",
+      "requirement": "主体排列、环境边缘或运动轨迹形成明确对角趋势，增强速度、张力和不稳定感。",
+      "machine_check": "mode=diagonal requires sceneLines or motionVector aligned to frame diagonal",
+      "exception": "静态中性对话不默认使用。",
+      "weight": 68,
+      "enabled": true,
+      "source": "Adobe 15 Composition Techniques",
+      "version": "1.2.0"
+    },
+    {
+      "id": "FRM-016",
+      "name": "框中框需要真实环境边界",
+      "category": "构图",
+      "enforcement": "软约束",
+      "applies_when": "门窗、走廊、栏杆或前景物可形成次级边框",
+      "requirement": "环境边界围合主体并强化窥视、隔离、禁锢或空间转换；没有场景几何时不得虚构已经成立。",
+      "machine_check": "mode=frame_within_frame ? enclosingSceneGeometry && subjectInsideInnerFrame : true",
+      "exception": "角色肩背可形成软性过肩框架，但仍按过肩覆盖分类。",
+      "weight": 74,
+      "enabled": true,
+      "source": "Adobe Natural Framing；Ohio State Internal Frames",
+      "version": "1.2.0"
+    },
+    {
+      "id": "FRM-017",
+      "name": "引导线必须指向叙事焦点",
+      "category": "构图",
+      "enforcement": "软约束",
+      "applies_when": "场景存在道路、走廊、墙缘、光线或角色视线等可读线索",
+      "requirement": "主导线应把视线带向主体或下一信息点，不能把观众引向无意义画外区域。",
+      "machine_check": "mode=leading_lines ? lineEndpointNearFocalPoint && sceneLineConfidence>=threshold : true",
+      "exception": "故意误导或制造画外威胁时可指向负空间。",
+      "weight": 76,
+      "enabled": true,
+      "source": "Adobe Composition Basics；StudioBinder Leading Lines",
+      "version": "1.2.0"
+    },
+    {
+      "id": "CON-007",
+      "name": "切点保持注视落点连续",
+      "category": "连续性",
+      "enforcement": "软约束",
+      "applies_when": "连续动作、反应或同一信息焦点的上下镜",
+      "requirement": "前镜主要视觉焦点与后镜主体眼睛或关键物体保持在相近屏幕区域，减少观众重新搜索。",
+      "machine_check": "transition=match_eye_trace ? abs(currentAnchor.x-previousAnchor.x)<=0.35 : true",
+      "exception": "有意把注意力甩向新信息或制造惊吓。",
+      "weight": 90,
+      "enabled": true,
+      "source": "Walter Murch Rule of Six；Adobe Continuity Editing",
+      "version": "1.2.0"
+    },
+    {
+      "id": "CON-008",
+      "name": "正反打构图左右互补",
+      "category": "连续性",
+      "enforcement": "软约束",
+      "applies_when": "同一关系轴上的正反打镜头对",
+      "requirement": "双方主体分别落在画面相对两侧，离中轴距离近似，眼高和视线空间互补。",
+      "machine_check": "transition=mirror_reverse ? oppositeAnchorSigns && abs(abs(x1)-abs(x2))<=0.2 : true",
+      "exception": "权力不对称或情绪断裂可有意改变画面重量。",
+      "weight": 92,
+      "enabled": true,
+      "source": "Adobe Continuity Editing；StudioBinder Rule of Thirds",
+      "version": "1.2.0"
+    },
+    {
+      "id": "CON-009",
+      "name": "构图变化跟随情绪推进",
+      "category": "连续性",
+      "enforcement": "风格偏好",
+      "applies_when": "场景存在情绪升级、权力变化或信息揭示",
+      "requirement": "可从平衡三分法逐步收紧至黄金分割或中心构图；破坏对称、压缩视线空间或增加负空间必须对应明确转折。",
+      "machine_check": "compositionChange ? narrativeBeat || transition in [progressive_shift,contrast] : true",
+      "exception": "整体采用固定画面语法的场景。",
+      "weight": 82,
+      "enabled": true,
+      "source": "StudioBinder Composition；Walter Murch Rule of Six",
+      "version": "1.2.0"
+    },
+    {
+      "id": "CON-010",
+      "name": "连续镜头避免无意义同构",
+      "category": "连续性",
+      "enforcement": "风格偏好",
+      "applies_when": "连续三个以上普通对话镜头",
+      "requirement": "避免所有主体长期占据同一屏幕侧和同一构图模式；在不破坏轴线与眼迹的前提下，通过互补落点、重建中心或景别变化建立节奏。",
+      "machine_check": "sameCompositionRun>=3 ? hasMotivatedVariation : true",
+      "exception": "刻意重复用于僵局、压迫或形式化节奏。",
+      "weight": 74,
+      "enabled": true,
+      "source": "项目风格要求；StudioBinder Composition",
+      "version": "1.2.0"
     }
   ],
   "sources": [
@@ -504,6 +742,38 @@
     {
       "name": "Cornell Spatial Relations Study",
       "url": "https://ecommons.cornell.edu/items/7dd0b8a5-46fa-4219-a78e-e02eee532b2a/full"
+    },
+    {
+      "name": "StudioBinder Composition Techniques",
+      "url": "https://www.studiobinder.com/camera-shots/composition/"
+    },
+    {
+      "name": "StudioBinder Rule of Thirds",
+      "url": "https://www.studiobinder.com/camera-shots/composition/rule-of-thirds-in-film/"
+    },
+    {
+      "name": "StudioBinder Negative Space",
+      "url": "https://www.studiobinder.com/camera-shots/composition/negative-space-in-film/"
+    },
+    {
+      "name": "StudioBinder Asymmetrical Balance",
+      "url": "https://www.studiobinder.com/camera-shots/composition/asymmetrical-balance-in-film/"
+    },
+    {
+      "name": "Adobe Photography Composition",
+      "url": "https://www.adobe.com/creativecloud/photography/technique/composition.html"
+    },
+    {
+      "name": "Adobe 15 Composition Techniques",
+      "url": "https://www.adobe.com/au/creativecloud/roc/blog/photography/photography-composition-techniques.html"
+    },
+    {
+      "name": "Walter Murch Rule of Six",
+      "url": "https://www.studiobinder.com/blog/walter-murch-rule-of-six"
+    },
+    {
+      "name": "Ohio State Film Cinematography",
+      "url": "https://ohiostate.pressbooks.pub/introfilm/chapter/cinematography-i/"
     }
   ]
 }

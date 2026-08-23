@@ -2,6 +2,7 @@ import * as THREE from "three";
 import type {
   DialogueParticipant,
   ParticipantSlot,
+  ShotComposition,
   ShotCoverage,
   ShotSize,
   Vec3,
@@ -72,6 +73,14 @@ export interface ProjectionAssessment {
   participantAreaRatios: Partial<Record<ParticipantSlot, number>>;
   subjectFaceAngle: number;
   subjectSafeForUltrawide: boolean;
+  visualAnchor: readonly [number, number];
+  targetAnchor: readonly [number, number];
+  anchorDistance: number;
+  headroom: number | null;
+  lookRoom: number | null;
+  visualWeightBias: number;
+  projectedTriangleArea: number | null;
+  depthSpread: number;
   valid: boolean;
   warnings: string[];
 }
@@ -82,7 +91,7 @@ interface SingleCameraRequest {
   participants: DialogueParticipant[];
   lensMm: number;
   cameraHeight: number;
-  screenPosition: DirectorDecision["screen_position"];
+  composition: ShotComposition;
   shotSize: ShotSize;
   coverage: Extract<ShotCoverage, "single" | "group-medium">;
   preferredFaceAngle?: number;
@@ -94,6 +103,7 @@ interface GroupCameraRequest {
   lensMm: number;
   cameraHeight: number;
   shotSize: Extract<ShotSize, "full" | "medium-full">;
+  composition: ShotComposition;
 }
 
 function add(left: Vec2, right: Vec2): Vec2 {
@@ -122,6 +132,37 @@ function normalize(vector: Vec2, fallback: Vec2 = { x: 0, z: 1 }): Vec2 {
 
 function dot(left: Vec2, right: Vec2): number {
   return left.x * right.x + left.z * right.z;
+}
+
+function projectedTriangleArea(
+  participants: ProjectedParticipant[],
+): number | null {
+  if (participants.length < 3) {
+    return null;
+  }
+  const centers = participants.map((participant) => ({
+    x: (participant.bounds.minX + participant.bounds.maxX) / 2,
+    y: (participant.bounds.minY + participant.bounds.maxY) / 2,
+  }));
+  let maximumArea = 0;
+  for (let first = 0; first < centers.length - 2; first += 1) {
+    for (let second = first + 1; second < centers.length - 1; second += 1) {
+      for (let third = second + 1; third < centers.length; third += 1) {
+        const a = centers[first];
+        const b = centers[second];
+        const c = centers[third];
+        maximumArea = Math.max(
+          maximumArea,
+          Math.abs(
+            a.x * (b.y - c.y) +
+              b.x * (c.y - a.y) +
+              c.x * (a.y - b.y),
+          ) / 2,
+        );
+      }
+    }
+  }
+  return maximumArea;
 }
 
 function sceneCenter(participants: DialogueParticipant[]): Vec3 {
@@ -340,6 +381,7 @@ export function assessProjection(
   lensMm: number,
   expectedShotSize: ShotSize,
   coverage: ShotCoverage,
+  composition: ShotComposition,
   lookTarget?: DialogueParticipant,
 ): ProjectionAssessment {
   const camera = cameraFor(geometry.position, geometry.target, lensMm);
@@ -379,6 +421,69 @@ export function assessProjection(
     ]),
   ) as Partial<Record<ParticipantSlot, number>>;
   const measuredShotSize = measureShotSize(camera, subject);
+  const subjectProjection = projected.find(
+    (participant) => participant.slot === subject.slot,
+  );
+  const subjectEyes = projectPoint(camera, [
+    subject.position[0],
+    1.74,
+    subject.position[2],
+  ]);
+  const targetAnchor = anchorForComposition(composition, coverage);
+  const significantProjected = projected.filter(
+    (participant) => participant.areaRatio >= SIGNIFICANT_ACTOR_AREA,
+  );
+  const totalVisualWeight = significantProjected.reduce(
+    (sum, participant) => sum + participant.areaRatio,
+    0,
+  );
+  const visualWeightBias =
+    totalVisualWeight > 0
+      ? significantProjected.reduce(
+          (sum, participant) =>
+            sum +
+            THREE.MathUtils.clamp(
+              (participant.bounds.minX + participant.bounds.maxX) / 2,
+              -1,
+              1,
+            ) *
+              participant.areaRatio,
+          0,
+        ) / totalVisualWeight
+      : 0;
+  const visualAnchor: readonly [number, number] =
+    coverage === "two-shot" || coverage === "group"
+      ? [visualWeightBias, 0]
+      : [subjectEyes.x, subjectEyes.y];
+  const anchorDistance = Math.abs(visualAnchor[0] - targetAnchor[0]);
+  const headroom = subjectProjection
+    ? (1 - subjectProjection.bounds.maxY) / 2
+    : null;
+  const projectedLookTarget = lookTarget
+    ? projectPoint(camera, [
+        lookTarget.position[0],
+        1.74,
+        lookTarget.position[2],
+      ])
+    : null;
+  const lookRoom =
+    subjectProjection && projectedLookTarget
+      ? projectedLookTarget.x >= subjectEyes.x
+        ? (1 - subjectProjection.bounds.maxX) / 2
+        : (subjectProjection.bounds.minX + 1) / 2
+      : null;
+  const cameraDepths = significantProjected.map((projectedParticipant) => {
+    const participant = participantBySlot.get(projectedParticipant.slot)!;
+    return Math.hypot(
+      geometry.position[0] - participant.position[0],
+      geometry.position[2] - participant.position[2],
+    );
+  });
+  const depthSpread =
+    cameraDepths.length > 1
+      ? Math.max(...cameraDepths) - Math.min(...cameraDepths)
+      : 0;
+  const triangleArea = projectedTriangleArea(significantProjected);
   const facing = subjectFacing(subject, participants, lookTarget);
   const cameraDirection = normalize({
     x: geometry.position[0] - subject.position[0],
@@ -387,11 +492,7 @@ export function assessProjection(
   const subjectFaceAngle = THREE.MathUtils.radToDeg(
     Math.acos(THREE.MathUtils.clamp(dot(facing, cameraDirection), -1, 1)),
   );
-  const eyes = projectPoint(camera, [
-    subject.position[0],
-    1.74,
-    subject.position[2],
-  ]);
+  const eyes = subjectEyes;
   const chin = projectPoint(camera, [
     subject.position[0],
     1.43,
@@ -433,6 +534,38 @@ export function assessProjection(
   if (!subjectSafeForUltrawide) {
     warnings.push("主体眼部或下巴超出 21:9 安全区域");
   }
+  if (anchorDistance > 0.18) {
+    warnings.push(
+      `构图落点偏离 ${composition.visualAnchor} ${anchorDistance.toFixed(2)} NDC`,
+    );
+  }
+  if (
+    composition.negativeSpace === "look_room" &&
+    lookRoom !== null &&
+    lookRoom < 0.14
+  ) {
+    warnings.push("构图视线空间不足");
+  }
+  if (
+    composition.mode === "symmetry" &&
+    Math.abs(visualWeightBias) > 0.12
+  ) {
+    warnings.push(
+      `构图视觉重量偏离中心 ${Math.abs(visualWeightBias).toFixed(2)} NDC`,
+    );
+  }
+  if (
+    composition.mode === "triangular" &&
+    (triangleArea === null || triangleArea < 0.035)
+  ) {
+    warnings.push("构图中的三名主要角色未形成清晰三角关系");
+  }
+  if (composition.mode === "layered_depth" && depthSpread < 0.6) {
+    warnings.push("构图缺少可读的前中后景纵深");
+  }
+  if (headroom !== null && (headroom < -0.03 || headroom > 0.22)) {
+    warnings.push(`构图头部空间异常 ${headroom.toFixed(2)}`);
+  }
 
   return {
     measuredShotSize,
@@ -441,6 +574,18 @@ export function assessProjection(
     participantAreaRatios,
     subjectFaceAngle: Number(subjectFaceAngle.toFixed(1)),
     subjectSafeForUltrawide,
+    visualAnchor: [
+      Number(visualAnchor[0].toFixed(3)),
+      Number(visualAnchor[1].toFixed(3)),
+    ],
+    targetAnchor,
+    anchorDistance: Number(anchorDistance.toFixed(3)),
+    headroom: headroom === null ? null : Number(headroom.toFixed(3)),
+    lookRoom: lookRoom === null ? null : Number(lookRoom.toFixed(3)),
+    visualWeightBias: Number(visualWeightBias.toFixed(3)),
+    projectedTriangleArea:
+      triangleArea === null ? null : Number(triangleArea.toFixed(3)),
+    depthSpread: Number(depthSpread.toFixed(3)),
     valid: warnings.length === 0,
     warnings,
   };
@@ -456,19 +601,48 @@ function distanceForShotSize(lensMm: number, shotSize: ShotSize): number {
   );
 }
 
-function targetForScreenPosition(
+function anchorForComposition(
+  composition: ShotComposition,
+  coverage: ShotCoverage,
+): readonly [number, number] {
+  if (coverage === "two-shot" || coverage === "group") {
+    return [0, 0];
+  }
+  const x =
+    composition.visualAnchor === "left_third"
+      ? -1 / 3
+      : composition.visualAnchor === "right_third"
+        ? 1 / 3
+        : composition.visualAnchor === "left_golden"
+          ? -0.236
+          : composition.visualAnchor === "right_golden"
+            ? 0.236
+            : 0;
+  const y =
+    composition.visualAnchor === "left_golden" ||
+    composition.visualAnchor === "right_golden"
+      ? 0.236
+      : 1 / 3;
+  return [x, y];
+}
+
+function targetForVisualAnchor(
   subject: DialogueParticipant,
   cameraDirection: Vec2,
   distance: number,
   lensMm: number,
   targetY: number,
-  screenPosition: DirectorDecision["screen_position"],
+  visualAnchor: DirectorDecision["visual_anchor"],
 ): Vec3 {
   const desiredSubjectNdc =
-    screenPosition === "left_third"
+    visualAnchor === "left_third"
       ? -0.32
-      : screenPosition === "right_third"
+      : visualAnchor === "right_third"
         ? 0.32
+        : visualAnchor === "left_golden"
+          ? -0.236
+          : visualAnchor === "right_golden"
+            ? 0.236
         : 0;
   const filmHeight = 35 / CAMERA_ASPECT_RATIO;
   const halfVerticalFov = Math.atan(filmHeight / (2 * lensMm));
@@ -495,18 +669,22 @@ export function solveSingleCamera(
   const preferredAngle = request.preferredFaceAngle ?? 28;
   const angleCandidates = [...new Set([preferredAngle, 18, 38, 8, 45])];
   const distanceScales = [1, 0.94, 1.06, 0.86, 1.16, 1.28];
-  const oppositeScreenPosition: DirectorDecision["screen_position"] =
-    request.screenPosition === "left_third"
+  const oppositeVisualAnchor: DirectorDecision["visual_anchor"] =
+    request.composition.visualAnchor === "left_third"
       ? "right_third"
-      : request.screenPosition === "right_third"
+      : request.composition.visualAnchor === "right_third"
         ? "left_third"
+        : request.composition.visualAnchor === "left_golden"
+          ? "right_golden"
+          : request.composition.visualAnchor === "right_golden"
+            ? "left_golden"
         : "center";
-  const screenPositionCandidates = (
+  const visualAnchorCandidates = (
     [
-      request.screenPosition,
-      oppositeScreenPosition,
+      request.composition.visualAnchor,
+      oppositeVisualAnchor,
       "center",
-    ] as DirectorDecision["screen_position"][]
+    ] as DirectorDecision["visual_anchor"][]
   ).filter((position, index, values) => values.indexOf(position) === index);
   const frame = SHOT_FRAMES[request.shotSize];
   const baseDistance = distanceForShotSize(request.lensMm, request.shotSize);
@@ -526,20 +704,20 @@ export function solveSingleCamera(
       faceAngle,
     );
     for (const distanceScale of distanceScales) {
-      for (const screenPosition of screenPositionCandidates) {
+      for (const visualAnchor of visualAnchorCandidates) {
         const distance = baseDistance * distanceScale;
         const position: Vec3 = [
           request.subject.position[0] + cameraDirection.x * distance,
           request.cameraHeight,
           request.subject.position[2] + cameraDirection.z * distance,
         ];
-        const target = targetForScreenPosition(
+        const target = targetForVisualAnchor(
           request.subject,
           cameraDirection,
           distance,
           request.lensMm,
           frame.targetY,
-          screenPosition,
+          visualAnchor,
         );
         const geometry = { position, target };
         const assessment = assessProjection(
@@ -549,6 +727,7 @@ export function solveSingleCamera(
           request.lensMm,
           request.shotSize,
           request.coverage,
+          { ...request.composition, visualAnchor },
           request.lookTarget,
         );
         const otherVisibleCount = assessment.visibleParticipantSlots.filter(
@@ -572,11 +751,12 @@ export function solveSingleCamera(
             ? 1_000
             : 0) +
           (!assessment.subjectSafeForUltrawide ? 180 : 0) +
+          assessment.anchorDistance * 220 +
           Math.max(0, assessment.subjectFaceAngle - 45) * 20 +
           Math.max(0, 30 - viewDelta) * 16 +
           Math.abs(faceAngle - preferredAngle) +
           Math.abs(distanceScale - 1) * 12 +
-          (screenPosition === request.screenPosition ? 0 : 24);
+          (visualAnchor === request.composition.visualAnchor ? 0 : 24);
         if (!best || score < best.score) {
           best = { geometry, assessment, score };
         }

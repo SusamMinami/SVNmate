@@ -41,6 +41,41 @@ export const BLOCKING_POSITIONS = [
   "rear_center",
 ] as const;
 
+export const COMPOSITION_MODES = [
+  "center",
+  "rule_of_thirds",
+  "golden_ratio",
+  "symmetry",
+  "asymmetrical_balance",
+  "triangular",
+  "negative_space",
+  "layered_depth",
+] as const;
+
+export const VISUAL_ANCHORS = [
+  "center",
+  "left_third",
+  "right_third",
+  "left_golden",
+  "right_golden",
+  "balanced",
+] as const;
+
+export const NEGATIVE_SPACE_MODES = [
+  "balanced",
+  "look_room",
+  "isolation",
+  "pressure",
+] as const;
+
+export const COMPOSITION_TRANSITIONS = [
+  "recenter",
+  "match_eye_trace",
+  "mirror_reverse",
+  "progressive_shift",
+  "contrast",
+] as const;
+
 export const ParticipantSlotSchema = z.enum(PARTICIPANT_SLOTS);
 
 export const DirectorBlockingSchema = z.object({
@@ -85,18 +120,16 @@ export const DirectorDecisionSchema = z.object({
     z.literal("group_center"),
   ]),
   lens_mm: z.number().min(24).max(100),
-  screen_position: z.enum([
-    "left_third",
-    "right_third",
-    "center",
-    "balanced",
-  ]),
+  composition_mode: z.enum(COMPOSITION_MODES),
+  visual_anchor: z.enum(VISUAL_ANCHORS),
+  negative_space: z.enum(NEGATIVE_SPACE_MODES),
+  composition_transition: z.enum(COMPOSITION_TRANSITIONS),
   camera_height: z.enum(["low", "eye", "high"]),
   intent: z.string().min(2).max(240),
 });
 
 export const MiraReadyResponseSchema = z.object({
-  schema_version: z.literal("shot-plan.v2"),
+  schema_version: z.literal("shot-plan.v3"),
   request_id: z.string().min(1),
   status: z.literal("ready"),
   scene_analysis: z.object({
@@ -109,7 +142,7 @@ export const MiraReadyResponseSchema = z.object({
 });
 
 export const MiraNeedContextResponseSchema = z.object({
-  schema_version: z.literal("shot-plan.v2"),
+  schema_version: z.literal("shot-plan.v3"),
   request_id: z.string().min(1),
   status: z.literal("need_context"),
   required_context: z.array(z.enum(REQUIRED_CONTEXTS)).min(1),
@@ -123,7 +156,7 @@ export const MiraDirectorResponseSchema = z.discriminatedUnion("status", [
 
 export const DirectorInputSchema = z.object({
   request_id: z.string().min(1),
-  schema_version: z.literal("shot-plan.v2"),
+  schema_version: z.literal("shot-plan.v3"),
   dialogue_prefix: z.string().regex(/^\d{4}$/),
   start_id: z.string().min(4),
   outline: z.string(),
@@ -184,6 +217,7 @@ export const DirectorInputSchema = z.object({
   }),
   constraints: z.object({
     dynamic_relationship_axis: z.literal(true),
+    composition_projection_validation: z.literal(true),
     primary_aspect_ratio: z.literal("16:9"),
     overlay_aspect_ratio: z.literal("21:9"),
     avoid_character_overlap: z.literal(true),
@@ -205,7 +239,7 @@ export type AppliedDirector = DirectorMode;
 
 export interface DirectorInput {
   request_id: string;
-  schema_version: "shot-plan.v2";
+  schema_version: "shot-plan.v3";
   dialogue_prefix: string;
   start_id: string;
   outline: string;
@@ -249,6 +283,7 @@ export interface DirectorInput {
   };
   constraints: {
     dynamic_relationship_axis: true;
+    composition_projection_validation: true;
     primary_aspect_ratio: "16:9";
     overlay_aspect_ratio: "21:9";
     avoid_character_overlap: true;
@@ -298,7 +333,7 @@ export function createDirectorInput(
   );
   return {
     request_id: requestId,
-    schema_version: "shot-plan.v2",
+    schema_version: "shot-plan.v3",
     dialogue_prefix: sequence.prefix,
     start_id: sequence.startId,
     outline: sequence.outline,
@@ -360,6 +395,7 @@ export function createDirectorInput(
     },
     constraints: {
       dynamic_relationship_axis: true,
+      composition_projection_validation: true,
       primary_aspect_ratio: "16:9",
       overlay_aspect_ratio: "21:9",
       avoid_character_overlap: true,

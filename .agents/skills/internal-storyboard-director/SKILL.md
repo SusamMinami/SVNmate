@@ -6,7 +6,7 @@ description: "Designs UE4 dialogue storyboards through the local storyboard MCP 
 # 内部 TRAE 分镜导演
 
 使用当前内部 TRAE 模型处理“镜头沙盘”提交的待办任务，并通过 MCP
-返回严格的 `shot-plan.v2`。
+返回严格的 `shot-plan.v3`。
 
 ## 触发场景
 
@@ -28,7 +28,7 @@ description: "Designs UE4 dialogue storyboards through the local storyboard MCP 
    - `constraints.supported_templates`：允许的镜头模板
 4. 分析戏剧目标、情绪推进、关系变化、信息揭示和视觉节奏。
 5. 根据角色关系、权力状态和当前事件设计语义站位。
-6. 生成满足下述要求的 `shot-plan.v2`。
+6. 生成满足下述要求的 `shot-plan.v3`。
 7. 调用 `storyboard_submit_plan` 提交结果。
 8. 只有 MCP 返回 `accepted=true` 才计为完成；随后再次调用
    `storyboard_get_pending_request`，继续处理下一项。
@@ -67,6 +67,15 @@ description: "Designs UE4 dialogue storyboards through the local storyboard MCP 
   变化原则上至少 30 度。
 - 普通对话从建立镜头逐步收紧景别；全景直接跳到特写必须有重大情绪或
   信息转折。特写后优先使用另一角色的匹配特写，或回到建立镜头。
+- 每个 shot 必须声明构图原则、视觉落点、负空间意图和上下镜构图衔接。
+- 普通对话单人镜头优先使用三分法并保留视线空间；细腻的情绪强调可用
+  黄金分割，秩序、权力、仪式感或正面揭示可用中心或对称构图。
+- 负空间构图应服务于孤独、缺席、等待、威胁或悬念；三角构图与纵深层次
+  优先用于三人及以上群像。
+- 正反打优先使用左右互补落点；连续动作或反应可匹配前镜注视点；重新
+  建立空间时回到中央视觉重心。只有明确制造冲击时使用对比切换。
+- 引导线与框中框依赖场景几何；输入没有门框、走廊、道路等环境信息时，
+  不得假装已经完成这两类构图。
 - 正面群像避免把角色同时放在同侧相邻的前后位置，优先使用横向错列或
   对角关系分离轮廓。
 - 群像通过前后层次与横向间距保持轮廓分离，单人镜头无需强行容纳全员。
@@ -105,7 +114,7 @@ description: "Designs UE4 dialogue storyboards through the local storyboard MCP 
 
 ```json
 {
-  "schema_version": "shot-plan.v2",
+  "schema_version": "shot-plan.v3",
   "request_id": "必须与任务一致",
   "status": "ready",
   "scene_analysis": {
@@ -142,7 +151,10 @@ description: "Designs UE4 dialogue storyboards through the local storyboard MCP 
       "subject": "group",
       "look_target": "group_center",
       "lens_mm": 50,
-      "screen_position": "left_third",
+      "composition_mode": "rule_of_thirds",
+      "visual_anchor": "left_third",
+      "negative_space": "look_room",
+      "composition_transition": "mirror_reverse",
       "camera_height": "eye",
       "intent": "该镜头推动叙事的原因"
     }
@@ -165,13 +177,38 @@ back_center, back_left, back_right,
 far_left, far_right, rear_center
 ```
 
+`composition_mode` 只能使用：
+
+```text
+center, rule_of_thirds, golden_ratio, symmetry,
+asymmetrical_balance, triangular, negative_space, layered_depth
+```
+
+`visual_anchor` 只能使用：
+
+```text
+center, left_third, right_third, left_golden, right_golden, balanced
+```
+
+`negative_space` 只能使用：
+
+```text
+balanced, look_room, isolation, pressure
+```
+
+`composition_transition` 只能使用：
+
+```text
+recenter, match_eye_trace, mirror_reverse, progressive_shift, contrast
+```
+
 ## 信息不足
 
 仅在确实无法设计时提交：
 
 ```json
 {
-  "schema_version": "shot-plan.v2",
+  "schema_version": "shot-plan.v3",
   "request_id": "必须与任务一致",
   "status": "need_context",
   "required_context": ["npc_relationship"],

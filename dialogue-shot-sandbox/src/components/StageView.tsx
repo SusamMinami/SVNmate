@@ -414,15 +414,53 @@ function TopStage({
   );
 }
 
-function CameraFrameGuides({ compact = false }: { compact?: boolean }) {
+function CameraFrameGuides({
+  shot,
+  compact = false,
+}: {
+  shot: ShotPlan;
+  compact?: boolean;
+}) {
+  const showThirds = [
+    "rule_of_thirds",
+    "asymmetrical_balance",
+    "negative_space",
+  ].includes(shot.compositionPlan.mode);
+  const showGolden = shot.compositionPlan.mode === "golden_ratio";
+  const showCenter = ["center", "symmetry"].includes(
+    shot.compositionPlan.mode,
+  );
+  const showTriangle = shot.compositionPlan.mode === "triangular";
   return (
     <>
       {!compact && (
-        <div className="composition-overlay" aria-hidden="true">
-          <i className="third third--v1" />
-          <i className="third third--v2" />
-          <i className="third third--h1" />
-          <i className="third third--h2" />
+        <div
+          className={`composition-overlay composition-overlay--${shot.compositionPlan.mode}`}
+          aria-hidden="true"
+        >
+          {showThirds && (
+            <>
+              <i className="third third--v1" />
+              <i className="third third--v2" />
+              <i className="third third--h1" />
+              <i className="third third--h2" />
+            </>
+          )}
+          {showGolden && (
+            <>
+              <i className="golden golden--v1" />
+              <i className="golden golden--v2" />
+              <i className="golden golden--h1" />
+              <i className="golden golden--h2" />
+            </>
+          )}
+          {showCenter && <i className="center-axis" />}
+          {showTriangle && (
+            <>
+              <i className="triangle-guide triangle-guide--left" />
+              <i className="triangle-guide triangle-guide--right" />
+            </>
+          )}
           <i className="safe-frame" />
         </div>
       )}
@@ -490,7 +528,7 @@ export function StageView({ participants, shot }: StageViewProps) {
             </Canvas>
           )}
 
-          {showingShot && <CameraFrameGuides />}
+          {showingShot && <CameraFrameGuides shot={shot} />}
 
           <div className="shot-hud">
             <span>{showingShot ? shot.label : "俯视调度"}</span>
@@ -552,7 +590,7 @@ export function StageView({ participants, shot }: StageViewProps) {
               />
             </Canvas>
           )}
-          {!showingShot && <CameraFrameGuides compact />}
+          {!showingShot && <CameraFrameGuides shot={shot} compact />}
         </div>
       </button>
     </div>

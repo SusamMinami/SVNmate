@@ -42,6 +42,13 @@ export function buildDirectorPrompt(
     "reverse_medium 只能用于与前一个单人镜头构成主体互换、视线互补的正反打；没有互补前镜时使用 close_up 或其他合适模板。",
     "相邻镜头应有明确的角度或景别变化；连续拍摄同一主体时，水平机位变化原则上至少 30 度。",
     "普通对话从建立镜头逐步收紧景别；全景直接跳到特写需要重大情绪或信息转折。特写后优先使用另一角色的匹配特写，或回到建立镜头重新交代空间。",
+    "每个 shot 必须声明 composition_mode、visual_anchor、negative_space 和 composition_transition；构图必须服务于当前情绪、关系与上下镜视觉连续。",
+    "普通对话单人镜头优先使用 rule_of_thirds，并把眼睛放在上三分交点附近、给视线方向保留空间；情绪强调可使用更细腻的 golden_ratio。",
+    "center 或 symmetry 用于秩序、权力、仪式感、压迫或正面揭示，不作为所有普通对话的默认构图。",
+    "negative_space 用于孤独、缺席、等待、威胁或悬念；isolation 保留较多空白，pressure 刻意压缩视线空间，但都必须写明叙事动机。",
+    "三人及以上群像优先考虑 triangular 或 layered_depth；通过前中后景和三角视觉关系分离角色轮廓。",
+    "上下镜 composition_transition：正反打优先 mirror_reverse；希望观众视线停留在相近屏幕区域时使用 match_eye_trace；收紧情绪时使用 progressive_shift；重新建立空间时使用 recenter；有意制造冲击时才使用 contrast。",
+    "构图连续性优先匹配主体眼睛或主要视觉重心，而不是机械保持完全相同画面；连续多镜也要避免所有主体始终落在同一侧造成单调。",
     "正面群像中避免同时选择同侧且前后相邻的位置组合（如 mid_right + back_right）；优先用左右错列或对角站位分离轮廓。",
     "群像镜头应形成前后层次和横向间距；单人镜头不必强行容纳所有角色。",
     input.participants.length > 2
@@ -51,7 +58,7 @@ export function buildDirectorPrompt(
     "ready 格式：",
     JSON.stringify(
       {
-        schema_version: "shot-plan.v2",
+        schema_version: "shot-plan.v3",
         request_id: input.request_id,
         status: "ready",
         scene_analysis: {
@@ -82,7 +89,11 @@ export function buildDirectorPrompt(
             subject: input.participants.length > 2 ? "group" : "both",
             look_target: "group_center",
             lens_mm: 35,
-            screen_position: "balanced",
+            composition_mode:
+              input.participants.length > 2 ? "triangular" : "symmetry",
+            visual_anchor: "balanced",
+            negative_space: "balanced",
+            composition_transition: "recenter",
             camera_height: "eye",
             intent: "这个镜头如何推动叙事",
           },
@@ -94,7 +105,7 @@ export function buildDirectorPrompt(
     "need_context 格式：",
     JSON.stringify(
       {
-        schema_version: "shot-plan.v2",
+        schema_version: "shot-plan.v3",
         request_id: input.request_id,
         status: "need_context",
         required_context: ["npc_relationship"],
@@ -107,7 +118,10 @@ export function buildDirectorPrompt(
     `允许的 subject：${subjectOptions.join(", ")}`,
     "允许的 formation：arc, triangle, cluster, opposed_groups, leader_front",
     "允许的 position：front_center, front_left, front_right, mid_center, mid_left, mid_right, back_center, back_left, back_right, far_left, far_right, rear_center",
-    "允许的 screen_position：left_third, right_third, center, balanced",
+    "允许的 composition_mode：center, rule_of_thirds, golden_ratio, symmetry, asymmetrical_balance, triangular, negative_space, layered_depth",
+    "允许的 visual_anchor：center, left_third, right_third, left_golden, right_golden, balanced",
+    "允许的 negative_space：balanced, look_room, isolation, pressure",
+    "允许的 composition_transition：recenter, match_eye_trace, mirror_reverse, progressive_shift, contrast",
     "允许的 camera_height：low, eye, high",
     "允许的 required_context：npc_background, npc_relationship, scene_layout, story_before, story_after",
     "输入数据：",

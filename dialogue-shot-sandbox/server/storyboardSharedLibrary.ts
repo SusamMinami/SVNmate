@@ -226,7 +226,7 @@ function sharedRecordFields(
     输入JSON: JSON.stringify(input),
     来源: "镜头沙盘自动同步",
     更新时间: new Date().toISOString(),
-    软件版本: "v0.12.0+",
+    软件版本: "v0.13.0+",
   };
 }
 

@@ -76,6 +76,31 @@ describe("createShotPlan", () => {
     }
   });
 
+  it("selects narrative composition modes and validates screen anchors", () => {
+    expect(shots.map((shot) => shot.compositionPlan.mode)).toEqual([
+      "symmetry",
+      "golden_ratio",
+      "negative_space",
+      "rule_of_thirds",
+    ]);
+    expect(shots[0].compositionPlan.transition).toBe("recenter");
+    expect(shots.at(-1)?.compositionPlan.transition).toBe(
+      "mirror_reverse",
+    );
+
+    for (const shot of shots) {
+      expect(shot.projection.anchorDistance).toBeLessThanOrEqual(0.18);
+      expect(Math.abs(shot.projection.visualWeightBias)).toBeLessThanOrEqual(
+        0.42,
+      );
+    }
+    for (const shot of shots.filter(
+      (candidate) => candidate.compositionPlan.negativeSpace === "look_room",
+    )) {
+      expect(shot.projection.lookRoom).toBeGreaterThanOrEqual(0.14);
+    }
+  });
+
   it("keeps the requested framing across the supported lens range", () => {
     const input = createDirectorInput(sequence, "lens-range-test");
     const blocking = createDefaultBlocking(input);

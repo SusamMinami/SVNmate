@@ -64,7 +64,7 @@ function validPlan(
 ): Record<string, unknown> {
   const isGroupDialogue = input.participants.length > 2;
   return {
-    schema_version: "shot-plan.v2",
+    schema_version: "shot-plan.v3",
     request_id: input.request_id,
     status: "ready",
     scene_analysis: {
@@ -107,12 +107,21 @@ function validPlan(
               (participant) => participant.slot !== line.speaker,
             )?.slot,
       lens_mm: index === 0 ? (isGroupDialogue ? 28 : 35) : 50,
-      screen_position:
+      composition_mode:
+        index === 0
+          ? isGroupDialogue
+            ? "triangular"
+            : "symmetry"
+          : "rule_of_thirds",
+      visual_anchor:
         index === 0
           ? "balanced"
           : line.speaker === "A"
             ? "left_third"
             : "right_third",
+      negative_space: index === 0 ? "balanced" : "look_room",
+      composition_transition:
+        index === 0 ? "recenter" : "mirror_reverse",
       camera_height: "eye",
       intent: `覆盖台词节点 ${line.dialogue_id}`,
     })),
@@ -260,7 +269,7 @@ describe("internal storyboard MCP", () => {
         }
         expect(presence.connected).toBe(true);
         expect(presence.compatible).toBe(true);
-        expect(presence.serverVersion).toBe("0.12.0");
+        expect(presence.serverVersion).toBe("0.13.0");
         expect(presence.transport).toBe("stdio");
 
         let claimed = await client.callTool({
@@ -306,7 +315,7 @@ describe("internal storyboard MCP", () => {
         await expect(response.json()).resolves.toMatchObject({
           ok: true,
           data: {
-            schema_version: "shot-plan.v2",
+            schema_version: "shot-plan.v3",
             request_id: input.request_id,
             status: "ready",
           },
@@ -395,6 +404,21 @@ describe("internal storyboard MCP", () => {
     await expect(
       completeStoryboardTask(input.request_id, plan),
     ).rejects.toThrow("按原顺序覆盖所有 dialogue_id");
+    expect((await getStoryboardTask(input.request_id))?.status).toBe("pending");
+  });
+
+  it("rejects legacy plans without executable composition semantics", async () => {
+    temporaryRoot = await mkdtemp(join(tmpdir(), "storyboard-v2-"));
+    process.env.STORYBOARD_PROJECT_ROOT = temporaryRoot;
+    const sequence = findDialogueSequence(demoDatabase, "2048");
+    const input = createDirectorInput(sequence, "composition-schema-request");
+    await createStoryboardTask(input);
+    const plan = validPlan(input);
+    plan.schema_version = "shot-plan.v2";
+
+    await expect(
+      completeStoryboardTask(input.request_id, plan),
+    ).rejects.toThrow();
     expect((await getStoryboardTask(input.request_id))?.status).toBe("pending");
   });
 

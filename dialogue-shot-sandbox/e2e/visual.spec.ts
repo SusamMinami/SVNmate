@@ -49,6 +49,9 @@ test("renders nonblank shot and blocking canvases without horizontal overflow", 
   expect(cameraFrame!.width / cameraFrame!.height).toBeCloseTo(16 / 9, 1);
   await expect(page.locator(".ultrawide-frame").first()).toBeVisible();
   await expect(page.getByText("21:9")).toBeVisible();
+  await expect(page.locator(".golden")).toHaveCount(4);
+  await expect(page.getByText("黄金分割", { exact: true })).toBeVisible();
+  await expect(page.getByText("渐进转移", { exact: true })).toBeVisible();
 
   const hasHorizontalOverflow = await page.evaluate(
     () => document.documentElement.scrollWidth > window.innerWidth + 1,
@@ -112,8 +115,8 @@ test("removes a character after the AI-directed exit node", async ({
           configured: true,
           connected: true,
           versionMismatch: false,
-          expectedVersion: "0.12.0",
-          serverVersion: "0.12.0",
+          expectedVersion: "0.13.0",
+          serverVersion: "0.13.0",
           lastSeenAt: "2026-08-22T00:00:00.000Z",
           mcpName: "internal-storyboard-collaboration",
           mcpConfigPath: "C:\\workspace\\.trae\\mcp.json",
@@ -144,7 +147,7 @@ test("removes a character after the AI-directed exit node", async ({
       body: JSON.stringify({
         ok: true,
         data: {
-          schema_version: "shot-plan.v2",
+          schema_version: "shot-plan.v3",
           request_id: input.request_id,
           status: "ready",
           scene_analysis: {
@@ -186,7 +189,11 @@ test("removes a character after the AI-directed exit node", async ({
                   ? "B"
                   : "A",
             lens_mm: index === 0 ? 35 : 50,
-            screen_position: index === 0 ? "balanced" : "center",
+            composition_mode: index === 0 ? "symmetry" : "center",
+            visual_anchor: index === 0 ? "balanced" : "center",
+            negative_space: index === 0 ? "balanced" : "look_room",
+            composition_transition:
+              index === 0 ? "recenter" : "match_eye_trace",
             camera_height: "eye",
             intent: `覆盖进出场节点 ${line.dialogue_id}`,
           })),
@@ -273,8 +280,8 @@ test("shows local content immediately and presents the AI story brief before app
           configured: true,
           connected: true,
           versionMismatch: false,
-          expectedVersion: "0.12.0",
-          serverVersion: "0.12.0",
+          expectedVersion: "0.13.0",
+          serverVersion: "0.13.0",
           lastSeenAt: "2026-08-22T00:00:00.000Z",
           mcpName: "internal-storyboard-collaboration",
           mcpConfigPath: "C:\\workspace\\.trae\\mcp.json",
@@ -299,7 +306,7 @@ test("shows local content immediately and presents the AI story brief before app
       body: JSON.stringify({
         ok: true,
         data: {
-          schema_version: "shot-plan.v2",
+          schema_version: "shot-plan.v3",
           request_id: input.request_id,
           status: "ready",
           scene_analysis: {
@@ -335,8 +342,11 @@ test("shows local content immediately and presents the AI story brief before app
             subject: line.speaker,
             look_target: line.speaker === "A" ? "B" : "A",
             lens_mm: 55,
-            screen_position:
+            composition_mode: "rule_of_thirds",
+            visual_anchor:
               line.speaker === "A" ? "left_third" : "right_third",
+            negative_space: "look_room",
+            composition_transition: "mirror_reverse",
             camera_height: "eye",
             intent: "测试 AI 镜头。",
           })),
@@ -380,8 +390,8 @@ test("previews shared and local plans before resolving a library conflict", asyn
           configured: true,
           connected: true,
           versionMismatch: false,
-          expectedVersion: "0.12.0",
-          serverVersion: "0.12.0",
+          expectedVersion: "0.13.0",
+          serverVersion: "0.13.0",
           transport: "http",
           lastSeenAt: "2026-08-22T00:00:00.000Z",
           mcpName: "internal-storyboard-collaboration",
@@ -409,7 +419,7 @@ test("previews shared and local plans before resolving a library conflict", asyn
       ),
     };
     const makePlan = (requestId: string, lens: number, goal: string) => ({
-      schema_version: "shot-plan.v2",
+      schema_version: "shot-plan.v3",
       request_id: requestId,
       status: "ready",
       scene_analysis: {
@@ -425,8 +435,11 @@ test("previews shared and local plans before resolving a library conflict", asyn
           subject: line.speaker,
           look_target: line.speaker === "A" ? "B" : "A",
           lens_mm: lens,
-          screen_position:
+          composition_mode: "rule_of_thirds",
+          visual_anchor:
             line.speaker === "A" ? "left_third" : "right_third",
+          negative_space: "look_room",
+          composition_transition: "mirror_reverse",
           camera_height: "eye",
           intent: goal,
         }),

@@ -52,7 +52,7 @@ export function createStoryboardMcpServer(): McpServer {
   "storyboard_submit_plan",
   {
     description:
-      "提交内部 TRAE 设计完成的 shot-plan.v2。服务端会校验 request_id、Schema、动态关系轴、镜头模板和字段范围。",
+      "提交内部 TRAE 设计完成的 shot-plan.v3。服务端会校验 request_id、Schema、动态关系轴、构图语义、镜头模板和字段范围。",
     inputSchema: {
       request_id: z.string().min(1),
       plan: z.record(z.string(), z.unknown()),

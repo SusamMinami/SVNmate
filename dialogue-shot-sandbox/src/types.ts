@@ -113,6 +113,44 @@ export type ShotCoverage =
   | "group"
   | "group-medium";
 
+export type CompositionMode =
+  | "center"
+  | "rule_of_thirds"
+  | "golden_ratio"
+  | "symmetry"
+  | "asymmetrical_balance"
+  | "triangular"
+  | "negative_space"
+  | "layered_depth";
+
+export type VisualAnchor =
+  | "center"
+  | "left_third"
+  | "right_third"
+  | "left_golden"
+  | "right_golden"
+  | "balanced";
+
+export type NegativeSpaceMode =
+  | "balanced"
+  | "look_room"
+  | "isolation"
+  | "pressure";
+
+export type CompositionTransition =
+  | "recenter"
+  | "match_eye_trace"
+  | "mirror_reverse"
+  | "progressive_shift"
+  | "contrast";
+
+export interface ShotComposition {
+  mode: CompositionMode;
+  visualAnchor: VisualAnchor;
+  negativeSpace: NegativeSpaceMode;
+  transition: CompositionTransition;
+}
+
 export interface ShotProjectionValidation {
   expectedShotSize: ShotSize;
   measuredShotSize: ShotSize;
@@ -122,6 +160,15 @@ export interface ShotProjectionValidation {
   participantAreaRatios: Partial<Record<ParticipantSlot, number>>;
   subjectFaceAngle: number | null;
   subjectSafeForUltrawide: boolean;
+  visualAnchor: readonly [number, number];
+  targetAnchor: readonly [number, number];
+  anchorDistance: number;
+  headroom: number | null;
+  lookRoom: number | null;
+  visualWeightBias: number;
+  projectedTriangleArea: number | null;
+  depthSpread: number;
+  eyeTraceDelta: number | null;
   valid: boolean;
   warnings: string[];
 }
@@ -151,6 +198,7 @@ export interface ShotPlan {
   duration: number;
   cameraPosition: Vec3;
   cameraTarget: Vec3;
+  compositionPlan: ShotComposition;
   composition: string;
   rationale: string;
   visualSubjectSlot: ParticipantSlot | null;

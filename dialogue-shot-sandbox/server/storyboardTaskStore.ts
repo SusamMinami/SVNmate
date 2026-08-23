@@ -29,7 +29,8 @@ export interface StoryboardTask {
 }
 
 const PROCESSING_LEASE_MS = 20 * 60_000;
-export const STORYBOARD_CACHE_POLICY = "shot-plan.v2:dynamic-axis-v1";
+export const STORYBOARD_CACHE_POLICY =
+  "shot-plan.v3:dynamic-axis-composition-v1";
 
 function taskDirectory(): string {
   return join(storyboardRuntimeRoot(), ".storyboard-data", "tasks");

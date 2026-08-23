@@ -24,15 +24,15 @@ function isEmphatic(content: string): boolean {
   return /[？！!?]|危险|必须|不能|真相|现在|立刻|到底/.test(content);
 }
 
-function screenPositionFor(
+function visualAnchorFor(
   slot: ParticipantSlot,
   input: DirectorInput,
-): DirectorDecision["screen_position"] {
+): DirectorDecision["visual_anchor"] {
   const speakerIndex = input.participants.findIndex(
     (participant) => participant.slot === slot,
   );
   const midpoint = (input.participants.length - 1) / 2;
-  if (Math.abs(speakerIndex - midpoint) < 0.6) {
+  if (Math.abs(speakerIndex - midpoint) < 0.1) {
     return "center";
   }
   return speakerIndex < midpoint ? "left_third" : "right_third";
@@ -77,7 +77,7 @@ function decisionFor(
   previousSpeaker: ParticipantSlot | null,
   input: DirectorInput,
 ): DirectorDecision {
-  const screenPosition = screenPositionFor(row.speaker, input);
+  const screenPosition = visualAnchorFor(row.speaker, input);
   const dialogueIndexById = new Map(
     input.dialogue.map((line, dialogueIndex) => [
       line.dialogue_id,
@@ -116,7 +116,10 @@ function decisionFor(
         subject: row.speaker,
         look_target: "group_center",
         lens_mm: 50,
-        screen_position: "center",
+        composition_mode: "center",
+        visual_anchor: "center",
+        negative_space: "balanced",
+        composition_transition: "recenter",
         camera_height: "eye",
         intent: "先建立当前在场角色，并为后续角色登场保留空间。",
       };
@@ -130,7 +133,11 @@ function decisionFor(
       subject: activeParticipants.length > 2 ? "group" : "both",
       look_target: "group_center",
       lens_mm: activeParticipants.length > 4 ? 28 : 38,
-      screen_position: "balanced",
+      composition_mode:
+        activeParticipants.length > 2 ? "triangular" : "symmetry",
+      visual_anchor: "balanced",
+      negative_space: "balanced",
+      composition_transition: "recenter",
       camera_height: "eye",
       intent:
         activeParticipants.length > 2
@@ -148,7 +155,13 @@ function decisionFor(
       subject: row.speaker,
       look_target: lookTarget,
       lens_mm: 42,
-      screen_position: screenPosition,
+      composition_mode:
+        activeParticipants.length > 2
+          ? "layered_depth"
+          : "asymmetrical_balance",
+      visual_anchor: screenPosition,
+      negative_space: "look_room",
+      composition_transition: "progressive_shift",
       camera_height: "eye",
       intent: "新角色在该台词节点进入场面，镜头明确其位置并更新群体关系。",
     };
@@ -160,7 +173,15 @@ function decisionFor(
       subject: row.speaker,
       look_target: lookTarget,
       lens_mm: 78,
-      screen_position: screenPosition,
+      composition_mode: "negative_space",
+      visual_anchor:
+        screenPosition === "left_third"
+          ? "left_golden"
+          : screenPosition === "right_third"
+            ? "right_golden"
+            : "center",
+      negative_space: "isolation",
+      composition_transition: "contrast",
       camera_height: "eye",
       intent: "停顿构成情绪节点，收紧景别读取角色没有说出口的反应。",
     };
@@ -172,7 +193,15 @@ function decisionFor(
       subject: row.speaker,
       look_target: lookTarget,
       lens_mm: 68,
-      screen_position: screenPosition,
+      composition_mode: "golden_ratio",
+      visual_anchor:
+        screenPosition === "left_third"
+          ? "left_golden"
+          : screenPosition === "right_third"
+            ? "right_golden"
+            : "center",
+      negative_space: "pressure",
+      composition_transition: "progressive_shift",
       camera_height: "eye",
       intent: "台词包含追问或强调信息，使用近景集中注意力并提高情绪权重。",
     };
@@ -186,7 +215,14 @@ function decisionFor(
     subject: row.speaker,
     look_target: lookTarget,
     lens_mm: input.participants.length > 2 ? 42 : 50,
-    screen_position: screenPosition,
+    composition_mode:
+      input.participants.length > 2 ? "layered_depth" : "rule_of_thirds",
+    visual_anchor: screenPosition,
+    negative_space: "look_room",
+    composition_transition:
+      previousSpeaker && previousSpeaker !== row.speaker
+        ? "mirror_reverse"
+        : "match_eye_trace",
     camera_height: "eye",
     intent:
       input.participants.length > 2
@@ -386,7 +422,7 @@ export function createRuleDecisions(input: DirectorInput): DirectorDecision[] {
                   : input.participants.length > 2
                     ? 42
                     : 50,
-              screen_position: screenPositionFor(
+              visual_anchor: visualAnchorFor(
                 activeAlternative.slot,
                 input,
               ),

@@ -772,6 +772,67 @@ input:focus-visible {
   top: 66.666%;
 }
 
+.golden,
+.center-axis,
+.triangle-guide {
+  position: absolute;
+  display: block;
+  background: rgba(255, 217, 122, 0.46);
+}
+
+.golden--v1,
+.golden--v2 {
+  top: 0;
+  bottom: 0;
+  width: 1px;
+}
+
+.golden--v1 {
+  left: 38.2%;
+}
+
+.golden--v2 {
+  left: 61.8%;
+}
+
+.golden--h1,
+.golden--h2 {
+  right: 0;
+  left: 0;
+  height: 1px;
+}
+
+.golden--h1 {
+  top: 38.2%;
+}
+
+.golden--h2 {
+  top: 61.8%;
+}
+
+.center-axis {
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+}
+
+.triangle-guide {
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  height: 112%;
+  transform-origin: bottom center;
+}
+
+.triangle-guide--left {
+  transform: rotate(61deg);
+}
+
+.triangle-guide--right {
+  transform: rotate(-61deg);
+}
+
 .safe-frame {
   position: absolute;
   inset: 6%;
