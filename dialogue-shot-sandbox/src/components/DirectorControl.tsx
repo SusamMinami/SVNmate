@@ -143,7 +143,7 @@ export function DirectorControl({
                   : traeConnected
                     ? "内部 TRAE MCP 已连接"
                     : traeStatus?.versionMismatch
-                      ? "MCP 版本已更新，需要重启"
+                      ? "MCP 仍在运行旧版本"
                     : traeStatus?.configured
                       ? "MCP 配置已发现，等待连接"
                       : "尚未检测到内部 TRAE MCP"}
@@ -152,7 +152,7 @@ export function DirectorControl({
               {traeConnected
                 ? `待处理 ${traeStatus?.stats.pending ?? 0} · 处理中 ${traeStatus?.stats.processing ?? 0}`
                 : traeStatus?.versionMismatch
-                  ? `当前 ${traeStatus.serverVersion ?? "旧版"} · 需要 ${traeStatus.expectedVersion}`
+                  ? `当前 ${traeStatus.serverVersion ?? "旧版"} · 需要 ${traeStatus.expectedVersion}；请在 TRAE 中停用后重新启用`
                 : traeStatus?.configured
                   ? "请在当前 TRAE 启用该 MCP"
                   : "仍可先提交任务，再启动 MCP 处理"}
@@ -161,7 +161,13 @@ export function DirectorControl({
           <button
             type="button"
             className="mira-status__action"
-            title={traeConnected ? "刷新协作状态" : "查看 MCP 配置"}
+            title={
+              traeConnected
+                ? "刷新协作状态"
+                : traeStatus?.versionMismatch
+                  ? "查看 MCP 重启步骤"
+                  : "查看 MCP 配置"
+            }
             aria-label={
               traeConnected
                 ? "刷新内部 TRAE 协作状态"

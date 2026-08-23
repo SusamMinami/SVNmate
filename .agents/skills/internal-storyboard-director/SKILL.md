@@ -6,7 +6,7 @@ description: "Designs UE4 dialogue storyboards through the local storyboard MCP 
 # 内部 TRAE 分镜导演
 
 使用当前内部 TRAE 模型处理“镜头沙盘”提交的待办任务，并通过 MCP
-返回严格的 `shot-plan.v4`。
+返回严格的 `shot-plan.v5`。
 
 ## 触发场景
 
@@ -28,7 +28,7 @@ description: "Designs UE4 dialogue storyboards through the local storyboard MCP 
    - `constraints.supported_templates`：允许的镜头模板
 4. 分析戏剧目标、情绪推进、关系变化、信息揭示和视觉节奏。
 5. 根据角色关系、权力状态和当前事件设计语义站位。
-6. 生成满足下述要求的 `shot-plan.v4`。
+6. 生成满足下述要求的 `shot-plan.v5`。
 7. 调用 `storyboard_submit_plan` 提交结果。
 8. 只有 MCP 返回 `accepted=true` 才计为完成；随后再次调用
    `storyboard_get_pending_request`，继续处理下一项。
@@ -38,6 +38,11 @@ description: "Designs UE4 dialogue storyboards through the local storyboard MCP 
 
 ## 分镜要求
 
+- 生成前先在内部依次判断：当前叙事变化是什么、观众该看谁、需要多少空间
+  信息、角度与焦段如何改变感受、镜头运动是否确有必要。最终只提交结论，
+  不输出思考过程。
+- 把镜头视为景别、角度、画面人数、运动、焦段、焦点层次和构图的组合。
+  所有参数共同服务一个主要叙事目标，不为展示技巧而叠加互相竞争的效果。
 - 覆盖每一个 `dialogue_id`，每个 ID 只能出现一次。
 - 可以让一个镜头覆盖连续多句台词，但不能改变台词顺序。
 - 只使用 `constraints.supported_templates` 中的模板。
@@ -73,6 +78,45 @@ description: "Designs UE4 dialogue storyboards through the local storyboard MCP 
 - 预判每个镜头中的人物投影，避免重要角色互相遮挡或堆叠。
 - 普通对话的单人镜头优先呈现主体正面或四分之三正面；侧面角度只用于
   明确的对峙、疏离、隐藏或观察意图。
+- `camera_height=eye` 是中性、平等和客观的默认角度；`low` 用于权力、
+  威胁或弱者视点，`high` 用于脆弱、受困、规模或环境压倒人物。高低角
+  的含义必须结合剧情，不能机械等同于强弱。
+- `camera_roll_degrees` 默认填 `0`。只有失衡、混乱、心理异常、梦境或
+  明确不安时才使用 Dutch angle，通常取正负 15-25 度；更陡角度只用于
+  强烈失序，不能把轻微歪斜当作装饰。
+- 焦距决定视场与空间透视，不直接决定景别。24-35mm 用于空间、群像或
+  有意夸张近大远小；35-50mm 接近自然视感；50-85mm 适合过肩、对话和
+  主体分离；85-135mm 适合近景、特写和空间压缩。镜头沙盘会通过机位
+  距离维持目标景别。
+- `lens_intent` 必须与 `lens_mm` 匹配：
+  `spatial_context=24-35`、`natural_perspective=35-50`、
+  `subject_isolation=50-85`、`compressed_intimacy=85-135`、
+  `perspective_distortion=24-35`。最后一种必须有明确的夸张意图。
+- `depth_of_field` 要服务叙事：建立镜头、群像和动作关系优先 `deep`；
+  前后景同时发生动作或需要比较关系时也使用 `deep`；普通对话可用
+  `moderate`；只有一个主要焦点的情绪近景、反应和关键信息可用
+  `shallow`。景深是清晰范围，`layered_depth` 是前中后景调度，不能
+  混为一谈。
+- `camera_movement` 默认使用 `static`。只有信息揭示、角色移动、情绪
+  推进、关系变化或空间重建需要时才运镜；运动必须有清晰起点、终点和
+  叙事目的。
+- `pan` 保持摄影机位置不变，通过水平改变视线连接角色、跟随横向动作
+  或逐步揭示信息；`tracking` 随主体穿过环境，只有上下文存在明确移动
+  路径时使用。
+- `dolly_in` 物理靠近主体，用于集中注意、期待、领悟或情绪增强；
+  `dolly_out` 物理远离主体，用于孤立、抽离、空间揭示或关系疏远。
+  `zoom_in` / `zoom_out` 保持机位不动，只通过增加/缩短焦距改变视场，
+  其空间透视不等同于物理推拉。
+- `dolly_zoom_in` 表示摄影机推进并同步缩短焦距，
+  `dolly_zoom_out` 表示摄影机后退并同步增加焦距。两者都要让主体
+  尺寸近似不变，只用于恐惧、震惊、顿悟或失衡等关键节点，并优先使用
+  50-135mm 和具有纵深层次的背景。
+- 静态镜头必须使用 `movement_intensity=none` 且
+  `end_lens_mm=lens_mm`；运动镜头必须使用 `subtle`、`moderate` 或
+  `strong`。只有 Zoom 和 Dolly zoom 可以改变 `end_lens_mm`：
+  `zoom_in` 增加焦距，`zoom_out` 缩短焦距。
+- 运镜起止画面都必须保持主体、视线、轴线和 21:9 安全区域可读。普通
+  对话优先 `subtle`，强运动只用于强烈动作或情绪节点。
 - `close_up`、`reaction_closeup`、`low_angle_closeup`、
   `high_angle_closeup` 和 `reverse_medium` 都按单主体构图设计；
   希望保留关系角色时使用 `speaker_group_medium`。
@@ -87,6 +131,18 @@ description: "Designs UE4 dialogue storyboards through the local storyboard MCP 
   黄金分割，秩序、权力、仪式感或正面揭示可用中心或对称构图。
 - 负空间构图应服务于孤独、缺席、等待、威胁或悬念；三角构图与纵深层次
   优先用于三人及以上群像。
+- Negative space 是主体周围的空白，不等同于角色脸后的空间。普通对话
+  使用 `look_room` 时，主要空白必须在角色注视方向，视线前方空间不得
+  小于后方空间。
+- `isolation` 只有在台词或上下文明确支持孤独、缺席、环境压倒人物或
+  画外威胁时才使用；停顿本身不足以推断孤立。
+- `pressure` 是有意的短边构图：压缩角色面朝方向的空间，把较多空白留在
+  脑后。只用于受阻、困住、对抗或不安，并在 `intent` 中说明。
+- 每镜必须有清晰焦点。单人和浅景深镜头只保留一个主焦点；双人、三人和
+  深景深镜头可让观众比较多个焦点，但站位、大小、锐度或画面重量必须说明
+  优先级。
+- 三人镜头不是简单装下三个人：均匀间距表达团结或平衡，中心前置/高位
+  表达领导，两人靠近而第三人拉开表达阵营分裂或孤立。
 - 正反打优先使用左右互补落点；连续动作或反应可匹配前镜注视点；重新
   建立空间时回到中央视觉重心。只有明确制造冲击时使用对比切换。
 - 引导线与框中框依赖场景几何；输入没有门框、走廊、道路等环境信息时，
@@ -129,7 +185,7 @@ description: "Designs UE4 dialogue storyboards through the local storyboard MCP 
 
 ```json
 {
-  "schema_version": "shot-plan.v4",
+  "schema_version": "shot-plan.v5",
   "request_id": "必须与任务一致",
   "status": "ready",
   "scene_analysis": {
@@ -166,6 +222,12 @@ description: "Designs UE4 dialogue storyboards through the local storyboard MCP 
       "subject": "group",
       "look_target": "group_center",
       "lens_mm": 50,
+      "end_lens_mm": 50,
+      "lens_intent": "natural_perspective",
+      "depth_of_field": "deep",
+      "camera_movement": "static",
+      "movement_intensity": "none",
+      "camera_roll_degrees": 0,
       "composition_mode": "rule_of_thirds",
       "visual_anchor": "left_third",
       "negative_space": "look_room",
@@ -225,13 +287,39 @@ establish_geography, reestablish_geography, relationship,
 shared_reaction, individual_perspective, individual_emphasis, reaction
 ```
 
+`lens_intent` 只能使用：
+
+```text
+spatial_context, natural_perspective, subject_isolation,
+compressed_intimacy, perspective_distortion
+```
+
+`depth_of_field` 只能使用：
+
+```text
+deep, moderate, shallow
+```
+
+`camera_movement` 只能使用：
+
+```text
+static, pan, tracking, dolly_in, dolly_out, zoom_in, zoom_out,
+dolly_zoom_in, dolly_zoom_out
+```
+
+`movement_intensity` 只能使用：
+
+```text
+none, subtle, moderate, strong
+```
+
 ## 信息不足
 
 仅在确实无法设计时提交：
 
 ```json
 {
-  "schema_version": "shot-plan.v4",
+  "schema_version": "shot-plan.v5",
   "request_id": "必须与任务一致",
   "status": "need_context",
   "required_context": ["npc_relationship"],

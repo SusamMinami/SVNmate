@@ -1,4 +1,4 @@
-# 镜头沙盘镜头语言规则库 v1.3
+# 镜头沙盘镜头语言规则库 v1.5
 
 本规则库用于三个环节：
 
@@ -7,6 +7,10 @@
 3. Three.js 生成摄影机后执行几何验收。
 
 机器可读源文件为 [`shot-language-rules.v1.json`](./shot-language-rules.v1.json)。
+Adobe 主文及专题页的提炼过程见
+[`adobe-camera-techniques.md`](./adobe-camera-techniques.md)。
+StudioBinder 分类页与子项的提炼过程见
+[`studiobinder-camera-techniques.md`](./studiobinder-camera-techniques.md)。
 
 ## 规则分级
 
@@ -19,6 +23,19 @@
 30°和180°规则是经典连续性原则，但仍允许有意打破。Adobe 对 180°规则的说明也强调，越轴可用于制造混乱或表现权力变化，前提是导演有意识地这样做。[来源](https://www.adobe.com/ph_en/creativecloud/video/discover/what-is-the-180-degree-rule.html)
 
 “全景不直接切特写”和“特写后优先匹配特写或回到远景”不是所有电影都必须遵守的铁律。大幅跳变可以形成冲击，因此本项目将它们设为可调的风格偏好；普通对话默认使用，明确的揭示、惊吓或情绪转折可以破例。
+
+## 导演决策顺序
+
+规则导演和大模型在选择参数前先回答五个问题：
+
+1. 当前段落发生了什么信息、情绪、权力、动作或空间变化？
+2. 观众此刻应该看个人、关系、共同反应，还是完整空间？
+3. 需要什么景别和垂直/水平角度？
+4. 什么焦段能产生所需的空间透视，是否需要改变景深？
+5. 静态镜头是否足够；若不够，运动的起点、终点和叙事理由是什么？
+
+模型只输出结论和简短 `intent`，不输出思维过程。系统随后验证协议一致性、
+几何投影和运动终点。
 
 ## 核心规则
 
@@ -38,6 +55,50 @@ Adobe 将中近景定义为头顶至胸部附近，将近景描述为由面部�
 - 普通对话默认平视；俯拍和仰拍需要承担权力或情绪语义。
 
 这里的角度是摄影机相对角色面部朝向的角度，不是摄影机相对世界坐标的角度。求解时必须使用 `facingTarget - position` 建立角色局部坐标系。
+
+### 焦段、景深与横滚
+
+- `24-35mm` 用于空间、群像或有意夸张近大远小；`35-50mm` 接近自然
+  视感；`50-85mm` 适合过肩、对话和主体分离；`85-135mm` 适合近景、
+  特写与空间压缩。
+- 焦距改变视场和空间透视，不直接定义景别。同一景别更换焦距时，求解器
+  必须同步改变机位距离。
+- 建立镜头和群像优先深景深，普通对话可用中等景深，情绪近景和关键细节
+  可用浅景深。
+- 景深描述清晰范围，纵深构图描述前景、中景和背景的空间组织。需要同时
+  阅读多层动作或关系时，纵深构图应配合深景深；只有一个主焦点时才使用
+  浅景深隔离它。
+- Dutch angle 默认横滚为 `0°`；只有失衡、混乱、心理异常、梦境或明确
+  不安时才使用，常用范围为正负 `15-25°`。
+- 极端高低角和近距离广角会叠加透视变形，只有明确需要夸张时才组合。
+
+Adobe 指出宽焦段会扩大视场和前后距离，长焦会压缩空间并更容易隔离主体；
+近景常用 `85-135mm`，中景常用 `35-50mm`，过肩常用 `50-85mm`。
+这些是全画幅等效推荐范围，项目将其作为语义范围而非绝对硬件限制。
+[Adobe 主文](https://www.adobe.com/creativecloud/video/production/cinematography/camera-shots-and-angles.html?country=us)
+
+### 镜内运动
+
+- 静态机位是普通对话默认值。镜头运动必须对应信息揭示、角色移动、情绪
+  推进、关系变化或空间重建。
+- `pan` 固定摄影机位置并水平改变朝向，用于连接角色、跟随横向动作或
+  逐步揭示；必须声明清楚起止视线。
+- `tracking` 随主体穿过环境，只在角色具有明确移动路径时使用。
+- `dolly_in` 物理靠近主体，用于集中注意、期待、领悟或情绪增强；
+  `dolly_out` 物理远离，用于孤立、抽离、关系疏远或揭示环境。
+- `zoom_in / zoom_out` 保持机位不动，只改变焦距与视场，不能当作
+  dolly。Dolly zoom 必须让摄影机移动与焦距变化方向相反，并尽量保持
+  主体尺寸稳定。
+- `dolly_zoom_in` 推进时缩短焦距，`dolly_zoom_out` 后退时增加焦距；
+  两者只用于恐惧、震惊、顿悟或失衡等关键节点。
+- 运动起止画面都要保持主体、轴线、视线和 21:9 安全区域可读。普通对话
+  优先轻微运动，强运动需要强烈动作或情绪依据。
+
+Adobe 将 Tracking 定义为摄影机跟随主体，将 Pan 定义为固定机位的水平
+旋转，并区分了物理推拉与光学变焦。Dolly zoom 的主体尺寸应近似不变，
+背景透视则扩张或压缩。[Tracking](https://www.adobe.com/creativecloud/video/production/cinematography/camera-shots-and-angles/tracking-shot.html)
+[Pan](https://www.adobe.com/creativecloud/video/production/cinematography/camera-shots-and-angles/pan-shot.html)
+[Dolly zoom](https://www.adobe.com/creativecloud/video/production/cinematography/camera-shots-and-angles/dolly-zoom-shot.html)
 
 ### 连续性
 
@@ -130,16 +191,35 @@ Adobe 将主镜头定义为覆盖人物、动作与空间关系的全景，并�
 | 框中框 | 窥视、禁锢、空间转换 | 隔离、观察、边界感 | 需要门窗等环境几何后才可验收 |
 | 引导线 | 走廊、道路、建筑边缘、光线 | 引导注意、制造纵深 | 需要场景线段和焦点数据后才可验收 |
 
-三分法把画面划分为九宫格并用交点组织重点，可同时建立自然平衡和视线空间；中心与对称构图则更直接、正式。负空间既能突出主体，也能通过“本应被填满却仍为空”的区域表达孤独或悬念。[StudioBinder 构图目录](https://www.studiobinder.com/camera-shots/composition/) [Adobe 构图基础](https://www.adobe.com/creativecloud/photography/technique/composition.html)
+三分法把画面划分为九宫格并用交点组织重点，可同时建立自然平衡和视线空间；中心与对称构图则更直接、正式。负空间是主体周围或主体之间没有主要视觉信息的区域，不等同于角色脸后的空间。它既能突出主体，也能通过“本应被填满却仍为空”的区域表达孤独或悬念。[StudioBinder 构图目录](https://www.studiobinder.com/camera-shots/composition/) [StudioBinder Negative Space](https://www.studiobinder.com/camera-shots/composition/negative-space-in-film/) [Adobe 构图基础](https://www.adobe.com/creativecloud/photography/technique/composition.html)
 
 黄金分割的横向落点使用画面宽度的 `0.382 / 0.618`，转换为 NDC 后约为 `-0.236 / +0.236`。它不是比三分法更高级的硬规则，而是一种更靠近中部、更柔和的偏置选择。
 
 ### 人物画面空间
 
-- 普通对话在角色注视方向保留 `look room`，当前最低软阈值为画面宽度的 `14%`。
-- 近景头部空间随景别收紧；压迫构图可以有意减小，但必须声明 `negative_space=pressure`。
-- `isolation` 通过较小主体和较大空白表达孤独；不能把错误偏框自动解释为负空间。
+- 普通对话在角色注视方向保留 `look room`，当前最低软阈值为画面宽度的
+  `14%`，且前向空间不得无动机小于脸后空间。
+- `pressure` 表示有意短边：压缩角色面朝方向的空间，把较多空白留在脸后，
+  只用于受阻、困住、对抗或不安；前向空间仍不得低于 `4%`。
+- `isolation` 通过较小主体和显著空白表达孤独、缺席或环境压倒人物。普通
+  停顿不构成孤立证据，不能把错误偏框自动解释为负空间。
+- 求解器同时记录 `lookRoom` 和 `backRoom`，按真实屏幕视线决定空白方向，
+  不再用角色槽位顺序猜测左右。
+- 近景头部空间随景别收紧；压迫构图可以有意减小，但必须声明
+  `negative_space=pressure`。
 - 群像按投影面积计算视觉重量中心；对称镜头要求其横向偏差不超过 `0.12 NDC`。
+
+### 焦点与视觉层级
+
+- 每镜必须有可解释的主焦点。单人和浅景深镜头只保留一个主要注意对象。
+- 深景深允许观众同时读取多层动作和关系；多人纵深构图应明确谁是第一焦点，
+  谁承担关系或环境信息。
+- 前景元素可用于建立深度、观察感和关系压力，但不能无意遮挡主体。
+- 三人镜头应通过间距、高低和朝向表达平衡、领导、结盟或孤立，不能只把
+  三个人平均塞进画面。
+- Rack focus、Split diopter、POV、Insert、Tilt、Arc、Whip pan、
+  Snorricam 和 Overhead 已记录为后续能力；在协议没有焦点对象、观察者、
+  场景目标或轨迹参数前，大模型不得用现有字段伪装这些镜头。
 
 ## 上下镜构图匹配
 
@@ -169,33 +249,45 @@ Adobe 将主镜头定义为覆盖人物、动作与空间关系的全景，并�
 
 ```json
 {
-  "schema_version": "shot-plan.v4",
+  "schema_version": "shot-plan.v5",
   "dialogue_ids": ["204803", "204804"],
   "template": "reverse_medium",
   "subject": "B",
   "look_target": "A",
   "camera_height": "eye",
+  "camera_roll_degrees": 0,
+  "camera_movement": "static",
+  "movement_intensity": "none",
   "composition_mode": "rule_of_thirds",
   "visual_anchor": "right_third",
   "negative_space": "look_room",
   "composition_transition": "mirror_reverse",
   "coverage_intent": "individual_perspective",
   "lens_mm": 50,
+  "end_lens_mm": 50,
+  "lens_intent": "subject_isolation",
+  "depth_of_field": "moderate",
   "intent": "在 A 的近景后切到 B，形成同一 A-B 关系轴上的匹配反打。"
 }
 ```
 
-大模型必须声明 `subject`、`look_target`、`coverage_intent` 和四个构图字段。Three.js 据此生成稳定的无序关系轴 ID（例如 `A-B`）、同侧机位、逐镜头朝向覆盖、视觉落点和投影验收。景别和画面构成由模板提出、由投影结果确认。大模型决定“为什么拍、拍谁、看向谁、采用个人还是关系覆盖、怎样组织画面”，几何求解器决定“轴线在哪里、摄影机具体放在哪里、实际构图是否成立”。
+大模型必须声明 `subject`、`look_target`、`coverage_intent`、焦段/景深字段、
+镜内运动字段和四个构图字段。Three.js 据此生成稳定的无序关系轴 ID
+（例如 `A-B`）、同侧机位、逐镜头朝向覆盖、视觉落点、运动起止机位和
+投影验收。景别和画面构成由模板提出、由投影结果确认。大模型决定
+“为什么拍、拍谁、看向谁、采用个人还是关系覆盖、怎样组织和移动画面”，
+几何求解器决定“轴线在哪里、摄影机具体放在哪里、实际构图是否成立”。
 
 ## 推荐执行管线
 
 1. 按进出场和叙事节拍划分镜头段。
 2. 为每段确定覆盖意图、视觉主体和镜头功能。
 3. 基于角色朝向、行动轴和目标景别生成多组机位候选。
-4. 将角色关键点投影到 16:9 和 21:9 画框。
-5. 硬约束过滤不合格候选。
-6. 按正面程度、景别节奏、30°变化、遮挡和叙事意图评分。
-7. 使用整段序列优化选择总分最高的组合。
-8. 输出实测标签、违规说明、规则集版本和规则集指纹。
+4. 基于焦段、角度和运动强度求解摄影机起止位置、朝向与焦距。
+5. 将起止画面的角色关键点投影到 16:9 和 21:9 画框。
+6. 硬约束过滤不合格候选。
+7. 按正面程度、景别节奏、30°变化、遮挡和叙事意图评分。
+8. 使用整段序列优化选择总分最高的组合。
+9. 输出实测标签、违规说明、规则集版本和规则集指纹。
 
 规则表更新后，应先经过 Schema 校验，再生成本地只读快照。网络不可用时使用最近一次有效快照，避免在线表格故障阻断规则导演。

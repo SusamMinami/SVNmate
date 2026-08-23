@@ -77,7 +77,7 @@ describe("designShots", () => {
         JSON.stringify({
           ok: true,
           data: {
-            schema_version: "shot-plan.v4",
+            schema_version: "shot-plan.v5",
             request_id: input!.request_id,
             status: "ready",
             scene_analysis: {
@@ -128,6 +128,15 @@ describe("designShots", () => {
                     ? "B"
                     : "A",
               lens_mm: index === 0 ? 35 : 50,
+              end_lens_mm: index === 0 ? 35 : 50,
+              lens_intent:
+                index === 0
+                  ? "spatial_context"
+                  : "subject_isolation",
+              depth_of_field: index === 0 ? "deep" : "moderate",
+              camera_movement: "static",
+              movement_intensity: "none",
+              camera_roll_degrees: 0,
               composition_mode:
                 index === 0 ? "symmetry" : "rule_of_thirds",
               visual_anchor:

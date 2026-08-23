@@ -64,7 +64,7 @@ function validPlan(
 ): Record<string, unknown> {
   const isGroupDialogue = input.participants.length > 2;
   return {
-    schema_version: "shot-plan.v4",
+    schema_version: "shot-plan.v5",
     request_id: input.request_id,
     status: "ready",
     scene_analysis: {
@@ -107,6 +107,17 @@ function validPlan(
               (participant) => participant.slot !== line.speaker,
             )?.slot,
       lens_mm: index === 0 ? (isGroupDialogue ? 28 : 35) : 50,
+      end_lens_mm: index === 0 ? (isGroupDialogue ? 28 : 35) : 50,
+      lens_intent:
+        index === 0
+          ? isGroupDialogue
+            ? "spatial_context"
+            : "natural_perspective"
+          : "subject_isolation",
+      depth_of_field: index === 0 ? "deep" : "moderate",
+      camera_movement: "static",
+      movement_intensity: "none",
+      camera_roll_degrees: 0,
       composition_mode:
         index === 0
           ? isGroupDialogue
@@ -275,7 +286,7 @@ describe("internal storyboard MCP", () => {
         }
         expect(presence.connected).toBe(true);
         expect(presence.compatible).toBe(true);
-        expect(presence.serverVersion).toBe("0.14.0");
+        expect(presence.serverVersion).toBe("0.15.0");
         expect(presence.transport).toBe("stdio");
 
         let claimed = await client.callTool({
@@ -321,7 +332,7 @@ describe("internal storyboard MCP", () => {
         await expect(response.json()).resolves.toMatchObject({
           ok: true,
           data: {
-            schema_version: "shot-plan.v4",
+            schema_version: "shot-plan.v5",
             request_id: input.request_id,
             status: "ready",
           },

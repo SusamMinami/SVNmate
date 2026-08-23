@@ -51,11 +51,15 @@ import {
   type TraeMcpConfig,
 } from "./trae/client";
 import type {
+  CameraMovement,
+  DepthOfField,
   DialogueDatabase,
   DialogueSequence,
   CompositionMode,
   CompositionTransition,
   CoverageIntent,
+  LensIntent,
+  MovementIntensity,
   ShotCoverage,
   ShotPlan,
   ShotSize,
@@ -158,6 +162,66 @@ function coverageIntentLabel(intent: CoverageIntent): string {
     reaction: "关键反应",
   };
   return labels[intent];
+}
+
+function cameraMovementLabel(movement: CameraMovement): string {
+  const labels: Record<CameraMovement, string> = {
+    static: "固定机位",
+    pan: "水平摇摄",
+    tracking: "跟随移动",
+    dolly_in: "推近",
+    dolly_out: "拉远",
+    zoom_in: "光学拉近",
+    zoom_out: "光学拉远",
+    dolly_zoom_in: "推进变焦",
+    dolly_zoom_out: "后拉变焦",
+  };
+  return labels[movement];
+}
+
+function movementIntensityLabel(intensity: MovementIntensity): string {
+  const labels: Record<MovementIntensity, string> = {
+    none: "无",
+    subtle: "轻微",
+    moderate: "中等",
+    strong: "强烈",
+  };
+  return labels[intensity];
+}
+
+function lensIntentLabel(intent: LensIntent): string {
+  const labels: Record<LensIntent, string> = {
+    spatial_context: "空间交代",
+    natural_perspective: "自然透视",
+    subject_isolation: "主体分离",
+    compressed_intimacy: "压缩亲密",
+    perspective_distortion: "透视夸张",
+  };
+  return labels[intent];
+}
+
+function depthOfFieldLabel(depthOfField: DepthOfField): string {
+  const labels: Record<DepthOfField, string> = {
+    deep: "深景深",
+    moderate: "中等景深",
+    shallow: "浅景深",
+  };
+  return labels[depthOfField];
+}
+
+function negativeSpaceLabel(
+  mode: ShotPlan["compositionPlan"]["negativeSpace"],
+): string {
+  const labels: Record<
+    ShotPlan["compositionPlan"]["negativeSpace"],
+    string
+  > = {
+    balanced: "均衡空间",
+    look_room: "前向视线空间",
+    isolation: "孤立留白",
+    pressure: "短边压迫",
+  };
+  return labels[mode];
 }
 
 function blockingPositionLabel(
@@ -600,7 +664,7 @@ export default function App() {
           <div>
             <h1>镜头沙盘</h1>
           </div>
-          <span className="version">v0.14.0</span>
+          <span className="version">v0.15.0</span>
         </div>
 
         <div className="source-status">
@@ -900,7 +964,32 @@ export default function App() {
               </div>
               <div>
                 <dt>焦距</dt>
-                <dd>{activeShot.focalLength} mm</dd>
+                <dd>
+                  {activeShot.endFocalLength === activeShot.focalLength
+                    ? `${activeShot.focalLength} mm`
+                    : `${activeShot.focalLength} → ${activeShot.endFocalLength} mm`}
+                </dd>
+              </div>
+              <div>
+                <dt>焦段意图</dt>
+                <dd>{lensIntentLabel(activeShot.lensIntent)}</dd>
+              </div>
+              <div>
+                <dt>景深</dt>
+                <dd>{depthOfFieldLabel(activeShot.depthOfField)}</dd>
+              </div>
+              <div>
+                <dt>镜内运动</dt>
+                <dd>
+                  {cameraMovementLabel(activeShot.cameraMovement)}
+                  {activeShot.movementIntensity === "none"
+                    ? ""
+                    : ` · ${movementIntensityLabel(activeShot.movementIntensity)}`}
+                </dd>
+              </div>
+              <div>
+                <dt>横滚角</dt>
+                <dd>{activeShot.cameraRollDegrees.toFixed(0)}°</dd>
               </div>
               <div>
                 <dt>预计时长</dt>
@@ -955,6 +1044,23 @@ export default function App() {
                   {compositionTransitionLabel(
                     activeShot.compositionPlan.transition,
                   )}
+                </dd>
+              </div>
+              <div>
+                <dt>空间策略</dt>
+                <dd>
+                  {negativeSpaceLabel(
+                    activeShot.compositionPlan.negativeSpace,
+                  )}
+                </dd>
+              </div>
+              <div>
+                <dt>视线前/后</dt>
+                <dd>
+                  {activeShot.projection.lookRoom === null ||
+                  activeShot.projection.backRoom === null
+                    ? "不适用"
+                    : `${activeShot.projection.lookRoom.toFixed(2)} / ${activeShot.projection.backRoom.toFixed(2)}`}
                 </dd>
               </div>
               <div>
@@ -1078,6 +1184,26 @@ export default function App() {
                   {activeShot.cameraTarget.map((value) => value.toFixed(2)).join(", ")}
                 </code>
               </div>
+              {activeShot.cameraMovement !== "static" && (
+                <>
+                  <div>
+                    <span>End Camera</span>
+                    <code>
+                      {activeShot.cameraEndPosition
+                        .map((value) => value.toFixed(2))
+                        .join(", ")}
+                    </code>
+                  </div>
+                  <div>
+                    <span>End Target</span>
+                    <code>
+                      {activeShot.cameraEndTarget
+                        .map((value) => value.toFixed(2))
+                        .join(", ")}
+                    </code>
+                  </div>
+                </>
+              )}
               <small>原型坐标为相对站位，用于构图参考，不直接等同于 UE4 世界坐标。</small>
             </div>
           </section>

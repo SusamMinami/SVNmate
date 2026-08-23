@@ -153,6 +153,32 @@ export type CoverageIntent =
   | "individual_emphasis"
   | "reaction";
 
+export type CameraMovement =
+  | "static"
+  | "pan"
+  | "tracking"
+  | "dolly_in"
+  | "dolly_out"
+  | "zoom_in"
+  | "zoom_out"
+  | "dolly_zoom_in"
+  | "dolly_zoom_out";
+
+export type MovementIntensity =
+  | "none"
+  | "subtle"
+  | "moderate"
+  | "strong";
+
+export type LensIntent =
+  | "spatial_context"
+  | "natural_perspective"
+  | "subject_isolation"
+  | "compressed_intimacy"
+  | "perspective_distortion";
+
+export type DepthOfField = "deep" | "moderate" | "shallow";
+
 export interface ShotComposition {
   mode: CompositionMode;
   visualAnchor: VisualAnchor;
@@ -174,6 +200,7 @@ export interface ShotProjectionValidation {
   anchorDistance: number;
   headroom: number | null;
   lookRoom: number | null;
+  backRoom: number | null;
   visualWeightBias: number;
   projectedTriangleArea: number | null;
   depthSpread: number;
@@ -204,9 +231,17 @@ export interface ShotPlan {
   kind: ShotKind;
   label: string;
   focalLength: number;
+  endFocalLength: number;
+  lensIntent: LensIntent;
+  depthOfField: DepthOfField;
   duration: number;
   cameraPosition: Vec3;
   cameraTarget: Vec3;
+  cameraEndPosition: Vec3;
+  cameraEndTarget: Vec3;
+  cameraMovement: CameraMovement;
+  movementIntensity: MovementIntensity;
+  cameraRollDegrees: number;
   coverageIntent: CoverageIntent;
   compositionPlan: ShotComposition;
   composition: string;

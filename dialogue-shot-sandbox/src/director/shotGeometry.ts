@@ -78,6 +78,7 @@ export interface ProjectionAssessment {
   anchorDistance: number;
   headroom: number | null;
   lookRoom: number | null;
+  backRoom: number | null;
   visualWeightBias: number;
   projectedTriangleArea: number | null;
   depthSpread: number;
@@ -96,6 +97,7 @@ interface SingleCameraRequest {
   coverage: Extract<ShotCoverage, "single" | "group-medium">;
   preferredFaceAngle?: number;
   previousGeometry?: CameraGeometry;
+  cameraRollDegrees?: number;
 }
 
 interface GroupCameraRequest {
@@ -261,6 +263,7 @@ function cameraFor(
   position: Vec3,
   target: Vec3,
   lensMm: number,
+  cameraRollDegrees = 0,
 ): THREE.PerspectiveCamera {
   const camera = new THREE.PerspectiveCamera(
     42,
@@ -271,6 +274,7 @@ function cameraFor(
   camera.position.set(...position);
   camera.setFocalLength(lensMm);
   camera.lookAt(new THREE.Vector3(...target));
+  camera.rotateZ(THREE.MathUtils.degToRad(cameraRollDegrees));
   camera.updateProjectionMatrix();
   camera.updateMatrixWorld(true);
   return camera;
@@ -383,8 +387,14 @@ export function assessProjection(
   coverage: ShotCoverage,
   composition: ShotComposition,
   lookTarget?: DialogueParticipant,
+  cameraRollDegrees = 0,
 ): ProjectionAssessment {
-  const camera = cameraFor(geometry.position, geometry.target, lensMm);
+  const camera = cameraFor(
+    geometry.position,
+    geometry.target,
+    lensMm,
+    cameraRollDegrees,
+  );
   const projected = participants.map((participant) =>
     projectedParticipant(camera, participant),
   );
@@ -472,6 +482,12 @@ export function assessProjection(
         ? (1 - subjectProjection.bounds.maxX) / 2
         : (subjectProjection.bounds.minX + 1) / 2
       : null;
+  const backRoom =
+    subjectProjection && projectedLookTarget
+      ? projectedLookTarget.x >= subjectEyes.x
+        ? (subjectProjection.bounds.minX + 1) / 2
+        : (1 - subjectProjection.bounds.maxX) / 2
+      : null;
   const cameraDepths = significantProjected.map((projectedParticipant) => {
     const participant = participantBySlot.get(projectedParticipant.slot)!;
     return Math.hypot(
@@ -547,6 +563,37 @@ export function assessProjection(
     warnings.push("构图视线空间不足");
   }
   if (
+    composition.negativeSpace === "look_room" &&
+    lookRoom !== null &&
+    backRoom !== null &&
+    lookRoom + 0.04 < backRoom
+  ) {
+    warnings.push("视线后方空白大于前向视线空间");
+  }
+  if (
+    composition.negativeSpace === "pressure" &&
+    lookRoom !== null &&
+    backRoom !== null &&
+    lookRoom >= backRoom
+  ) {
+    warnings.push("压迫构图未形成有意的短边视线");
+  }
+  if (
+    composition.negativeSpace === "pressure" &&
+    lookRoom !== null &&
+    lookRoom < 0.04
+  ) {
+    warnings.push("短边视线空间过窄，主体贴近画框边缘");
+  }
+  if (
+    composition.negativeSpace === "isolation" &&
+    lookRoom !== null &&
+    backRoom !== null &&
+    Math.max(lookRoom, backRoom) < 0.32
+  ) {
+    warnings.push("孤立构图没有形成足够的有意义空白");
+  }
+  if (
     composition.mode === "symmetry" &&
     Math.abs(visualWeightBias) > 0.12
   ) {
@@ -582,6 +629,7 @@ export function assessProjection(
     anchorDistance: Number(anchorDistance.toFixed(3)),
     headroom: headroom === null ? null : Number(headroom.toFixed(3)),
     lookRoom: lookRoom === null ? null : Number(lookRoom.toFixed(3)),
+    backRoom: backRoom === null ? null : Number(backRoom.toFixed(3)),
     visualWeightBias: Number(visualWeightBias.toFixed(3)),
     projectedTriangleArea:
       triangleArea === null ? null : Number(triangleArea.toFixed(3)),
@@ -665,6 +713,7 @@ export function solveSingleCamera(
 ): {
   geometry: CameraGeometry;
   assessment: ProjectionAssessment;
+  composition: ShotComposition;
 } {
   const preferredAngle = request.preferredFaceAngle ?? 28;
   const angleCandidates = [...new Set([preferredAngle, 18, 38, 8, 45])];
@@ -692,6 +741,7 @@ export function solveSingleCamera(
     | {
         geometry: CameraGeometry;
         assessment: ProjectionAssessment;
+      composition: ShotComposition;
         score: number;
       }
     | undefined;
@@ -729,7 +779,12 @@ export function solveSingleCamera(
           request.coverage,
           { ...request.composition, visualAnchor },
           request.lookTarget,
+          request.cameraRollDegrees,
         );
+        const resolvedComposition = {
+          ...request.composition,
+          visualAnchor,
+        };
         const otherVisibleCount = assessment.visibleParticipantSlots.filter(
           (slot) => slot !== request.subject.slot,
         ).length;
@@ -740,6 +795,33 @@ export function solveSingleCamera(
         const viewDelta = request.previousGeometry
           ? horizontalViewDelta(request.previousGeometry, geometry)
           : 90;
+        const lookRoomPenalty =
+          assessment.lookRoom === null || assessment.backRoom === null
+            ? 0
+            : request.composition.negativeSpace === "look_room"
+              ? Math.max(0, 0.14 - assessment.lookRoom) * 1_200 +
+                Math.max(
+                  0,
+                  assessment.backRoom - assessment.lookRoom - 0.04,
+                ) *
+                  900
+              : request.composition.negativeSpace === "pressure"
+                ? Math.max(0, 0.04 - assessment.lookRoom) * 1_200 +
+                  Math.max(
+                    0,
+                    assessment.lookRoom - assessment.backRoom,
+                  ) *
+                    900
+                : request.composition.negativeSpace === "isolation"
+                  ? Math.max(
+                      0,
+                      0.32 -
+                        Math.max(
+                          assessment.lookRoom,
+                          assessment.backRoom,
+                        ),
+                    ) * 600
+                  : 0;
         const score =
           sizeDelta * 500 +
           (request.coverage === "single" ? otherVisibleCount * 800 : 0) +
@@ -752,13 +834,19 @@ export function solveSingleCamera(
             : 0) +
           (!assessment.subjectSafeForUltrawide ? 180 : 0) +
           assessment.anchorDistance * 220 +
+          lookRoomPenalty +
           Math.max(0, assessment.subjectFaceAngle - 45) * 20 +
           Math.max(0, 30 - viewDelta) * 16 +
           Math.abs(faceAngle - preferredAngle) +
           Math.abs(distanceScale - 1) * 12 +
           (visualAnchor === request.composition.visualAnchor ? 0 : 24);
         if (!best || score < best.score) {
-          best = { geometry, assessment, score };
+          best = {
+            geometry,
+            assessment,
+            composition: resolvedComposition,
+            score,
+          };
         }
       }
     }

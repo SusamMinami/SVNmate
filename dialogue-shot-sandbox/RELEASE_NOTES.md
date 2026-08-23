@@ -1,3 +1,20 @@
+# 镜头沙盘 v0.15.0
+
+## Adobe 摄影机语言
+
+- 基于 Adobe Camera Shots and Angles 主文及其专题页，将焦段、景深、角度、
+  Pan、Tracking、Dolly in/out 和 Dolly zoom 纳入规则库。
+- 镜头协议升级为 `shot-plan.v5`，每镜必须声明起止焦距、焦段意图、景深、
+  镜内运动、运动强度与横滚角。
+- Three.js 镜头预览可播放推拉、摇摄、跟随、Dolly zoom 和 Dutch angle，
+  俯视调度图会显示摄影机运动路径。
+- 规则导演默认保持静态机位，只在强调节点轻微推近、在停顿反应节点轻微
+  拉远；大模型必须先判断叙事动机，再选择运动和焦段。
+- 规则库升级至 v1.4.0，共 69 条规则；AI 缓存策略升级为
+  `shot-plan.v5:camera-language-v1`。
+
+---
+
 # 镜头沙盘 v0.14.0
 
 ## 单人/多人覆盖策略

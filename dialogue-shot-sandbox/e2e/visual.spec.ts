@@ -26,6 +26,31 @@ function imageMetrics(buffer: Buffer) {
   };
 }
 
+function changedPixelRatio(before: Buffer, after: Buffer): number {
+  const first = PNG.sync.read(before);
+  const second = PNG.sync.read(after);
+  expect(second.width).toBe(first.width);
+  expect(second.height).toBe(first.height);
+  let sampled = 0;
+  let changed = 0;
+
+  for (let y = 0; y < first.height; y += 4) {
+    for (let x = 0; x < first.width; x += 4) {
+      const offset = (first.width * y + x) * 4;
+      const difference =
+        Math.abs(first.data[offset] - second.data[offset]) +
+        Math.abs(first.data[offset + 1] - second.data[offset + 1]) +
+        Math.abs(first.data[offset + 2] - second.data[offset + 2]);
+      sampled += 1;
+      if (difference > 24) {
+        changed += 1;
+      }
+    }
+  }
+
+  return changed / sampled;
+}
+
 test("renders nonblank shot and blocking canvases without horizontal overflow", async ({
   page,
 }, testInfo) => {
@@ -33,10 +58,24 @@ test("renders nonblank shot and blocking canvases without horizontal overflow", 
   await expect(page.getByRole("heading", { name: "镜头沙盘" })).toBeVisible();
   await page.locator(".shot-row").nth(1).click();
   await page.locator(".viewport-panel").scrollIntoViewIfNeeded();
+  const movementStart = await page.locator("canvas").first().screenshot();
   await page.waitForTimeout(1_200);
+  const movementProgress = await page.locator("canvas").first().screenshot();
+  expect(changedPixelRatio(movementStart, movementProgress)).toBeGreaterThan(
+    0.005,
+  );
 
   const canvases = page.locator("canvas");
   await expect(canvases).toHaveCount(2);
+  const insetFrame = await page.locator(".top-view__canvas").boundingBox();
+  const insetCanvas = await page
+    .locator(".top-view__canvas canvas")
+    .boundingBox();
+  expect(insetFrame).not.toBeNull();
+  expect(insetCanvas).not.toBeNull();
+  expect(insetCanvas!.x).toBeCloseTo(insetFrame!.x, 1);
+  expect(insetCanvas!.width).toBeCloseTo(insetFrame!.width, 1);
+  expect(insetCanvas!.width / insetCanvas!.height).toBeCloseTo(16 / 9, 2);
   for (let index = 0; index < 2; index += 1) {
     const canvas = canvases.nth(index);
     await expect(canvas).toBeVisible();
@@ -53,6 +92,9 @@ test("renders nonblank shot and blocking canvases without horizontal overflow", 
   await expect(page.getByText("黄金分割", { exact: true })).toBeVisible();
   await expect(page.getByText("渐进转移", { exact: true })).toBeVisible();
   await expect(page.getByText("个人强调", { exact: true })).toBeVisible();
+  await expect(page.getByText("压缩亲密", { exact: true })).toBeVisible();
+  await expect(page.getByText("浅景深", { exact: true })).toBeVisible();
+  await expect(page.getByText("推近 · 轻微", { exact: true })).toBeVisible();
 
   const hasHorizontalOverflow = await page.evaluate(
     () => document.documentElement.scrollWidth > window.innerWidth + 1,
@@ -120,8 +162,8 @@ test("removes a character after the AI-directed exit node", async ({
           configured: true,
           connected: true,
           versionMismatch: false,
-          expectedVersion: "0.14.0",
-          serverVersion: "0.14.0",
+          expectedVersion: "0.15.0",
+          serverVersion: "0.15.0",
           lastSeenAt: "2026-08-22T00:00:00.000Z",
           mcpName: "internal-storyboard-collaboration",
           mcpConfigPath: "C:\\workspace\\.trae\\mcp.json",
@@ -152,7 +194,7 @@ test("removes a character after the AI-directed exit node", async ({
       body: JSON.stringify({
         ok: true,
         data: {
-          schema_version: "shot-plan.v4",
+          schema_version: "shot-plan.v5",
           request_id: input.request_id,
           status: "ready",
           scene_analysis: {
@@ -201,6 +243,12 @@ test("removes a character after the AI-directed exit node", async ({
                   ? "B"
                   : "A",
             lens_mm: index === 0 ? 35 : 50,
+            end_lens_mm: index === 0 ? 35 : 50,
+            lens_intent: "natural_perspective",
+            depth_of_field: index === 0 ? "deep" : "moderate",
+            camera_movement: "static",
+            movement_intensity: "none",
+            camera_roll_degrees: 0,
             composition_mode: index === 0 ? "symmetry" : "center",
             visual_anchor: index === 0 ? "balanced" : "center",
             negative_space: index === 0 ? "balanced" : "look_room",
@@ -269,6 +317,15 @@ test("switches the main canvas between shot and blocking views", async ({
   await expect(page.locator(".actor-label--below")).toHaveCount(2);
   const switchedCanvases = page.locator("canvas");
   await expect(switchedCanvases).toHaveCount(2);
+  const insetFrame = await page.locator(".top-view__canvas").boundingBox();
+  const insetCanvas = await page
+    .locator(".top-view__canvas canvas")
+    .boundingBox();
+  expect(insetFrame).not.toBeNull();
+  expect(insetCanvas).not.toBeNull();
+  expect(insetCanvas!.x).toBeCloseTo(insetFrame!.x, 1);
+  expect(insetCanvas!.width).toBeCloseTo(insetFrame!.width, 1);
+  expect(insetCanvas!.width / insetCanvas!.height).toBeCloseTo(16 / 9, 2);
   for (let index = 0; index < 2; index += 1) {
     const metrics = imageMetrics(
       await switchedCanvases.nth(index).screenshot(),
@@ -302,8 +359,8 @@ test("shows local content immediately and presents the AI story brief before app
           configured: true,
           connected: true,
           versionMismatch: false,
-          expectedVersion: "0.14.0",
-          serverVersion: "0.14.0",
+          expectedVersion: "0.15.0",
+          serverVersion: "0.15.0",
           lastSeenAt: "2026-08-22T00:00:00.000Z",
           mcpName: "internal-storyboard-collaboration",
           mcpConfigPath: "C:\\workspace\\.trae\\mcp.json",
@@ -328,7 +385,7 @@ test("shows local content immediately and presents the AI story brief before app
       body: JSON.stringify({
         ok: true,
         data: {
-          schema_version: "shot-plan.v4",
+          schema_version: "shot-plan.v5",
           request_id: input.request_id,
           status: "ready",
           scene_analysis: {
@@ -364,6 +421,12 @@ test("shows local content immediately and presents the AI story brief before app
             subject: line.speaker,
             look_target: line.speaker === "A" ? "B" : "A",
             lens_mm: 55,
+            end_lens_mm: 55,
+            lens_intent: "subject_isolation",
+            depth_of_field: "moderate",
+            camera_movement: "static",
+            movement_intensity: "none",
+            camera_roll_degrees: 0,
             composition_mode: "rule_of_thirds",
             visual_anchor:
               line.speaker === "A" ? "left_third" : "right_third",
@@ -413,8 +476,8 @@ test("previews shared and local plans before resolving a library conflict", asyn
           configured: true,
           connected: true,
           versionMismatch: false,
-          expectedVersion: "0.14.0",
-          serverVersion: "0.14.0",
+          expectedVersion: "0.15.0",
+          serverVersion: "0.15.0",
           transport: "http",
           lastSeenAt: "2026-08-22T00:00:00.000Z",
           mcpName: "internal-storyboard-collaboration",
@@ -442,7 +505,7 @@ test("previews shared and local plans before resolving a library conflict", asyn
       ),
     };
     const makePlan = (requestId: string, lens: number, goal: string) => ({
-      schema_version: "shot-plan.v4",
+      schema_version: "shot-plan.v5",
       request_id: requestId,
       status: "ready",
       scene_analysis: {
@@ -458,6 +521,13 @@ test("previews shared and local plans before resolving a library conflict", asyn
           subject: line.speaker,
           look_target: line.speaker === "A" ? "B" : "A",
           lens_mm: lens,
+          end_lens_mm: lens,
+          lens_intent:
+            lens <= 50 ? "natural_perspective" : "subject_isolation",
+          depth_of_field: "moderate",
+          camera_movement: "static",
+          movement_intensity: "none",
+          camera_roll_degrees: 0,
           composition_mode: "rule_of_thirds",
           visual_anchor:
             line.speaker === "A" ? "left_third" : "right_third",
@@ -641,6 +711,44 @@ test("switches to internal TRAE and visibly degrades when collaboration fails", 
   ).toBeVisible();
   await expect(page.getByText(/实际：规则导演/)).toBeVisible();
   await expect(page.getByText(/规则导演（已降级）/)).toBeVisible();
+});
+
+test("explains that an old MCP must be restarted inside TRAE", async ({
+  page,
+}) => {
+  await page.route("**/api/trae/status", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          configured: true,
+          connected: false,
+          versionMismatch: true,
+          expectedVersion: "0.15.0",
+          serverVersion: "0.13.0",
+          transport: "stdio",
+          lastSeenAt: "2026-08-23T04:19:22.608Z",
+          mcpName: "internal-storyboard-collaboration",
+          mcpConfigPath: "C:\\workspace\\.trae\\mcp.json",
+          skillName: "internal-storyboard-director",
+          stats: { pending: 0, processing: 0, completed: 0, failed: 0 },
+        },
+      }),
+    });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "TRAE 协作" }).click();
+
+  await expect(page.getByText("MCP 仍在运行旧版本")).toBeVisible();
+  await expect(
+    page.getByText(/当前 0\.13\.0 · 需要 0\.15\.0；请在 TRAE 中停用后重新启用/),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "配置内部 TRAE MCP" }),
+  ).toHaveAttribute("title", "查看 MCP 重启步骤");
 });
 
 test("shows the internal TRAE MCP configuration guide", async ({ page }) => {

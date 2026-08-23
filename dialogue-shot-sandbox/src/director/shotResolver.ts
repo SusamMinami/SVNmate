@@ -1,7 +1,9 @@
+import * as THREE from "three";
 import type {
   DialogueParticipant,
   DialogueSequence,
   ShotAxis,
+  ShotComposition,
   ShotCoverage,
   ShotKind,
   ShotPlan,
@@ -38,9 +40,127 @@ interface Geometry {
   position: Vec3;
   target: Vec3;
   composition: string;
+  compositionPlan: ShotComposition;
   shotSize: ShotSize;
   coverage: ShotCoverage;
   assessment: ProjectionAssessment;
+}
+
+interface MotionGeometry {
+  endPosition: Vec3;
+  endTarget: Vec3;
+}
+
+function movementAmount(
+  intensity: DirectorDecision["movement_intensity"],
+): number {
+  if (intensity === "strong") {
+    return 1.35;
+  }
+  if (intensity === "moderate") {
+    return 0.9;
+  }
+  if (intensity === "subtle") {
+    return 0.45;
+  }
+  return 0;
+}
+
+function resolveMotionGeometry(
+  decision: DirectorDecision,
+  geometry: Geometry,
+  subject: DialogueParticipant,
+  lookTarget: DialogueParticipant | null,
+): MotionGeometry {
+  const position = new THREE.Vector3(...geometry.position);
+  const target = new THREE.Vector3(...geometry.target);
+  const amount = movementAmount(decision.movement_intensity);
+
+  if (decision.camera_movement === "pan") {
+    const panTarget = lookTarget
+      ? new THREE.Vector3(
+          lookTarget.position[0],
+          geometry.target[1],
+          lookTarget.position[2],
+        )
+      : target
+          .clone()
+          .add(
+            new THREE.Vector3(
+              decision.visual_anchor.startsWith("left") ? 0.8 : -0.8,
+              0,
+              0,
+            ),
+          );
+    const panFraction =
+      decision.movement_intensity === "strong"
+        ? 1
+        : decision.movement_intensity === "moderate"
+          ? 0.72
+          : 0.45;
+    return {
+      endPosition: geometry.position,
+      endTarget: target.lerp(panTarget, panFraction).toArray() as Vec3,
+    };
+  }
+
+  if (decision.camera_movement === "tracking") {
+    const destination = lookTarget?.position ?? subject.facingTarget;
+    const travel = new THREE.Vector3(
+      destination[0] - subject.position[0],
+      0,
+      destination[2] - subject.position[2],
+    );
+    if (travel.lengthSq() < 0.001) {
+      travel.set(1, 0, 0);
+    }
+    travel.normalize().multiplyScalar(amount);
+    return {
+      endPosition: position.clone().add(travel).toArray() as Vec3,
+      endTarget: geometry.target,
+    };
+  }
+
+  if (
+    decision.camera_movement === "dolly_zoom_in" ||
+    decision.camera_movement === "dolly_zoom_out"
+  ) {
+    const endDistanceScale =
+      decision.end_lens_mm / decision.lens_mm;
+    return {
+      endPosition: [
+        target.x + (position.x - target.x) * endDistanceScale,
+        position.y,
+        target.z + (position.z - target.z) * endDistanceScale,
+      ],
+      endTarget: geometry.target,
+    };
+  }
+
+  if (
+    decision.camera_movement === "dolly_in" ||
+    decision.camera_movement === "dolly_out"
+  ) {
+    const towardTarget = new THREE.Vector3(
+      target.x - position.x,
+      0,
+      target.z - position.z,
+    ).normalize();
+    const signedAmount =
+      decision.camera_movement === "dolly_in" ? amount : -amount;
+    return {
+      endPosition: position
+        .clone()
+        .add(towardTarget.multiplyScalar(signedAmount))
+        .toArray() as Vec3,
+      endTarget: geometry.target,
+    };
+  }
+
+  return {
+    endPosition: geometry.position,
+    endTarget: geometry.target,
+  };
 }
 
 function createShotAxis(
@@ -208,6 +328,8 @@ function geometryFor(
         shotSize,
         coverage,
         compositionPlan,
+        undefined,
+        decision.camera_roll_degrees,
       ),
     };
   };
@@ -226,6 +348,7 @@ function geometryFor(
       shotSize,
       coverage,
       previousGeometry,
+      cameraRollDegrees: decision.camera_roll_degrees,
     });
   };
 
@@ -244,6 +367,7 @@ function geometryFor(
         position: result.geometry.position,
         target: result.geometry.target,
         composition: `两人同框，${framing}，先建立空间和人物距离`,
+        compositionPlan,
         shotSize: "full",
         coverage: "two-shot",
         assessment: result.assessment,
@@ -257,6 +381,7 @@ function geometryFor(
         position: result.geometry.position,
         target: result.geometry.target,
         composition: `两人侧面对峙，${framing}，强化关系张力`,
+        compositionPlan,
         shotSize: "medium-full",
         coverage: "two-shot",
         assessment: result.assessment,
@@ -276,6 +401,7 @@ function geometryFor(
         position: result.geometry.position,
         target: result.geometry.target,
         composition: `${groupLabel}完整同框，${framing}，建立站位层次与多人视线关系`,
+        compositionPlan,
         shotSize: "full",
         coverage: "group",
         assessment: result.assessment,
@@ -289,6 +415,7 @@ function geometryFor(
         position: result.geometry.position,
         target: result.geometry.target,
         composition: `${subjectLabel}位于${framing}，邻近角色保留为关系前景或背景`,
+        compositionPlan: result.composition,
         shotSize: "medium",
         coverage: "group-medium",
         assessment: result.assessment,
@@ -302,6 +429,7 @@ function geometryFor(
         position: result.geometry.position,
         target: result.geometry.target,
         composition: `${subjectLabel} 位于${framing}，保留视线空间读取无声反应`,
+        compositionPlan: result.composition,
         shotSize: "close-up",
         coverage: "single",
         assessment: result.assessment,
@@ -315,6 +443,7 @@ function geometryFor(
         position: result.geometry.position,
         target: result.geometry.target,
         composition: `${subjectLabel} 位于${framing}，低机位增强压迫或权力感`,
+        compositionPlan: result.composition,
         shotSize: "close-up",
         coverage: "single",
         assessment: result.assessment,
@@ -328,6 +457,7 @@ function geometryFor(
         position: result.geometry.position,
         target: result.geometry.target,
         composition: `${subjectLabel} 位于${framing}，高机位表现脆弱或被动`,
+        compositionPlan: result.composition,
         shotSize: "close-up",
         coverage: "single",
         assessment: result.assessment,
@@ -341,6 +471,7 @@ function geometryFor(
         position: result.geometry.position,
         target: result.geometry.target,
         composition: `${subjectLabel} 位于${framing}，集中呈现表情和关键信息`,
+        compositionPlan: result.composition,
         shotSize: "close-up",
         coverage: "single",
         assessment: result.assessment,
@@ -354,6 +485,7 @@ function geometryFor(
         position: result.geometry.position,
         target: result.geometry.target,
         composition: `${subjectLabel} 位于${framing}，保持轴线同侧和相反视线方向`,
+        compositionPlan: result.composition,
         shotSize: "medium-close-up",
         coverage: "single",
         assessment: result.assessment,
@@ -524,12 +656,34 @@ export function resolveShotDecisions(
       activeParticipants,
       previousGeometry,
     );
+    const motionGeometry = resolveMotionGeometry(
+      decision,
+      geometry,
+      subject,
+      lookTarget,
+    );
     const axis = createShotAxis(
       activeParticipants,
       subject,
       groupSubject ? null : lookTarget,
       geometry.position,
     );
+    const motionEndAxis = createShotAxis(
+      activeParticipants,
+      subject,
+      groupSubject ? null : lookTarget,
+      motionGeometry.endPosition,
+    );
+    if (
+      axis.kind === "relationship" &&
+      axis.cameraSide !== 0 &&
+      motionEndAxis.cameraSide !== 0 &&
+      motionEndAxis.cameraSide !== axis.cameraSide
+    ) {
+      throw new Error(
+        `镜头 ${index + 1} 的镜内运动越过了关系轴 ${axis.id}`,
+      );
+    }
     const hardProjectionWarnings = geometry.assessment.warnings.filter(
       (warning) =>
         !warning.startsWith("单人镜头偏离角色正面") &&
@@ -571,6 +725,44 @@ export function resolveShotDecisions(
       previousLookTargetSlot === subject.slot &&
       lookTarget?.slot === previousVisualSubjectSlot;
     const projectionWarnings = [...geometry.assessment.warnings];
+    let motionEndAssessment: ProjectionAssessment | null = null;
+    if (decision.camera_movement !== "static") {
+      motionEndAssessment = assessProjection(
+        {
+          position: motionGeometry.endPosition,
+          target: motionGeometry.endTarget,
+        },
+        subject,
+        activeParticipants,
+        decision.end_lens_mm,
+        geometry.shotSize,
+        geometry.coverage,
+        geometry.compositionPlan,
+        lookTarget ?? undefined,
+        decision.camera_roll_degrees,
+      );
+      if (
+        decision.camera_movement !== "pan" &&
+        !motionEndAssessment.visibleParticipantSlots.includes(subject.slot)
+      ) {
+        projectionWarnings.push("运镜终点未保留当前主体");
+      }
+      if (
+        decision.camera_movement !== "pan" &&
+        !motionEndAssessment.subjectSafeForUltrawide
+      ) {
+        projectionWarnings.push("运镜终点的主体超出 21:9 安全区域");
+      }
+      if (decision.camera_movement.startsWith("dolly_zoom")) {
+        const startArea =
+          geometry.assessment.participantAreaRatios[subject.slot] ?? 0;
+        const endArea =
+          motionEndAssessment.participantAreaRatios[subject.slot] ?? 0;
+        if (Math.abs(startArea - endArea) > 0.03) {
+          projectionWarnings.push("Dolly zoom 起止主体尺寸未能保持稳定");
+        }
+      }
+    }
     const eyeTraceDelta = previousVisualAnchor
       ? Math.abs(
           geometry.assessment.visualAnchor[0] - previousVisualAnchor[0],
@@ -671,16 +863,19 @@ export function resolveShotDecisions(
       kind: formsReversePair ? "reverse-shot" : geometry.kind,
       label: adjustedLabel ?? geometry.label,
       focalLength: decision.lens_mm,
+      endFocalLength: decision.end_lens_mm,
+      lensIntent: decision.lens_intent,
+      depthOfField: decision.depth_of_field,
       duration: estimateShotDuration(rows.map((row) => row.content)),
       cameraPosition: geometry.position,
       cameraTarget: geometry.target,
+      cameraEndPosition: motionGeometry.endPosition,
+      cameraEndTarget: motionGeometry.endTarget,
+      cameraMovement: decision.camera_movement,
+      movementIntensity: decision.movement_intensity,
+      cameraRollDegrees: decision.camera_roll_degrees,
       coverageIntent: decision.coverage_intent,
-      compositionPlan: {
-        mode: decision.composition_mode,
-        visualAnchor: decision.visual_anchor,
-        negativeSpace: decision.negative_space,
-        transition: decision.composition_transition,
-      },
+      compositionPlan: geometry.compositionPlan,
       composition: geometry.composition,
       rationale: decision.intent,
       visualSubjectSlot: groupSubject ? null : subject.slot,
@@ -711,6 +906,7 @@ export function resolveShotDecisions(
         anchorDistance: geometry.assessment.anchorDistance,
         headroom: geometry.assessment.headroom,
         lookRoom: geometry.assessment.lookRoom,
+        backRoom: geometry.assessment.backRoom,
         visualWeightBias: geometry.assessment.visualWeightBias,
         projectedTriangleArea:
           geometry.assessment.projectedTriangleArea,
@@ -722,14 +918,16 @@ export function resolveShotDecisions(
       },
     } satisfies ShotPlan;
     previousGeometry = {
-      position: shot.cameraPosition,
-      target: shot.cameraTarget,
+      position: shot.cameraEndPosition,
+      target: shot.cameraEndTarget,
     };
     previousVisualSubjectSlot = shot.visualSubjectSlot;
     previousLookTargetSlot = shot.lookTargetSlot;
     previousCoverage = shot.projection.coverage;
-    previousAxis = shot.axis;
-    previousVisualAnchor = shot.projection.visualAnchor;
+    previousAxis =
+      shot.cameraMovement === "static" ? shot.axis : motionEndAxis;
+    previousVisualAnchor =
+      motionEndAssessment?.visualAnchor ?? shot.projection.visualAnchor;
     return shot;
   });
 

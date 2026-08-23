@@ -30,7 +30,7 @@ export interface StoryboardTask {
 
 const PROCESSING_LEASE_MS = 20 * 60_000;
 export const STORYBOARD_CACHE_POLICY =
-  "shot-plan.v4:relationship-coverage-v1";
+  "shot-plan.v5:camera-language-v2";
 
 function taskDirectory(): string {
   return join(storyboardRuntimeRoot(), ".storyboard-data", "tasks");

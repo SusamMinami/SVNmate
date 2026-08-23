@@ -42,6 +42,28 @@ function isEmphatic(content: string): boolean {
   return /[？！!?]|危险|必须|不能|真相|现在|立刻|到底/.test(content);
 }
 
+function hasDisorientationCue(content: string): boolean {
+  return /失控|眩晕|混乱|疯狂|疯了|幻觉|不对劲|崩塌|扭曲/.test(content);
+}
+
+function hasIsolationCue(content: string): boolean {
+  return /独自|一个人|只剩|没人|空无|离开我|别管我|让我静静|被抛弃|孤立|失去/.test(
+    content,
+  );
+}
+
+function hasOffscreenThreatCue(content: string): boolean {
+  return /门外|窗外|身后|脚步|追兵|埋伏|监视|有人来了|危险正在|逼近/.test(
+    content,
+  );
+}
+
+function hasPressureCue(content: string): boolean {
+  return /危险|必须|不能|现在|立刻|到底|威胁|逼问|住手|滚开|没有选择/.test(
+    content,
+  );
+}
+
 function visualAnchorFor(
   slot: ParticipantSlot,
   input: DirectorInput,
@@ -131,6 +153,16 @@ function relationshipWideDecision(
         ? 28
         : 32
       : 38,
+    end_lens_mm: isGroup
+      ? activeParticipants.length > 4
+        ? 28
+        : 32
+      : 38,
+    lens_intent: isGroup ? "spatial_context" : "natural_perspective",
+    depth_of_field: "deep",
+    camera_movement: "static",
+    movement_intensity: "none",
+    camera_roll_degrees: 0,
     composition_mode:
       activeParticipants.length === 3
         ? "triangular"
@@ -193,6 +225,9 @@ function decisionFor(
       attendance.entryIndexBySlot.get(participant.slot) === index &&
       index > 0,
   );
+  const isolationCue = hasIsolationCue(row.content);
+  const offscreenThreatCue = hasOffscreenThreatCue(row.content);
+  const pressureCue = hasPressureCue(row.content);
   const lookTarget = lookTargetFor(
     row.speaker,
     index,
@@ -207,7 +242,13 @@ function decisionFor(
         template: "close_up",
         subject: row.speaker,
         look_target: "group_center",
-        lens_mm: 50,
+        lens_mm: 85,
+        end_lens_mm: 85,
+        lens_intent: "compressed_intimacy",
+        depth_of_field: "shallow",
+        camera_movement: "static",
+        movement_intensity: "none",
+        camera_roll_degrees: 0,
         composition_mode: "center",
         visual_anchor: "center",
         negative_space: "balanced",
@@ -240,19 +281,32 @@ function decisionFor(
       template: "reaction_closeup",
       subject: row.speaker,
       look_target: lookTarget,
-      lens_mm: 78,
-      composition_mode: "negative_space",
+      lens_mm: 100,
+      end_lens_mm: 100,
+      lens_intent: "compressed_intimacy",
+      depth_of_field: "shallow",
+      camera_movement: isolationCue ? "dolly_out" : "static",
+      movement_intensity: isolationCue ? "subtle" : "none",
+      camera_roll_degrees: hasDisorientationCue(row.content) ? 18 : 0,
+      composition_mode:
+        isolationCue || offscreenThreatCue
+          ? "negative_space"
+          : "golden_ratio",
       visual_anchor:
         screenPosition === "left_third"
           ? "left_golden"
           : screenPosition === "right_third"
             ? "right_golden"
             : "center",
-      negative_space: "isolation",
+      negative_space: isolationCue ? "isolation" : "look_room",
       composition_transition: "contrast",
       coverage_intent: "reaction",
       camera_height: "eye",
-      intent: "停顿构成情绪节点，收紧景别读取角色没有说出口的反应。",
+      intent: isolationCue
+        ? "停顿与台词明确表达孤立，拉远并保留有意义空白，读取角色没有说出口的反应。"
+        : offscreenThreatCue
+          ? "停顿指向画外威胁，在视线前方保留信息空间并读取角色反应。"
+          : "停顿构成情绪节点，以稳定近景读取角色没有说出口的反应，不额外推断孤立。",
     };
   }
   if (isEmphatic(row.content) || previousSpeaker === row.speaker) {
@@ -261,7 +315,13 @@ function decisionFor(
       template: "close_up",
       subject: row.speaker,
       look_target: lookTarget,
-      lens_mm: 68,
+      lens_mm: 85,
+      end_lens_mm: 85,
+      lens_intent: "compressed_intimacy",
+      depth_of_field: "shallow",
+      camera_movement: "dolly_in",
+      movement_intensity: "subtle",
+      camera_roll_degrees: hasDisorientationCue(row.content) ? 18 : 0,
       composition_mode: "golden_ratio",
       visual_anchor:
         screenPosition === "left_third"
@@ -269,11 +329,13 @@ function decisionFor(
           : screenPosition === "right_third"
             ? "right_golden"
             : "center",
-      negative_space: "pressure",
+      negative_space: pressureCue ? "pressure" : "look_room",
       composition_transition: "progressive_shift",
       coverage_intent: "individual_emphasis",
       camera_height: "eye",
-      intent: "台词包含追问或强调信息，使用近景集中注意力并提高情绪权重。",
+      intent: pressureCue
+        ? "台词形成明确压力，使用轻微推近和短边构图集中注意力并制造受阻感。"
+        : "台词包含追问或强调信息，使用轻微推近和常规视线空间提高情绪权重。",
     };
   }
   return {
@@ -285,6 +347,15 @@ function decisionFor(
     subject: row.speaker,
     look_target: lookTarget,
     lens_mm: input.participants.length > 2 ? 42 : 50,
+    end_lens_mm: input.participants.length > 2 ? 42 : 50,
+    lens_intent:
+      input.participants.length > 2
+        ? "natural_perspective"
+        : "subject_isolation",
+    depth_of_field: "moderate",
+    camera_movement: "static",
+    movement_intensity: "none",
+    camera_roll_degrees: 0,
     composition_mode:
       input.participants.length > 2 ? "layered_depth" : "rule_of_thirds",
     visual_anchor: screenPosition,
@@ -326,8 +397,8 @@ export function createRuleAnalysis(
     dramaticGoal: "规则导演未进行深层剧情推理",
     emotionalProgression: "根据句长、停顿、标点和说话人切换判断节奏",
     visualStrategy: isGroupDialogue
-      ? "前三镜建立关系全景，进出场后重新建立空间；普通关系段优先带群或群像，重要情绪才收紧为单人"
-      : "先用双人镜头建立关系，共同反应保留同框，重要台词与内心反应再切单人，并在连续紧景后回到双人空间",
+      ? "前三镜建立关系全景，进出场后重新建立空间；普通关系段优先自然焦段的带群或群像，重要情绪才以长焦收紧并轻微推拉"
+      : "先用自然焦段双人镜头建立关系，共同反应保留同框，重要台词用长焦轻微推近、停顿反应用长焦轻微拉远，并在连续紧景后回到双人空间",
   };
 }
 
@@ -527,6 +598,22 @@ export function createRuleDecisions(
                   : input.participants.length > 2
                     ? 42
                     : 50,
+              end_lens_mm:
+                selected.template === "reaction_closeup"
+                  ? selected.end_lens_mm
+                  : input.participants.length > 2
+                    ? 42
+                    : 50,
+              lens_intent:
+                selected.template === "reaction_closeup"
+                  ? selected.lens_intent
+                  : input.participants.length > 2
+                    ? "natural_perspective"
+                    : "subject_isolation",
+              depth_of_field:
+                selected.template === "reaction_closeup"
+                  ? selected.depth_of_field
+                  : "moderate",
               visual_anchor: visualAnchorFor(
                 activeAlternative.slot,
                 input,
@@ -606,6 +693,12 @@ export function createRuleDecisions(
           subject: "both",
           look_target: "group_center",
           lens_mm: 42,
+          end_lens_mm: 42,
+          lens_intent: "natural_perspective",
+          depth_of_field: "moderate",
+          camera_movement: "static",
+          movement_intensity: "none",
+          camera_roll_degrees: 0,
           composition_mode: "asymmetrical_balance",
           visual_anchor: "balanced",
           negative_space: "balanced",
@@ -626,6 +719,12 @@ export function createRuleDecisions(
           ...selected,
           template: "speaker_group_medium",
           lens_mm: 42,
+          end_lens_mm: 42,
+          lens_intent: "natural_perspective",
+          depth_of_field: "moderate",
+          camera_movement: "static",
+          movement_intensity: "none",
+          camera_roll_degrees: 0,
           composition_mode: "layered_depth",
           negative_space: "look_room",
           composition_transition: "match_eye_trace",

@@ -86,6 +86,39 @@ export const COVERAGE_INTENTS = [
   "reaction",
 ] as const;
 
+export const CAMERA_MOVEMENTS = [
+  "static",
+  "pan",
+  "tracking",
+  "dolly_in",
+  "dolly_out",
+  "zoom_in",
+  "zoom_out",
+  "dolly_zoom_in",
+  "dolly_zoom_out",
+] as const;
+
+export const MOVEMENT_INTENSITIES = [
+  "none",
+  "subtle",
+  "moderate",
+  "strong",
+] as const;
+
+export const LENS_INTENTS = [
+  "spatial_context",
+  "natural_perspective",
+  "subject_isolation",
+  "compressed_intimacy",
+  "perspective_distortion",
+] as const;
+
+export const DEPTH_OF_FIELD_MODES = [
+  "deep",
+  "moderate",
+  "shallow",
+] as const;
+
 export const ParticipantSlotSchema = z.enum(PARTICIPANT_SLOTS);
 
 export const DirectorBlockingSchema = z.object({
@@ -117,30 +150,134 @@ export const REQUIRED_CONTEXTS = [
   "story_after",
 ] as const;
 
-export const DirectorDecisionSchema = z.object({
-  dialogue_ids: z.array(z.string().min(1)).min(1),
-  template: z.enum(DIRECTOR_TEMPLATES),
-  subject: z.union([
-    ParticipantSlotSchema,
-    z.literal("both"),
-    z.literal("group"),
-  ]),
-  look_target: z.union([
-    ParticipantSlotSchema,
-    z.literal("group_center"),
-  ]),
-  lens_mm: z.number().min(24).max(100),
-  composition_mode: z.enum(COMPOSITION_MODES),
-  visual_anchor: z.enum(VISUAL_ANCHORS),
-  negative_space: z.enum(NEGATIVE_SPACE_MODES),
-  composition_transition: z.enum(COMPOSITION_TRANSITIONS),
-  coverage_intent: z.enum(COVERAGE_INTENTS),
-  camera_height: z.enum(["low", "eye", "high"]),
-  intent: z.string().min(2).max(240),
-});
+export const DirectorDecisionSchema = z
+  .object({
+    dialogue_ids: z.array(z.string().min(1)).min(1),
+    template: z.enum(DIRECTOR_TEMPLATES),
+    subject: z.union([
+      ParticipantSlotSchema,
+      z.literal("both"),
+      z.literal("group"),
+    ]),
+    look_target: z.union([
+      ParticipantSlotSchema,
+      z.literal("group_center"),
+    ]),
+    lens_mm: z.number().min(24).max(135),
+    end_lens_mm: z.number().min(24).max(135),
+    lens_intent: z.enum(LENS_INTENTS),
+    depth_of_field: z.enum(DEPTH_OF_FIELD_MODES),
+    camera_movement: z.enum(CAMERA_MOVEMENTS),
+    movement_intensity: z.enum(MOVEMENT_INTENSITIES),
+    camera_roll_degrees: z.number().min(-45).max(45),
+    composition_mode: z.enum(COMPOSITION_MODES),
+    visual_anchor: z.enum(VISUAL_ANCHORS),
+    negative_space: z.enum(NEGATIVE_SPACE_MODES),
+    composition_transition: z.enum(COMPOSITION_TRANSITIONS),
+    coverage_intent: z.enum(COVERAGE_INTENTS),
+    camera_height: z.enum(["low", "eye", "high"]),
+    intent: z.string().min(2).max(240),
+  })
+  .superRefine((shot, context) => {
+    const moving = shot.camera_movement !== "static";
+    if (moving === (shot.movement_intensity === "none")) {
+      context.addIssue({
+        code: "custom",
+        path: ["movement_intensity"],
+        message:
+          shot.camera_movement === "static"
+            ? "静态镜头的 movement_intensity 必须为 none"
+            : "运动镜头的 movement_intensity 不能为 none",
+      });
+    }
+    const changesFocalLength = [
+      "zoom_in",
+      "zoom_out",
+      "dolly_zoom_in",
+      "dolly_zoom_out",
+    ].includes(shot.camera_movement);
+    if (!changesFocalLength && shot.end_lens_mm !== shot.lens_mm) {
+      context.addIssue({
+        code: "custom",
+        path: ["end_lens_mm"],
+        message: "只有 zoom 或 dolly zoom 可以在镜内改变焦距",
+      });
+    }
+    if (
+      shot.camera_movement === "zoom_in" &&
+      shot.end_lens_mm <= shot.lens_mm
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["end_lens_mm"],
+        message: "zoom_in 必须增加焦距",
+      });
+    }
+    if (
+      shot.camera_movement === "zoom_out" &&
+      shot.end_lens_mm >= shot.lens_mm
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["end_lens_mm"],
+        message: "zoom_out 必须缩短焦距",
+      });
+    }
+    if (
+      shot.camera_movement === "dolly_zoom_in" &&
+      shot.end_lens_mm >= shot.lens_mm
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["end_lens_mm"],
+        message: "dolly_zoom_in 必须在推进时同步缩短焦距",
+      });
+    }
+    if (
+      shot.camera_movement === "dolly_zoom_out" &&
+      shot.end_lens_mm <= shot.lens_mm
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["end_lens_mm"],
+        message: "dolly_zoom_out 必须在后退时同步增加焦距",
+      });
+    }
+    if (
+      shot.camera_roll_degrees !== 0 &&
+      Math.abs(shot.camera_roll_degrees) < 10
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["camera_roll_degrees"],
+        message: "Dutch angle 应为 0 或至少倾斜 10 度，避免意外歪斜",
+      });
+    }
+    const lensRanges: Record<
+      (typeof LENS_INTENTS)[number],
+      readonly [number, number]
+    > = {
+      spatial_context: [24, 35],
+      natural_perspective: [35, 50],
+      subject_isolation: [50, 85],
+      compressed_intimacy: [85, 135],
+      perspective_distortion: [24, 35],
+    };
+    const [minimumLens, maximumLens] = lensRanges[shot.lens_intent];
+    if (
+      shot.lens_mm < minimumLens ||
+      shot.lens_mm > maximumLens
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["lens_intent"],
+        message: `${shot.lens_intent} 与 ${shot.lens_mm}mm 焦段不匹配`,
+      });
+    }
+  });
 
 export const MiraReadyResponseSchema = z.object({
-  schema_version: z.literal("shot-plan.v4"),
+  schema_version: z.literal("shot-plan.v5"),
   request_id: z.string().min(1),
   status: z.literal("ready"),
   scene_analysis: z.object({
@@ -153,7 +290,7 @@ export const MiraReadyResponseSchema = z.object({
 });
 
 export const MiraNeedContextResponseSchema = z.object({
-  schema_version: z.literal("shot-plan.v4"),
+  schema_version: z.literal("shot-plan.v5"),
   request_id: z.string().min(1),
   status: z.literal("need_context"),
   required_context: z.array(z.enum(REQUIRED_CONTEXTS)).min(1),
@@ -167,7 +304,7 @@ export const MiraDirectorResponseSchema = z.discriminatedUnion("status", [
 
 export const DirectorInputSchema = z.object({
   request_id: z.string().min(1),
-  schema_version: z.literal("shot-plan.v4"),
+  schema_version: z.literal("shot-plan.v5"),
   dialogue_prefix: z.string().regex(/^\d{4}$/),
   start_id: z.string().min(4),
   outline: z.string(),
@@ -230,10 +367,19 @@ export const DirectorInputSchema = z.object({
     dynamic_relationship_axis: z.literal(true),
     composition_projection_validation: z.literal(true),
     relationship_coverage: z.literal(true),
+    motivated_camera_movement: z.literal(true),
+    lens_semantics: z.literal(true),
     primary_aspect_ratio: z.literal("16:9"),
     overlay_aspect_ratio: z.literal("21:9"),
     avoid_character_overlap: z.literal(true),
     supported_templates: z.array(z.enum(DIRECTOR_TEMPLATES)).min(1),
+    supported_camera_movements: z
+      .array(z.enum(CAMERA_MOVEMENTS))
+      .min(1),
+    supported_lens_intents: z.array(z.enum(LENS_INTENTS)).min(1),
+    supported_depth_of_field: z
+      .array(z.enum(DEPTH_OF_FIELD_MODES))
+      .min(1),
     max_characters: z
       .number()
       .int()
@@ -251,7 +397,7 @@ export type AppliedDirector = DirectorMode;
 
 export interface DirectorInput {
   request_id: string;
-  schema_version: "shot-plan.v4";
+  schema_version: "shot-plan.v5";
   dialogue_prefix: string;
   start_id: string;
   outline: string;
@@ -297,10 +443,21 @@ export interface DirectorInput {
     dynamic_relationship_axis: true;
     composition_projection_validation: true;
     relationship_coverage: true;
+    motivated_camera_movement: true;
+    lens_semantics: true;
     primary_aspect_ratio: "16:9";
     overlay_aspect_ratio: "21:9";
     avoid_character_overlap: true;
     supported_templates: ReadonlyArray<(typeof DIRECTOR_TEMPLATES)[number]>;
+    supported_camera_movements: ReadonlyArray<
+      (typeof CAMERA_MOVEMENTS)[number]
+    >;
+    supported_lens_intents: ReadonlyArray<
+      (typeof LENS_INTENTS)[number]
+    >;
+    supported_depth_of_field: ReadonlyArray<
+      (typeof DEPTH_OF_FIELD_MODES)[number]
+    >;
     max_characters: number;
     output_language: "zh-CN";
   };
@@ -346,7 +503,7 @@ export function createDirectorInput(
   );
   return {
     request_id: requestId,
-    schema_version: "shot-plan.v4",
+    schema_version: "shot-plan.v5",
     dialogue_prefix: sequence.prefix,
     start_id: sequence.startId,
     outline: sequence.outline,
@@ -410,10 +567,15 @@ export function createDirectorInput(
       dynamic_relationship_axis: true,
       composition_projection_validation: true,
       relationship_coverage: true,
+      motivated_camera_movement: true,
+      lens_semantics: true,
       primary_aspect_ratio: "16:9",
       overlay_aspect_ratio: "21:9",
       avoid_character_overlap: true,
       supported_templates: DIRECTOR_TEMPLATES,
+      supported_camera_movements: CAMERA_MOVEMENTS,
+      supported_lens_intents: LENS_INTENTS,
+      supported_depth_of_field: DEPTH_OF_FIELD_MODES,
       max_characters: sequence.participants.length,
       output_language: "zh-CN",
     },

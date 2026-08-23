@@ -62,6 +62,109 @@ describe("createShotPlan", () => {
     expect(reaction?.focalLength).toBeGreaterThan(70);
   });
 
+  it("uses restrained movement only for motivated emotional beats", () => {
+    const pushIn = shots.find(
+      (shot) => shot.cameraMovement === "dolly_in",
+    );
+    const pauseReaction = shots.find((shot) =>
+      shot.content.includes("……"),
+    );
+    const distanceToTarget = (
+      position: readonly [number, number, number],
+      target: readonly [number, number, number],
+    ) =>
+      Math.hypot(
+        position[0] - target[0],
+        position[1] - target[1],
+        position[2] - target[2],
+      );
+
+    expect(pushIn?.movementIntensity).toBe("subtle");
+    expect(pushIn?.lensIntent).toBe("compressed_intimacy");
+    expect(pushIn?.depthOfField).toBe("shallow");
+    expect(
+      distanceToTarget(
+        pushIn!.cameraEndPosition,
+        pushIn!.cameraEndTarget,
+      ),
+    ).toBeLessThan(
+      distanceToTarget(pushIn!.cameraPosition, pushIn!.cameraTarget),
+    );
+
+    expect(pauseReaction?.cameraMovement).toBe("static");
+    expect(pauseReaction?.compositionPlan.negativeSpace).toBe(
+      "look_room",
+    );
+
+    const isolatedInput = createDirectorInput(
+      sequence,
+      "motivated-isolation-test",
+    );
+    isolatedInput.dialogue[4].content = "……只剩我一个人。";
+    const isolatedDecision = createRuleDecisions(isolatedInput).find(
+      (decision) => decision.dialogue_ids.includes("204805"),
+    );
+    expect(isolatedDecision?.camera_movement).toBe("dolly_out");
+    expect(isolatedDecision?.movement_intensity).toBe("subtle");
+    expect(isolatedDecision?.negative_space).toBe("isolation");
+    expect(
+      shots
+        .filter((shot) => shot.cameraMovement === "static")
+        .every(
+          (shot) =>
+            shot.movementIntensity === "none" &&
+            shot.focalLength === shot.endFocalLength,
+        ),
+    ).toBe(true);
+  });
+
+  it("keeps dolly zoom movement and focal changes coupled", () => {
+    const input = createDirectorInput(sequence, "dolly-zoom-test");
+    const blocking = createDefaultBlocking(input);
+    const participants = resolveBlocking(
+      sequence.participants,
+      blocking,
+      sequence.rows.map((row) => row.id),
+    );
+    const decisions = createRuleDecisions(input, blocking);
+    const source = decisions.find(
+      (decision) => decision.template === "close_up",
+    );
+    expect(source).toBeDefined();
+    source!.camera_movement = "dolly_zoom_in";
+    source!.movement_intensity = "moderate";
+    source!.lens_mm = 85;
+    source!.end_lens_mm = 50;
+    source!.lens_intent = "compressed_intimacy";
+    const resolved = resolveShotDecisions(
+      { ...sequence, participants },
+      decisions,
+    );
+    const dollyZoom = resolved.find(
+      (shot) => shot.cameraMovement === "dolly_zoom_in",
+    );
+
+    expect(dollyZoom?.endFocalLength).toBe(50);
+    expect(
+      Math.hypot(
+        dollyZoom!.cameraEndPosition[0] - dollyZoom!.cameraEndTarget[0],
+        dollyZoom!.cameraEndPosition[1] - dollyZoom!.cameraEndTarget[1],
+        dollyZoom!.cameraEndPosition[2] - dollyZoom!.cameraEndTarget[2],
+      ),
+    ).toBeLessThan(
+      Math.hypot(
+        dollyZoom!.cameraPosition[0] - dollyZoom!.cameraTarget[0],
+        dollyZoom!.cameraPosition[1] - dollyZoom!.cameraTarget[1],
+        dollyZoom!.cameraPosition[2] - dollyZoom!.cameraTarget[2],
+      ),
+    );
+    expect(
+      dollyZoom?.projection.warnings.some((warning) =>
+        warning.includes("Dolly zoom"),
+      ),
+    ).toBe(false);
+  });
+
   it("solves clean singles from actor-local facing and validates projection", () => {
     const singleShots = shots.filter(
       (shot) => shot.projection.coverage === "single",
@@ -90,8 +193,8 @@ describe("createShotPlan", () => {
     for (let index = 1; index < shots.length; index += 1) {
       const delta = horizontalViewDelta(
         {
-          position: shots[index - 1].cameraPosition,
-          target: shots[index - 1].cameraTarget,
+          position: shots[index - 1].cameraEndPosition,
+          target: shots[index - 1].cameraEndTarget,
         },
         {
           position: shots[index].cameraPosition,
@@ -106,7 +209,7 @@ describe("createShotPlan", () => {
     expect(shots.map((shot) => shot.compositionPlan.mode)).toEqual([
       "symmetry",
       "golden_ratio",
-      "negative_space",
+      "golden_ratio",
       "asymmetrical_balance",
     ]);
     expect(shots[0].compositionPlan.transition).toBe("recenter");
@@ -122,6 +225,9 @@ describe("createShotPlan", () => {
       (candidate) => candidate.compositionPlan.negativeSpace === "look_room",
     )) {
       expect(shot.projection.lookRoom).toBeGreaterThanOrEqual(0.14);
+      expect(shot.projection.lookRoom).toBeGreaterThanOrEqual(
+        (shot.projection.backRoom ?? 0) - 0.04,
+      );
     }
   });
 
@@ -133,10 +239,18 @@ describe("createShotPlan", () => {
       blocking,
       sequence.rows.map((row) => row.id),
     );
-    const decisions = createRuleDecisions(input).map((decision, index) => ({
-      ...decision,
-      lens_mm: index % 2 === 0 ? 24 : 100,
-    }));
+    const decisions = createRuleDecisions(input).map((decision, index) => {
+      const lens = index % 2 === 0 ? 24 : 135;
+      return {
+        ...decision,
+        lens_mm: lens,
+        end_lens_mm: lens,
+        lens_intent:
+          lens === 24
+            ? ("spatial_context" as const)
+            : ("compressed_intimacy" as const),
+      };
+    });
     const resolved = resolveShotDecisions(
       { ...sequence, participants },
       decisions,

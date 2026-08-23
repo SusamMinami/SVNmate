@@ -240,7 +240,8 @@ export async function routeTraeRequest(
           instructions: [
             "在 TRAE 设置中打开 MCP。",
             "将配置写入项目根目录 .trae/mcp.json，或粘贴到全局 MCP 原始配置。",
-            "启用 internal-storyboard-collaboration。",
+            "保存配置后启用 internal-storyboard-collaboration。",
+            "若提示版本不一致，请在 TRAE 中先停用再重新启用该 MCP；刷新镜头沙盘网页不会重启 MCP 进程。",
             "在 TRAE 中输入“处理待分镜任务”。",
           ],
         },

@@ -912,9 +912,12 @@ input:focus-visible {
   top: 14px;
   right: 14px;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: 31px auto;
+  box-sizing: border-box;
   width: 230px;
   height: auto;
+  padding: 0;
   overflow: hidden;
   background: #eef0f2;
   border: 1px solid rgba(33, 41, 49, 0.72);
@@ -960,11 +963,16 @@ input:focus-visible {
 
 .top-view__canvas {
   position: relative;
+  width: 100%;
+  min-width: 0;
   min-height: 0;
+  overflow: hidden;
   aspect-ratio: 16 / 9;
 }
 
 .top-view__canvas canvas {
+  display: block;
+  max-width: 100%;
   pointer-events: none;
 }
 

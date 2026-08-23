@@ -1,6 +1,6 @@
 {
   "schema_version": "shot-rules.v1",
-  "version": "1.3.0",
+  "version": "1.5.0",
   "updated_at": "2026-08-23",
   "shot_size_order": ["EWS", "WS", "FS", "MFS", "MS", "MCU", "CU", "ECU"],
   "lark_fields": [
@@ -18,6 +18,11 @@
         { "name": "正反打" },
         { "name": "节奏" },
         { "name": "群像" },
+        { "name": "焦距" },
+        { "name": "景深" },
+        { "name": "焦点" },
+        { "name": "镜内运动" },
+        { "name": "基础覆盖" },
         { "name": "系统校验" }
       ]
     },
@@ -790,8 +795,372 @@
       "exception": "无；缺失或与模板冲突时拒绝方案。",
       "weight": 100,
       "enabled": true,
-      "source": "项目机器协议 shot-plan.v4",
+      "source": "项目机器协议 shot-plan.v5",
       "version": "1.3.0"
+    },
+    {
+      "id": "ANG-004",
+      "name": "Dutch angle 只用于明确失衡",
+      "category": "角色朝向",
+      "enforcement": "软约束",
+      "applies_when": "camera_roll_degrees 不为 0",
+      "requirement": "横滚必须表达失衡、混乱、心理异常、梦境或明确不安，通常使用正负 15-25 度；普通对话保持水平。",
+      "machine_check": "roll===0 || (abs(roll)>=10 && abs(roll)<=45 && hasIntent([imbalance,chaos,unease,dream,instability]))",
+      "exception": "全片采用明确的表现主义视觉语法。",
+      "weight": 88,
+      "enabled": true,
+      "source": "Adobe Dutch Angle Shot",
+      "version": "1.4.0"
+    },
+    {
+      "id": "ANG-005",
+      "name": "极端角度与广角畸变需双重动机",
+      "category": "角色朝向",
+      "enforcement": "软约束",
+      "applies_when": "高低机位使用 35mm 以下焦段并靠近主体",
+      "requirement": "极端高低角与近距离广角会叠加透视变形，只在需要夸张体量、威胁、脆弱或主观失真时组合。",
+      "machine_check": "extremeVerticalAngle && lens<=35 ? lensIntent=perspective_distortion : true",
+      "exception": "环境建立镜头虽使用广角，但摄影机没有靠近人物。",
+      "weight": 78,
+      "enabled": true,
+      "source": "Adobe Camera Shots and Angles",
+      "version": "1.4.0"
+    },
+    {
+      "id": "LNS-001",
+      "name": "24-35mm 用于空间与透视夸张",
+      "category": "焦距",
+      "enforcement": "软约束",
+      "applies_when": "lens_mm 在 24-35mm",
+      "requirement": "宽焦段优先交代环境、群像和空间距离；靠近主体时产生的近大远小必须是有意选择。",
+      "machine_check": "lensIntent in [spatial_context,perspective_distortion]",
+      "exception": "受场地尺寸限制且仍能通过投影验收。",
+      "weight": 86,
+      "enabled": true,
+      "source": "Adobe Camera Shots and Angles；Adobe Wide Shot",
+      "version": "1.4.0"
+    },
+    {
+      "id": "LNS-002",
+      "name": "35-50mm 维持自然透视",
+      "category": "焦距",
+      "enforcement": "风格偏好",
+      "applies_when": "中景、双人或中性对话",
+      "requirement": "自然视感的焦段作为普通对话和关系镜头默认值，避免无动机放大或压缩空间。",
+      "machine_check": "lensIntent=natural_perspective ? lens in [35,50] : true",
+      "exception": "空间限制、主观视角或明确风格化处理。",
+      "weight": 82,
+      "enabled": true,
+      "source": "Adobe Camera Shots and Angles；Adobe Eye-level Shot",
+      "version": "1.4.0"
+    },
+    {
+      "id": "LNS-003",
+      "name": "50-85mm 用于对话主体分离",
+      "category": "焦距",
+      "enforcement": "风格偏好",
+      "applies_when": "过肩、中近景、正反打或稳定单人对话",
+      "requirement": "使用轻度长焦压缩空间并分离主体，同时保留足够关系背景和自然五官。",
+      "machine_check": "lensIntent=subject_isolation ? lens in [50,85] : true",
+      "exception": "需要更强环境感或更强背景压缩。",
+      "weight": 88,
+      "enabled": true,
+      "source": "Adobe Over-the-Shoulder；Adobe Camera Shots and Angles",
+      "version": "1.4.0"
+    },
+    {
+      "id": "LNS-004",
+      "name": "85-135mm 保留给近景和压缩亲密感",
+      "category": "焦距",
+      "enforcement": "软约束",
+      "applies_when": "近景、特写、关键反应或需要背景压缩",
+      "requirement": "长焦用于减少面部透视变形、压缩背景和强化主体隔离，不作为普通群像默认焦段。",
+      "machine_check": "lensIntent=compressed_intimacy ? lens in [85,135] && coverage not in [group,group-medium] : true",
+      "exception": "有意使用长焦把阵营或人群压缩在同一画面。",
+      "weight": 90,
+      "enabled": true,
+      "source": "Adobe Close-up Shot；Adobe Dolly Zoom Shot",
+      "version": "1.4.0"
+    },
+    {
+      "id": "DOF-001",
+      "name": "景深服从空间信息与情绪重点",
+      "category": "景深",
+      "enforcement": "软约束",
+      "applies_when": "所有镜头",
+      "requirement": "建立、群像和动作关系优先深景深；普通对话可用中等景深；情绪近景和关键细节可用浅景深。",
+      "machine_check": "establishOrGroup ? depthOfField=deep : closeEmphasis ? depthOfField in [moderate,shallow] : true",
+      "exception": "明确以选择性焦点重组群体关系，且焦点转移过程可见。",
+      "weight": 80,
+      "enabled": true,
+      "source": "Adobe Camera Shots and Angles；Adobe Medium Close-up",
+      "version": "1.4.0"
+    },
+    {
+      "id": "MOV-001",
+      "name": "静态机位是普通对话默认值",
+      "category": "镜内运动",
+      "enforcement": "风格偏好",
+      "applies_when": "没有信息揭示、角色移动、情绪推进、关系变化或空间重建",
+      "requirement": "让表演和构图承担叙事，不为视觉变化无目的移动摄影机。",
+      "machine_check": "noMovementBeat ? cameraMovement=static && movementIntensity=none : true",
+      "exception": "作品已经确立持续运动的统一视觉语法。",
+      "weight": 92,
+      "enabled": true,
+      "source": "Adobe Master Shot；Adobe Tracking Shot",
+      "version": "1.4.0"
+    },
+    {
+      "id": "MOV-002",
+      "name": "Pan 固定机位并规划起止视线",
+      "category": "镜内运动",
+      "enforcement": "软约束",
+      "applies_when": "camera_movement=pan",
+      "requirement": "摄影机位置保持不变，只水平改变朝向，用于连接人物、跟随横向动作或逐步揭示信息。",
+      "machine_check": "startPosition===endPosition && startTarget!==endTarget && hasIntent([connect,follow,reveal,geography])",
+      "exception": "与其他运动组合时应升级为复合运动协议，不能继续标为纯 Pan。",
+      "weight": 94,
+      "enabled": true,
+      "source": "Adobe Pan Shot",
+      "version": "1.4.0"
+    },
+    {
+      "id": "MOV-003",
+      "name": "Tracking 必须对应主体移动路径",
+      "category": "镜内运动",
+      "enforcement": "软约束",
+      "applies_when": "camera_movement=tracking",
+      "requirement": "摄影机跟随主体穿过环境，必须有可读的角色行动路径、稳定主体构图和明确起止标记。",
+      "machine_check": "cameraMovement=tracking ? subjectMotionPath && startEndFramingValid : true",
+      "exception": "围绕静态主体的环绕运动应另行标记，不能误称 Tracking。",
+      "weight": 94,
+      "enabled": true,
+      "source": "Adobe Tracking Shot",
+      "version": "1.4.0"
+    },
+    {
+      "id": "MOV-004",
+      "name": "Dolly in/out 必须改变叙事距离",
+      "category": "镜内运动",
+      "enforcement": "软约束",
+      "applies_when": "camera_movement 为 dolly_in 或 dolly_out",
+      "requirement": "Dolly in 用于集中注意、期待、领悟或增强情绪；Dolly out 用于孤立、抽离、关系疏远或揭示空间。",
+      "machine_check": "dollyIn ? endDistance<startDistance : dollyOut ? endDistance>startDistance : true",
+      "exception": "纯技术性重新构图不应被标为叙事性推拉。",
+      "weight": 90,
+      "enabled": true,
+      "source": "Adobe Camera Shots and Angles",
+      "version": "1.4.0"
+    },
+    {
+      "id": "MOV-005",
+      "name": "Dolly zoom 反向联动机位与焦距",
+      "category": "镜内运动",
+      "enforcement": "硬约束",
+      "applies_when": "camera_movement 为 dolly_zoom_in 或 dolly_zoom_out",
+      "requirement": "推进时缩短焦距，后退时增加焦距，并让主体起止尺寸近似不变；只用于恐惧、震惊、顿悟或失衡等关键节点。",
+      "machine_check": "dollyZoomIn ? endDistance<startDistance && endLens<startLens : endDistance>startDistance && endLens>startLens; abs(subjectAreaDelta)<=0.03",
+      "exception": "无；方向或主体尺寸不成立时不能标记为 Dolly zoom。",
+      "weight": 100,
+      "enabled": true,
+      "source": "Adobe Dolly Zoom Shot",
+      "version": "1.4.0"
+    },
+    {
+      "id": "MOV-006",
+      "name": "运镜起止画面都要通过连续性验收",
+      "category": "镜内运动",
+      "enforcement": "硬约束",
+      "applies_when": "camera_movement 不为 static",
+      "requirement": "运动起点和终点都必须保持主体可读、关系轴稳定、视线合理，并保护 21:9 安全区域中的关键表演。",
+      "machine_check": "startFrame.valid && endFrame.valid && axisSideStable",
+      "exception": "Pan 有意把原主体移出画面并揭示新主体时，终点改验收新主体。",
+      "weight": 100,
+      "enabled": true,
+      "source": "Adobe Tracking Shot；Adobe Pan Shot；项目投影约束",
+      "version": "1.4.0"
+    },
+    {
+      "id": "MOV-007",
+      "name": "区分光学 Zoom 与物理 Dolly",
+      "category": "镜内运动",
+      "enforcement": "硬约束",
+      "applies_when": "camera_movement 为 zoom_in、zoom_out、dolly_in 或 dolly_out",
+      "requirement": "Zoom 保持机位不动并只改变焦距；Dolly 改变机位距离并保持焦距。两者不能因画面同时变大或变小而混用名称。",
+      "machine_check": "zoom ? startPosition===endPosition && startLens!==endLens : dolly ? startPosition!==endPosition && startLens===endLens : true",
+      "exception": "Dolly zoom 作为独立复合运动，按 MOV-005 验收。",
+      "weight": 100,
+      "enabled": true,
+      "source": "Adobe Camera Shots and Angles；Adobe Dolly Zoom Shot",
+      "version": "1.4.0"
+    },
+    {
+      "id": "FND-001",
+      "name": "区分 Master 与 Establishing",
+      "category": "基础覆盖",
+      "enforcement": "软约束",
+      "applies_when": "建立场景或重建空间",
+      "requirement": "Master 覆盖整场重要人物、动作和空间关系；Establishing 主要交代时间地点，通常更短，不应把二者仅按广角画面混为一谈。",
+      "machine_check": "coverageIntent in [establish_geography,reestablish_geography] ? coversActiveActorsAndAction : true",
+      "exception": "一个镜头同时完整交代地点、人物和动作时可兼具两种功能。",
+      "weight": 84,
+      "enabled": true,
+      "source": "Adobe Master Shot；Adobe Establishing Shot",
+      "version": "1.4.0"
+    },
+    {
+      "id": "FND-002",
+      "name": "Insert 与 Cutaway 依赖可寻址场景目标",
+      "category": "基础覆盖",
+      "enforcement": "硬约束",
+      "applies_when": "计划展示关键道具、环境细节或画外事件",
+      "requirement": "Insert 放大主动作内细节，Cutaway 暂离主动作展示相关信息；没有道具或环境目标数据时不得伪造可执行镜头。",
+      "machine_check": "template in [insert,cutaway] ? sceneTargetId!=null : true",
+      "exception": "当前协议不支持这两类模板时，只能记录为未来覆盖建议。",
+      "weight": 100,
+      "enabled": true,
+      "source": "Adobe Cutaway Shot；Adobe Camera Shots and Angles",
+      "version": "1.4.0"
+    },
+    {
+      "id": "FRM-018",
+      "name": "普通对话把主要空白留在视线前方",
+      "category": "构图",
+      "enforcement": "硬约束",
+      "applies_when": "negative_space=look_room 且存在明确 look_target",
+      "requirement": "按最终屏幕投影判断角色注视方向，前向视线空间至少为画面宽度 14%，且不得无动机小于脸后空间。",
+      "machine_check": "lookRoom>=0.14 && lookRoom+0.04>=backRoom",
+      "exception": "受阻或困住的短边构图必须改为 negative_space=pressure。",
+      "weight": 100,
+      "enabled": true,
+      "source": "StudioBinder Rule of Thirds；项目负空间缺陷",
+      "version": "1.5.0"
+    },
+    {
+      "id": "FRM-019",
+      "name": "短边压迫必须显式声明",
+      "category": "构图",
+      "enforcement": "软约束",
+      "applies_when": "negative_space=pressure",
+      "requirement": "将主体置于其注视方向一侧，使脸后空间大于视线前方空间，用于受阻、困住、对抗或不安；仍保留至少 4% 前向边缘安全距离。",
+      "machine_check": "lookRoom>=0.04 && lookRoom<backRoom && intentExplainsShortSide",
+      "exception": "中心正面构图没有明确左右视线时不适用。",
+      "weight": 94,
+      "enabled": true,
+      "source": "StudioBinder Negative Space；经典 short-side framing",
+      "version": "1.5.0"
+    },
+    {
+      "id": "FRM-020",
+      "name": "孤立留白需要叙事证据",
+      "category": "构图",
+      "enforcement": "硬约束",
+      "applies_when": "negative_space=isolation",
+      "requirement": "只有孤独、缺席、等待、环境压倒人物或明确画外威胁才使用显著留白；停顿和省略号本身不能推断孤立。",
+      "machine_check": "hasIsolationOrThreatCue && max(lookRoom,backRoom)>=0.32",
+      "exception": "场景已建立持续的极简或疏离视觉语法。",
+      "weight": 100,
+      "enabled": true,
+      "source": "StudioBinder Negative Space；项目负空间缺陷",
+      "version": "1.5.0"
+    },
+    {
+      "id": "FRM-021",
+      "name": "每镜建立清晰视觉焦点",
+      "category": "焦点",
+      "enforcement": "软约束",
+      "applies_when": "所有镜头",
+      "requirement": "主体、大小、锐度、光线和画面重量应共同指向主要信息；多个焦点只用于比较、冲突或同步动作。",
+      "machine_check": "primaryFocalPoint!=null && (focalPointCount===1 || hasRelationalIntent)",
+      "exception": "建立镜头允许观众自由探索，但仍应有进入画面的视觉锚点。",
+      "weight": 90,
+      "enabled": true,
+      "source": "StudioBinder Focal Point；StudioBinder Positive Space",
+      "version": "1.5.0"
+    },
+    {
+      "id": "DOF-002",
+      "name": "区分景深与画面纵深",
+      "category": "景深",
+      "enforcement": "硬约束",
+      "applies_when": "使用 depth_of_field 或 layered_depth",
+      "requirement": "depth_of_field 描述清晰范围，layered_depth 描述前中后景的空间组织；两者可以组合但不能互相替代。",
+      "machine_check": "depthOfField in [deep,moderate,shallow] && layeredDepthValidatedByDepthBands",
+      "exception": "无；字段语义不能混用。",
+      "weight": 100,
+      "enabled": true,
+      "source": "StudioBinder Depth in Film",
+      "version": "1.5.0"
+    },
+    {
+      "id": "DOF-003",
+      "name": "多层动作和关系优先深景深",
+      "category": "景深",
+      "enforcement": "软约束",
+      "applies_when": "前景、中景和背景同时包含重要人物或动作",
+      "requirement": "使用 deep focus 让观众同时读取多层事件和人物关系，避免把必要背景信息虚化掉。",
+      "machine_check": "importantDepthLayers>=2 ? depthOfField=deep : true",
+      "exception": "通过镜内焦点转移明确引导注意，但当前协议尚不支持 Rack focus。",
+      "weight": 88,
+      "enabled": true,
+      "source": "StudioBinder Deep Focus；StudioBinder Depth in Film",
+      "version": "1.5.0"
+    },
+    {
+      "id": "DOF-004",
+      "name": "浅景深只保留一个主要焦点",
+      "category": "景深",
+      "enforcement": "软约束",
+      "applies_when": "depth_of_field=shallow",
+      "requirement": "浅景深用于隔离一个角色、表情或关键细节；需要比较多位角色或多层动作时不得默认使用。",
+      "machine_check": "depthOfField=shallow ? primaryFocalPointCount===1 : true",
+      "exception": "后续支持 Split diopter 或可执行 Rack focus 时按对应规则验收。",
+      "weight": 90,
+      "enabled": true,
+      "source": "StudioBinder Shallow Focus",
+      "version": "1.5.0"
+    },
+    {
+      "id": "GRP-003",
+      "name": "三人镜头用站位表达关系结构",
+      "category": "群像",
+      "enforcement": "软约束",
+      "applies_when": "恰有三位主要角色同框",
+      "requirement": "均匀间距表达团结或平衡，中心前置或高位表达领导，两人靠近而第三人拉开表达阵营变化或孤立。",
+      "machine_check": "threeShot ? blockingPatternMatchesRelationshipIntent : true",
+      "exception": "纯空间建立镜头可先保持中性，再在后续镜头明确层级。",
+      "weight": 88,
+      "enabled": true,
+      "source": "StudioBinder Three Shot",
+      "version": "1.5.0"
+    },
+    {
+      "id": "MOV-008",
+      "name": "静态镜头也必须有叙事目的",
+      "category": "镜内运动",
+      "enforcement": "风格偏好",
+      "applies_when": "camera_movement=static",
+      "requirement": "静止用于让观众研究画面、读取表演、承受停顿或感受关系；不能把 static 当作未完成的默认值。",
+      "machine_check": "cameraMovement=static ? intentExplainsHoldOrObservation || ordinaryDialogue : true",
+      "exception": "纯功能性建立和连续性覆盖可以保持中性。",
+      "weight": 76,
+      "enabled": true,
+      "source": "StudioBinder Static Shot",
+      "version": "1.5.0"
+    },
+    {
+      "id": "SYS-003",
+      "name": "未支持技巧不得由相近字段伪装",
+      "category": "系统校验",
+      "enforcement": "硬约束",
+      "applies_when": "模型考虑 Rack focus、Split diopter、POV、Insert、Tilt、Arc、Whip pan、Snorricam 或 Overhead",
+      "requirement": "协议缺少焦点对象、观察者、场景目标或轨迹参数时，不得用现有模板和运动名称冒充；只记录为后续覆盖建议。",
+      "machine_check": "requestedTechnique in supportedCapabilities",
+      "exception": "对应协议、求解和预览能力完整上线后启用专用字段。",
+      "weight": 100,
+      "enabled": true,
+      "source": "StudioBinder Camera Shots 分类库；项目可执行性约束",
+      "version": "1.5.0"
     }
   ],
   "sources": [
@@ -902,6 +1271,114 @@
     {
       "name": "StudioBinder Single Shot",
       "url": "https://www.studiobinder.com/camera-shots/framing/single-shot/"
+    },
+    {
+      "name": "Adobe Tracking Shot",
+      "url": "https://www.adobe.com/creativecloud/video/production/cinematography/camera-shots-and-angles/tracking-shot.html"
+    },
+    {
+      "name": "Adobe Pan Shot",
+      "url": "https://www.adobe.com/creativecloud/video/production/cinematography/camera-shots-and-angles/pan-shot.html"
+    },
+    {
+      "name": "Adobe Dolly Zoom Shot",
+      "url": "https://www.adobe.com/creativecloud/video/production/cinematography/camera-shots-and-angles/dolly-zoom-shot.html"
+    },
+    {
+      "name": "Adobe Dutch Angle Shot",
+      "url": "https://www.adobe.com/creativecloud/video/production/cinematography/camera-shots-and-angles/dutch-angle-shot.html"
+    },
+    {
+      "name": "Adobe Eye-level Shot",
+      "url": "https://www.adobe.com/creativecloud/video/production/cinematography/camera-shots-and-angles/eye-level-shot.html"
+    },
+    {
+      "name": "Adobe High-angle Shot",
+      "url": "https://www.adobe.com/creativecloud/video/production/cinematography/camera-shots-and-angles/high-angle-shot.html"
+    },
+    {
+      "name": "Adobe Low-angle Shot",
+      "url": "https://www.adobe.com/creativecloud/video/production/cinematography/camera-shots-and-angles/low-angle-shot.html"
+    },
+    {
+      "name": "Adobe Profile Shot",
+      "url": "https://www.adobe.com/creativecloud/video/production/cinematography/camera-shots-and-angles/profile-shot.html"
+    },
+    {
+      "name": "Adobe Close-up Shot",
+      "url": "https://www.adobe.com/creativecloud/video/production/cinematography/camera-shots-and-angles/close-up-shot.html"
+    },
+    {
+      "name": "Adobe Wide Shot",
+      "url": "https://www.adobe.com/creativecloud/video/production/cinematography/camera-shots-and-angles/wide-shot.html"
+    },
+    {
+      "name": "Adobe Establishing Shot",
+      "url": "https://www.adobe.com/creativecloud/video/production/cinematography/camera-shots-and-angles/establishing-shot.html"
+    },
+    {
+      "name": "Adobe Cutaway Shot",
+      "url": "https://www.adobe.com/creativecloud/video/production/cinematography/camera-shots-and-angles/cut-away-shot.html"
+    },
+    {
+      "name": "Adobe Sequence Shot",
+      "url": "https://www.adobe.com/creativecloud/video/production/cinematography/camera-shots-and-angles/sequence-shot.html"
+    },
+    {
+      "name": "StudioBinder Camera Shots",
+      "url": "https://www.studiobinder.com/camera-shots/"
+    },
+    {
+      "name": "StudioBinder Camera Movements",
+      "url": "https://www.studiobinder.com/camera-shots/camera-movements/"
+    },
+    {
+      "name": "StudioBinder Camera Focus",
+      "url": "https://www.studiobinder.com/camera-shots/focus/"
+    },
+    {
+      "name": "StudioBinder Positive Space",
+      "url": "https://www.studiobinder.com/camera-shots/composition/positive-space-in-film/"
+    },
+    {
+      "name": "StudioBinder Focal Point",
+      "url": "https://www.studiobinder.com/camera-shots/composition/focal-point-in-film/"
+    },
+    {
+      "name": "StudioBinder Depth in Film",
+      "url": "https://www.studiobinder.com/camera-shots/composition/depth-in-film/"
+    },
+    {
+      "name": "StudioBinder Shallow Focus",
+      "url": "https://www.studiobinder.com/camera-shots/focus/shallow-focus-shot/"
+    },
+    {
+      "name": "StudioBinder Deep Focus",
+      "url": "https://www.studiobinder.com/camera-shots/focus/deep-focus-shot/"
+    },
+    {
+      "name": "StudioBinder Static Shot",
+      "url": "https://www.studiobinder.com/camera-shots/camera-movements/static-shot/"
+    },
+    {
+      "name": "StudioBinder Three Shot",
+      "url": "https://www.studiobinder.com/camera-shots/framing/three-shot/"
+    },
+    {
+      "name": "StudioBinder POV Shot",
+      "url": "https://www.studiobinder.com/camera-shots/framing/pov-shot/"
+    },
+    {
+      "name": "StudioBinder Arc Shot",
+      "url": "https://www.studiobinder.com/camera-shots/camera-movements/arc-shot/"
+    },
+    {
+      "name": "StudioBinder Rack Focus",
+      "url": "https://www.studiobinder.com/camera-shots/focus/rack-focus-shot/"
+    },
+    {
+      "name": "StudioBinder Split Diopter",
+      "url": "https://www.studiobinder.com/camera-shots/focus/split-diopter-shot/"
     }
   ]
 }

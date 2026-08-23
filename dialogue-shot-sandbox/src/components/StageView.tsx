@@ -6,7 +6,7 @@ import {
   Line,
 } from "@react-three/drei";
 import { Camera, Map } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import type {
   DialogueParticipant,
@@ -173,27 +173,68 @@ function StageFloor({ compact = false }: { compact?: boolean }) {
 
 function ShotCamera({ shot }: { shot: ShotPlan }) {
   const { camera } = useThree();
-  const targetPosition = useMemo(
+  const startPosition = useMemo(
     () => new THREE.Vector3(...shot.cameraPosition),
     [shot.cameraPosition],
   );
-  const lookAt = useMemo(
+  const endPosition = useMemo(
+    () => new THREE.Vector3(...shot.cameraEndPosition),
+    [shot.cameraEndPosition],
+  );
+  const startTarget = useMemo(
     () => new THREE.Vector3(...shot.cameraTarget),
     [shot.cameraTarget],
   );
+  const endTarget = useMemo(
+    () => new THREE.Vector3(...shot.cameraEndTarget),
+    [shot.cameraEndTarget],
+  );
+  const currentTarget = useMemo(() => new THREE.Vector3(), []);
+  const elapsed = useRef(0);
 
   useEffect(() => {
+    elapsed.current = 0;
+    camera.position.copy(startPosition);
     if (camera instanceof THREE.PerspectiveCamera) {
       camera.setFocalLength(shot.focalLength);
       camera.near = 0.1;
       camera.far = 100;
       camera.updateProjectionMatrix();
     }
-  }, [camera, shot.focalLength]);
+    camera.lookAt(startTarget);
+    camera.rotateZ(THREE.MathUtils.degToRad(shot.cameraRollDegrees));
+  }, [
+    camera,
+    shot.id,
+    shot.focalLength,
+    shot.cameraRollDegrees,
+    startPosition,
+    startTarget,
+  ]);
 
-  useFrame(() => {
-    camera.position.lerp(targetPosition, 0.13);
-    camera.lookAt(lookAt);
+  useFrame((_, delta) => {
+    elapsed.current += delta;
+    const motionDuration = Math.max(1, shot.duration * 0.85);
+    const rawProgress =
+      shot.cameraMovement === "static"
+        ? 1
+        : Math.min(1, elapsed.current / motionDuration);
+    const progress =
+      rawProgress * rawProgress * (3 - 2 * rawProgress);
+    camera.position.lerpVectors(startPosition, endPosition, progress);
+    currentTarget.lerpVectors(startTarget, endTarget, progress);
+    if (camera instanceof THREE.PerspectiveCamera) {
+      camera.setFocalLength(
+        THREE.MathUtils.lerp(
+          shot.focalLength,
+          shot.endFocalLength,
+          progress,
+        ),
+      );
+      camera.updateProjectionMatrix();
+    }
+    camera.lookAt(currentTarget);
+    camera.rotateZ(THREE.MathUtils.degToRad(shot.cameraRollDegrees));
   });
   return null;
 }
@@ -316,6 +357,32 @@ function CameraDiagram({
   );
 }
 
+function CameraMotionPath({ shot }: { shot: ShotPlan }) {
+  if (
+    shot.cameraMovement === "static" ||
+    shot.cameraMovement === "pan"
+  ) {
+    return null;
+  }
+  return (
+    <Line
+      points={[
+        [shot.cameraPosition[0], 0.08, shot.cameraPosition[2]],
+        [
+          shot.cameraEndPosition[0],
+          0.08,
+          shot.cameraEndPosition[2],
+        ],
+      ]}
+      color="#2f96e8"
+      lineWidth={2}
+      dashed
+      dashSize={0.14}
+      gapSize={0.1}
+    />
+  );
+}
+
 function TopCamera({
   participants,
   shot,
@@ -410,6 +477,7 @@ function TopStage({
         />
       ))}
       <CameraDiagram shot={shot} participants={participants} />
+      <CameraMotionPath shot={shot} />
     </>
   );
 }
@@ -534,7 +602,9 @@ export function StageView({ participants, shot }: StageViewProps) {
             <span>{showingShot ? shot.label : "俯视调度"}</span>
             <strong>
               {showingShot
-                ? `${shot.focalLength} mm`
+                ? shot.endFocalLength === shot.focalLength
+                  ? `${shot.focalLength} mm`
+                  : `${shot.focalLength}-${shot.endFocalLength} mm`
                 : `${stagedParticipants.length} 人站位`}
             </strong>
           </div>
