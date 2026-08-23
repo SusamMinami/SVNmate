@@ -97,6 +97,17 @@ isolation + dolly_out`。这会把普通思考、迟疑或承认错误过度解�
 - `pressure` 则反向要求短边视线，并保留最小边缘安全距离。
 - 参数面板显示“视线前/后”实测值，便于人工复核。
 
+## 真实数据审计
+
+使用 `C:\trunk\doc\csvdir` 在 2026-08-23 扫描可成功生成的 1,585 段对话，
+共 10,274 个镜头，其中 6,086 个镜头具有可测量的前后视线空间：
+
+- 普通 `look_room` 中，前向空间明显小于脸后空间：0 个。
+- 非 `pressure` / `isolation` 镜头中，脸后空白超过半幅且明显大于前方：
+  0 个。
+- `pressure` 短边镜头：541 个，全部满足前向空间小于脸后空间。
+- `isolation` 镜头：1 个，仅在文本存在明确孤立证据时生成。
+
 ## 来源
 
 - [StudioBinder Camera Shots](https://www.studiobinder.com/camera-shots/)

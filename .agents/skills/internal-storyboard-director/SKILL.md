@@ -134,8 +134,9 @@ description: "Designs UE4 dialogue storyboards through the local storyboard MCP 
 - Negative space 是主体周围的空白，不等同于角色脸后的空间。普通对话
   使用 `look_room` 时，主要空白必须在角色注视方向，视线前方空间不得
   小于后方空间。
-- `isolation` 只有在台词或上下文明确支持孤独、缺席、环境压倒人物或
-  画外威胁时才使用；停顿本身不足以推断孤立。
+- `isolation` 只有在台词或上下文明确支持孤独、缺席或环境压倒人物时才
+  使用；停顿本身不足以推断孤立。画外威胁使用 `look_room`，把空白留在
+  角色正在观察的方向。
 - `pressure` 是有意的短边构图：压缩角色面朝方向的空间，把较多空白留在
   脑后。只用于受阻、困住、对抗或不安，并在 `intent` 中说明。
 - 每镜必须有清晰焦点。单人和浅景深镜头只保留一个主焦点；双人、三人和
@@ -143,6 +144,9 @@ description: "Designs UE4 dialogue storyboards through the local storyboard MCP 
   优先级。
 - 三人镜头不是简单装下三个人：均匀间距表达团结或平衡，中心前置/高位
   表达领导，两人靠近而第三人拉开表达阵营分裂或孤立。
+- Rack focus、Split diopter、POV、Insert、Tilt、Arc、Whip pan、
+  Snorricam 和 Overhead 需要当前协议尚未提供的焦点对象、观察者、场景
+  目标或轨迹参数；不得用相近模板或 `camera_movement` 字段冒充。
 - 正反打优先使用左右互补落点；连续动作或反应可匹配前镜注视点；重新
   建立空间时回到中央视觉重心。只有明确制造冲击时使用对比切换。
 - 引导线与框中框依赖场景几何；输入没有门框、走廊、道路等环境信息时，

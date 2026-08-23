@@ -95,11 +95,22 @@ test("renders nonblank shot and blocking canvases without horizontal overflow", 
   await expect(page.getByText("压缩亲密", { exact: true })).toBeVisible();
   await expect(page.getByText("浅景深", { exact: true })).toBeVisible();
   await expect(page.getByText("推近 · 轻微", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("前向视线空间", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText("0.41 / 0.19", { exact: true })).toBeVisible();
 
   const hasHorizontalOverflow = await page.evaluate(
     () => document.documentElement.scrollWidth > window.innerWidth + 1,
   );
   expect(hasHorizontalOverflow).toBe(false);
+
+  await page.locator(".shot-row").nth(2).click();
+  await expect(page.getByText("固定机位", { exact: true })).toBeVisible();
+  await expect(page.getByText("0.39 / 0.17", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText(/普通停顿不会被额外解释为孤立|不额外推断孤立/),
+  ).toBeVisible();
 
   await page.screenshot({
     path: testInfo.outputPath("dialogue-shot-sandbox.png"),
@@ -162,8 +173,8 @@ test("removes a character after the AI-directed exit node", async ({
           configured: true,
           connected: true,
           versionMismatch: false,
-          expectedVersion: "0.15.0",
-          serverVersion: "0.15.0",
+          expectedVersion: "0.15.1",
+          serverVersion: "0.15.1",
           lastSeenAt: "2026-08-22T00:00:00.000Z",
           mcpName: "internal-storyboard-collaboration",
           mcpConfigPath: "C:\\workspace\\.trae\\mcp.json",
@@ -359,8 +370,8 @@ test("shows local content immediately and presents the AI story brief before app
           configured: true,
           connected: true,
           versionMismatch: false,
-          expectedVersion: "0.15.0",
-          serverVersion: "0.15.0",
+          expectedVersion: "0.15.1",
+          serverVersion: "0.15.1",
           lastSeenAt: "2026-08-22T00:00:00.000Z",
           mcpName: "internal-storyboard-collaboration",
           mcpConfigPath: "C:\\workspace\\.trae\\mcp.json",
@@ -476,8 +487,8 @@ test("previews shared and local plans before resolving a library conflict", asyn
           configured: true,
           connected: true,
           versionMismatch: false,
-          expectedVersion: "0.15.0",
-          serverVersion: "0.15.0",
+          expectedVersion: "0.15.1",
+          serverVersion: "0.15.1",
           transport: "http",
           lastSeenAt: "2026-08-22T00:00:00.000Z",
           mcpName: "internal-storyboard-collaboration",
@@ -726,7 +737,7 @@ test("explains that an old MCP must be restarted inside TRAE", async ({
           configured: true,
           connected: false,
           versionMismatch: true,
-          expectedVersion: "0.15.0",
+          expectedVersion: "0.15.1",
           serverVersion: "0.13.0",
           transport: "stdio",
           lastSeenAt: "2026-08-23T04:19:22.608Z",
@@ -744,7 +755,7 @@ test("explains that an old MCP must be restarted inside TRAE", async ({
 
   await expect(page.getByText("MCP 仍在运行旧版本")).toBeVisible();
   await expect(
-    page.getByText(/当前 0\.13\.0 · 需要 0\.15\.0；请在 TRAE 中停用后重新启用/),
+    page.getByText(/当前 0\.13\.0 · 需要 0\.15\.1；请在 TRAE 中停用后重新启用/),
   ).toBeVisible();
   await expect(
     page.getByRole("button", { name: "配置内部 TRAE MCP" }),

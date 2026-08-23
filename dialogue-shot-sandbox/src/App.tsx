@@ -664,7 +664,7 @@ export default function App() {
           <div>
             <h1>镜头沙盘</h1>
           </div>
-          <span className="version">v0.15.0</span>
+          <span className="version">v0.15.1</span>
         </div>
 
         <div className="source-status">

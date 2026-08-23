@@ -576,7 +576,7 @@ export function assessProjection(
     backRoom !== null &&
     lookRoom >= backRoom
   ) {
-    warnings.push("压迫构图未形成有意的短边视线");
+    warnings.push("构图：压迫意图未形成有意的短边视线");
   }
   if (
     composition.negativeSpace === "pressure" &&
@@ -732,6 +732,14 @@ export function solveSingleCamera(
     [
       request.composition.visualAnchor,
       oppositeVisualAnchor,
+      ...(request.composition.negativeSpace === "balanced"
+        ? []
+        : ([
+            "left_golden",
+            "right_golden",
+            "left_third",
+            "right_third",
+          ] as const)),
       "center",
     ] as DirectorDecision["visual_anchor"][]
   ).filter((position, index, values) => values.indexOf(position) === index);
@@ -800,18 +808,19 @@ export function solveSingleCamera(
             ? 0
             : request.composition.negativeSpace === "look_room"
               ? Math.max(0, 0.14 - assessment.lookRoom) * 1_200 +
-                Math.max(
-                  0,
-                  assessment.backRoom - assessment.lookRoom - 0.04,
-                ) *
-                  900
+                (assessment.lookRoom + 0.04 < assessment.backRoom
+                  ? 400 +
+                    (assessment.backRoom -
+                      assessment.lookRoom -
+                      0.04) *
+                      900
+                  : 0)
               : request.composition.negativeSpace === "pressure"
                 ? Math.max(0, 0.04 - assessment.lookRoom) * 1_200 +
-                  Math.max(
-                    0,
-                    assessment.lookRoom - assessment.backRoom,
-                  ) *
-                    900
+                  (assessment.lookRoom >= assessment.backRoom
+                    ? 400 +
+                      (assessment.lookRoom - assessment.backRoom) * 900
+                    : 0)
                 : request.composition.negativeSpace === "isolation"
                   ? Math.max(
                       0,

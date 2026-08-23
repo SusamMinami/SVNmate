@@ -231,6 +231,32 @@ describe("createShotPlan", () => {
     }
   });
 
+  it("uses rear negative space only for motivated short-side pressure", () => {
+    const input = createDirectorInput(sequence, "short-side-test");
+    input.dialogue[3].content = "你现在必须说出真相！";
+    const blocking = createDefaultBlocking(input);
+    const participants = resolveBlocking(
+      sequence.participants,
+      blocking,
+      sequence.rows.map((row) => row.id),
+    );
+    const pressureShot = resolveShotDecisions(
+      { ...sequence, participants },
+      createRuleDecisions(input, blocking),
+    ).find(
+      (shot) => shot.compositionPlan.negativeSpace === "pressure",
+    );
+
+    expect(pressureShot).toBeDefined();
+    expect(pressureShot?.projection.lookRoom).toBeGreaterThanOrEqual(0.04);
+    expect(pressureShot?.projection.lookRoom).toBeLessThan(
+      pressureShot?.projection.backRoom ?? 0,
+    );
+    expect(pressureShot?.projection.warnings).not.toContain(
+      "构图：压迫意图未形成有意的短边视线",
+    );
+  });
+
   it("keeps the requested framing across the supported lens range", () => {
     const input = createDirectorInput(sequence, "lens-range-test");
     const blocking = createDefaultBlocking(input);
