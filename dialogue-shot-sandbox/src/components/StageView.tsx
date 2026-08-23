@@ -25,9 +25,17 @@ interface CharacterProps {
   slotOnly?: boolean;
   labelPlacement?: "body" | "below";
   showDirectionIndicator?: boolean;
+  presence?: "present" | "pending";
 }
 
-function DirectionIndicator({ color }: { color: string }) {
+function DirectionIndicator({
+  color,
+  pending = false,
+}: {
+  color: string;
+  pending?: boolean;
+}) {
+  const opacity = pending ? 0.3 : 1;
   return (
     <group position={[0, 2.16, 0.02]}>
       <mesh
@@ -35,18 +43,34 @@ function DirectionIndicator({ color }: { color: string }) {
         rotation={[Math.PI / 2, 0, 0]}
       >
         <cylinderGeometry args={[0.045, 0.045, 0.34, 10]} />
-        <meshBasicMaterial color="#202830" />
+        <meshBasicMaterial
+          color="#202830"
+          transparent={pending}
+          opacity={opacity}
+          depthWrite={!pending}
+        />
       </mesh>
       <mesh
         position={[0, 0, 0.43]}
         rotation={[Math.PI / 2, 0, 0]}
       >
         <coneGeometry args={[0.13, 0.25, 10]} />
-        <meshBasicMaterial color={color} />
+        <meshBasicMaterial
+          color={color}
+          transparent={pending}
+          opacity={opacity}
+          depthWrite={!pending}
+        />
       </mesh>
       <mesh position={[0, -0.035, 0]} rotation={[-Math.PI / 2, 0, 0]}>
         <ringGeometry args={[0.13, 0.18, 24]} />
-        <meshBasicMaterial color="#ffffff" side={THREE.DoubleSide} />
+        <meshBasicMaterial
+          color="#ffffff"
+          side={THREE.DoubleSide}
+          transparent={pending}
+          opacity={opacity}
+          depthWrite={!pending}
+        />
       </mesh>
     </group>
   );
@@ -58,7 +82,10 @@ function Character({
   slotOnly = false,
   labelPlacement = "body",
   showDirectionIndicator = true,
+  presence = "present",
 }: CharacterProps) {
+  const pending = presence === "pending";
+  const opacity = pending ? 0.28 : 1;
   const facingCenter = Math.atan2(
     participant.facingTarget[0] - participant.position[0],
     participant.facingTarget[2] - participant.position[2],
@@ -66,32 +93,65 @@ function Character({
   return (
     <group position={participant.position}>
       <group rotation={[0, facingCenter, 0]}>
-        <mesh position={[0, 0.92, 0]} castShadow>
+        <mesh position={[0, 0.92, 0]} castShadow={!pending}>
           <capsuleGeometry args={[0.3, 0.86, 5, 12]} />
-          <meshStandardMaterial color={participant.color} roughness={0.72} />
+          <meshStandardMaterial
+            color={participant.color}
+            roughness={0.72}
+            transparent={pending}
+            opacity={opacity}
+            depthWrite={!pending}
+          />
         </mesh>
-        <mesh position={[0, 1.72, 0]} castShadow>
+        <mesh position={[0, 1.72, 0]} castShadow={!pending}>
           <sphereGeometry args={[0.29, 20, 16]} />
-          <meshStandardMaterial color="#f1c9b4" roughness={0.8} />
+          <meshStandardMaterial
+            color="#f1c9b4"
+            roughness={0.8}
+            transparent={pending}
+            opacity={opacity}
+            depthWrite={!pending}
+          />
         </mesh>
         <mesh position={[0, 1.7, 0.27]} rotation={[Math.PI / 2, 0, 0]}>
           <coneGeometry args={[0.055, 0.16, 12]} />
-          <meshStandardMaterial color="#20262e" />
+          <meshStandardMaterial
+            color="#20262e"
+            transparent={pending}
+            opacity={opacity}
+            depthWrite={!pending}
+          />
         </mesh>
-        <mesh position={[-0.14, 0.25, 0]} castShadow>
+        <mesh position={[-0.14, 0.25, 0]} castShadow={!pending}>
           <cylinderGeometry args={[0.1, 0.12, 0.5, 12]} />
-          <meshStandardMaterial color="#353c46" />
+          <meshStandardMaterial
+            color="#353c46"
+            transparent={pending}
+            opacity={opacity}
+            depthWrite={!pending}
+          />
         </mesh>
-        <mesh position={[0.14, 0.25, 0]} castShadow>
+        <mesh position={[0.14, 0.25, 0]} castShadow={!pending}>
           <cylinderGeometry args={[0.1, 0.12, 0.5, 12]} />
-          <meshStandardMaterial color="#353c46" />
+          <meshStandardMaterial
+            color="#353c46"
+            transparent={pending}
+            opacity={opacity}
+            depthWrite={!pending}
+          />
         </mesh>
         <mesh position={[0, 0.025, 0]} rotation={[-Math.PI / 2, 0, 0]}>
           <ringGeometry args={[0.38, 0.45, 32]} />
-          <meshBasicMaterial color={participant.color} side={THREE.DoubleSide} />
+          <meshBasicMaterial
+            color={participant.color}
+            side={THREE.DoubleSide}
+            transparent={pending}
+            opacity={opacity}
+            depthWrite={!pending}
+          />
         </mesh>
         {showDirectionIndicator && (
-          <DirectionIndicator color={participant.color} />
+          <DirectionIndicator color={participant.color} pending={pending} />
         )}
       </group>
       <Html
@@ -111,11 +171,14 @@ function Character({
             labelPlacement === "below" ? "actor-label--below" : "",
             compact ? "actor-label--compact" : "",
             slotOnly ? "actor-label--slot-only" : "",
+            pending ? "actor-label--pending" : "",
           ]
             .filter(Boolean)
             .join(" ")}
           style={{ borderColor: participant.color }}
-          title={`${participant.slot} ${participant.name} NPC ${participant.id}`}
+          title={`${participant.slot} ${participant.name} NPC ${participant.id}${
+            pending ? " · 未登场" : ""
+          }`}
         >
           <strong style={{ backgroundColor: participant.color }}>
             {participant.slot}
@@ -123,7 +186,7 @@ function Character({
           {!slotOnly && (
             <>
               <span>{participant.name}</span>
-              <small>{participant.id}</small>
+              <small>{pending ? `未登场 · ${participant.id}` : participant.id}</small>
             </>
           )}
         </div>
@@ -474,6 +537,11 @@ function TopStage({
           participant={participant}
           compact={inset}
           labelPlacement="below"
+          presence={
+            participant.entryIndex > shot.dialogueEndIndex
+              ? "pending"
+              : "present"
+          }
         />
       ))}
       <CameraDiagram shot={shot} participants={participants} />
@@ -547,7 +615,7 @@ function CameraFrameGuides({
 export function StageView({ participants, shot }: StageViewProps) {
   const [viewMode, setViewMode] = useState<"shot" | "blocking">("shot");
   const showingShot = viewMode === "shot";
-  const visibleParticipants = useMemo(
+  const presentParticipants = useMemo(
     () =>
       participants.filter(
         (participant) =>
@@ -557,14 +625,33 @@ export function StageView({ participants, shot }: StageViewProps) {
       ),
     [participants, shot.dialogueEndIndex],
   );
-  const stagedParticipants = useMemo(
+  const stagedPresentParticipants = useMemo(
     () =>
-      visibleParticipants.map((participant) => {
+      presentParticipants.map((participant) => {
         const facingTarget = shot.facingOverrides[participant.slot];
         return facingTarget ? { ...participant, facingTarget } : participant;
       }),
-    [visibleParticipants, shot.facingOverrides],
+    [presentParticipants, shot.facingOverrides],
   );
+  const blockingParticipants = useMemo(
+    () =>
+      participants
+        .filter(
+          (participant) =>
+            participant.exitIndex === null ||
+            participant.exitIndex >= shot.dialogueEndIndex,
+        )
+        .map((participant) => {
+          if (participant.entryIndex > shot.dialogueEndIndex) {
+            return participant;
+          }
+          const facingTarget = shot.facingOverrides[participant.slot];
+          return facingTarget ? { ...participant, facingTarget } : participant;
+        }),
+    [participants, shot.dialogueEndIndex, shot.facingOverrides],
+  );
+  const pendingCount =
+    blockingParticipants.length - stagedPresentParticipants.length;
 
   return (
     <div className={`stage-view stage-view--${viewMode}`}>
@@ -582,7 +669,10 @@ export function StageView({ participants, shot }: StageViewProps) {
               camera={{ position: [...shot.cameraPosition], fov: 42 }}
               gl={{ antialias: true }}
             >
-              <MainStage participants={stagedParticipants} shot={shot} />
+              <MainStage
+                participants={stagedPresentParticipants}
+                shot={shot}
+              />
             </Canvas>
           ) : (
             <Canvas
@@ -592,7 +682,7 @@ export function StageView({ participants, shot }: StageViewProps) {
               dpr={[1, 1.5]}
               gl={{ antialias: true }}
             >
-              <TopStage participants={stagedParticipants} shot={shot} />
+              <TopStage participants={blockingParticipants} shot={shot} />
             </Canvas>
           )}
 
@@ -605,7 +695,9 @@ export function StageView({ participants, shot }: StageViewProps) {
                 ? shot.endFocalLength === shot.focalLength
                   ? `${shot.focalLength} mm`
                   : `${shot.focalLength}-${shot.endFocalLength} mm`
-                : `${stagedParticipants.length} 人站位`}
+                : pendingCount > 0
+                  ? `${stagedPresentParticipants.length} 人在场 · ${pendingCount} 人未登场`
+                  : `${stagedPresentParticipants.length} 人均已登场`}
             </strong>
           </div>
         </div>
@@ -640,7 +732,7 @@ export function StageView({ participants, shot }: StageViewProps) {
               gl={{ antialias: true }}
             >
               <TopStage
-                participants={stagedParticipants}
+                participants={blockingParticipants}
                 shot={shot}
                 inset
               />
@@ -654,7 +746,7 @@ export function StageView({ participants, shot }: StageViewProps) {
               gl={{ antialias: true }}
             >
               <MainStage
-                participants={stagedParticipants}
+                participants={stagedPresentParticipants}
                 shot={shot}
                 inset
               />

@@ -160,6 +160,51 @@ test("renders every participant in a multi-character dialogue", async ({
   }
 });
 
+test("previews future entrants as transparent blocking markers", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByLabel("四位数对话 ID").fill("3099");
+  await page.getByRole("button", { name: "查找并生成分镜" }).click();
+
+  await expect(page.locator(".stage-main .actor-label")).toHaveCount(2);
+  await expect(page.locator(".top-view .actor-label")).toHaveCount(4);
+  await expect(page.locator(".top-view .actor-label--pending")).toHaveCount(2);
+  await expect(
+    page.locator(".top-view .actor-label--pending", { hasText: "弥莎" }),
+  ).toHaveCount(1);
+  await expect(
+    page.locator(".top-view .actor-label--pending", { hasText: "赫克" }),
+  ).toHaveCount(1);
+
+  await page.getByRole("button", { name: "切换到俯视调度" }).click();
+  await expect(page.locator(".stage-main .actor-label")).toHaveCount(4);
+  await expect(page.locator(".stage-main .actor-label--pending")).toHaveCount(
+    2,
+  );
+  await expect(page.locator(".shot-hud")).toContainText(
+    "2 人在场 · 2 人未登场",
+  );
+
+  await page
+    .getByRole("button", { name: /C 3人群像重建全景/ })
+    .click();
+  await expect(page.locator(".stage-main .actor-label--pending")).toHaveCount(
+    1,
+  );
+  await expect(page.locator(".shot-hud")).toContainText(
+    "3 人在场 · 1 人未登场",
+  );
+
+  await page
+    .getByRole("button", { name: /D 4人群像重建全景/ })
+    .click();
+  await expect(page.locator(".stage-main .actor-label--pending")).toHaveCount(
+    0,
+  );
+  await expect(page.locator(".shot-hud")).toContainText("4 人均已登场");
+});
+
 test("removes a character after the AI-directed exit node", async ({
   page,
 }) => {
@@ -173,8 +218,8 @@ test("removes a character after the AI-directed exit node", async ({
           configured: true,
           connected: true,
           versionMismatch: false,
-          expectedVersion: "0.15.1",
-          serverVersion: "0.15.1",
+          expectedVersion: "0.15.2",
+          serverVersion: "0.15.2",
           lastSeenAt: "2026-08-22T00:00:00.000Z",
           mcpName: "internal-storyboard-collaboration",
           mcpConfigPath: "C:\\workspace\\.trae\\mcp.json",
@@ -305,6 +350,9 @@ test("removes a character after the AI-directed exit node", async ({
     page.locator(".stage-main .actor-label", { hasText: "弥莎" }),
   ).toHaveCount(0);
   await expect(
+    page.locator(".top-view .actor-label", { hasText: "弥莎" }),
+  ).toHaveCount(0);
+  await expect(
     page.locator(".stage-main .actor-label", { hasText: "赫克" }),
   ).toHaveCount(1);
 });
@@ -370,8 +418,8 @@ test("shows local content immediately and presents the AI story brief before app
           configured: true,
           connected: true,
           versionMismatch: false,
-          expectedVersion: "0.15.1",
-          serverVersion: "0.15.1",
+          expectedVersion: "0.15.2",
+          serverVersion: "0.15.2",
           lastSeenAt: "2026-08-22T00:00:00.000Z",
           mcpName: "internal-storyboard-collaboration",
           mcpConfigPath: "C:\\workspace\\.trae\\mcp.json",
@@ -487,8 +535,8 @@ test("previews shared and local plans before resolving a library conflict", asyn
           configured: true,
           connected: true,
           versionMismatch: false,
-          expectedVersion: "0.15.1",
-          serverVersion: "0.15.1",
+          expectedVersion: "0.15.2",
+          serverVersion: "0.15.2",
           transport: "http",
           lastSeenAt: "2026-08-22T00:00:00.000Z",
           mcpName: "internal-storyboard-collaboration",
@@ -737,7 +785,7 @@ test("explains that an old MCP must be restarted inside TRAE", async ({
           configured: true,
           connected: false,
           versionMismatch: true,
-          expectedVersion: "0.15.1",
+          expectedVersion: "0.15.2",
           serverVersion: "0.13.0",
           transport: "stdio",
           lastSeenAt: "2026-08-23T04:19:22.608Z",
@@ -755,7 +803,7 @@ test("explains that an old MCP must be restarted inside TRAE", async ({
 
   await expect(page.getByText("MCP 仍在运行旧版本")).toBeVisible();
   await expect(
-    page.getByText(/当前 0\.13\.0 · 需要 0\.15\.1；请在 TRAE 中停用后重新启用/),
+    page.getByText(/当前 0\.13\.0 · 需要 0\.15\.2；请在 TRAE 中停用后重新启用/),
   ).toBeVisible();
   await expect(
     page.getByRole("button", { name: "配置内部 TRAE MCP" }),

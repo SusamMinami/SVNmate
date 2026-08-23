@@ -1042,6 +1042,21 @@ input:focus-visible {
   color: #6c7680;
 }
 
+.actor-label--pending {
+  opacity: 0.52;
+  border-style: dashed;
+  box-shadow: none;
+}
+
+.actor-label--pending strong {
+  opacity: 0.72;
+}
+
+.actor-label--pending small {
+  color: #58636d;
+  font-weight: 700;
+}
+
 .actor-label--compact {
   grid-template-columns: 16px auto;
   min-width: 58px;
