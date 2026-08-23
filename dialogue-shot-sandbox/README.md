@@ -4,6 +4,13 @@
 `doc\csvdir` 读取真实对话链，通过规则导演、内部 TRAE 协作或 Mira AI
 生成 2-12 人分镜。
 
+## 平台范围
+
+镜头沙盘只面向 Windows 桌面端，正式运行载体为 Electron。Vite 浏览器页面
+仅用于本地开发和自动化验收，不需要支持移动端、触屏端或窄屏响应式交互。
+后续界面设计、实现和测试均以常规 Windows 桌面窗口为准。面向 AI 开发助手
+的完整约束见 [`AGENTS.md`](AGENTS.md)。
+
 ## 运行
 
 ```powershell
