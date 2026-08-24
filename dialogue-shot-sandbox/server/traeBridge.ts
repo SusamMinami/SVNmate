@@ -15,7 +15,6 @@ import {
 import {
   completeStoryboardTask,
   createStoryboardTask,
-  failStoryboardTask,
   getStoryboardTask,
   storyboardTaskStats,
 } from "./storyboardTaskStore";
@@ -28,8 +27,39 @@ import {
   type SharedStoryboardRecord,
 } from "./storyboardSharedLibrary";
 
-const COLLABORATION_TIMEOUT_MS = 10 * 60_000;
+function configuredTimeout(name: string, fallback: number): number {
+  const configured = Number(process.env[name]);
+  return Number.isFinite(configured) && configured >= 1_000
+    ? configured
+    : fallback;
+}
+
+const QUEUE_TIMEOUT_MS = configuredTimeout(
+  "STORYBOARD_TRAE_QUEUE_TIMEOUT_MS",
+  30 * 60_000,
+);
+const PROCESSING_TIMEOUT_MS = configuredTimeout(
+  "STORYBOARD_TRAE_PROCESSING_TIMEOUT_MS",
+  20 * 60_000,
+);
 const POLL_INTERVAL_MS = 700;
+
+class TraeWaitTimeoutError extends Error {
+  constructor(
+    readonly code: "TRAE_QUEUE_TIMEOUT" | "TRAE_PROCESSING_TIMEOUT",
+    message: string,
+  ) {
+    super(message);
+    this.name = "TraeWaitTimeoutError";
+  }
+}
+
+function durationMinutes(milliseconds: number): string {
+  return (milliseconds / 60_000).toLocaleString("zh-CN", {
+    maximumFractionDigits: 1,
+  });
+}
+
 const SharedResolutionSchema = z.object({
   choice: z.enum(["local", "shared"]),
   record_id: z.string().min(1),
@@ -171,12 +201,24 @@ async function readJson(request: IncomingMessage): Promise<unknown> {
   return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
 }
 
-async function waitForCollaborationResult(
+export interface CollaborationWaitOptions {
+  queueTimeoutMs?: number;
+  processingTimeoutMs?: number;
+  pollIntervalMs?: number;
+}
+
+export async function waitForCollaborationResult(
   taskRequestId: string,
   responseRequestId = taskRequestId,
+  options: CollaborationWaitOptions = {},
 ) {
-  const deadline = Date.now() + COLLABORATION_TIMEOUT_MS;
-  while (Date.now() < deadline) {
+  const queueTimeoutMs = options.queueTimeoutMs ?? QUEUE_TIMEOUT_MS;
+  const processingTimeoutMs =
+    options.processingTimeoutMs ?? PROCESSING_TIMEOUT_MS;
+  const pollIntervalMs = options.pollIntervalMs ?? POLL_INTERVAL_MS;
+  const queueDeadline = Date.now() + queueTimeoutMs;
+  let processingDeadline: number | null = null;
+  while (true) {
     const task = await getStoryboardTask(taskRequestId);
     if (!task) {
       throw new Error(`内部 TRAE 协作任务 ${taskRequestId} 丢失`);
@@ -187,15 +229,27 @@ async function waitForCollaborationResult(
     if (task.status === "failed") {
       throw new Error(task.error || "内部 TRAE 未能完成分镜任务");
     }
+    const now = Date.now();
+    if (task.status === "processing") {
+      processingDeadline ??=
+        Date.parse(task.claimedAt || task.updatedAt) +
+        processingTimeoutMs;
+      if (now >= processingDeadline) {
+        throw new TraeWaitTimeoutError(
+          "TRAE_PROCESSING_TIMEOUT",
+          `TRAE 已领取任务，但处理超过 ${durationMinutes(processingTimeoutMs)} 分钟。任务仍保留，完成后重新分析可直接复用结果`,
+        );
+      }
+    } else if (now >= queueDeadline) {
+      throw new TraeWaitTimeoutError(
+        "TRAE_QUEUE_TIMEOUT",
+        `TRAE 模型排队超过 ${durationMinutes(queueTimeoutMs)} 分钟。任务仍在队列中，模型完成后重新分析可直接复用结果`,
+      );
+    }
     await new Promise((resolvePromise) =>
-      setTimeout(resolvePromise, POLL_INTERVAL_MS),
+      setTimeout(resolvePromise, pollIntervalMs),
     );
   }
-  await failStoryboardTask(
-    taskRequestId,
-    `等待内部 TRAE 超过 ${COLLABORATION_TIMEOUT_MS / 60_000} 分钟`,
-  );
-  throw new Error("等待内部 TRAE 协作超时，已降级到规则导演");
 }
 
 async function lookupSharedLibrary(
@@ -367,7 +421,10 @@ export async function routeTraeRequest(
     sendJson(response, 503, {
       ok: false,
       error: {
-        code: "TRAE_COLLABORATION_ERROR",
+        code:
+          error instanceof TraeWaitTimeoutError
+            ? error.code
+            : "TRAE_COLLABORATION_ERROR",
         message:
           error instanceof Error ? error.message : "内部 TRAE 协作失败",
       },

@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { readablePowerShellError } from "./excelRegistration";
+import {
+  powerShellFileArguments,
+  readablePowerShellError,
+} from "./excelRegistration";
 
 describe("Excel PowerShell errors", () => {
   it("turns Excel busy CLIXML into an actionable message", () => {
@@ -18,5 +21,16 @@ describe("Excel PowerShell errors", () => {
     expect(readablePowerShellError(clixml)).toBe(
       "目标物 500001 不存在\r\n请刷新",
     );
+  });
+
+  it("runs scripts from a file instead of the Windows command line", () => {
+    const scriptPath =
+      "C:\\Users\\Admin\\AppData\\Local\\Temp\\shot-sandbox-excel-1\\operation.ps1";
+    const arguments_ = powerShellFileArguments(scriptPath);
+
+    expect(arguments_).toContain("-File");
+    expect(arguments_).toContain(scriptPath);
+    expect(arguments_).not.toContain("-EncodedCommand");
+    expect(arguments_.join(" ").length).toBeLessThan(1_000);
   });
 });

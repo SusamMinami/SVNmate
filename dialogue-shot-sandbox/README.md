@@ -131,7 +131,7 @@ powershell -ExecutionPolicy Bypass -File scripts\publish-update.ps1
 - **规则导演**：完全本地运行；按台词长度和标点估算时长，普通镜头至少覆盖两句台词，不因说话人变化立即切镜。前三镜建立人物关系，进出场后重建空间，普通互动优先双人或带群镜头，重要个人节点才收紧为单人。
 - **内部 TRAE 协作**：软件创建本地待处理任务，当前已登录的内部 TRAE 通过 MCP 领取并提交 `shot-plan.v5`。
 - **Mira AI**：前端调用本地 Vite/Node 桥，桥接服务通过 `lark-cli` 搜索 Mira、发送严格 JSON 请求并轮询回复。
-- **自动降级**：MCP 协作超时、飞书未授权、回复非 JSON、Schema 错误、台词遗漏或重复时，自动使用规则导演，并在界面显示原因。
+- **自动降级**：飞书未授权、回复非 JSON、Schema 错误、台词遗漏或重复时，自动使用规则导演，并在界面显示原因。TRAE 等待达到上限时仅结束本次界面等待，后台任务继续保留。
 
 ### 内部 TRAE 协作初始化
 
@@ -145,6 +145,11 @@ powershell -ExecutionPolicy Bypass -File scripts\publish-update.ps1
 
 网页不依赖配置文件检测来创建任务。TRAE 成功访问 MCP 后会写入本地连接
 记录，界面据此显示真实连接状态；仅启动镜头沙盘不会再被误报为已连接。
+提交后界面每 2 秒刷新队列状态，区分“模型排队”和“正在生成”。排队默认
+等待 30 分钟，领取后另计 20 分钟处理时间；可分别通过
+`STORYBOARD_TRAE_QUEUE_TIMEOUT_MS` 和
+`STORYBOARD_TRAE_PROCESSING_TIMEOUT_MS` 调整。达到等待上限不会把任务标记
+为失败，TRAE 晚到后仍可继续处理，重新分析相同内容会直接复用完成结果。
 桌面版 MCP 必须使用生成配置中的 `http://127.0.0.1:43127/mcp`，不要把
 便携版 EXE 配置成 stdio `command`，便携启动器不会透传 MCP 标准输入输出。
 启动 v0.15.1 时会自动把本应用遗留的便携版全局配置迁移为上述 HTTP 地址，

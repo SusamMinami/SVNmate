@@ -362,6 +362,16 @@ export default function App() {
       : directorLoading
         ? `${directorLabel(directorMode)}正在生成镜头`
         : "镜头方案尚未生成";
+  const traeWaitHeading =
+    (traeStatus?.stats.processing ?? 0) > 0
+      ? "TRAE 正在生成分镜"
+      : (traeStatus?.stats.pending ?? 0) > 0
+        ? "协作任务已排队，等待模型可用"
+        : "已提交，等待内部 TRAE 接收";
+  const traeWaitDetail =
+    (traeStatus?.stats.processing ?? 0) > 0
+      ? "对话与规则分镜保持可用，完成后再确认 TRAE 方案"
+      : "模型繁忙时会继续排队，不会立即判定协作失败";
 
   useEffect(() => {
     void refreshTraeConnection();
@@ -374,8 +384,20 @@ export default function App() {
     }
   }, []);
 
-  async function refreshTraeConnection() {
-    setTraeLoading(true);
+  useEffect(() => {
+    if (!directorLoading || directorMode !== "trae") {
+      return;
+    }
+    const interval = window.setInterval(() => {
+      void refreshTraeConnection(false);
+    }, 2_000);
+    return () => window.clearInterval(interval);
+  }, [directorLoading, directorMode]);
+
+  async function refreshTraeConnection(showLoading = true) {
+    if (showLoading) {
+      setTraeLoading(true);
+    }
     setTraeError("");
     try {
       setTraeStatus(await getTraeStatus());
@@ -386,7 +408,9 @@ export default function App() {
           : "TRAE 连接检查失败",
       );
     } finally {
-      setTraeLoading(false);
+      if (showLoading) {
+        setTraeLoading(false);
+      }
     }
   }
 
@@ -987,7 +1011,9 @@ export default function App() {
               <div className="fallback-notice" role="status">
                 <Bot size={16} />
                 <span>
-                  {directorLabel(directorMode)} 未生效，已自动使用规则导演：
+                  {directorMode === "trae"
+                    ? "TRAE 协作本次未完成，当前显示规则导演结果："
+                    : `${directorLabel(directorMode)} 未生效，已自动使用规则导演：`}
                   {fallbackReason}
                 </span>
               </div>
@@ -1158,12 +1184,12 @@ export default function App() {
                       {directorMode === "rule"
                         ? "规则导演正在编排镜头"
                         : directorMode === "trae"
-                          ? "已提交，等待内部 TRAE 处理"
+                          ? traeWaitHeading
                           : "Mira AI 正在分析剧情"}
                     </strong>
                     <small>
                       {directorMode === "trae"
-                        ? "对话与本地分镜已显示，可继续浏览"
+                        ? traeWaitDetail
                         : directorMode === "mira"
                           ? "本地分镜已显示，AI 完成后将展示故事梗概"
                           : "正在维护动态关系轴与视线连续"}

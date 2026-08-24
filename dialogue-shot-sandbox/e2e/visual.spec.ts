@@ -827,7 +827,9 @@ test("switches to internal TRAE and visibly degrades when collaboration fails", 
   await expect(page.getByText(/内部 TRAE MCP 已连接/)).toBeVisible();
 
   await expect(
-    page.getByText(/已自动使用规则导演：模拟内部 TRAE 协作超时/),
+    page.getByText(
+      /TRAE 协作本次未完成，当前显示规则导演结果：模拟内部 TRAE 协作超时/,
+    ),
   ).toBeVisible();
   await expect(page.getByText(/实际：规则导演/)).toBeVisible();
   await expect(page.getByText(/规则导演（已降级）/)).toBeVisible();

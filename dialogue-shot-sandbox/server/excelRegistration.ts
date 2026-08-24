@@ -1,6 +1,13 @@
 import { spawn } from "node:child_process";
 import { Buffer } from "node:buffer";
-import { open, stat, unlink } from "node:fs/promises";
+import {
+  mkdtemp,
+  open,
+  rm,
+  stat,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
@@ -138,10 +145,10 @@ async function withExcelRegistrationLock<T>(
 const EXCEL_REGISTRATION_SCRIPT = String.raw`
 $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
-$payload = [Text.Encoding]::UTF8.GetString(
-  [Convert]::FromBase64String($env:SHOT_SANDBOX_REGISTRATION_PAYLOAD)
+$request = (
+  Get-Content -LiteralPath $env:SHOT_SANDBOX_REGISTRATION_PAYLOAD_PATH -Raw -Encoding UTF8 |
+    ConvertFrom-Json
 )
-$request = $payload | ConvertFrom-Json
 $paths = @{
   missionTarget = "C:\trunk\doc\xlsdir\r任务剧情\m目标物表.xlsm"
   npc = "C:\trunk\doc\xlsdir\NPC表.xlsm"
@@ -626,10 +633,10 @@ const EXCEL_TARGET_UPDATE_SCRIPT = String.raw`
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
-$payload = [Text.Encoding]::UTF8.GetString(
-  [Convert]::FromBase64String($env:SHOT_SANDBOX_TARGET_UPDATE_PAYLOAD)
+$request = (
+  Get-Content -LiteralPath $env:SHOT_SANDBOX_TARGET_UPDATE_PAYLOAD_PATH -Raw -Encoding UTF8 |
+    ConvertFrom-Json
 )
-$request = $payload | ConvertFrom-Json
 $targetPath = "C:\trunk\doc\xlsdir\r任务剧情\m目标物表.xlsm"
 
 function Invoke-ExcelAction(
@@ -937,6 +944,18 @@ export function readablePowerShellError(value: string): string {
   return text || "PowerShell 未返回可读错误";
 }
 
+export function powerShellFileArguments(scriptPath: string): string[] {
+  return [
+    "-NoLogo",
+    "-NoProfile",
+    "-NonInteractive",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    scriptPath,
+  ];
+}
+
 async function runExcelOperation<
   TResult extends { ok: boolean; message?: string },
 >(
@@ -945,79 +964,90 @@ async function runExcelOperation<
   payload: unknown,
   fallbackError: string,
 ): Promise<TResult> {
-  const encodedScript = Buffer.from(
-    script,
-    "utf16le",
-  ).toString("base64");
-  const encodedPayload = Buffer.from(
-    JSON.stringify(payload),
-    "utf8",
-  ).toString("base64");
-  return new Promise((resolvePromise, reject) => {
-    const child = spawn(
-      "powershell.exe",
-      [
-        "-NoLogo",
-        "-NoProfile",
-        "-NonInteractive",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-EncodedCommand",
-        encodedScript,
-      ],
-      {
-        env: {
-          ...process.env,
-          [environmentName]: encodedPayload,
+  const operationRoot = await mkdtemp(
+    join(tmpdir(), "shot-sandbox-excel-"),
+  );
+  const scriptPath = join(operationRoot, "operation.ps1");
+  const payloadPath = join(operationRoot, "payload.json");
+  try {
+    await Promise.all([
+      writeFile(scriptPath, `\uFEFF${script}`, "utf8"),
+      writeFile(payloadPath, JSON.stringify(payload), "utf8"),
+    ]);
+    return await new Promise((resolvePromise, reject) => {
+      const child = spawn(
+        "powershell.exe",
+        powerShellFileArguments(scriptPath),
+        {
+          env: {
+            ...process.env,
+            [environmentName]: payloadPath,
+          },
+          windowsHide: true,
         },
-        windowsHide: true,
-      },
-    );
-    const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
-    const timeout = setTimeout(() => {
-      child.kill();
-      reject(new Error(`${fallbackError}超时`));
-    }, 60_000);
-    child.stdout.on("data", (chunk) =>
-      stdout.push(Buffer.from(chunk)),
-    );
-    child.stderr.on("data", (chunk) =>
-      stderr.push(Buffer.from(chunk)),
-    );
-    child.once("error", (error) => {
-      clearTimeout(timeout);
-      reject(error);
+      );
+      const stdout: Buffer[] = [];
+      const stderr: Buffer[] = [];
+      let settled = false;
+      const rejectOnce = (error: Error) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timeout);
+        reject(error);
+      };
+      const timeout = setTimeout(() => {
+        child.kill();
+        rejectOnce(new Error(`${fallbackError}超时`));
+      }, 60_000);
+      child.stdout.on("data", (chunk) =>
+        stdout.push(Buffer.from(chunk)),
+      );
+      child.stderr.on("data", (chunk) =>
+        stderr.push(Buffer.from(chunk)),
+      );
+      child.once("error", (error) => {
+        rejectOnce(error);
+      });
+      child.once("close", (code) => {
+        if (settled) {
+          return;
+        }
+        const output = Buffer.concat(stdout).toString("utf8").trim();
+        const errorOutput = Buffer.concat(stderr).toString("utf8").trim();
+        let result: TResult | null = null;
+        try {
+          result = JSON.parse(output) as TResult;
+        } catch {
+          rejectOnce(
+            new Error(
+              readablePowerShellError(errorOutput || output) ||
+                `${fallbackError}进程异常退出（${code ?? "unknown"}）`,
+            ),
+          );
+          return;
+        }
+        if (code !== 0 || !result.ok) {
+          rejectOnce(
+            new Error(
+              result.message ||
+                readablePowerShellError(errorOutput) ||
+                `${fallbackError}失败`,
+            ),
+          );
+          return;
+        }
+        settled = true;
+        clearTimeout(timeout);
+        resolvePromise(result);
+      });
     });
-    child.once("close", (code) => {
-      clearTimeout(timeout);
-      const output = Buffer.concat(stdout).toString("utf8").trim();
-      const errorOutput = Buffer.concat(stderr).toString("utf8").trim();
-      let result: TResult | null = null;
-      try {
-        result = JSON.parse(output) as TResult;
-      } catch {
-        reject(
-          new Error(
-            readablePowerShellError(errorOutput || output) ||
-              `${fallbackError}进程异常退出（${code ?? "unknown"}）`,
-          ),
-        );
-        return;
-      }
-      if (code !== 0 || !result.ok) {
-        reject(
-          new Error(
-            result.message ||
-              readablePowerShellError(errorOutput) ||
-              `${fallbackError}失败`,
-          ),
-        );
-        return;
-      }
-      resolvePromise(result);
-    });
-  });
+  } finally {
+    await rm(operationRoot, { recursive: true, force: true }).catch(
+      () => undefined,
+    );
+  }
 }
 
 function runExcelRegistration(
@@ -1025,7 +1055,7 @@ function runExcelRegistration(
 ): Promise<ExcelRegistrationResponse> {
   return runExcelOperation<ExcelRegistrationResponse>(
     EXCEL_REGISTRATION_SCRIPT,
-    "SHOT_SANDBOX_REGISTRATION_PAYLOAD",
+    "SHOT_SANDBOX_REGISTRATION_PAYLOAD_PATH",
     { items },
     "Excel 写入",
   );
@@ -1036,7 +1066,7 @@ function runExcelTargetUpdate(
 ): Promise<ExcelTargetUpdateResponse> {
   return runExcelOperation<ExcelTargetUpdateResponse>(
     EXCEL_TARGET_UPDATE_SCRIPT,
-    "SHOT_SANDBOX_TARGET_UPDATE_PAYLOAD",
+    "SHOT_SANDBOX_TARGET_UPDATE_PAYLOAD_PATH",
     { items },
     "Excel 目标物修改",
   );

@@ -24,12 +24,16 @@ import {
 } from "./storyboardMcpHeartbeat";
 import { routeStoryboardMcpRequest } from "../mcp/storyboardServer";
 import {
+  claimPendingStoryboardTask,
   completeStoryboardTask,
   createStoryboardTask,
   getStoryboardTask,
   storyboardInputContentHash,
 } from "./storyboardTaskStore";
-import { traeBridgePlugin } from "./traeBridge";
+import {
+  traeBridgePlugin,
+  waitForCollaborationResult,
+} from "./traeBridge";
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const originalProjectRoot = process.env.STORYBOARD_PROJECT_ROOT;
@@ -426,6 +430,51 @@ describe("internal storyboard MCP", () => {
 
     expect(secondTask.requestId).toBe(firstTask.requestId);
     expect(await getStoryboardTask(second.request_id)).toBeNull();
+  });
+
+  it("keeps a queued task active when the UI wait expires", async () => {
+    temporaryRoot = await mkdtemp(join(tmpdir(), "storyboard-queue-timeout-"));
+    process.env.STORYBOARD_PROJECT_ROOT = temporaryRoot;
+    const input = createDirectorInput(
+      findDialogueSequence(demoDatabase, "2048"),
+      "queue-timeout-request",
+    );
+    await createStoryboardTask(input);
+
+    await expect(
+      waitForCollaborationResult(input.request_id, input.request_id, {
+        queueTimeoutMs: 10,
+        processingTimeoutMs: 100,
+        pollIntervalMs: 1,
+      }),
+    ).rejects.toMatchObject({ code: "TRAE_QUEUE_TIMEOUT" });
+    expect((await getStoryboardTask(input.request_id))?.status).toBe(
+      "pending",
+    );
+  });
+
+  it("keeps a claimed task active when the UI wait expires", async () => {
+    temporaryRoot = await mkdtemp(
+      join(tmpdir(), "storyboard-processing-timeout-"),
+    );
+    process.env.STORYBOARD_PROJECT_ROOT = temporaryRoot;
+    const input = createDirectorInput(
+      findDialogueSequence(demoDatabase, "2048"),
+      "processing-timeout-request",
+    );
+    await createStoryboardTask(input);
+    await claimPendingStoryboardTask();
+
+    await expect(
+      waitForCollaborationResult(input.request_id, input.request_id, {
+        queueTimeoutMs: 100,
+        processingTimeoutMs: 10,
+        pollIntervalMs: 1,
+      }),
+    ).rejects.toMatchObject({ code: "TRAE_PROCESSING_TIMEOUT" });
+    expect((await getStoryboardTask(input.request_id))?.status).toBe(
+      "processing",
+    );
   });
 
   it("keeps content hashes stable when JSON object keys are reordered", () => {

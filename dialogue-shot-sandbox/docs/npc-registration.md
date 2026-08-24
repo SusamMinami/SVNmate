@@ -85,7 +85,8 @@ NPC 候选按 `NPC.resource_id == Model.id` 查询。界面列出每个候选 NP
 
 打开动作使用 Windows 文件关联；新增动作使用本机 Excel COM 操作真实工作簿，
 不通过 JavaScript Excel 库重写文件。这样可以保留 VBA、公式、样式、批注、
-隐藏列和数据验证。
+隐藏列和数据验证。PowerShell 操作脚本与 JSON 请求通过短生命周期临时文件
+传递，避免 Windows 命令行和环境变量长度限制；进程结束后自动清理。
 
 新增规则：
 
