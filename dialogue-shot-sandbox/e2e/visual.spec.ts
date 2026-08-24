@@ -90,6 +90,19 @@ test("renders nonblank shot and blocking canvases without horizontal overflow", 
   expect(insetCanvas!.x).toBeCloseTo(insetFrame!.x, 1);
   expect(insetCanvas!.width).toBeCloseTo(insetFrame!.width, 1);
   expect(insetCanvas!.width / insetCanvas!.height).toBeCloseTo(16 / 9, 2);
+  const insetActors = await page
+    .locator(".top-view .actor-label")
+    .evaluateAll((elements) =>
+      elements.map((element) => {
+        const bounds = element.getBoundingClientRect();
+        return bounds.x + bounds.width / 2;
+      }),
+    );
+  expect(insetActors).toHaveLength(2);
+  expect(
+    (Math.max(...insetActors) - Math.min(...insetActors)) /
+      insetFrame!.width,
+  ).toBeGreaterThan(0.3);
   for (let index = 0; index < 2; index += 1) {
     const canvas = canvases.nth(index);
     await expect(canvas).toBeVisible();
@@ -1121,7 +1134,14 @@ test("offers the detected Blueprint formation before designing shots", async ({
   await expect(
     page.getByRole("button", { name: "分析对话与站位" }),
   ).toBeDisabled();
-  await expect(page.getByText(/围绕失踪的钥匙互相试探/)).toBeVisible();
+  await expect(
+    page.locator(".dialogue-preview p").filter({ hasText: "你来了。" }),
+  ).toBeVisible();
+  await expect(page.locator(".dialogue-row")).toHaveCount(2);
+  await expect(page.locator(".shot-row")).toHaveCount(0);
+  await expect(
+    page.getByText("正在查询 UE Blueprint 站位").first(),
+  ).toBeVisible();
   releaseFormation();
 
   const dialog = page.getByRole("dialog", {
@@ -1136,6 +1156,12 @@ test("offers the detected Blueprint formation before designing shots", async ({
   await expect(dialog).toBeHidden();
   await expect(page.getByText(/正在使用 .*BP_735000/)).toBeVisible();
   await expect(page.locator(".cast-row")).toHaveCount(2);
+  await expect(page.locator(".shot-row.is-invalid")).toHaveCount(1);
+  await expect(page.getByLabel("投影验收未通过")).toBeVisible();
+  await page.screenshot({
+    path: testInfo.outputPath("blueprint-invalid-shot.png"),
+    fullPage: true,
+  });
 });
 
 test("previews mission targets and blocks mixed MapIDs before UE loading", async ({
@@ -1143,8 +1169,31 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
 }, testInfo) => {
   let loadRequests = 0;
   let formationRequests = 0;
+  let createRequests = 0;
+  let createdBlueprintName = "";
+  let createdTargetIds: string[] = [];
+  let openedConfigTable = "";
+  let registrationWriteItems: Array<{
+    existingModelId: number | null;
+    existingNpcId: number | null;
+    mapId: string;
+  }> = [];
+  let targetUpdateItems: Array<{
+    targetId: string;
+    mapId: string;
+    originalTransform: {
+      location: { x: number; y: number; z: number };
+      rotation: { pitch: number; yaw: number; roll: number };
+    };
+    transform: {
+      location: { x: number; y: number; z: number };
+      rotation: { pitch: number; yaw: number; roll: number };
+    };
+  }> = [];
   let loadedTaskId = "";
   let loadedTargetIds: string[] = [];
+  let loadedMapMode = "";
+  let mapStatusMatches = false;
   await page.route("**/api/ue/formation/read", async (route) => {
     formationRequests += 1;
     await route.fulfill({
@@ -1159,11 +1208,293 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
       }),
     });
   });
+  await page.route(
+    "**/api/ue/mission-targets/create-blueprint",
+    async (route) => {
+      createRequests += 1;
+      const request = route.request().postDataJSON();
+      createdBlueprintName = request.blueprintName;
+      createdTargetIds = request.selectedTargetIds;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          data: {
+            status: "created",
+            taskId: request.plan.taskId,
+            blueprintAssetPath:
+              "/Game/Seria/Task/Mod/MainQuest/Test/BP_Test.BP_Test",
+            targetCount: createdTargetIds.length,
+            componentNames: ["0", "1", "c1"],
+          },
+        }),
+      });
+    },
+  );
+  await page.route(
+    "**/api/ue/mission-targets/check-blueprint",
+    async (route) => {
+      const request = route.request().postDataJSON();
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          data: {
+            status: "matched",
+            blueprintAssetPath:
+              "/Game/Seria/Task/Mod/MainQuest/Test/BP_Test.BP_Test",
+            dialogueId: request.plan.taskId,
+            dialogueAssetPath:
+              "/Game/Seria/Task/dialoggraph/Test.Test",
+            formationClassPath:
+              "/Game/Seria/Task/Mod/MainQuest/Test/BP_Test.BP_Test_C",
+            dialogueModels: [],
+            selectedModels: [],
+            message: "Formation 和模型顺序均匹配",
+          },
+        }),
+      });
+    },
+  );
+  await page.route(
+    "**/api/ue/mission-targets/inspect-blueprint",
+    async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          data: {
+            blueprintState: "empty",
+            blueprintAssetPath:
+              "/Game/Seria/Task/Mod/MainQuest/Test/BP_Test.BP_Test",
+            blueprintClassPath:
+              "/Game/Seria/Task/Mod/MainQuest/Test/BP_Test.BP_Test_C",
+            parentClassPath:
+              "/Game/Seria/Blueprint/Task/PositionModeBase.PositionModeBase_C",
+            dialogueId: null,
+            dialogueAssetPath: null,
+            formationClassPath: null,
+            slots: [],
+            message: "BP 尚未创建站位组件",
+          },
+        }),
+      });
+    },
+  );
+  await page.route("**/api/ue/selection/registration", async (route) => {
+    const existingActor = {
+      actorRef: "BP_Guard_C_0",
+      label: "守卫预览",
+      classPath:
+        "/Game/Seria/NPC/Guard/BP_Guard.BP_Guard_C",
+      transform: {
+        location: { x: 10, y: 20, z: 30 },
+        rotation: { pitch: 0, yaw: 90, roll: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+      },
+    };
+    const newActor = {
+      actorRef: "BP_Guard_C_1",
+      label: "守卫新增",
+      classPath:
+        "/Game/Seria/NPC/Guard/BP_Guard.BP_Guard_C",
+      transform: {
+        location: { x: 100, y: 200, z: 300 },
+        rotation: { pitch: 0, yaw: 45, roll: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+      },
+    };
+    const model = {
+      id: 200135,
+      configuredPath: "/Game/Seria/NPC/Guard/BP_Guard",
+      generatedClassPath:
+        "/Game/Seria/NPC/Guard/BP_Guard.BP_Guard_C",
+      rowNumber: 3,
+    };
+    const npc = {
+      id: 101968,
+      name: "商会安保",
+      note: "",
+      introduction: "",
+      resourceId: 200135,
+    };
+    const target = {
+      id: "500001",
+      type: 1,
+      description: "商会安保",
+      npcId: 101968,
+      itemId: 0,
+      blueprintModelId: null,
+      mapId: "1204",
+      positionText: "(X=10,Y=20,Z=30)",
+      rotationText: "(Pitch=0,Yaw=90,Roll=0)",
+      rowNumber: 3,
+    };
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          selection: {
+            mapAssetPath:
+              "/Game/Seria/Maps/08_01_UrbanArea/08_01_UrbanArea",
+            actors: [existingActor, newActor],
+          },
+          candidates: [
+            {
+              actor: existingActor,
+              modelOptions: [model],
+              npcOptions: [npc],
+              positionMatches: [target],
+              targetMatches: [target],
+              mapOptions: [
+                {
+                  id: "1204",
+                  name: "上城区",
+                  resourceId: "100128",
+                  assetPath:
+                    "/Game/Seria/Maps/08_01_UrbanArea/08_01_UrbanArea",
+                  rowNumber: 3,
+                },
+              ],
+              mapId: "1204",
+              mapName: "上城区",
+            },
+            {
+              actor: newActor,
+              modelOptions: [model],
+              npcOptions: [npc],
+              positionMatches: [],
+              targetMatches: [],
+              mapOptions: [
+                {
+                  id: "1204",
+                  name: "上城区",
+                  resourceId: "100128",
+                  assetPath:
+                    "/Game/Seria/Maps/08_01_UrbanArea/08_01_UrbanArea",
+                  rowNumber: 3,
+                },
+              ],
+              mapId: "1204",
+              mapName: "上城区",
+            },
+          ],
+        },
+      }),
+    });
+  });
+  await page.route("**/api/ue/selection/read", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          mapAssetPath:
+            "/Game/Seria/Maps/08_01_UrbanArea/08_01_UrbanArea",
+          actors: [
+            {
+              actorRef:
+                "/Game/Seria/Maps/08_01_UrbanArea/08_01_UrbanArea.PersistentLevel.ShotSandboxMissionTargetPreview_900001_500001",
+              label:
+                "ShotSandboxMissionTargetPreview_900001_500001",
+              classPath:
+                "/Game/Seria/NPC/Guard/BP_Guard.BP_Guard_C",
+              transform: {
+                location: { x: 15, y: 25, z: 35 },
+                rotation: { pitch: 0, yaw: 95, roll: 0 },
+                scale: { x: 1, y: 1, z: 1 },
+              },
+            },
+          ],
+        },
+      }),
+    });
+  });
+  await page.route("**/api/ue/config-table/open", async (route) => {
+    openedConfigTable = route.request().postDataJSON().table;
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          table: openedConfigTable,
+          path: "C:\\trunk\\doc\\xlsdir\\test.xlsm",
+        },
+      }),
+    });
+  });
+  await page.route("**/api/ue/config-registration/write", async (route) => {
+    registrationWriteItems = route.request().postDataJSON().items;
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          createdModels: [],
+          createdNpcs: [],
+          createdTargets: [{ actorRef: "BP_Guard_C_1", id: 500005 }],
+          reusedTargets: [{ actorRef: "BP_Guard_C_0", id: "500001" }],
+          openedWorkbooks: [
+            "C:\\trunk\\doc\\xlsdir\\r任务剧情\\m目标物表.xlsm",
+          ],
+        },
+      }),
+    });
+  });
+  await page.route(
+    "**/api/ue/config-registration/update-targets",
+    async (route) => {
+      targetUpdateItems = route.request().postDataJSON().items;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          data: {
+            updatedTargets: [{ targetId: "500001", rowNumber: 3 }],
+            unchangedTargetIds: [],
+            openedWorkbooks: [
+              "C:\\trunk\\doc\\xlsdir\\r任务剧情\\m目标物表.xlsm",
+            ],
+          },
+        }),
+      });
+    },
+  );
+  await page.route(
+    "**/api/ue/mission-targets/map-status",
+    async (route) => {
+      const request = route.request().postDataJSON();
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          data: {
+            currentMapAssetPath: mapStatusMatches
+              ? request.mapAssetPath
+              : "/Game/Seria/Maps/Old/Old",
+            expectedMapAssetPath: request.mapAssetPath,
+            matches: mapStatusMatches,
+          },
+        }),
+      });
+    },
+  );
   await page.route("**/api/ue/mission-targets/load", async (route) => {
     loadRequests += 1;
     const request = route.request().postDataJSON();
-    loadedTaskId = request.taskId;
-    loadedTargetIds = request.targets.map(
+    loadedTaskId = request.plan.taskId;
+    loadedMapMode = request.mapMode;
+    loadedTargetIds = request.plan.targets.map(
       (target: { targetId: string }) => target.targetId,
     );
     await route.fulfill({
@@ -1173,11 +1504,11 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
         ok: true,
         data: {
           status: "loaded",
-          taskId: loadedTaskId,
+            taskId: request.plan.taskId,
           mapId: "1204",
           mapAssetPath:
             "/Game/Seria/Maps/08_01_UrbanArea/08_01_UrbanArea",
-          autoOpenedMap: true,
+            autoOpenedMap: request.mapMode === "auto",
           spawnedCount: loadedTargetIds.length,
           assetCount: 1,
           markerCount: Math.max(0, loadedTargetIds.length - 1),
@@ -1284,6 +1615,9 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
   await expect(dialog.getByText("0°, 90°, 0°")).toBeVisible();
   await dialog.getByLabel("选择目标物 500002").uncheck();
   await expect(dialog.getByText(/已选择 1 \/ 2 个目标物/)).toBeVisible();
+  await dialog.getByLabel("BP 文件名").fill("BP_Test");
+  await dialog.getByRole("button", { name: "检查 BP 与对话模型" }).click();
+  await expect(dialog.getByText("BP 尚未创建站位组件")).toBeVisible();
   const modalBounds = await dialog.boundingBox();
   const footerBounds = await dialog.locator("footer").boundingBox();
   expect(modalBounds).not.toBeNull();
@@ -1294,11 +1628,93 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
   await dialog.screenshot({
     path: testInfo.outputPath("mission-target-selection.png"),
   });
+  await dialog.getByRole("button", { name: "创建 BP" }).click();
+  await expect(
+    dialog.getByText(/0 号玩家、1 个目标物和 c1 摄像机/),
+  ).toBeVisible();
+  expect(createRequests).toBe(1);
+  expect(createdBlueprintName).toBe("BP_Test");
+  expect(createdTargetIds).toEqual(["500001"]);
   await dialog.getByRole("button", { name: "加载到 UE" }).click();
-  await expect(dialog.getByText(/已自动打开\s*上城区/)).toBeVisible();
+  const mapChoice = dialog.getByRole("alertdialog", {
+    name: "选择地图加载方式",
+  });
+  await expect(mapChoice).toBeVisible();
+  await expect(
+    mapChoice.getByRole("button", { name: "软件自动切换" }),
+  ).toBeVisible();
+  await mapChoice.screenshot({
+    path: testInfo.outputPath("mission-target-map-choice.png"),
+  });
+  await mapChoice.getByRole("button", { name: "我来手动切换" }).click();
+  await expect(
+    dialog.getByRole("alertdialog", { name: "等待手动切换地图" }),
+  ).toBeVisible();
+  await dialog.getByRole("button", { name: "检查并加载" }).click();
+  await expect(dialog.getByText("UE 尚未完成目标地图切换")).toBeVisible();
+  expect(loadRequests).toBe(0);
+  mapStatusMatches = true;
+  await dialog.getByRole("button", { name: "检查并加载" }).click();
+  await expect(dialog.getByText(/当前已是\s*上城区/)).toBeVisible();
   expect(loadRequests).toBe(1);
   expect(loadedTaskId).toBe("900001");
+  expect(loadedMapMode).toBe("require-current");
   expect(loadedTargetIds).toEqual(["500001"]);
+
+  mapStatusMatches = false;
+  await dialog.getByRole("button", { name: "加载到 UE" }).click();
+  await dialog
+    .getByRole("alertdialog", { name: "选择地图加载方式" })
+    .getByRole("button", { name: "软件自动切换" })
+    .click();
+  await expect(dialog.getByText(/已自动打开\s*上城区/)).toBeVisible();
+  expect(loadRequests).toBe(2);
+  expect(loadedMapMode).toBe("auto");
+  mapStatusMatches = true;
+
+  await dialog.getByRole("button", { name: "修改位置" }).click();
+  const targetEditor = page.getByRole("dialog", {
+    name: "修改目标物位置",
+  });
+  await expect(targetEditor.getByText("500001", { exact: true })).toBeVisible();
+  await expect(
+    targetEditor.getByRole("button", { name: "写入修改" }),
+  ).toBeDisabled();
+  await targetEditor.getByRole("button", { name: "读取 UE 选择" }).click();
+  await expect(targetEditor.getByLabel("目标物 500001 新位置")).toHaveValue(
+    "(X=15.000000,Y=25.000000,Z=35.000000)",
+  );
+  await expect(targetEditor.getByLabel("目标物 500001 新旋转")).toHaveValue(
+    "(Pitch=0.000000,Yaw=95.000000,Roll=0.000000)",
+  );
+  await targetEditor.screenshot({
+    path: testInfo.outputPath("mission-target-edit.png"),
+  });
+  page.once("dialog", async (confirmation) => {
+    expect(confirmation.message()).toContain("仅更新位置和旋转");
+    await confirmation.accept();
+  });
+  await targetEditor.getByRole("button", { name: "写入修改" }).click();
+  await expect(targetEditor.getByText(/修改 1 个目标物/)).toBeVisible();
+  expect(targetUpdateItems).toEqual([
+    expect.objectContaining({
+      targetId: "500001",
+      mapId: "1204",
+      originalTransform: expect.objectContaining({
+        location: { x: 10, y: 20, z: 30 },
+        rotation: { pitch: 0, yaw: 90, roll: 0 },
+      }),
+      transform: expect.objectContaining({
+        location: { x: 15, y: 25, z: 35 },
+        rotation: { pitch: 0, yaw: 95, roll: 0 },
+      }),
+    }),
+  ]);
+  await targetEditor
+    .getByRole("button", { name: "关闭修改目标物位置" })
+    .click();
+  await expect(dialog.getByText("15, 25, 35")).toBeVisible();
+  await expect(dialog.getByText("0°, 95°, 0°")).toBeVisible();
 
   await dialog.getByLabel("任务节点 ID").fill("900002");
   await dialog.getByRole("button", { name: "解析任务目标物" }).click();
@@ -1306,5 +1722,36 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
   await expect(
     dialog.getByRole("button", { name: "加载到 UE" }),
   ).toBeDisabled();
-  expect(loadRequests).toBe(1);
+  expect(loadRequests).toBe(2);
+
+  await dialog.getByRole("button", { name: "关闭任务目标物" }).click();
+  await page.getByRole("button", { name: "注册 NPC" }).click();
+  const registration = page.getByRole("dialog", { name: "注册 NPC" });
+  await registration.getByRole("button", { name: "读取 UE 选择" }).click();
+  await expect(registration.getByText("守卫预览")).toBeVisible();
+  await expect(registration.getByText("已有 500001")).toBeVisible();
+  await expect(registration.getByText("200135").first()).toBeVisible();
+  await expect(
+    registration.getByLabel("守卫预览 NPC 复用方式"),
+  ).toHaveValue("101968");
+  await expect(registration.getByText("1204").first()).toBeVisible();
+  await registration.screenshot({
+    path: testInfo.outputPath("npc-registration-selection.png"),
+  });
+  await registration.getByRole("button", { name: "目标物表" }).click();
+  expect(openedConfigTable).toBe("missionTarget");
+  page.once("dialog", async (confirmation) => {
+    expect(confirmation.message()).toContain("工作簿会保持未保存状态");
+    await confirmation.accept();
+  });
+  await registration.getByRole("button", { name: "写入新增项" }).click();
+  await expect(registration.getByText(/目标物 1/)).toBeVisible();
+  expect(registrationWriteItems).toEqual([
+    expect.objectContaining({
+      actorRef: "BP_Guard_C_1",
+      existingModelId: 200135,
+      existingNpcId: 101968,
+      mapId: "1204",
+    }),
+  ]);
 });

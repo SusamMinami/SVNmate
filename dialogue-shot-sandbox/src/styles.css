@@ -587,6 +587,39 @@ input:focus-visible {
   box-shadow: inset 3px 0 0 var(--accent);
 }
 
+.shot-row.is-invalid {
+  background: #fff3f0;
+  box-shadow: inset 3px 0 0 #c84b3a;
+}
+
+.shot-row.is-invalid:hover {
+  background: #ffece7;
+}
+
+.shot-row.is-invalid.is-active {
+  background: #ffe5df;
+  box-shadow: inset 4px 0 0 #b83a2b;
+}
+
+.dialogue-row {
+  display: grid;
+  grid-template-columns: 28px 23px minmax(0, 1fr) auto;
+  align-items: center;
+  width: 100%;
+  min-height: 58px;
+  gap: 7px;
+  padding: 8px 11px;
+  color: var(--text);
+  background: #ffffff;
+  border-bottom: 1px solid #e7e9eb;
+}
+
+.dialogue-row__id {
+  color: #7a838c;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 9px;
+}
+
 .shot-row__number {
   color: #89919a;
   font-family: "Cascadia Code", Consolas, monospace;
@@ -635,9 +668,19 @@ input:focus-visible {
 }
 
 .shot-row__time {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 40px;
+  gap: 4px;
   color: #7a838c;
   font-family: "Cascadia Code", Consolas, monospace;
   font-size: 9px;
+}
+
+.shot-row.is-invalid .shot-row__time {
+  color: #a9382b;
+  font-weight: 750;
 }
 
 .viewport-panel {
@@ -1163,6 +1206,64 @@ input:focus-visible {
   font-weight: 600;
 }
 
+.dialogue-preview {
+  min-height: 0;
+  padding: 14px clamp(18px, 5vw, 64px);
+  overflow-y: auto;
+  background: #e7ebee;
+}
+
+.dialogue-preview__row {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: start;
+  max-width: 780px;
+  gap: 11px;
+  padding: 11px 0;
+  margin: 0 auto;
+  border-bottom: 1px solid #cbd1d6;
+}
+
+.dialogue-preview__row > div {
+  min-width: 0;
+}
+
+.dialogue-preview__row strong {
+  display: block;
+  margin-bottom: 3px;
+  color: #4c555e;
+  font-size: 10px;
+}
+
+.dialogue-preview__row p {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: #20262e;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 20px;
+}
+
+.dialogue-preview__row > small {
+  color: #7a838c;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 9px;
+  line-height: 28px;
+}
+
+.dialogue-preparation-status {
+  display: flex;
+  align-items: center;
+  min-height: 52px;
+  gap: 8px;
+  padding: 0 16px;
+  color: #31556c;
+  background: #edf5f8;
+  border-top: 1px solid #bfcbd2;
+  font-size: 11px;
+  font-weight: 700;
+}
+
 .inspector-header {
   display: flex;
   align-items: center;
@@ -1231,6 +1332,14 @@ input:focus-visible {
   font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.parameter-grid .projection-status--valid {
+  color: #1f6547;
+}
+
+.parameter-grid .projection-status--invalid {
+  color: #b13d2f;
 }
 
 .ue-reference {
@@ -2087,6 +2196,7 @@ input:focus-visible {
 }
 
 .mission-target-modal {
+  position: relative;
   display: flex;
   flex-direction: column;
   width: min(1120px, 97vw);
@@ -2154,6 +2264,28 @@ input:focus-visible {
   color: var(--text-muted);
   font-size: 10px;
   font-weight: 700;
+}
+
+.mission-target-query input {
+  width: 100%;
+  height: 36px;
+  min-width: 0;
+  padding: 0 10px;
+  color: var(--text);
+  background: #ffffff;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.mission-target-query input::placeholder {
+  color: #a0a7ae;
+  font-weight: 400;
+}
+
+.mission-target-query .input-row {
+  min-width: 0;
 }
 
 .mission-target-message {
@@ -2269,7 +2401,7 @@ input:focus-visible {
 
 .mission-target-table {
   width: 100%;
-  min-width: 1080px;
+  min-width: 1240px;
   border-collapse: collapse;
   table-layout: fixed;
 }
@@ -2329,6 +2461,10 @@ input:focus-visible {
   width: 90px;
 }
 
+.mission-target-table th:nth-child(9) {
+  width: 150px;
+}
+
 .mission-target-table td:last-child,
 .mission-target-table th:last-child {
   border-right: 0;
@@ -2367,6 +2503,69 @@ input:focus-visible {
 .mission-target-table td code {
   font-family: "Cascadia Code", Consolas, monospace;
   font-size: 9px;
+}
+
+.mission-target-table td:last-child > code {
+  display: block;
+  overflow: hidden;
+  margin-top: 4px;
+  color: #4f5c66;
+  text-overflow: ellipsis;
+}
+
+.mission-target-dialogue-table {
+  min-width: 780px;
+}
+
+.mission-target-dialogue-table th:nth-child(2) {
+  width: 70px;
+}
+
+.mission-target-dialogue-table th:nth-child(3) {
+  width: 310px;
+}
+
+.mission-target-dialogue-table th:nth-child(4) {
+  width: 220px;
+}
+
+.mission-target-dialogue-table th:nth-child(5) {
+  width: 120px;
+}
+
+.dialogue-model-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 0 6px;
+  border: 1px solid;
+  border-radius: 4px;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.dialogue-model-status--registered {
+  color: #256548;
+  background: #edf8f2;
+  border-color: #b9ddcb;
+}
+
+.dialogue-model-status--pending {
+  color: #31556c;
+  background: #edf3f6;
+  border-color: #c7dbe5;
+}
+
+.dialogue-model-status--warning {
+  color: #8d401f;
+  background: #fff1e9;
+  border-color: #efc7b2;
+}
+
+.dialogue-model-status--empty {
+  color: #66717b;
+  background: #f3f4f5;
+  border-color: #d7dbde;
 }
 
 .preview-kind {
@@ -2420,6 +2619,463 @@ input:focus-visible {
 }
 
 .mission-target-modal > footer > div {
+  display: flex;
+  gap: 8px;
+}
+
+.mission-map-choice-layer {
+  position: absolute;
+  z-index: 4;
+  inset: 0;
+  display: grid;
+  padding: 20px;
+  background: rgba(25, 31, 37, 0.52);
+  place-items: center;
+}
+
+.mission-map-choice {
+  width: min(560px, 100%);
+  overflow: hidden;
+  background: #ffffff;
+  border: 1px solid #8f9aa3;
+  border-radius: 6px;
+  box-shadow: 0 22px 70px rgba(13, 19, 24, 0.38);
+}
+
+.mission-map-choice > header {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) 34px;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.mission-map-choice > header > span {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  color: #ffffff;
+  background: #26313a;
+  border-radius: 5px;
+  place-items: center;
+}
+
+.mission-map-choice h3 {
+  margin: 2px 0 0;
+  font-size: 15px;
+}
+
+.mission-map-choice small,
+.mission-map-choice dt {
+  color: var(--text-muted);
+  font-size: 9px;
+}
+
+.mission-map-choice__body {
+  padding: 16px;
+}
+
+.mission-map-choice__body dl {
+  display: grid;
+  margin: 0;
+  gap: 10px;
+}
+
+.mission-map-choice__body dl > div {
+  min-width: 0;
+}
+
+.mission-map-choice__body dd {
+  margin: 4px 0 0;
+  overflow: hidden;
+  color: #303a43;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 10px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mission-map-choice__body p {
+  margin: 14px 0 0;
+  color: #46515b;
+  font-size: 10px;
+  line-height: 16px;
+}
+
+.mission-map-choice__error {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin-top: 12px;
+  padding: 8px 9px;
+  color: #8d401f;
+  background: #fff1e9;
+  border: 1px solid #efc7b2;
+  border-radius: 4px;
+  font-size: 10px;
+}
+
+.mission-map-choice__error svg {
+  flex: 0 0 auto;
+}
+
+.mission-map-choice > footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 16px;
+  background: var(--surface-muted);
+  border-top: 1px solid var(--border);
+}
+
+.npc-registration-backdrop {
+  background: rgba(18, 24, 30, 0.72);
+}
+
+.npc-registration-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(1180px, 97vw);
+  height: min(720px, 94vh);
+  overflow: hidden;
+  background: #ffffff;
+  border: 1px solid #929da6;
+  border-radius: 6px;
+  box-shadow: 0 28px 90px rgba(13, 19, 24, 0.44);
+}
+
+.npc-registration-modal > header,
+.npc-registration-modal > footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 13px 18px;
+}
+
+.npc-registration-modal > header {
+  border-bottom: 1px solid var(--border);
+}
+
+.npc-registration-title,
+.npc-registration-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.npc-registration-title > span {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  color: #ffffff;
+  background: #26313a;
+  border-radius: 5px;
+  place-items: center;
+}
+
+.npc-registration-title small {
+  color: var(--text-muted);
+  font-size: 9px;
+}
+
+.npc-registration-title h2 {
+  margin: 2px 0 0;
+  font-size: 17px;
+}
+
+.npc-registration-message {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 9px 18px;
+  font-size: 10px;
+  line-height: 16px;
+  border-bottom: 1px solid;
+}
+
+.npc-registration-message svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.npc-registration-message.is-error {
+  color: #8d401f;
+  background: #fff1e9;
+  border-color: #efc7b2;
+}
+
+.npc-registration-message.is-success {
+  color: #256548;
+  background: #edf8f2;
+  border-color: #b9ddcb;
+}
+
+.npc-registration-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.npc-registration-table {
+  width: 100%;
+  min-width: 1160px;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.npc-registration-table th,
+.npc-registration-table td {
+  padding: 10px;
+  overflow: hidden;
+  border-right: 1px solid #e4e7e9;
+  border-bottom: 1px solid #e4e7e9;
+  color: #3d4852;
+  font-size: 10px;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.npc-registration-table th {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+  color: #56616b;
+  background: #f1f3f4;
+  font-size: 9px;
+  font-weight: 750;
+}
+
+.npc-registration-table th:nth-child(1) {
+  width: 180px;
+}
+
+.npc-registration-table th:nth-child(2) {
+  width: 145px;
+}
+
+.npc-registration-table th:nth-child(3) {
+  width: 280px;
+}
+
+.npc-registration-table th:nth-child(4) {
+  width: 110px;
+}
+
+.npc-registration-table th:nth-child(5),
+.npc-registration-table th:nth-child(6) {
+  width: 165px;
+}
+
+.npc-registration-table th:nth-child(7) {
+  width: 80px;
+}
+
+.npc-registration-table td {
+  vertical-align: middle;
+}
+
+.npc-registration-table strong {
+  display: block;
+  overflow: hidden;
+  color: #26313a;
+  font-size: 10px;
+  text-overflow: ellipsis;
+}
+
+.npc-registration-table small {
+  display: block;
+  overflow: hidden;
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 9px;
+  text-overflow: ellipsis;
+}
+
+.npc-registration-table code {
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 9px;
+}
+
+.npc-registration-table select {
+  width: 100%;
+  height: 30px;
+  min-width: 0;
+  padding: 0 7px;
+  color: #34404a;
+  background: #ffffff;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  font-size: 9px;
+}
+
+.npc-target-edit-table {
+  min-width: 1320px;
+}
+
+.npc-target-edit-table th:nth-child(1) {
+  width: 150px;
+}
+
+.npc-target-edit-table th:nth-child(2) {
+  width: 210px;
+}
+
+.npc-target-edit-table th:nth-child(3) {
+  width: 190px;
+}
+
+.npc-target-edit-table th:nth-child(4),
+.npc-target-edit-table th:nth-child(5) {
+  width: 330px;
+}
+
+.npc-target-edit-table th:nth-child(6) {
+  width: 90px;
+}
+
+.npc-target-edit-table input {
+  width: 100%;
+  min-width: 0;
+  height: 30px;
+  padding: 0 7px;
+  color: #34404a;
+  background: #ffffff;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 9px;
+}
+
+.npc-target-edit-table input:focus {
+  border-color: #587789;
+  outline: 2px solid rgba(49, 85, 108, 0.16);
+  outline-offset: 0;
+}
+
+.npc-target-edit-table input.is-invalid {
+  color: #8d401f;
+  background: #fff7f2;
+  border-color: #d8906f;
+}
+
+.npc-target-edit-table td:nth-child(4) small,
+.npc-target-edit-table td:nth-child(5) small {
+  font-family: "Cascadia Code", Consolas, monospace;
+}
+
+.npc-registration-table td.registration-match {
+  color: #1f6547;
+  background: #f0f9f4;
+}
+
+.npc-registration-table td.registration-match code {
+  color: #1f6547;
+  font-weight: 700;
+}
+
+.npc-registration-new-fields {
+  display: grid;
+  grid-template-columns: minmax(90px, 1fr) minmax(70px, 0.8fr) auto;
+  align-items: center;
+  gap: 5px;
+  margin-top: 6px;
+}
+
+.npc-registration-new-fields > input {
+  width: 100%;
+  min-width: 0;
+  height: 28px;
+  padding: 0 6px;
+  color: #34404a;
+  background: #ffffff;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  font-size: 9px;
+}
+
+.npc-registration-new-fields > label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-muted);
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.npc-registration-new-fields > label input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.registration-state {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  min-height: 22px;
+  padding: 0 7px;
+  color: #5b6570;
+  background: #f1f3f4;
+  border: 1px solid #d6dadd;
+  border-radius: 4px;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.registration-state.is-warning {
+  color: #79511d;
+  background: #fff8e9;
+  border-color: #e8d2a7;
+}
+
+.registration-state.is-new {
+  color: #256548;
+  background: #edf8f2;
+  border-color: #b9ddcb;
+}
+
+.registration-state.is-existing {
+  color: #1f6547;
+  background: #e6f6ed;
+  border-color: #9ed2b8;
+}
+
+.npc-registration-empty {
+  display: grid;
+  min-height: 320px;
+  color: var(--text-muted);
+  place-content: center;
+  justify-items: center;
+}
+
+.npc-registration-empty strong {
+  margin-top: 10px;
+  color: #3c4650;
+  font-size: 12px;
+}
+
+.npc-registration-empty small {
+  max-width: 520px;
+  margin-top: 4px;
+  overflow: hidden;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.npc-registration-modal > footer {
+  color: var(--text-muted);
+  background: var(--surface-muted);
+  border-top: 1px solid var(--border);
+  font-size: 10px;
+}
+
+.npc-registration-modal > footer > div {
   display: flex;
   gap: 8px;
 }
@@ -2515,6 +3171,29 @@ input:focus-visible {
   font-size: 10px;
   font-weight: 700;
   cursor: pointer;
+}
+
+.setup-status-list .setup-port-control {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.setup-port-control input {
+  width: 74px;
+  height: 28px;
+  padding: 0 7px;
+  color: var(--text);
+  background: #fff;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  font: 10px "Cascadia Code", Consolas, monospace;
+}
+
+.setup-port-control button {
+  min-height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
 }
 
 .setup-instructions {
@@ -2838,6 +3517,24 @@ input:focus-visible {
 
   .mission-target-modal > footer > div {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .npc-registration-modal {
+    height: 94vh;
+  }
+
+  .npc-registration-table {
+    min-width: 960px;
+  }
+
+  .npc-registration-modal > footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .npc-registration-modal > footer > div {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
   }
 }

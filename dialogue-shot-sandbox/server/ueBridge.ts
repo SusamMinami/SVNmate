@@ -1,21 +1,73 @@
 import { type IncomingMessage, type ServerResponse } from "node:http";
+import { spawn } from "node:child_process";
+import { access, readFile, unlink } from "node:fs/promises";
 import net from "node:net";
 import type { Plugin, PreviewServer, ViteDevServer } from "vite";
 import { z } from "zod";
 import type {
   BlueprintFormationSlot,
   BlueprintFormationSnapshot,
+  DialogueModelRegistrationResult,
+  DialogueModelRegistrationSlot,
+  MissionTargetBlueprintCreateResult,
+  MissionTargetBlueprintCompatibility,
+  MissionTargetBlueprintInspection,
+  MissionTargetMapStatus,
   MissionTargetPreviewLoadResult,
   MissionTargetPreviewPlan,
+  MissionTargetPreviewTarget,
+  NpcRegistrationScanResult,
+  SelectedLevelActor,
+  SelectedLevelActorsResult,
+  UnrealTransform,
 } from "../src/types";
+import { parseNpcRegistrationDatabase } from "../src/data/csv";
+import { buildNpcRegistrationCandidates } from "../src/data/npcRegistration";
+import {
+  updateMissionTargetTransforms,
+  writeNpcRegistrationDraft,
+} from "./excelRegistration";
 
 const UE_MCP_HOST = process.env.UE_MCP_HOST || "127.0.0.1";
-const UE_MCP_PORT = Number.parseInt(process.env.UE_MCP_PORT || "12031", 10);
+const DEFAULT_UE_MCP_PORT = 12031;
+const environmentUeMcpPort = Number.parseInt(
+  process.env.UE_MCP_PORT || String(DEFAULT_UE_MCP_PORT),
+  10,
+);
+let ueMcpPort =
+  Number.isInteger(environmentUeMcpPort) &&
+  environmentUeMcpPort >= 1 &&
+  environmentUeMcpPort <= 65_535
+    ? environmentUeMcpPort
+    : DEFAULT_UE_MCP_PORT;
 const CONNECT_TIMEOUT_MS = 1_500;
 const REQUEST_TIMEOUT_MS = 8_000;
 const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 const PREVIEW_MARKER_CLASS = "/Script/Engine.TargetPoint";
 const PREVIEW_ACTOR_PREFIX = "ShotSandboxMissionTargetPreview";
+const BLUEPRINT_SEARCH_PATH = "/Game/Seria/Task/Mod";
+const POSITION_MODE_BASE_CLASS =
+  "/Game/Seria/Task/Mod/PositionMode/PositionModeBase.PositionModeBase_C";
+const PLAYER_CLASS =
+  "/Game/Seria/Characters/Eric/BP_Eric.BP_Eric_C";
+const CHILD_ACTOR_COMPONENT_CLASS = "/Script/Engine.ChildActorComponent";
+const CAMERA_COMPONENT_CLASS = "/Script/Engine.CameraComponent";
+const DIALOGUE_SEARCH_PATH = "/Game/Seria/Task/dialoggraph";
+const DIALOG_NPC_TABLE_PATH =
+  "/Game/Seria/Task/Mod/DialogNPCTable.DialogNPCTable";
+const CONFIG_TABLE_PATHS = {
+  missionTarget:
+    "C:\\trunk\\doc\\xlsdir\\r任务剧情\\m目标物表.xlsm",
+  npc: "C:\\trunk\\doc\\xlsdir\\NPC表.xlsm",
+  model: "C:\\trunk\\doc\\xlsdir\\m模型资源表.xlsm",
+} as const;
+const CONFIG_CSV_PATHS = {
+  npc: "C:\\trunk\\doc\\csvdir\\NPC表.csv",
+  model: "C:\\trunk\\doc\\csvdir\\m模型资源表.csv",
+  missionTarget: "C:\\trunk\\doc\\csvdir\\m目标物表.csv",
+  map: "C:\\trunk\\doc\\csvdir\\d地图配置表.csv",
+  scene: "C:\\trunk\\doc\\csvdir\\d地图资源表.csv",
+} as const;
 
 interface UnrealResponse {
   success?: boolean;
@@ -28,6 +80,17 @@ export interface UnrealInvoker {
   connect(): Promise<void>;
   invoke(action: string, args: Record<string, unknown>): Promise<unknown>;
   close(): void;
+}
+
+export function getUnrealMcpEndpoint(): { host: string; port: number } {
+  return { host: UE_MCP_HOST, port: ueMcpPort };
+}
+
+export function configureUnrealMcpPort(port: number): void {
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    throw new Error("UE MCP 端口必须是 1-65535 的整数");
+  }
+  ueMcpPort = port;
 }
 
 export interface BlueprintFormationLookup {
@@ -60,7 +123,7 @@ class UnrealMcpConnection implements UnrealInvoker {
         clearTimeout(timer);
         reject(error);
       });
-      this.socket.connect(UE_MCP_PORT, UE_MCP_HOST);
+      this.socket.connect(ueMcpPort, UE_MCP_HOST);
     });
     this.socket.on("data", (chunk) =>
       this.consume(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)),
@@ -185,6 +248,38 @@ const MissionTargetPreviewPlanSchema = z.object({
   warnings: z.array(z.string()),
 });
 
+const MissionTargetPreviewLoadRequestSchema = z.object({
+  plan: MissionTargetPreviewPlanSchema,
+  mapMode: z.enum(["require-current", "auto"]),
+});
+
+const MissionTargetMapStatusRequestSchema = z.object({
+  mapAssetPath: z.string().startsWith("/Game/"),
+});
+
+const MissionTargetBlueprintCreateRequestSchema = z.object({
+  blueprintName: z.string().trim().min(1).max(512),
+  plan: MissionTargetPreviewPlanSchema,
+  selectedTargetIds: z.array(z.string().regex(/^\d+$/)).max(200).optional(),
+  registerDialogue: z.boolean().optional(),
+});
+
+const MissionTargetBlueprintInspectionRequestSchema = z.object({
+  blueprintName: z.string().trim().min(1).max(512),
+  plan: MissionTargetPreviewPlanSchema.optional(),
+});
+
+const DialogueModelRegistrationRequestSchema = z.object({
+  blueprintName: z.string().trim().min(1).max(512),
+  selectedModelIndexes: z
+    .array(z.number().int().positive())
+    .max(200),
+});
+
+const ConfigTableOpenSchema = z.object({
+  table: z.enum(["missionTarget", "npc", "model"]),
+});
+
 let activeMissionPreviewActors: string[] = [];
 let activeMissionPreviewMap = "";
 
@@ -225,6 +320,11 @@ function hasUnrealObjectReference(value: unknown): boolean {
 
 function assetPathFromSearch(value: string): string | null {
   return value.match(/\[([^\]]+)\]\s*$/)?.[1] ?? null;
+}
+
+function assetNameFromPath(value: string): string {
+  const objectPath = value.split(".").at(-1) ?? "";
+  return objectPath.replace(/_C$/i, "");
 }
 
 function vector(value: unknown): { x: number; y: number; z: number } {
@@ -278,6 +378,1042 @@ async function readProperty(
     ThisPtr: object,
     PropertyName: propertyName,
   });
+}
+
+interface BlueprintComponentInfo {
+  variableName: string;
+  componentClass: string;
+  childActorClass: string;
+}
+
+export interface MissionTargetBlueprintComponentPlan {
+  componentName: string;
+  componentClass: string;
+  childActorClass: string;
+  targetId: string | null;
+  transform: UnrealTransform;
+}
+
+function rounded(value: number): number {
+  const result = Math.round(value * 1_000_000) / 1_000_000;
+  return Object.is(result, -0) ? 0 : result;
+}
+
+export function buildMissionTargetBlueprintComponents(
+  targets: MissionTargetPreviewTarget[],
+  modelIndexes = targets.map((_, index) => index + 1),
+): MissionTargetBlueprintComponentPlan[] {
+  if (targets.length === 0) {
+    throw new Error("至少选择一个具有模型资源的目标物");
+  }
+  if (
+    modelIndexes.length !== targets.length ||
+    new Set(modelIndexes).size !== modelIndexes.length ||
+    modelIndexes.some((index) => !Number.isInteger(index) || index <= 0)
+  ) {
+    throw new Error("目标物 BP 槽位序号无效");
+  }
+  const anchor = targets[0].transform.location;
+  const playerTransform: UnrealTransform = {
+    location: { x: 0, y: 0, z: 100 },
+    rotation: { pitch: 0, yaw: 0, roll: 0 },
+    scale: { x: 1, y: 1, z: 1 },
+  };
+  const components: MissionTargetBlueprintComponentPlan[] = [
+    {
+      componentName: "0",
+      componentClass: CHILD_ACTOR_COMPONENT_CLASS,
+      childActorClass: PLAYER_CLASS,
+      targetId: null,
+      transform: playerTransform,
+    },
+  ];
+  targets.forEach((target, index) => {
+    components.push({
+      componentName: String(modelIndexes[index]),
+      componentClass: CHILD_ACTOR_COMPONENT_CLASS,
+      childActorClass: target.modelClassPath,
+      targetId: target.targetId,
+      transform: {
+        location: {
+          x: rounded(target.transform.location.x - anchor.x),
+          y: rounded(target.transform.location.y - anchor.y),
+          z: rounded(target.transform.location.z - anchor.z + 100),
+        },
+        rotation: { ...target.transform.rotation },
+        scale: { ...target.transform.scale },
+      },
+    });
+  });
+  components.push({
+    componentName: "c1",
+    componentClass: CAMERA_COMPONENT_CLASS,
+    childActorClass: "",
+    targetId: null,
+    transform: {
+      location: { x: 0, y: 0, z: 99 },
+      rotation: { pitch: 0, yaw: -90, roll: 0 },
+      scale: { x: 1, y: 1, z: 1 },
+    },
+  });
+  return components;
+}
+
+function formatNumber(value: number): string {
+  return String(rounded(value));
+}
+
+function formatVector(value: UnrealTransform["location"]): string {
+  return `(X=${formatNumber(value.x)},Y=${formatNumber(value.y)},Z=${formatNumber(value.z)})`;
+}
+
+function formatRotator(value: UnrealTransform["rotation"]): string {
+  return `(Pitch=${formatNumber(value.pitch)},Yaw=${formatNumber(value.yaw)},Roll=${formatNumber(value.roll)})`;
+}
+
+function normalizeObjectPath(value: string): string {
+  return value.trim().replaceAll("\\", "/").toLowerCase();
+}
+
+function directBlueprintAssetPath(input: string): string | null {
+  const normalized = input
+    .trim()
+    .replaceAll("\\", "/")
+    .replace(/\.uasset$/i, "");
+  return normalized.startsWith("/Game/")
+    ? blueprintAssetPath(normalized)
+    : null;
+}
+
+function blueprintNameFromInput(input: string): string {
+  const normalized = input
+    .trim()
+    .replaceAll("\\", "/")
+    .replace(/\.uasset$/i, "");
+  const name = assetNameFromPath(normalized.split("/").at(-1) ?? normalized);
+  if (!/^[A-Za-z0-9_]+$/.test(name)) {
+    throw new Error("请输入有效的 BP 文件名或 /Game/ 资产路径");
+  }
+  return name;
+}
+
+async function resolveExistingBlueprint(
+  connection: UnrealInvoker,
+  input: string,
+): Promise<{ assetPath: string; blueprint: string } | null> {
+  const directPath = directBlueprintAssetPath(input);
+  const blueprintName = blueprintNameFromInput(input);
+  let assetPath = directPath;
+  if (!assetPath) {
+    const result = await connection.invoke("asset.asset_search", {
+      Query: blueprintName,
+      ClassFilter: "Blueprint",
+      PathFilter: BLUEPRINT_SEARCH_PATH,
+      Limit: 200,
+    });
+    const matches = Array.from(
+      new Set(
+        (Array.isArray(result) ? result : [])
+          .map((value) => assetPathFromSearch(String(value)))
+          .filter((value): value is string => Boolean(value))
+          .filter(
+            (value) =>
+              assetNameFromPath(value).toLowerCase() ===
+              blueprintName.toLowerCase(),
+          ),
+      ),
+    );
+    if (matches.length > 1) {
+      throw new Error(
+        `找到多个名为 ${blueprintName} 的 BP，请输入完整 /Game/ 资产路径`,
+      );
+    }
+    assetPath = matches[0] ?? null;
+  }
+  if (!assetPath) {
+    return null;
+  }
+  const blueprint = await connection.invoke("bp.get_blueprint_by_path", {
+    AssetPath: assetPath,
+  });
+  return hasUnrealObjectReference(blueprint)
+    ? { assetPath, blueprint: String(blueprint) }
+    : null;
+}
+
+async function readBlueprintComponents(
+  connection: UnrealInvoker,
+  blueprintClassPathValue: string,
+): Promise<BlueprintComponentInfo[]> {
+  const nodes = await readProperty(
+    connection,
+    `${blueprintClassPathValue}:SimpleConstructionScript_0`,
+    "AllNodes",
+  );
+  const result: BlueprintComponentInfo[] = [];
+  for (const nodeValue of Array.isArray(nodes) ? nodes : []) {
+    const node = String(nodeValue);
+    const variableName = String(
+      await readProperty(connection, node, "InternalVariableName"),
+    );
+    const componentClass = String(
+      await readProperty(connection, node, "ComponentClass"),
+    );
+    const componentTemplate = await readProperty(
+      connection,
+      node,
+      "ComponentTemplate",
+    );
+    let childActorClass = "";
+    if (
+      componentClass.endsWith("ChildActorComponent") &&
+      hasUnrealObjectReference(componentTemplate)
+    ) {
+      childActorClass = String(
+        (await readProperty(
+          connection,
+          String(componentTemplate),
+          "ChildActorClass",
+        )) ?? "",
+      );
+    }
+    result.push({ variableName, componentClass, childActorClass });
+  }
+  return result;
+}
+
+async function readValidatedBlueprint(
+  connection: UnrealInvoker,
+  resolved: { assetPath: string; blueprint: string },
+): Promise<{
+  blueprintClassPath: string;
+  parentClassPath: string;
+  components: BlueprintComponentInfo[];
+}> {
+  const basicInfo = (await connection.invoke(
+    "bp.get_blueprint_basic_info",
+    { Bp: resolved.blueprint },
+  )) as { GeneratedClass?: unknown; ParentClass?: unknown };
+  const parentClassPath = String(basicInfo?.ParentClass ?? "");
+  if (
+    normalizeObjectPath(parentClassPath) !==
+    normalizeObjectPath(POSITION_MODE_BASE_CLASS)
+  ) {
+    throw new Error(
+      `BP 父类不是 PositionModeBase：${parentClassPath || "无法读取"}`,
+    );
+  }
+  const blueprintClassPathValue =
+    String(basicInfo?.GeneratedClass ?? "") ||
+    blueprintClassPath(resolved.assetPath);
+  return {
+    blueprintClassPath: blueprintClassPathValue,
+    parentClassPath,
+    components: await readBlueprintComponents(
+      connection,
+      blueprintClassPathValue,
+    ),
+  };
+}
+
+async function addBlueprintComponent(
+  connection: UnrealInvoker,
+  blueprint: string,
+  component: MissionTargetBlueprintComponentPlan,
+): Promise<void> {
+  await connection.invoke("bp.add_component", {
+    Bp: blueprint,
+    ComponentClass: component.componentClass,
+    ComponentName: component.componentName,
+  });
+  if (component.childActorClass) {
+    await connection.invoke("bp.set_component_property", {
+      Bp: blueprint,
+      ComponentName: component.componentName,
+      PropertyName: "ChildActorClass",
+      Value: component.childActorClass,
+    });
+  }
+  const properties = [
+    ["RelativeLocation", formatVector(component.transform.location)],
+    ["RelativeRotation", formatRotator(component.transform.rotation)],
+    ["RelativeScale3D", formatVector(component.transform.scale)],
+  ] as const;
+  for (const [propertyName, value] of properties) {
+    await connection.invoke("bp.set_component_property", {
+      Bp: blueprint,
+      ComponentName: component.componentName,
+      PropertyName: propertyName,
+      Value: value,
+    });
+  }
+}
+
+function compileFailure(value: unknown): string | null {
+  const result = value as {
+    bSuccess?: boolean;
+    Errors?: unknown[];
+    Messages?: Array<{ Severity?: unknown; Message?: unknown }>;
+  };
+  if (result?.bSuccess !== false) {
+    return null;
+  }
+  const errors = [
+    ...(Array.isArray(result.Errors) ? result.Errors.map(String) : []),
+    ...(Array.isArray(result.Messages)
+      ? result.Messages
+          .filter(
+            (message) =>
+              String(message.Severity ?? "").toLowerCase() === "error",
+          )
+          .map((message) => String(message.Message ?? ""))
+      : []),
+  ].filter(Boolean);
+  return errors.join("；") || "Blueprint 编译失败";
+}
+
+function saveFailure(value: unknown): string | null {
+  const result = value as {
+    bSuccess?: boolean;
+    Message?: unknown;
+    CapturedLog?: unknown;
+  };
+  if (result?.bSuccess !== false) {
+    return null;
+  }
+  return String(
+    result.Message || result.CapturedLog || "Blueprint 保存失败",
+  );
+}
+
+function modelToken(value: string): string {
+  const normalized = value.trim().replaceAll("\\", "/");
+  const leaf = normalized.split("/").at(-1) ?? normalized;
+  const objectName = leaf.split(".").at(-1) ?? leaf;
+  return objectName
+    .replace(/_C$/i, "")
+    .replace(/^BP_/i, "")
+    .toLowerCase();
+}
+
+export function compareDialogueModelOrder(
+  dialogueModels: string[],
+  selectedClassPaths: string[],
+  selectedModelIndexes?: ReadonlySet<number>,
+): { matched: boolean; message: string; selectedModels: string[] } {
+  const preserveSlots = selectedModelIndexes !== undefined;
+  const expected = preserveSlots
+    ? dialogueModels.slice(1).map((model) => {
+        const normalized = model.trim().toLowerCase();
+        return ["", "none", "null"].includes(normalized)
+          ? "none"
+          : modelToken(model);
+      })
+    : dialogueModels
+        .filter(
+          (model) =>
+            !["", "none", "player"].includes(model.trim().toLowerCase()),
+        )
+        .map(modelToken);
+  const selectedModels = selectedClassPaths.map((model, index) =>
+    !preserveSlots || selectedModelIndexes.has(index + 1)
+      ? modelToken(model)
+      : "none",
+  );
+  const matched =
+    expected.length === selectedModels.length &&
+    expected.every((model, index) => model === selectedModels[index]);
+  return {
+    matched,
+    selectedModels,
+    message: matched
+      ? "对话模型顺序与所选目标物一致"
+      : `对话模型顺序为 ${expected.join("、") || "空"}；所选目标物顺序为 ${selectedModels.join("、") || "空"}`,
+  };
+}
+
+function dialogueIdFromBlueprintPath(assetPath: string): string | null {
+  return assetNameFromPath(assetPath).match(/^BP_(\d{4,})$/i)?.[1] ?? null;
+}
+
+function parseDialogueExport(text: string): {
+  formationClassPath: string | null;
+  dialogueModels: string[];
+} {
+  const formationClassPath =
+    text.match(/^\s*Formation=(\S+)\s*$/m)?.[1] ?? null;
+  const dialogueModels = Array.from(
+    text.matchAll(/^\s*DialogModels\((\d+)\)="([^"]*)"\s*$/gm),
+  )
+    .map((match) => ({
+      index: Number.parseInt(match[1], 10),
+      model: match[2],
+    }))
+    .sort((left, right) => left.index - right.index)
+    .map((item) => item.model);
+  return { formationClassPath, dialogueModels };
+}
+
+async function findDialogueAssetPath(
+  connection: UnrealInvoker,
+  dialogueId: string,
+): Promise<string[]> {
+  const result = await connection.invoke("asset.asset_search", {
+    Query: dialogueId,
+    PathFilter: DIALOGUE_SEARCH_PATH,
+    Limit: 100,
+  });
+  return Array.from(
+    new Set(
+      (Array.isArray(result) ? result : [])
+        .map((value) => assetPathFromSearch(String(value)))
+        .filter((value): value is string => Boolean(value))
+        .filter((value) => assetNameFromPath(value) === dialogueId),
+    ),
+  );
+}
+
+async function exportAssetText(
+  connection: UnrealInvoker,
+  assetPath: string,
+): Promise<string> {
+  const outputPath = String(
+    await connection.invoke("asset.export_asset_to_text_file", {
+      AssetPath: assetPath,
+    }),
+  );
+  if (!outputPath) {
+    throw new Error(`无法导出对话资产：${assetPath}`);
+  }
+  try {
+    return await readFile(outputPath, "utf8");
+  } finally {
+    if (/[/\\]Saved[/\\]McpTemp[/\\].+\.txt$/i.test(outputPath)) {
+      await unlink(outputPath).catch(() => undefined);
+    }
+  }
+}
+
+interface DialogueModelSourceSlot {
+  modelIndex: number;
+  targetId: string | null;
+  modelClassPath: string;
+}
+
+interface DialogNpcRegistryEntry {
+  name: string;
+  characterClassPath: string;
+}
+
+interface DialogueRegistrationContext {
+  dialogueId: string;
+  dialogueAssetPath: string;
+  dialogueAsset: string;
+  startNodeData: string;
+  formationClassPath: string | null;
+  existingModels: string[];
+  slots: DialogueModelRegistrationSlot[];
+}
+
+function normalizedDialogueModelName(value: unknown): string {
+  const name = String(value ?? "").trim();
+  return ["", "none", "null"].includes(name.toLowerCase())
+    ? "None"
+    : name;
+}
+
+async function findDialogueStartNodeData(
+  connection: UnrealInvoker,
+  dialogueAssetPath: string,
+): Promise<string> {
+  const graphPath = `${dialogueAssetPath}:Dialog Graph`;
+  const nodes = await readProperty(connection, graphPath, "Nodes");
+  for (const nodeValue of Array.isArray(nodes) ? nodes : []) {
+    const nodeName = String(nodeValue);
+    if (!nodeName.startsWith("SeriaEdDialogGraphNode_")) {
+      continue;
+    }
+    const nodePath = nodeName.includes("/")
+      ? nodeName
+      : `${graphPath}.${nodeName}`;
+    const nodeDataValue = await readProperty(
+      connection,
+      nodePath,
+      "DialogGraphNodeData",
+    );
+    if (!hasUnrealObjectReference(nodeDataValue)) {
+      continue;
+    }
+    const nodeDataName = String(nodeDataValue);
+    const nodeDataPath = nodeDataName.includes("/")
+      ? nodeDataName
+      : `${nodePath}.${nodeDataName}`;
+    const nodeType = await readProperty(
+      connection,
+      nodeDataPath,
+      "SeriaDialogGraphNodeType",
+    );
+    if (String(nodeType).toLowerCase().endsWith("start")) {
+      return nodeDataPath;
+    }
+  }
+  throw new Error(`对话资产中未找到开始节点：${dialogueAssetPath}`);
+}
+
+async function readDialogNpcRegistry(
+  connection: UnrealInvoker,
+): Promise<DialogNpcRegistryEntry[]> {
+  const result = await connection.invoke("script.eval_python_expression", {
+    Expression:
+      `__import__('json').dumps({'names':[str(x) for x in unreal.DataTableFunctionLibrary.get_data_table_row_names(unreal.load_asset('${DIALOG_NPC_TABLE_PATH}'))],` +
+      `'paths':[str(x) for x in unreal.DataTableFunctionLibrary.get_data_table_column_as_string(unreal.load_asset('${DIALOG_NPC_TABLE_PATH}'),'CharacterBPPath')]})`,
+  });
+  const parsed = parsePythonJson(
+    result,
+    "无法读取 DialogNPCTable",
+  ) as { names?: unknown[]; paths?: unknown[] };
+  if (
+    !Array.isArray(parsed.names) ||
+    !Array.isArray(parsed.paths) ||
+    parsed.names.length !== parsed.paths.length
+  ) {
+    throw new Error("DialogNPCTable 的行名与 CharacterBPPath 数量不一致");
+  }
+  return parsed.names.map((name, index) => ({
+    name: String(name),
+    characterClassPath: String(parsed.paths?.[index] ?? ""),
+  }));
+}
+
+export function buildDialogueModelRegistrationSlots(
+  sourceSlots: DialogueModelSourceSlot[],
+  existingModels: string[],
+  registry: DialogNpcRegistryEntry[],
+): DialogueModelRegistrationSlot[] {
+  return sourceSlots
+    .slice()
+    .sort((left, right) => left.modelIndex - right.modelIndex)
+    .map((source) => {
+      const existingModelName = normalizedDialogueModelName(
+        existingModels[source.modelIndex],
+      );
+      if (source.modelIndex === 0) {
+        return {
+          ...source,
+          existingModelName,
+          suggestedModelName: "player",
+          candidateModelNames: ["player"],
+          status:
+            existingModelName.toLowerCase() === "player"
+              ? "registered"
+              : "available",
+        };
+      }
+      const normalizedClassPath = normalizeObjectPath(
+        source.modelClassPath,
+      );
+      const candidateModelNames = normalizedClassPath
+        ? registry
+            .filter(
+              (entry) =>
+                normalizeObjectPath(entry.characterClassPath) ===
+                normalizedClassPath,
+            )
+            .map((entry) => entry.name)
+        : [];
+      const exactName = candidateModelNames.find(
+        (name) => modelToken(name) === modelToken(source.modelClassPath),
+      );
+      const suggestedModelName =
+        existingModelName !== "None"
+          ? existingModelName
+          : exactName ??
+            (candidateModelNames.length === 1
+              ? candidateModelNames[0]
+              : null);
+      return {
+        ...source,
+        existingModelName,
+        suggestedModelName,
+        candidateModelNames,
+        status:
+          existingModelName !== "None"
+            ? "registered"
+            : suggestedModelName
+              ? "available"
+              : "unmapped",
+      };
+    });
+}
+
+export function buildDialogueModelsForRegistration(
+  slots: DialogueModelRegistrationSlot[],
+  selectedModelIndexes: ReadonlySet<number>,
+): { dialogueModels: string[]; unresolvedIndexes: number[] } {
+  const maximumIndex = Math.max(0, ...slots.map((slot) => slot.modelIndex));
+  const dialogueModels = Array.from(
+    { length: maximumIndex + 1 },
+    () => "None",
+  );
+  const unresolvedIndexes: number[] = [];
+  if (slots.some((slot) => slot.modelIndex === 0)) {
+    dialogueModels[0] = "player";
+  }
+  for (const slot of slots) {
+    if (slot.modelIndex === 0 || !selectedModelIndexes.has(slot.modelIndex)) {
+      continue;
+    }
+    if (!slot.suggestedModelName) {
+      unresolvedIndexes.push(slot.modelIndex);
+      continue;
+    }
+    dialogueModels[slot.modelIndex] = slot.suggestedModelName;
+  }
+  return { dialogueModels, unresolvedIndexes };
+}
+
+async function readDialogueRegistrationContext(
+  connection: UnrealInvoker,
+  blueprintAssetPathValue: string,
+  sourceSlots: DialogueModelSourceSlot[],
+): Promise<DialogueRegistrationContext> {
+  const dialogueId = dialogueIdFromBlueprintPath(blueprintAssetPathValue);
+  if (!dialogueId) {
+    throw new Error("BP 文件名中没有可用于查找对话资产的数字 ID");
+  }
+  const dialogueAssets = await findDialogueAssetPath(
+    connection,
+    dialogueId,
+  );
+  if (dialogueAssets.length === 0) {
+    throw new Error(`未找到与 BP 对应的对话资产 ${dialogueId}`);
+  }
+  if (dialogueAssets.length > 1) {
+    throw new Error(`找到多个名为 ${dialogueId} 的对话资产，无法自动确认`);
+  }
+  const dialogueAssetPath = dialogueAssets[0];
+  const dialogueAsset = await connection.invoke("asset.get_asset_by_path", {
+    AssetPath: dialogueAssetPath,
+  });
+  if (!hasUnrealObjectReference(dialogueAsset)) {
+    throw new Error(`无法加载对话资产：${dialogueAssetPath}`);
+  }
+  const startNodeData = await findDialogueStartNodeData(
+    connection,
+    dialogueAssetPath,
+  );
+  const existingModelsValue = await readProperty(
+    connection,
+    startNodeData,
+    "DialogModels",
+  );
+  const existingModels = (
+    Array.isArray(existingModelsValue) ? existingModelsValue : []
+  ).map(normalizedDialogueModelName);
+  const formationValue = await readProperty(
+    connection,
+    startNodeData,
+    "Formation",
+  );
+  const formationName = normalizedDialogueModelName(formationValue);
+  const registry = await readDialogNpcRegistry(connection);
+  return {
+    dialogueId,
+    dialogueAssetPath,
+    dialogueAsset: String(dialogueAsset),
+    startNodeData,
+    formationClassPath:
+      formationName === "None" ? null : String(formationValue),
+    existingModels,
+    slots: buildDialogueModelRegistrationSlots(
+      sourceSlots,
+      existingModels,
+      registry,
+    ),
+  };
+}
+
+async function writeDialogueRegistration(
+  connection: UnrealInvoker,
+  blueprintAssetPathValue: string,
+  context: DialogueRegistrationContext,
+  selectedModelIndexes: ReadonlySet<number>,
+): Promise<DialogueModelRegistrationResult> {
+  const { dialogueModels, unresolvedIndexes } =
+    buildDialogueModelsForRegistration(
+      context.slots,
+      selectedModelIndexes,
+    );
+  const currentModels = context.existingModels.map(
+    normalizedDialogueModelName,
+  );
+  const desiredFormation = blueprintClassPath(blueprintAssetPathValue);
+  const modelsUnchanged =
+    currentModels.length === dialogueModels.length &&
+    currentModels.every(
+      (model, index) =>
+        model.toLowerCase() === dialogueModels[index].toLowerCase(),
+    );
+  const formationUnchanged =
+    context.formationClassPath !== null &&
+    normalizeObjectPath(context.formationClassPath) ===
+      normalizeObjectPath(desiredFormation);
+  const unchanged = modelsUnchanged && formationUnchanged;
+  if (!unchanged) {
+    if (!modelsUnchanged) {
+      await connection.invoke("reflect.write_object_property", {
+        ThisPtr: context.startNodeData,
+        PropertyName: "DialogModels",
+        Value: dialogueModels,
+      });
+    }
+    if (!formationUnchanged) {
+      await connection.invoke("reflect.write_object_property", {
+        ThisPtr: context.startNodeData,
+        PropertyName: "Formation",
+        Value: desiredFormation,
+      });
+    }
+    const writtenValue = await readProperty(
+      connection,
+      context.startNodeData,
+      "DialogModels",
+    );
+    const writtenModels = (
+      Array.isArray(writtenValue) ? writtenValue : []
+    ).map(normalizedDialogueModelName);
+    if (
+      writtenModels.length !== dialogueModels.length ||
+      writtenModels.some(
+        (model, index) =>
+          model.toLowerCase() !== dialogueModels[index].toLowerCase(),
+      )
+    ) {
+      throw new Error("DialogModels 写入后的回读结果不一致");
+    }
+    const writtenFormation = String(
+      await readProperty(connection, context.startNodeData, "Formation"),
+    );
+    if (
+      normalizeObjectPath(writtenFormation) !==
+      normalizeObjectPath(desiredFormation)
+    ) {
+      throw new Error("Formation 写入后的回读结果不一致");
+    }
+    const saveResult = await connection.invoke("asset.save_asset", {
+      Asset: context.dialogueAsset || context.dialogueAssetPath,
+    });
+    if (saveResult === false) {
+      throw new Error(`对话资产保存失败：${context.dialogueAssetPath}`);
+    }
+  }
+  const registeredCount = dialogueModels
+    .slice(1)
+    .filter((name) => name !== "None").length;
+  return {
+    status: unchanged ? "unchanged" : "registered",
+    blueprintAssetPath: blueprintAssetPathValue,
+    dialogueId: context.dialogueId,
+    dialogueAssetPath: context.dialogueAssetPath,
+    dialogueModels,
+    registeredCount,
+    emptyCount: Math.max(0, dialogueModels.length - 1 - registeredCount),
+    unresolvedIndexes,
+  };
+}
+
+export async function inspectMissionTargetBlueprint(
+  rawRequest: unknown,
+  connectionFactory: () => UnrealInvoker = () => new UnrealMcpConnection(),
+): Promise<MissionTargetBlueprintInspection> {
+  const request = MissionTargetBlueprintInspectionRequestSchema.parse(
+    rawRequest,
+  ) as {
+    blueprintName: string;
+    plan?: MissionTargetPreviewPlan;
+  };
+  const connection = connectionFactory();
+  await connectUnreal(connection);
+  try {
+    const resolved = await resolveExistingBlueprint(
+      connection,
+      request.blueprintName,
+    );
+    if (!resolved) {
+      throw new Error(`BP 文件不存在：${request.blueprintName}`);
+    }
+    const blueprint = await readValidatedBlueprint(connection, resolved);
+    const reservedComponents = blueprint.components.filter(
+      (component) =>
+        /^\d+$/.test(component.variableName) ||
+        component.variableName.toLowerCase() === "c1",
+    );
+    const blueprintState =
+      reservedComponents.length === 0 ? "empty" : "populated";
+    const numericComponents = blueprint.components
+      .filter((component) => /^\d+$/.test(component.variableName))
+      .sort(
+        (left, right) =>
+          Number(left.variableName) - Number(right.variableName),
+      );
+    if (
+      blueprintState === "populated" &&
+      numericComponents.some((component) => !component.childActorClass)
+    ) {
+      throw new Error("BP 数字槽位中存在非 ChildActorComponent 或空模型");
+    }
+    const playerSlot = numericComponents.find(
+      (component) => component.variableName === "0",
+    );
+    if (
+      blueprintState === "populated" &&
+      (!playerSlot ||
+        normalizeObjectPath(playerSlot.childActorClass) !==
+          normalizeObjectPath(PLAYER_CLASS))
+    ) {
+      throw new Error("BP 的 0 号位不是玩家 BP_Eric");
+    }
+    const sourceSlots: DialogueModelSourceSlot[] =
+      blueprintState === "populated"
+        ? numericComponents.map((component) => ({
+            modelIndex: Number(component.variableName),
+            targetId: null,
+            modelClassPath: component.childActorClass,
+          }))
+        : request.plan
+          ? [
+              {
+                modelIndex: 0,
+                targetId: null,
+                modelClassPath: PLAYER_CLASS,
+              },
+              ...request.plan.targets.map((target, index) => ({
+                modelIndex: index + 1,
+                targetId: target.targetId,
+                modelClassPath: target.modelClassPath,
+              })),
+            ]
+          : [];
+    const dialogue = await readDialogueRegistrationContext(
+      connection,
+      resolved.assetPath,
+      sourceSlots,
+    );
+    const registeredCount = dialogue.slots.filter(
+      (slot) => slot.modelIndex > 0 && slot.status === "registered",
+    ).length;
+    const formationMatched =
+      dialogue.formationClassPath !== null &&
+      normalizeObjectPath(dialogue.formationClassPath) ===
+        normalizeObjectPath(blueprint.blueprintClassPath);
+    return {
+      blueprintState,
+      blueprintAssetPath: resolved.assetPath,
+      blueprintClassPath: blueprint.blueprintClassPath,
+      parentClassPath: blueprint.parentClassPath,
+      dialogueId: dialogue.dialogueId,
+      dialogueAssetPath: dialogue.dialogueAssetPath,
+      formationClassPath: dialogue.formationClassPath,
+      slots: dialogue.slots,
+      message: `${blueprintState === "empty" ? "BP 尚未创建站位组件" : `BP 已有 ${Math.max(0, numericComponents.length - 1)} 个模型槽`}；对话已注册 ${registeredCount} 个模型${formationMatched ? "" : "；Formation 未指向当前 BP"}`,
+    };
+  } finally {
+    connection.close();
+  }
+}
+
+export async function registerBlueprintDialogueModels(
+  rawRequest: unknown,
+  connectionFactory: () => UnrealInvoker = () => new UnrealMcpConnection(),
+): Promise<DialogueModelRegistrationResult> {
+  const request = DialogueModelRegistrationRequestSchema.parse(
+    rawRequest,
+  );
+  const connection = connectionFactory();
+  await connectUnreal(connection);
+  let mutationStarted = false;
+  try {
+    const resolved = await resolveExistingBlueprint(
+      connection,
+      request.blueprintName,
+    );
+    if (!resolved) {
+      throw new Error(`BP 文件不存在：${request.blueprintName}`);
+    }
+    const blueprint = await readValidatedBlueprint(connection, resolved);
+    const numericComponents = blueprint.components
+      .filter((component) => /^\d+$/.test(component.variableName))
+      .sort(
+        (left, right) =>
+          Number(left.variableName) - Number(right.variableName),
+      );
+    const playerSlot = numericComponents.find(
+      (component) => component.variableName === "0",
+    );
+    if (
+      !playerSlot ||
+      normalizeObjectPath(playerSlot.childActorClass) !==
+        normalizeObjectPath(PLAYER_CLASS)
+    ) {
+      throw new Error("BP 的 0 号位不是玩家 BP_Eric");
+    }
+    if (
+      numericComponents.some((component) => !component.childActorClass)
+    ) {
+      throw new Error("BP 数字槽位中存在非 ChildActorComponent 或空模型");
+    }
+    const sourceSlots = numericComponents.map((component) => ({
+      modelIndex: Number(component.variableName),
+      targetId: null,
+      modelClassPath: component.childActorClass,
+    }));
+    const validIndexes = new Set(
+      sourceSlots
+        .map((slot) => slot.modelIndex)
+        .filter((index) => index > 0),
+    );
+    if (
+      request.selectedModelIndexes.some(
+        (index) => !validIndexes.has(index),
+      )
+    ) {
+      throw new Error("所选模型槽位不属于当前 BP");
+    }
+    const context = await readDialogueRegistrationContext(
+      connection,
+      resolved.assetPath,
+      sourceSlots,
+    );
+    mutationStarted = true;
+    return await writeDialogueRegistration(
+      connection,
+      resolved.assetPath,
+      context,
+      new Set(request.selectedModelIndexes),
+    );
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "注册 DialogModels 失败";
+    throw new Error(
+      mutationStarted
+        ? `${message}；对话资产可能留有未保存修改，请在 UE 中检查`
+        : message,
+    );
+  } finally {
+    connection.close();
+  }
+}
+
+export async function inspectMissionTargetBlueprintCompatibility(
+  rawRequest: unknown,
+  connectionFactory: () => UnrealInvoker = () => new UnrealMcpConnection(),
+): Promise<MissionTargetBlueprintCompatibility> {
+  const request = MissionTargetBlueprintCreateRequestSchema.parse(
+    rawRequest,
+  ) as {
+    blueprintName: string;
+    plan: MissionTargetPreviewPlan;
+    selectedTargetIds?: string[];
+  };
+  const connection = connectionFactory();
+  await connectUnreal(connection);
+  try {
+    const resolved = await resolveExistingBlueprint(
+      connection,
+      request.blueprintName,
+    );
+    if (!resolved) {
+      throw new Error(`BP 文件不存在：${request.blueprintName}`);
+    }
+    const dialogueId = dialogueIdFromBlueprintPath(resolved.assetPath);
+    const selectedClassPaths = request.plan.targets.map(
+      (target) => target.modelClassPath,
+    );
+    const selectedTargetIds = new Set(
+      request.selectedTargetIds ??
+        request.plan.targets.map((target) => target.targetId),
+    );
+    const selectedModelIndexes = new Set(
+      request.plan.targets.flatMap((target, index) =>
+        selectedTargetIds.has(target.targetId) ? [index + 1] : [],
+      ),
+    );
+    const emptyResult = {
+      blueprintAssetPath: resolved.assetPath,
+      dialogueId,
+      dialogueAssetPath: null,
+      formationClassPath: null,
+      dialogueModels: [],
+      selectedModels: selectedClassPaths.map(modelToken),
+    };
+    if (!dialogueId) {
+      return {
+        status: "unavailable",
+        ...emptyResult,
+        message: "BP 文件名中没有可用于查找对话资产的数字 ID",
+      };
+    }
+    const dialogueAssets = await findDialogueAssetPath(
+      connection,
+      dialogueId,
+    );
+    if (dialogueAssets.length === 0) {
+      return {
+        status: "unavailable",
+        ...emptyResult,
+        message: `未找到与 BP 对应的对话资产 ${dialogueId}`,
+      };
+    }
+    if (dialogueAssets.length > 1) {
+      return {
+        status: "unavailable",
+        ...emptyResult,
+        message: `找到多个名为 ${dialogueId} 的对话资产，无法自动确认`,
+      };
+    }
+    const dialogueAssetPath = dialogueAssets[0];
+    const exported = parseDialogueExport(
+      await exportAssetText(connection, dialogueAssetPath),
+    );
+    const comparison = compareDialogueModelOrder(
+      exported.dialogueModels,
+      selectedClassPaths,
+      selectedModelIndexes,
+    );
+    const expectedFormation = blueprintClassPath(resolved.assetPath);
+    const formationMatched =
+      exported.formationClassPath !== null &&
+      normalizeObjectPath(exported.formationClassPath) ===
+        normalizeObjectPath(expectedFormation);
+    const messages = [];
+    if (!formationMatched) {
+      messages.push(
+        exported.formationClassPath
+          ? `对话 Formation 指向 ${exported.formationClassPath}`
+          : "对话尚未配置 Formation",
+      );
+    }
+    if (!comparison.matched) {
+      messages.push(comparison.message);
+    }
+    return {
+      status:
+        formationMatched && comparison.matched
+          ? "matched"
+          : "mismatch",
+      blueprintAssetPath: resolved.assetPath,
+      dialogueId,
+      dialogueAssetPath,
+      formationClassPath: exported.formationClassPath,
+      dialogueModels: exported.dialogueModels,
+      selectedModels: comparison.selectedModels,
+      message:
+        messages.join("；") ||
+        `对话 ${dialogueId} 的 Formation 和模型顺序均匹配`,
+    };
+  } finally {
+    connection.close();
+  }
 }
 
 export async function readBlueprintFormation(
@@ -415,6 +1551,190 @@ export async function readBlueprintFormation(
   }
 }
 
+export async function populateMissionTargetBlueprint(
+  rawRequest: unknown,
+  connectionFactory: () => UnrealInvoker = () => new UnrealMcpConnection(),
+): Promise<MissionTargetBlueprintCreateResult> {
+  const request = MissionTargetBlueprintCreateRequestSchema.parse(
+    rawRequest,
+  ) as {
+    blueprintName: string;
+    plan: MissionTargetPreviewPlan;
+    selectedTargetIds?: string[];
+    registerDialogue?: boolean;
+  };
+  const selectedTargetIds = new Set(
+    request.selectedTargetIds ??
+      request.plan.targets.map((target) => target.targetId),
+  );
+  const unknownTargetIds = Array.from(selectedTargetIds).filter(
+    (targetId) =>
+      !request.plan.targets.some((target) => target.targetId === targetId),
+  );
+  if (unknownTargetIds.length > 0) {
+    throw new Error(`所选目标物不属于当前任务：${unknownTargetIds.join("、")}`);
+  }
+  const selectedEntries = request.plan.targets
+    .map((target, index) => ({ target, modelIndex: index + 1 }))
+    .filter(({ target }) => selectedTargetIds.has(target.targetId));
+  const assetEntries = selectedEntries.filter(
+    ({ target }) =>
+      target.previewKind === "asset" && Boolean(target.modelClassPath),
+  );
+  if (assetEntries.length !== selectedEntries.length) {
+    throw new Error("所选目标物中存在没有模型资源的对象，无法创建 BP 组件");
+  }
+  const components = buildMissionTargetBlueprintComponents(
+    assetEntries.map(({ target }) => target),
+    assetEntries.map(({ modelIndex }) => modelIndex),
+  );
+  const connection = connectionFactory();
+  await connectUnreal(connection);
+  let mutationStarted = false;
+  let blueprintSaved = false;
+  try {
+    const resolved = await resolveExistingBlueprint(
+      connection,
+      request.blueprintName,
+    );
+    if (!resolved) {
+      throw new Error(`BP 文件不存在：${request.blueprintName}`);
+    }
+    const blueprint = await readValidatedBlueprint(connection, resolved);
+    const reservedComponents = blueprint.components
+      .map((component) => component.variableName)
+      .filter(
+        (name) => /^\d+$/.test(name) || name.toLowerCase() === "c1",
+      );
+    if (reservedComponents.length > 0) {
+      throw new Error(
+        `BP 已包含站位组件 ${reservedComponents.join("、")}，仅允许写入尚未配置站位和摄像机的空 BP`,
+      );
+    }
+    const dialogueContext = request.registerDialogue
+      ? await readDialogueRegistrationContext(
+          connection,
+          resolved.assetPath,
+          [
+            {
+              modelIndex: 0,
+              targetId: null,
+              modelClassPath: PLAYER_CLASS,
+            },
+            ...request.plan.targets.map((target, index) => ({
+              modelIndex: index + 1,
+              targetId: target.targetId,
+              modelClassPath: target.modelClassPath,
+            })),
+          ],
+        )
+      : null;
+
+    const requiredAssets = Array.from(
+      new Set(
+        components
+          .map((component) => component.childActorClass)
+          .filter(Boolean),
+      ),
+    );
+    for (const classPathValue of requiredAssets) {
+      const asset = await connection.invoke("asset.get_asset_by_path", {
+        AssetPath: blueprintAssetPath(classPathValue),
+      });
+      if (!hasUnrealObjectReference(asset)) {
+        throw new Error(`模型资产不存在：${classPathValue}`);
+      }
+    }
+
+    mutationStarted = true;
+    for (const component of components) {
+      await addBlueprintComponent(
+        connection,
+        resolved.blueprint,
+        component,
+      );
+    }
+
+    const compileResult = await connection.invoke("bp.compile_blueprint", {
+      Bp: resolved.blueprint,
+    });
+    const compileError = compileFailure(compileResult);
+    if (compileError) {
+      throw new Error(compileError);
+    }
+
+    const actualComponents = await readBlueprintComponents(
+      connection,
+      blueprint.blueprintClassPath,
+    );
+    for (const expected of components) {
+      const actual = actualComponents.find(
+        (component) => component.variableName === expected.componentName,
+      );
+      if (!actual) {
+        throw new Error(`回读时未找到 BP 组件 ${expected.componentName}`);
+      }
+      if (
+        normalizeObjectPath(actual.componentClass) !==
+        normalizeObjectPath(expected.componentClass)
+      ) {
+        throw new Error(
+          `BP 组件 ${expected.componentName} 类型回读不一致`,
+        );
+      }
+      if (
+        expected.childActorClass &&
+        normalizeObjectPath(actual.childActorClass) !==
+          normalizeObjectPath(expected.childActorClass)
+      ) {
+        throw new Error(
+          `BP 组件 ${expected.componentName} 的角色资产回读不一致`,
+        );
+      }
+    }
+
+    const saveResult = await connection.invoke(
+      "bp.save_asset_and_capture_log",
+      { AssetPath: resolved.assetPath },
+    );
+    const saveError = saveFailure(saveResult);
+    if (saveError) {
+      throw new Error(saveError);
+    }
+    blueprintSaved = true;
+    const dialogueRegistration = dialogueContext
+      ? await writeDialogueRegistration(
+          connection,
+          resolved.assetPath,
+          dialogueContext,
+          new Set(assetEntries.map(({ modelIndex }) => modelIndex)),
+        )
+      : undefined;
+    return {
+      status: "created",
+      taskId: request.plan.taskId,
+      blueprintAssetPath: resolved.assetPath,
+      targetCount: assetEntries.length,
+      componentNames: components.map(
+        (component) => component.componentName,
+      ),
+      dialogueRegistration,
+    };
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "创建 BP 内容失败";
+    throw new Error(
+      blueprintSaved
+        ? `${message}；BP 已保存，但对话模型注册未完成`
+        : mutationStarted
+        ? `${message}；BP 可能已在 UE 编辑器中留下未保存修改，请检查后撤销`
+        : message,
+    );
+  } finally {
+    connection.close();
+  }
+}
+
 function normalizeLevelPath(value: string): string {
   return value
     .trim()
@@ -436,6 +1756,19 @@ function scriptResult(value: unknown): string {
   return String(result?.Result ?? "");
 }
 
+function parsePythonJson(value: unknown, errorMessage: string): unknown {
+  try {
+    const rawResult = scriptResult(value).trim();
+    const serialized =
+      rawResult.startsWith("'") && rawResult.endsWith("'")
+        ? rawResult.slice(1, -1)
+        : rawResult;
+    return JSON.parse(serialized);
+  } catch {
+    throw new Error(errorMessage);
+  }
+}
+
 async function currentMapName(connection: UnrealInvoker): Promise<string> {
   const value = await connection.invoke("editor.get_current_map_name", {});
   const mapName = String(value ?? "").trim();
@@ -443,6 +1776,126 @@ async function currentMapName(connection: UnrealInvoker): Promise<string> {
     throw new Error("无法读取 UE 当前关卡");
   }
   return mapName;
+}
+
+export async function readSelectedLevelActors(
+  connectionFactory: () => UnrealInvoker = () => new UnrealMcpConnection(),
+): Promise<SelectedLevelActorsResult> {
+  const connection = connectionFactory();
+  await connectUnreal(connection);
+  try {
+    const mapAssetPath = await currentMapName(connection);
+    const value = await connection.invoke("script.eval_python_expression", {
+      Expression:
+        "__import__('json').dumps([{'actor_ref': a.get_path_name(), 'label': a.get_actor_label(), 'class_path': a.get_class().get_path_name(), 'location': [a.get_actor_location().x, a.get_actor_location().y, a.get_actor_location().z], 'rotation': [a.get_actor_rotation().pitch, a.get_actor_rotation().yaw, a.get_actor_rotation().roll], 'scale': [a.get_actor_scale3d().x, a.get_actor_scale3d().y, a.get_actor_scale3d().z]} for a in unreal.EditorLevelLibrary.get_selected_level_actors()])",
+    });
+    const parsed = parsePythonJson(
+      value,
+      "无法读取 UE 编辑器当前选择",
+    );
+    if (!Array.isArray(parsed)) {
+      throw new Error("UE 编辑器返回了无效的选择数据");
+    }
+    const actors: SelectedLevelActor[] = parsed.map((item, index) => {
+      const actor = item as {
+        actor_ref?: unknown;
+        label?: unknown;
+        class_path?: unknown;
+        location?: unknown[];
+        rotation?: unknown[];
+        scale?: unknown[];
+      };
+      const location = actor.location ?? [];
+      const rotation = actor.rotation ?? [];
+      const scale = actor.scale ?? [];
+      const values = [...location, ...rotation, ...scale].map(Number);
+      if (
+        !actor.actor_ref ||
+        !actor.class_path ||
+        values.length !== 9 ||
+        values.some((number) => !Number.isFinite(number))
+      ) {
+        throw new Error(`UE 选择数据第 ${index + 1} 项无效`);
+      }
+      return {
+        actorRef: String(actor.actor_ref),
+        label: String(actor.label || `Actor ${index + 1}`),
+        classPath: String(actor.class_path),
+        transform: {
+          location: {
+            x: values[0],
+            y: values[1],
+            z: values[2],
+          },
+          rotation: {
+            pitch: values[3],
+            yaw: values[4],
+            roll: values[5],
+          },
+          scale: {
+            x: values[6],
+            y: values[7],
+            z: values[8],
+          },
+        },
+      };
+    });
+    return { mapAssetPath, actors };
+  } finally {
+    connection.close();
+  }
+}
+
+export async function scanSelectedNpcRegistration(
+  connectionFactory: () => UnrealInvoker = () => new UnrealMcpConnection(),
+): Promise<NpcRegistrationScanResult> {
+  const [
+    selection,
+    npcText,
+    modelText,
+    missionTargetText,
+    mapText,
+    sceneText,
+  ] = await Promise.all([
+    readSelectedLevelActors(connectionFactory),
+    readFile(CONFIG_CSV_PATHS.npc, "utf8"),
+    readFile(CONFIG_CSV_PATHS.model, "utf8"),
+    readFile(CONFIG_CSV_PATHS.missionTarget, "utf8"),
+    readFile(CONFIG_CSV_PATHS.map, "utf8"),
+    readFile(CONFIG_CSV_PATHS.scene, "utf8"),
+  ]);
+  const database = parseNpcRegistrationDatabase(
+    npcText,
+    modelText,
+    missionTargetText,
+    mapText,
+    sceneText,
+    "C:\\trunk\\doc\\csvdir",
+  );
+  return {
+    selection,
+    candidates: buildNpcRegistrationCandidates(database, selection),
+  };
+}
+
+export async function openConfigTable(
+  rawRequest: unknown,
+): Promise<{ table: keyof typeof CONFIG_TABLE_PATHS; path: string }> {
+  const { table } = ConfigTableOpenSchema.parse(rawRequest);
+  const path = CONFIG_TABLE_PATHS[table];
+  await access(path);
+  await new Promise<void>((resolvePromise, reject) => {
+    const child = spawn("explorer.exe", [path], {
+      detached: true,
+      stdio: "ignore",
+    });
+    child.once("spawn", () => {
+      child.unref();
+      resolvePromise();
+    });
+    child.once("error", reject);
+  });
+  return { table, path };
 }
 
 async function dirtyMapPackages(
@@ -492,8 +1945,42 @@ async function connectUnreal(connection: UnrealInvoker): Promise<void> {
   } catch {
     connection.close();
     throw new Error(
-      `无法连接 UE 编辑器 OmniMcpCore（${UE_MCP_HOST}:${UE_MCP_PORT}），请确认 UE 编辑器和插件正在运行`,
+      `无法连接 UE 编辑器 OmniMcpCore（${UE_MCP_HOST}:${ueMcpPort}），请确认 UE 编辑器和插件正在运行`,
     );
+  }
+}
+
+export async function inspectUnrealMcpConnection(
+  connectionFactory: () => UnrealInvoker = () => new UnrealMcpConnection(),
+): Promise<{
+  connected: boolean;
+  host: string;
+  port: number;
+  message: string;
+}> {
+  const connection = connectionFactory();
+  const endpoint = getUnrealMcpEndpoint();
+  try {
+    await connectUnreal(connection);
+    const mapName = String(
+      await connection.invoke("editor.get_current_map_name", {}),
+    ).trim();
+    return {
+      connected: true,
+      ...endpoint,
+      message: mapName
+        ? `已连接 UE 编辑器，当前关卡 ${mapName}`
+        : "已连接 UE 编辑器 OmniMcpCore",
+    };
+  } catch (error) {
+    return {
+      connected: false,
+      ...endpoint,
+      message:
+        error instanceof Error ? error.message : "UE 编辑器连接检查失败",
+    };
+  } finally {
+    connection.close();
   }
 }
 
@@ -507,24 +1994,62 @@ async function deletePreviewActors(
   await connection.invoke("world.delete_actors", { Actors: actors });
 }
 
+async function findMissionPreviewActors(
+  connection: UnrealInvoker,
+): Promise<string[]> {
+  const value = await connection.invoke("script.eval_python_expression", {
+    Expression:
+      `__import__('json').dumps([a.get_path_name() for a in unreal.EditorLevelLibrary.get_all_level_actors() ` +
+      `if a.get_name().startswith('${PREVIEW_ACTOR_PREFIX}_') or a.get_actor_label().startswith('${PREVIEW_ACTOR_PREFIX}_')])`,
+  });
+  const parsed = parsePythonJson(
+    value,
+    "无法扫描 UE 当前关卡中的目标物预览对象",
+  );
+  if (
+    !Array.isArray(parsed) ||
+    !parsed.every((item) => typeof item === "string")
+  ) {
+    throw new Error("UE 编辑器返回了无效的目标物预览列表");
+  }
+  return Array.from(new Set(parsed));
+}
+
 export async function clearMissionTargetPreview(
   connectionFactory: () => UnrealInvoker = () => new UnrealMcpConnection(),
 ): Promise<{ clearedCount: number }> {
-  if (activeMissionPreviewActors.length === 0) {
-    return { clearedCount: 0 };
-  }
   const connection = connectionFactory();
   await connectUnreal(connection);
   try {
     const currentMap = normalizeLevelPath(await currentMapName(connection));
-    if (currentMap !== normalizeLevelPath(activeMissionPreviewMap)) {
-      const staleCount = activeMissionPreviewActors.length;
+    let actors: string[];
+    let discoveredFromLevel = true;
+    try {
+      actors = await findMissionPreviewActors(connection);
+    } catch (error) {
+      discoveredFromLevel = false;
+      actors =
+        currentMap === normalizeLevelPath(activeMissionPreviewMap)
+          ? [...activeMissionPreviewActors]
+          : [];
+      if (actors.length === 0) {
+        throw error;
+      }
+    }
+    if (actors.length === 0) {
       activeMissionPreviewActors = [];
       activeMissionPreviewMap = "";
-      return { clearedCount: staleCount };
+      return { clearedCount: 0 };
     }
-    const actors = [...activeMissionPreviewActors];
     await deletePreviewActors(connection, actors);
+    if (discoveredFromLevel) {
+      const remaining = await findMissionPreviewActors(connection);
+      if (remaining.length > 0) {
+        throw new Error(
+          `仍有 ${remaining.length} 个目标物预览对象未能删除`,
+        );
+      }
+    }
     activeMissionPreviewActors = [];
     activeMissionPreviewMap = "";
     return { clearedCount: actors.length };
@@ -533,13 +2058,36 @@ export async function clearMissionTargetPreview(
   }
 }
 
+export async function inspectMissionTargetMap(
+  rawRequest: unknown,
+  connectionFactory: () => UnrealInvoker = () => new UnrealMcpConnection(),
+): Promise<MissionTargetMapStatus> {
+  const request = MissionTargetMapStatusRequestSchema.parse(rawRequest);
+  const connection = connectionFactory();
+  await connectUnreal(connection);
+  try {
+    const currentMapAssetPath = await currentMapName(connection);
+    return {
+      currentMapAssetPath,
+      expectedMapAssetPath: request.mapAssetPath,
+      matches:
+        normalizeLevelPath(currentMapAssetPath) ===
+        normalizeLevelPath(request.mapAssetPath),
+    };
+  } finally {
+    connection.close();
+  }
+}
+
 export async function loadMissionTargetPreview(
-  rawPlan: unknown,
+  rawRequest: unknown,
   connectionFactory: () => UnrealInvoker = () => new UnrealMcpConnection(),
 ): Promise<MissionTargetPreviewLoadResult> {
-  const plan = MissionTargetPreviewPlanSchema.parse(
-    rawPlan,
-  ) as MissionTargetPreviewPlan;
+  const request = MissionTargetPreviewLoadRequestSchema.parse(rawRequest) as {
+    plan: MissionTargetPreviewPlan;
+    mapMode: "require-current" | "auto";
+  };
+  const plan = request.plan;
   assertSinglePreviewMap(plan);
 
   const connection = connectionFactory();
@@ -565,6 +2113,11 @@ export async function loadMissionTargetPreview(
     let currentMap = normalizeLevelPath(await currentMapName(connection));
     let autoOpenedMap = false;
     if (currentMap !== expectedMap) {
+      if (request.mapMode === "require-current") {
+        throw new Error(
+          `UE 尚未切换到 ${plan.mapName}，当前关卡为 ${currentMap}`,
+        );
+      }
       const dirtyPackages = await dirtyMapPackages(connection);
       if (dirtyPackages.length > 0) {
         throw new Error(
@@ -585,11 +2138,9 @@ export async function loadMissionTargetPreview(
       autoOpenedMap = true;
     }
 
-    if (
-      activeMissionPreviewActors.length > 0 &&
-      normalizeLevelPath(activeMissionPreviewMap) === currentMap
-    ) {
-      await deletePreviewActors(connection, activeMissionPreviewActors);
+    const existingPreviewActors = await findMissionPreviewActors(connection);
+    if (existingPreviewActors.length > 0) {
+      await deletePreviewActors(connection, existingPreviewActors);
       activeMissionPreviewActors = [];
       activeMissionPreviewMap = "";
     }
@@ -707,11 +2258,81 @@ export async function routeUeRequest(
       });
       return true;
     }
+    if (url.pathname === "/api/ue/selection/read") {
+      sendJson(response, 200, {
+        ok: true,
+        data: await readSelectedLevelActors(),
+      });
+      return true;
+    }
+    if (url.pathname === "/api/ue/selection/registration") {
+      sendJson(response, 200, {
+        ok: true,
+        data: await scanSelectedNpcRegistration(),
+      });
+      return true;
+    }
     const body = (await readJson(request)) as Record<string, unknown>;
+    if (url.pathname === "/api/ue/mission-targets/map-status") {
+      sendJson(response, 200, {
+        ok: true,
+        data: await inspectMissionTargetMap(body),
+      });
+      return true;
+    }
     if (url.pathname === "/api/ue/mission-targets/load") {
       sendJson(response, 200, {
         ok: true,
         data: await loadMissionTargetPreview(body),
+      });
+      return true;
+    }
+    if (url.pathname === "/api/ue/mission-targets/create-blueprint") {
+      sendJson(response, 200, {
+        ok: true,
+        data: await populateMissionTargetBlueprint(body),
+      });
+      return true;
+    }
+    if (url.pathname === "/api/ue/mission-targets/inspect-blueprint") {
+      sendJson(response, 200, {
+        ok: true,
+        data: await inspectMissionTargetBlueprint(body),
+      });
+      return true;
+    }
+    if (url.pathname === "/api/ue/mission-targets/register-dialogue") {
+      sendJson(response, 200, {
+        ok: true,
+        data: await registerBlueprintDialogueModels(body),
+      });
+      return true;
+    }
+    if (url.pathname === "/api/ue/mission-targets/check-blueprint") {
+      sendJson(response, 200, {
+        ok: true,
+        data: await inspectMissionTargetBlueprintCompatibility(body),
+      });
+      return true;
+    }
+    if (url.pathname === "/api/ue/config-table/open") {
+      sendJson(response, 200, {
+        ok: true,
+        data: await openConfigTable(body),
+      });
+      return true;
+    }
+    if (url.pathname === "/api/ue/config-registration/write") {
+      sendJson(response, 200, {
+        ok: true,
+        data: await writeNpcRegistrationDraft(body),
+      });
+      return true;
+    }
+    if (url.pathname === "/api/ue/config-registration/update-targets") {
+      sendJson(response, 200, {
+        ok: true,
+        data: await updateMissionTargetTransforms(body),
       });
       return true;
     }

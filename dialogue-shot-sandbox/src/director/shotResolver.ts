@@ -694,17 +694,6 @@ export function resolveShotDecisions(
         `镜头 ${index + 1} 的镜内运动越过了关系轴 ${axis.id}`,
       );
     }
-    const hardProjectionWarnings = geometry.assessment.warnings.filter(
-      (warning) =>
-        !warning.startsWith("单人镜头偏离角色正面") &&
-        !warning.startsWith("单人镜头包含其他主要可见角色") &&
-        !warning.startsWith("构图"),
-    );
-    if (hardProjectionWarnings.length > 0) {
-      throw new Error(
-        `镜头 ${index + 1} 投影验收失败：${hardProjectionWarnings.join("；")}`,
-      );
-    }
     const additionalVisibleSlots =
       geometry.coverage === "single"
         ? geometry.assessment.visibleParticipantSlots.filter(

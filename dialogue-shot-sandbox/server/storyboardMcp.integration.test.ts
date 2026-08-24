@@ -286,7 +286,7 @@ describe("internal storyboard MCP", () => {
         }
         expect(presence.connected).toBe(true);
         expect(presence.compatible).toBe(true);
-        expect(presence.serverVersion).toBe("0.16.1");
+        expect(presence.serverVersion).toBe("0.16.2");
         expect(presence.transport).toBe("stdio");
 
         let claimed = await client.callTool({
@@ -313,7 +313,7 @@ describe("internal storyboard MCP", () => {
           request_id: input.request_id,
         });
 
-        const submitted = await client.callTool({
+        let submitted = await client.callTool({
           name: "storyboard_submit_plan",
           arguments: {
             request_id: input.request_id,
@@ -322,9 +322,51 @@ describe("internal storyboard MCP", () => {
         });
         expect(submitted.isError).not.toBe(true);
         expect(submitted.structuredContent).toMatchObject({
+          accepted: false,
+          retry_required: true,
+          request_id: input.request_id,
+          revision_attempt: 1,
+        });
+        const failedShots = (
+          submitted.structuredContent as {
+            failed_shots?: Array<Record<string, unknown>>;
+          }
+        ).failed_shots;
+        expect(failedShots?.length).toBeGreaterThan(0);
+        expect(failedShots?.[0]).toMatchObject({
+          shot_index: expect.any(Number),
+          dialogue_ids: expect.any(Array),
+          warnings: expect.any(Array),
+          previous_decision: expect.any(Object),
+        });
+
+        const duplicateInitial = await client.callTool({
+          name: "storyboard_submit_plan",
+          arguments: {
+            request_id: input.request_id,
+            plan: validPlan(input),
+          },
+        });
+        expect(duplicateInitial.structuredContent).toMatchObject({
+          accepted: false,
+          retry_required: true,
+          revision_attempt: 1,
+        });
+
+        submitted = await client.callTool({
+          name: "storyboard_submit_plan",
+          arguments: {
+            request_id: input.request_id,
+            plan: validPlan(input),
+            revision_attempt: 1,
+          },
+        });
+        expect(submitted.isError).not.toBe(true);
+        expect(submitted.structuredContent).toMatchObject({
           accepted: true,
           request_id: input.request_id,
           status: "completed",
+          projection_validation: "failed_after_retry",
         });
 
         const response = await responsePromise;

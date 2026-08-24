@@ -30,11 +30,17 @@ description: "Designs UE4 dialogue storyboards through the local storyboard MCP 
 5. 根据角色关系、权力状态和当前事件设计语义站位。
 6. 生成满足下述要求的 `shot-plan.v5`。
 7. 调用 `storyboard_submit_plan` 提交结果。
-8. 只有 MCP 返回 `accepted=true` 才计为完成；随后再次调用
+8. 如果 MCP 返回 `accepted=false`、`retry_required=true`，逐项读取
+   `failed_shots` 的台词节点、上一版决策与投影验收原因。保留未列出的镜头，
+   只重新设计失败镜头，然后再次提交完整方案，并在
+   `storyboard_submit_plan` 参数中传入返回的 `revision_attempt: 1`。
+9. 每个任务最多执行一次投影返修。第二次提交即使仍有
+   `remaining_failed_shots` 也以 MCP 返回状态为准，不得无限重试。
+10. 只有 MCP 返回 `accepted=true` 才计为完成；随后再次调用
    `storyboard_get_pending_request`，继续处理下一项。
-9. 单次最多连续处理 5 项，或在 `found=false` 时停止，并汇总实际完成的
+11. 单次最多连续处理 5 项，或在 `found=false` 时停止，并汇总实际完成的
    `request_id`。若队列仍有任务，明确提示用户再次触发。
-10. 若无法完成，调用 `storyboard_fail_request` 写入明确原因。
+12. 若无法完成，调用 `storyboard_fail_request` 写入明确原因。
 
 ## 分镜要求
 

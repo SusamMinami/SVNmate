@@ -7,6 +7,7 @@ import {
 import {
   createRuleAnalysis,
   createRuleDecisions,
+  reviseRuleDecisionsForProjection,
 } from "./ruleDirector";
 import { resolveShotDecisions } from "./shotResolver";
 
@@ -16,6 +17,38 @@ import { resolveShotDecisions } from "./shotResolver";
  */
 export function createShotPlan(sequence: DialogueSequence): ShotPlan[] {
   return createShotPreview(sequence).shots;
+}
+
+function projectionIssueScore(shots: ShotPlan[]): number {
+  return shots.reduce(
+    (score, shot) =>
+      score +
+      (shot.projection.valid ? 0 : 1_000) +
+      shot.projection.warnings.length,
+    0,
+  );
+}
+
+export function resolveRuleShotsWithRetry(
+  sequence: DialogueSequence,
+  decisions: ReturnType<typeof createRuleDecisions>,
+): ShotPlan[] {
+  const initialShots = resolveShotDecisions(sequence, decisions);
+  if (initialShots.every((shot) => shot.projection.valid)) {
+    return initialShots;
+  }
+
+  try {
+    const revisedShots = resolveShotDecisions(
+      sequence,
+      reviseRuleDecisionsForProjection(decisions, initialShots),
+    );
+    return projectionIssueScore(revisedShots) < projectionIssueScore(initialShots)
+      ? revisedShots
+      : initialShots;
+  } catch {
+    return initialShots;
+  }
 }
 
 export function createShotPreview(
@@ -36,12 +69,10 @@ export function createShotPreview(
     options,
   );
   const stagedSequence = { ...sequence, participants };
+  const decisions = createRuleDecisions(input, blocking);
   return {
     sequence: stagedSequence,
-    shots: resolveShotDecisions(
-      stagedSequence,
-      createRuleDecisions(input, blocking),
-    ),
+    shots: resolveRuleShotsWithRetry(stagedSequence, decisions),
     blocking,
     analysis: createRuleAnalysis(input),
   };

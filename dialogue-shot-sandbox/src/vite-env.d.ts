@@ -14,6 +14,10 @@ interface DesktopSetupStatus {
   mcpVersion: string | null;
   expectedMcpVersion: string;
   defaultDataReady: boolean;
+  ueConnected: boolean;
+  ueMcpHost: string;
+  ueMcpPort: number;
+  ueConnectionMessage: string;
   updateSupported: boolean;
   updatePage: string;
 }
@@ -43,6 +47,7 @@ interface Window {
     installTraeIntegration: () => Promise<DesktopSetupStatus>;
     openIntegrationFolder: () => Promise<void>;
     openTraeDownload: () => Promise<void>;
+    setUeMcpPort: (port: number) => Promise<DesktopSetupStatus>;
     completeSetup: () => Promise<DesktopSetupStatus>;
     checkForUpdates: () => Promise<DesktopUpdateSnapshot>;
     getUpdateSnapshot: () => Promise<DesktopUpdateSnapshot>;

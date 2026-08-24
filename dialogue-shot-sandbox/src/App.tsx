@@ -13,6 +13,7 @@ import {
   MapPinned,
   Search,
   Settings,
+  UserRoundPlus,
   Users,
   X,
 } from "lucide-react";
@@ -21,6 +22,7 @@ import { DesktopSetupModal } from "./components/DesktopSetupModal";
 import { BlueprintFormationModal } from "./components/BlueprintFormationModal";
 import { DirectorControl } from "./components/DirectorControl";
 import { MissionTargetModal } from "./components/MissionTargetModal";
+import { NpcRegistrationModal } from "./components/NpcRegistrationModal";
 import { SharedPlanCompareModal } from "./components/SharedPlanCompareModal";
 import { StageView } from "./components/StageView";
 import { StoryBriefModal } from "./components/StoryBriefModal";
@@ -309,6 +311,7 @@ export default function App() {
     useState<DesktopSetupStatus | null>(null);
   const [showDesktopSetup, setShowDesktopSetup] = useState(false);
   const [showMissionTargets, setShowMissionTargets] = useState(false);
+  const [showNpcRegistration, setShowNpcRegistration] = useState(false);
   const [traeStatus, setTraeStatus] =
     useState<TraeCollaborationStatus | null>(null);
   const [traeLoading, setTraeLoading] = useState(false);
@@ -324,7 +327,7 @@ export default function App() {
   const formationRunRef = useRef(0);
   const authFinishingRef = useRef(false);
 
-  const activeShot = shots[activeIndex] ?? shots[0];
+  const activeShot: ShotPlan | undefined = shots[activeIndex] ?? shots[0];
   const sourceStats = useMemo(
     () => ({
       dialogues: database.dialogueRows.length,
@@ -342,6 +345,23 @@ export default function App() {
       ),
     [sequence.participants],
   );
+  const participantNamesBySlot = useMemo(
+    () =>
+      new Map(
+        sequence.participants.map((participant) => [
+          participant.slot,
+          participant.name,
+        ]),
+      ),
+    [sequence.participants],
+  );
+  const shotPreparationMessage = formationChecking
+    ? "正在查询 UE Blueprint 站位"
+    : formationChoice
+      ? "BP 站位已读取，等待选择"
+      : directorLoading
+        ? `${directorLabel(directorMode)}正在生成镜头`
+        : "镜头方案尚未生成";
 
   useEffect(() => {
     void refreshTraeConnection();
@@ -564,10 +584,14 @@ export default function App() {
     const nextSequence = findDialogueSequence(nextDatabase, prefix);
     const formationRunId = ++formationRunRef.current;
     directorRunRef.current += 1;
+    setSequence(nextSequence);
+    setShots([]);
+    setActiveIndex(0);
     setFormationChoice(null);
     setPendingDirectorResult(null);
     setSharedComparison(null);
     setDirectorLoading(false);
+    setDirectorAnalysis(undefined);
     setFallbackReason(null);
     setError("");
     setActiveFormationSource("generated");
@@ -579,36 +603,13 @@ export default function App() {
     }
 
     setFormationChecking(true);
+    let lookup: Awaited<ReturnType<typeof getBlueprintFormation>>;
     try {
-      const lookup = await getBlueprintFormation({
+      lookup = await getBlueprintFormation({
         dialogueId: prefix,
         startId: nextSequence.startId,
         formationClassPath: nextSequence.formation?.classPath,
       });
-      if (formationRunId !== formationRunRef.current) {
-        return;
-      }
-      if (lookup.status === "found" && lookup.snapshot) {
-        setFormationStatus(lookup.message);
-        const imported = applyBlueprintFormation(
-          nextDatabase,
-          nextSequence,
-          lookup.snapshot,
-        );
-        setFormationChoice({
-          blueprint: createShotPreview(imported.sequence, {
-            preserveInputPositions: true,
-          }),
-          generated: createShotPreview(nextSequence),
-          snapshot: lookup.snapshot,
-          mappedSlotCount: imported.mappedSlotCount,
-          requestedMode,
-          sourceSequence: nextSequence,
-        });
-        return;
-      }
-      setFormationStatus(skippedBlueprintMessage(lookup.message));
-      await applySequence(nextSequence, requestedMode);
     } catch (formationError) {
       if (formationRunId !== formationRunRef.current) {
         return;
@@ -621,11 +622,37 @@ export default function App() {
         ),
       );
       await applySequence(nextSequence, requestedMode);
+      return;
     } finally {
       if (formationRunId === formationRunRef.current) {
         setFormationChecking(false);
       }
     }
+    if (formationRunId !== formationRunRef.current) {
+      return;
+    }
+    if (lookup.status === "found" && lookup.snapshot) {
+      setFormationStatus(lookup.message);
+      const generated = createShotPreview(nextSequence);
+      const imported = applyBlueprintFormation(
+        nextDatabase,
+        nextSequence,
+        lookup.snapshot,
+      );
+      setFormationChoice({
+        blueprint: createShotPreview(imported.sequence, {
+          preserveInputPositions: true,
+        }),
+        generated,
+        snapshot: lookup.snapshot,
+        mappedSlotCount: imported.mappedSlotCount,
+        requestedMode,
+        sourceSequence: nextSequence,
+      });
+      return;
+    }
+    setFormationStatus(skippedBlueprintMessage(lookup.message));
+    await applySequence(nextSequence, requestedMode);
   }
 
   function chooseFormation(choice: "blueprint" | "generated") {
@@ -840,6 +867,14 @@ export default function App() {
           <button
             className="button"
             type="button"
+            onClick={() => setShowNpcRegistration(true)}
+          >
+            <UserRoundPlus size={17} />
+            注册 NPC
+          </button>
+          <button
+            className="button"
+            type="button"
             onClick={() => setShowMissionTargets(true)}
           >
             <MapPinned size={17} />
@@ -1000,111 +1035,218 @@ export default function App() {
 
           <section className="shot-list-section">
             <div className="section-label section-label--sticky">
-              <span>镜头列表</span>
+              <span>{activeShot ? "镜头列表" : "对话文本"}</span>
               <small>
-                {shots.length} 镜 ·{" "}
-                {directorLoading && directorMode !== "rule"
-                  ? "本地预览"
-                  : directorLabel(appliedDirector)}
-                {fallbackReason ? "（已降级）" : ""}
+                {activeShot ? (
+                  <>
+                    {shots.length} 镜 ·{" "}
+                    {directorLoading && directorMode !== "rule"
+                      ? "本地预览"
+                      : directorLabel(appliedDirector)}
+                    {fallbackReason ? "（已降级）" : ""}
+                  </>
+                ) : (
+                  `${sequence.rows.length} 句 · ${shotPreparationMessage}`
+                )}
               </small>
             </div>
             <div className="shot-list">
-              {shots.map((shot, index) => (
-                <button
-                  className={`shot-row ${index === activeIndex ? "is-active" : ""}`}
-                  type="button"
-                  key={shot.id}
-                  onClick={() => setActiveIndex(index)}
-                >
-                  <span className="shot-row__number">
-                    {String(index + 1).padStart(2, "0")}
-                  </span>
-                  <span
-                    className="shot-row__speaker"
-                    data-slot={shot.speakerSlot}
-                    style={{
-                      backgroundColor: participantColorsBySlot.get(
-                        shot.speakerSlot,
-                      ),
-                    }}
-                  >
-                    {shot.speakerSlot}
-                  </span>
-                  <span className="shot-row__body">
-                    <strong>{shot.label}</strong>
-                    <small>{shot.content}</small>
-                  </span>
-                  <span className="shot-row__time">{shot.duration}s</span>
-                </button>
-              ))}
+              {activeShot
+                ? shots.map((shot, index) => (
+                    <button
+                      className={`shot-row ${index === activeIndex ? "is-active" : ""} ${shot.projection.valid ? "" : "is-invalid"}`}
+                      type="button"
+                      key={shot.id}
+                      onClick={() => setActiveIndex(index)}
+                    >
+                      <span className="shot-row__number">
+                        {String(index + 1).padStart(2, "0")}
+                      </span>
+                      <span
+                        className="shot-row__speaker"
+                        data-slot={shot.speakerSlot}
+                        style={{
+                          backgroundColor: participantColorsBySlot.get(
+                            shot.speakerSlot,
+                          ),
+                        }}
+                      >
+                        {shot.speakerSlot}
+                      </span>
+                      <span className="shot-row__body">
+                        <strong>{shot.label}</strong>
+                        <small>{shot.content}</small>
+                      </span>
+                      <span
+                        className="shot-row__time"
+                        title={
+                          shot.projection.valid
+                            ? undefined
+                            : "投影验收未通过"
+                        }
+                      >
+                        {!shot.projection.valid && (
+                          <AlertTriangle
+                            aria-label="投影验收未通过"
+                            size={13}
+                          />
+                        )}
+                        {shot.duration}s
+                      </span>
+                    </button>
+                  ))
+                : sequence.rows.map((row, index) => (
+                    <div className="dialogue-row" key={row.id}>
+                      <span className="shot-row__number">
+                        {String(index + 1).padStart(2, "0")}
+                      </span>
+                      <span
+                        className="shot-row__speaker"
+                        data-slot={row.speakerSlot ?? undefined}
+                        style={{
+                          backgroundColor: row.speakerSlot
+                            ? participantColorsBySlot.get(row.speakerSlot)
+                            : undefined,
+                        }}
+                      >
+                        {row.speakerSlot ?? "?"}
+                      </span>
+                      <span className="shot-row__body">
+                        <strong>
+                          {row.speakerSlot
+                            ? participantNamesBySlot.get(row.speakerSlot)
+                            : "未知角色"}
+                        </strong>
+                        <small>{row.content}</small>
+                      </span>
+                      <span className="dialogue-row__id">{row.id}</span>
+                    </div>
+                  ))}
             </div>
           </section>
         </aside>
 
         <section className="viewport-panel">
-          <div className="viewport-toolbar">
-            <div>
-              <Camera size={16} />
-              <span>镜头 {String(activeIndex + 1).padStart(2, "0")}</span>
-              <small>台词节点 {activeShot.dialogueId}</small>
-            </div>
-            <div className="axis-status">
-              <LocateFixed size={15} />
-              <span>
-                {activeShot.axis.kind === "relationship"
-                  ? `关系轴 ${activeShot.axis.id}`
-                  : activeShot.axis.kind === "direction"
-                    ? `视线轴 ${activeShot.axis.id}`
-                    : "群像总轴"}
-              </span>
-            </div>
-          </div>
-          <StageView
-            participants={sequence.participants}
-            shot={activeShot}
-          />
-          {directorLoading && (
-            <div className="director-loading" role="status">
-              <LoaderCircle className="spin" size={20} />
+          {activeShot ? (
+            <>
+              <div className="viewport-toolbar">
               <div>
-                <strong>
-                  {directorMode === "rule"
-                    ? "规则导演正在编排镜头"
-                    : directorMode === "trae"
-                      ? "已提交，等待内部 TRAE 处理"
-                      : "Mira AI 正在分析剧情"}
-                </strong>
-                <small>
-                  {directorMode === "trae"
-                    ? "对话与本地分镜已显示，可继续浏览"
-                    : directorMode === "mira"
-                      ? "本地分镜已显示，AI 完成后将展示故事梗概"
-                    : "正在维护动态关系轴与视线连续"}
-                </small>
+                  <Camera size={16} />
+                  <span>镜头 {String(activeIndex + 1).padStart(2, "0")}</span>
+                  <small>台词节点 {activeShot.dialogueId}</small>
+                </div>
+                <div className="axis-status">
+                  <LocateFixed size={15} />
+                  <span>
+                    {activeShot.axis.kind === "relationship"
+                      ? `关系轴 ${activeShot.axis.id}`
+                      : activeShot.axis.kind === "direction"
+                        ? `视线轴 ${activeShot.axis.id}`
+                        : "群像总轴"}
+                  </span>
+                </div>
               </div>
-            </div>
+              <StageView
+                participants={sequence.participants}
+                shot={activeShot}
+              />
+              {directorLoading && (
+                <div className="director-loading" role="status">
+                  <LoaderCircle className="spin" size={20} />
+                  <div>
+                    <strong>
+                      {directorMode === "rule"
+                        ? "规则导演正在编排镜头"
+                        : directorMode === "trae"
+                          ? "已提交，等待内部 TRAE 处理"
+                          : "Mira AI 正在分析剧情"}
+                    </strong>
+                    <small>
+                      {directorMode === "trae"
+                        ? "对话与本地分镜已显示，可继续浏览"
+                        : directorMode === "mira"
+                          ? "本地分镜已显示，AI 完成后将展示故事梗概"
+                          : "正在维护动态关系轴与视线连续"}
+                    </small>
+                  </div>
+                </div>
+              )}
+              <div className="dialogue-strip">
+                <span
+                  className="dialogue-strip__slot"
+                  data-slot={activeShot.speakerSlot}
+                  style={{
+                    backgroundColor: participantColorsBySlot.get(
+                      activeShot.speakerSlot,
+                    ),
+                  }}
+                >
+                  {activeShot.speakerSlot}
+                </span>
+                <div>
+                  <strong>{activeShot.speakerName}</strong>
+                  <p>{activeShot.content}</p>
+                </div>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="viewport-toolbar">
+                <div>
+                  <Camera size={16} />
+                  <span>对话 {sequence.prefix}</span>
+                  <small>{sequence.rows.length} 句台词已加载</small>
+                </div>
+                <div className="axis-status">
+                  {formationChecking || directorLoading ? (
+                    <LoaderCircle className="spin" size={15} />
+                  ) : (
+                    <Boxes size={15} />
+                  )}
+                  <span>{shotPreparationMessage}</span>
+                </div>
+              </div>
+              <div className="dialogue-preview" role="status">
+                {sequence.rows.map((row) => (
+                  <div className="dialogue-preview__row" key={row.id}>
+                    <span
+                      className="dialogue-strip__slot"
+                      data-slot={row.speakerSlot ?? undefined}
+                      style={{
+                        backgroundColor: row.speakerSlot
+                          ? participantColorsBySlot.get(row.speakerSlot)
+                          : undefined,
+                      }}
+                    >
+                      {row.speakerSlot ?? "?"}
+                    </span>
+                    <div>
+                      <strong>
+                        {row.speakerSlot
+                          ? participantNamesBySlot.get(row.speakerSlot)
+                          : "未知角色"}
+                      </strong>
+                      <p>{row.content}</p>
+                    </div>
+                    <small>{row.id}</small>
+                  </div>
+                ))}
+              </div>
+              <div className="dialogue-preparation-status">
+                {formationChecking || directorLoading ? (
+                  <LoaderCircle className="spin" size={16} />
+                ) : (
+                  <Boxes size={16} />
+                )}
+                <span>{shotPreparationMessage}</span>
+              </div>
+            </>
           )}
-          <div className="dialogue-strip">
-            <span
-              className="dialogue-strip__slot"
-              data-slot={activeShot.speakerSlot}
-              style={{
-                backgroundColor: participantColorsBySlot.get(
-                  activeShot.speakerSlot,
-                ),
-              }}
-            >
-              {activeShot.speakerSlot}
-            </span>
-            <div>
-              <strong>{activeShot.speakerName}</strong>
-              <p>{activeShot.content}</p>
-            </div>
-          </div>
         </section>
 
         <aside className="right-panel">
+          {activeShot ? (
+            <>
           <section className="inspector-header">
             <div>
               <small>当前镜头</small>
@@ -1262,7 +1404,15 @@ export default function App() {
               </div>
               <div>
                 <dt>投影验收</dt>
-                <dd>{activeShot.projection.valid ? "通过" : "需复核"}</dd>
+                <dd
+                  className={
+                    activeShot.projection.valid
+                      ? "projection-status--valid"
+                      : "projection-status--invalid"
+                  }
+                >
+                  {activeShot.projection.valid ? "通过" : "未通过"}
+                </dd>
               </div>
             </dl>
           </section>
@@ -1404,6 +1554,38 @@ export default function App() {
             <Users size={15} />
             <span>支持 2-12 人动态进出场、群像站位与动态关系轴</span>
           </footer>
+            </>
+          ) : (
+            <>
+              <section className="inspector-header">
+                <div>
+                  <small>当前进度</small>
+                  <h2>对话已加载</h2>
+                </div>
+              </section>
+              <section className="inspector-section">
+                <div className="section-label">
+                  <span>镜头准备</span>
+                  <small>{sequence.rows.length} 句台词</small>
+                </div>
+                <p>{shotPreparationMessage}</p>
+              </section>
+              {sequence.warnings.length > 0 && (
+                <section className="inspector-section warning-section">
+                  <div className="section-label">
+                    <span>数据提示</span>
+                  </div>
+                  {sequence.warnings.map((warning) => (
+                    <p key={warning}>{warning}</p>
+                  ))}
+                </section>
+              )}
+              <footer className="inspector-footer">
+                <Users size={15} />
+                <span>{sequence.participants.length} 位对话参与者</span>
+              </footer>
+            </>
+          )}
         </aside>
       </div>
 
@@ -1461,6 +1643,12 @@ export default function App() {
         <MissionTargetModal
           database={database}
           onClose={() => setShowMissionTargets(false)}
+        />
+      )}
+
+      {showNpcRegistration && (
+        <NpcRegistrationModal
+          onClose={() => setShowNpcRegistration(false)}
         />
       )}
 

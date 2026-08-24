@@ -7,6 +7,7 @@ import {
   DirectorInputSchema,
   MiraReadyResponseSchema,
 } from "../src/director/contracts";
+import { inspectDirectorProjection } from "../src/director/orchestrator";
 import {
   getStoryboardMcpPresence,
   STORYBOARD_MCP_VERSION,
@@ -255,6 +256,15 @@ export async function routeTraeRequest(
       const resolution = SharedResolutionSchema.parse(
         await readJson(request),
       );
+      const projectionFailures = inspectDirectorProjection(
+        resolution.input,
+        resolution.plan,
+      );
+      if (projectionFailures.length > 0) {
+        throw new Error(
+          `所选方案仍有 ${projectionFailures.length} 个镜头未通过投影验收`,
+        );
+      }
       if (resolution.choice === "local") {
         await saveSharedStoryboard(
           resolution.input,
@@ -286,7 +296,14 @@ export async function routeTraeRequest(
       const task = await createStoryboardTask(input);
       const taskWasCompleted = task.status === "completed";
       const sharedRecords = await lookupSharedLibrary(input);
-      const exactShared = findExactSharedStoryboard(input, sharedRecords);
+      const validSharedRecords = sharedRecords.filter((record) => {
+        try {
+          return inspectDirectorProjection(input, record.plan).length === 0;
+        } catch {
+          return false;
+        }
+      });
+      const exactShared = findExactSharedStoryboard(input, validSharedRecords);
       let source: "generated" | "local-cache" | "shared-library" =
         taskWasCompleted ? "local-cache" : "generated";
       if (!taskWasCompleted && exactShared) {
@@ -302,18 +319,21 @@ export async function routeTraeRequest(
       );
       let conflict: SharedStoryboardRecord | null = null;
       if (result.status === "ready") {
+        const projectionFailures = inspectDirectorProjection(input, result);
         const comparableResult = {
           ...result,
           request_id: exactShared?.plan.request_id || result.request_id,
         };
-        if (
+        if (projectionFailures.length > 0) {
+          conflict = null;
+        } else if (
           exactShared &&
           !sharedPlansEqual(comparableResult, exactShared.plan)
         ) {
           conflict = exactShared;
-        } else if (!exactShared && sharedRecords[0]) {
-          conflict = sharedRecords[0];
-        } else if (!sharedRecords[0] && sharedLibraryEnabled()) {
+        } else if (!exactShared && validSharedRecords[0]) {
+          conflict = validSharedRecords[0];
+        } else if (!validSharedRecords[0] && sharedLibraryEnabled()) {
           try {
             await saveSharedStoryboard(input, result);
           } catch (error) {

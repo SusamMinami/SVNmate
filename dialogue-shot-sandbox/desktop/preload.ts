@@ -8,6 +8,8 @@ contextBridge.exposeInMainWorld("shotSandboxDesktop", {
     ipcRenderer.invoke("desktop:open-integration-folder"),
   openTraeDownload: () =>
     ipcRenderer.invoke("desktop:open-trae-download"),
+  setUeMcpPort: (port: number) =>
+    ipcRenderer.invoke("desktop:set-ue-port", port),
   completeSetup: () => ipcRenderer.invoke("desktop:complete-setup"),
   checkForUpdates: () => ipcRenderer.invoke("desktop:check-update"),
   getUpdateSnapshot: () => ipcRenderer.invoke("desktop:update-snapshot"),

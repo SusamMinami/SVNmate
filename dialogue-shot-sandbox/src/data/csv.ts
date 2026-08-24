@@ -78,6 +78,17 @@ function optionalInteger(value: string): number | null {
   return Number.parseInt(value, 10);
 }
 
+function optionalBoolean(value: string): boolean | null {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "true") {
+    return true;
+  }
+  if (normalized === "false") {
+    return false;
+  }
+  return null;
+}
+
 function firstReference(value: string): string | null {
   return value.match(/(?<!\d)\d+(?!\d)/)?.[0] ?? null;
 }
@@ -177,6 +188,8 @@ function parseNpcs(text: string): Map<number, NpcProfile> {
     "NPC.npcintroduce",
   ]);
   const resourceIndex = optionalIndex(rows[0], "NPC.resource_id");
+  const titleIndex = optionalIndex(rows[0], "NPC.title");
+  const canTurnIndex = optionalIndex(rows[0], "NPC.ifturn");
   const npcs = new Map<number, NpcProfile>();
 
   rows.slice(2).forEach((row) => {
@@ -190,6 +203,8 @@ function parseNpcs(text: string): Map<number, NpcProfile> {
       note: "",
       introduction: valueAt(row, indexes, "NPC.npcintroduce"),
       resourceId: optionalInteger(optionalValueAt(row, resourceIndex)),
+      title: optionalValueAt(row, titleIndex),
+      canTurn: optionalBoolean(optionalValueAt(row, canTurnIndex)),
     });
   });
   return npcs;
@@ -366,6 +381,26 @@ export function parseDialogueDatabase(
         "副本任务表",
       ),
     ],
+    missionPositions: parseMissionPositions(missionPositionText),
+    mapConfigs: parseMapConfigs(mapConfigText, mapResourceText),
+    sourceName,
+  };
+}
+
+export function parseNpcRegistrationDatabase(
+  npcText: string,
+  modelText: string,
+  missionPositionText: string,
+  mapConfigText: string,
+  mapResourceText: string,
+  sourceName: string,
+): DialogueDatabase {
+  return {
+    dialogueRows: [],
+    starts: [],
+    npcs: parseNpcs(npcText),
+    models: parseModels(modelText),
+    missionRows: [],
     missionPositions: parseMissionPositions(missionPositionText),
     mapConfigs: parseMapConfigs(mapConfigText, mapResourceText),
     sourceName,

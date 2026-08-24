@@ -1,8 +1,22 @@
-import { BLOCKING_POSITIONS, type DirectorInput } from "./contracts";
+import {
+  BLOCKING_POSITIONS,
+  type DirectorInput,
+  type ReadyDirectorResponse,
+} from "./contracts";
+
+interface DirectorProjectionRevision {
+  previousPlan: ReadyDirectorResponse;
+  failures: Array<{
+    shotIndex: number;
+    dialogueIds: string[];
+    warnings: string[];
+  }>;
+}
 
 export function buildDirectorPrompt(
   input: DirectorInput,
   providerName: string,
+  revision?: DirectorProjectionRevision,
 ): string {
   const participantSlots = input.participants.map(
     (participant) => participant.slot,
@@ -15,6 +29,31 @@ export function buildDirectorPrompt(
     input.participants.length === 2
       ? (["front_left", "front_right"] as const)
       : BLOCKING_POSITIONS;
+  if (revision) {
+    const contentById = new Map(
+      input.dialogue.map((line) => [line.dialogue_id, line]),
+    );
+    const failures = revision.failures.map((failure) => ({
+      ...failure,
+      dialogue: failure.dialogueIds.map((dialogueId) =>
+        contentById.get(dialogueId),
+      ),
+    }));
+    return [
+      `你是 ${providerName}，正在执行一次投影验收后的定向返修。`,
+      `request_id 必须原样返回：${input.request_id}`,
+      "只输出完整的 shot-plan.v5 JSON，不要 Markdown 或解释文字。",
+      "保留未列出镜头的台词分组和设计，只重新设计失败镜头（failed_shots）；返回结果仍须按原顺序覆盖每个 dialogue_id 一次。",
+      "根据每条 warnings 调整失败镜头的模板、主体、注视对象、焦段、机位高度、运动或构图语义。不要只改 intent 文案。",
+      input.constraints.preserve_input_formation
+        ? "角色站位来自 UE Blueprint，不得修改或假设 blocking.position 会改变实际坐标。"
+        : "可以调整 blocking，但所有角色位置必须唯一，并保持进出场节点有效。",
+      "继续遵守 16:9 主构图、21:9 安全区域、关系轴同侧、视线空间、角色不重叠、运镜起止画面可读和相邻镜头至少 30 度变化等约束。",
+      `failed_shots：${JSON.stringify(failures)}`,
+      `上一版完整方案：${JSON.stringify(revision.previousPlan)}`,
+      `原始输入：${JSON.stringify(input)}`,
+    ].join("\n");
+  }
   return [
     `你是 ${providerName}，负责游戏过场动画的分镜设计。`,
     `请分析 ${input.participants.length} 人对话的戏剧目标、情绪推进、权力变化和视觉节奏。`,

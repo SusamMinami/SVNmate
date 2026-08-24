@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rm } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
@@ -9,10 +9,19 @@ import {
   DirectorInputSchema,
   MiraDirectorResponseSchema,
   type DirectorInput,
+  type MiraDirectorResponse,
 } from "../src/director/contracts";
+import { inspectDirectorProjection } from "../src/director/orchestrator";
 import { buildDirectorPrompt } from "../src/director/prompt";
 
 const execFileAsync = promisify(execFile);
+
+function miraIdempotencyKey(requestId: string, phase: "initial" | "revision") {
+  return createHash("sha256")
+    .update(`${phase}:${requestId}`)
+    .digest("hex")
+    .slice(0, 50);
+}
 const REQUIRED_SCOPES = ["search:bot", "im:message.send_as_user"] as const;
 const MIRA_QUERY = process.env.MIRA_BOT_QUERY || "Mira";
 const COMMAND_TIMEOUT_MS = 30_000;
@@ -362,7 +371,7 @@ async function waitForMiraReply(
   bot: MiraBot,
   input: DirectorInput,
   startIso: string,
-): Promise<unknown> {
+): Promise<MiraDirectorResponse> {
   const deadline = Date.now() + MIRA_REPLY_TIMEOUT_MS;
   while (Date.now() < deadline) {
     const envelope = await runLark([
@@ -445,14 +454,97 @@ async function analyzeWithMira(input: DirectorInput): Promise<unknown> {
         "--text",
         prompt,
         "--idempotency-key",
-        input.request_id.slice(0, 50),
+        miraIdempotencyKey(input.request_id, "initial"),
         "--as",
         "user",
         "--format",
         "json",
       ]),
     );
-    return await waitForMiraReply(discovery.selected, input, startIso);
+    const firstResult = await waitForMiraReply(
+      discovery.selected,
+      input,
+      startIso,
+    );
+    if (firstResult.status !== "ready") {
+      return firstResult;
+    }
+
+    const projectionFailures = inspectDirectorProjection(input, firstResult);
+    if (projectionFailures.length === 0) {
+      return firstResult;
+    }
+
+    const revisionInput = {
+      ...input,
+      request_id: `${input.request_id.slice(0, 80)}-projection-retry`,
+    };
+    const revisionPrompt = buildDirectorPrompt(
+      revisionInput,
+      "Mira AI 导演",
+      {
+        previousPlan: firstResult,
+        failures: projectionFailures,
+      },
+    );
+    const revisionStartIso = new Date(Date.now() - 5_000).toISOString();
+    unwrapData(
+      await runLark([
+        "im",
+        "+messages-send",
+        "--user-id",
+        discovery.selected.openId,
+        "--text",
+        revisionPrompt,
+        "--idempotency-key",
+        miraIdempotencyKey(input.request_id, "revision"),
+        "--as",
+        "user",
+        "--format",
+        "json",
+      ]),
+    );
+    const revisedResult = await waitForMiraReply(
+      discovery.selected,
+      revisionInput,
+      revisionStartIso,
+    );
+    if (revisedResult.status !== "ready") {
+      return firstResult;
+    }
+    const failedShotIndexes = new Set(
+      projectionFailures.map((failure) => failure.shotIndex - 1),
+    );
+    const mergedResult: MiraDirectorResponse = {
+      ...firstResult,
+      request_id: input.request_id,
+      shots: firstResult.shots.map((shot, index) =>
+        failedShotIndexes.has(index)
+          ? (revisedResult.shots[index] ?? shot)
+          : shot,
+      ),
+    };
+    let revisedFailures: ReturnType<typeof inspectDirectorProjection>;
+    try {
+      revisedFailures = inspectDirectorProjection(input, mergedResult);
+    } catch {
+      return firstResult;
+    }
+    const failureScore = (
+      failures: ReturnType<typeof inspectDirectorProjection>,
+    ) =>
+      failures.reduce(
+        (score, failure) => score + 1_000 + failure.warnings.length,
+        0,
+      );
+    const selectedResult =
+      failureScore(revisedFailures) < failureScore(projectionFailures)
+        ? mergedResult
+        : firstResult;
+    return {
+      ...selectedResult,
+      request_id: input.request_id,
+    };
   } finally {
     state.activeMiraRequest = null;
   }

@@ -46,6 +46,8 @@ export interface NpcProfile {
   note: string;
   introduction: string;
   resourceId: number | null;
+  title?: string;
+  canTurn?: boolean | null;
 }
 
 export interface ModelResource {
@@ -199,6 +201,143 @@ export interface MissionTargetPreviewLoadResult {
   spawnedCount: number;
   assetCount: number;
   markerCount: number;
+}
+
+export interface MissionTargetMapStatus {
+  currentMapAssetPath: string;
+  expectedMapAssetPath: string;
+  matches: boolean;
+}
+
+export interface MissionTargetBlueprintCreateResult {
+  status: "created";
+  taskId: string;
+  blueprintAssetPath: string;
+  targetCount: number;
+  componentNames: string[];
+  dialogueRegistration?: DialogueModelRegistrationResult;
+}
+
+export interface MissionTargetBlueprintCompatibility {
+  status: "matched" | "mismatch" | "unavailable";
+  blueprintAssetPath: string;
+  dialogueId: string | null;
+  dialogueAssetPath: string | null;
+  formationClassPath: string | null;
+  dialogueModels: string[];
+  selectedModels: string[];
+  message: string;
+}
+
+export interface DialogueModelRegistrationSlot {
+  modelIndex: number;
+  targetId: string | null;
+  modelClassPath: string;
+  existingModelName: string;
+  suggestedModelName: string | null;
+  candidateModelNames: string[];
+  status: "registered" | "available" | "unmapped";
+}
+
+export interface MissionTargetBlueprintInspection {
+  blueprintState: "empty" | "populated";
+  blueprintAssetPath: string;
+  blueprintClassPath: string;
+  parentClassPath: string;
+  dialogueId: string | null;
+  dialogueAssetPath: string | null;
+  formationClassPath: string | null;
+  slots: DialogueModelRegistrationSlot[];
+  message: string;
+}
+
+export interface DialogueModelRegistrationResult {
+  status: "registered" | "unchanged";
+  blueprintAssetPath: string;
+  dialogueId: string;
+  dialogueAssetPath: string;
+  dialogueModels: string[];
+  registeredCount: number;
+  emptyCount: number;
+  unresolvedIndexes: number[];
+}
+
+export interface SelectedLevelActor {
+  actorRef: string;
+  label: string;
+  classPath: string;
+  transform: UnrealTransform;
+}
+
+export interface SelectedLevelActorsResult {
+  mapAssetPath: string;
+  actors: SelectedLevelActor[];
+}
+
+export interface NpcRegistrationCandidate {
+  actor: SelectedLevelActor;
+  modelOptions: ModelResource[];
+  npcOptions: NpcProfile[];
+  positionMatches: MissionPositionRow[];
+  targetMatches: MissionPositionRow[];
+  mapOptions: MapConfigRow[];
+  mapId: string | null;
+  mapName: string;
+}
+
+export interface NpcRegistrationScanResult {
+  selection: SelectedLevelActorsResult;
+  candidates: NpcRegistrationCandidate[];
+}
+
+export interface NpcRegistrationWriteItem {
+  actorRef: string;
+  label: string;
+  classPath: string;
+  transform: UnrealTransform;
+  mapId: string;
+  existingModelId: number | null;
+  existingNpcId: number | null;
+  existingTargetId: string | null;
+  canTurn: boolean;
+  newNpc: {
+    name: string;
+    title: string;
+    canTurn: boolean;
+  } | null;
+}
+
+export interface NpcRegistrationWriteResult {
+  createdModels: Array<{ actorRef: string; id: number }>;
+  createdNpcs: Array<{ actorRef: string; id: number }>;
+  createdTargets: Array<{ actorRef: string; id: number }>;
+  reusedTargets: Array<{ actorRef: string; id: string }>;
+  openedWorkbooks: string[];
+}
+
+export type MissionTargetTransform = Pick<
+  UnrealTransform,
+  "location" | "rotation"
+>;
+
+export interface MissionTargetEditRequest {
+  taskId: string;
+  mapId: string;
+  mapAssetPath: string;
+  targets: MissionTargetPreviewTarget[];
+}
+
+export interface MissionTargetUpdateItem {
+  targetId: string;
+  mapId: string;
+  originalTransform: MissionTargetTransform;
+  transform: MissionTargetTransform;
+}
+
+export interface MissionTargetUpdateResult {
+  updatedTargets: Array<{ targetId: string; rowNumber: number }>;
+  unchangedTargetIds: string[];
+  openedWorkbooks: string[];
 }
 
 export type ShotKind =

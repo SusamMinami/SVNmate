@@ -1,7 +1,18 @@
 import type {
   BlueprintFormationSnapshot,
+  DialogueModelRegistrationResult,
+  MissionTargetBlueprintCreateResult,
+  MissionTargetBlueprintCompatibility,
+  MissionTargetBlueprintInspection,
+  MissionTargetMapStatus,
+  MissionTargetUpdateItem,
+  MissionTargetUpdateResult,
   MissionTargetPreviewLoadResult,
   MissionTargetPreviewPlan,
+  NpcRegistrationScanResult,
+  NpcRegistrationWriteItem,
+  NpcRegistrationWriteResult,
+  SelectedLevelActorsResult,
 } from "../types";
 
 export interface BlueprintFormationLookup {
@@ -22,9 +33,10 @@ async function fetchUe(
   path: string,
   init: RequestInit,
   timeoutMs?: number,
+  attempts = 2,
 ): Promise<Response> {
   let lastError: unknown;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
     const controller = timeoutMs ? new AbortController() : null;
     const timeout = controller
       ? window.setTimeout(() => controller.abort(), timeoutMs)
@@ -39,7 +51,7 @@ async function fetchUe(
       if (error instanceof DOMException && error.name === "AbortError") {
         throw error;
       }
-      if (attempt === 0) {
+      if (attempt + 1 < attempts) {
         await new Promise((resolve) => window.setTimeout(resolve, 600));
       }
     } finally {
@@ -97,14 +109,18 @@ export async function getBlueprintFormation(input: {
   return body.data;
 }
 
-async function postUe<T>(path: string, body?: unknown): Promise<T> {
+async function postUe<T>(
+  path: string,
+  body?: unknown,
+  retry = true,
+): Promise<T> {
   let response: Response;
   try {
     response = await fetchUe(path, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: body === undefined ? undefined : JSON.stringify(body),
-    });
+    }, undefined, retry ? 2 : 1);
   } catch {
     throw new Error(bridgeUnavailableMessage());
   }
@@ -121,8 +137,99 @@ async function postUe<T>(path: string, body?: unknown): Promise<T> {
 
 export function loadMissionTargetPreview(
   plan: MissionTargetPreviewPlan,
+  mapMode: "require-current" | "auto",
 ): Promise<MissionTargetPreviewLoadResult> {
-  return postUe("/api/ue/mission-targets/load", plan);
+  return postUe("/api/ue/mission-targets/load", { plan, mapMode }, false);
+}
+
+export function inspectMissionTargetMap(
+  mapAssetPath: string,
+): Promise<MissionTargetMapStatus> {
+  return postUe("/api/ue/mission-targets/map-status", { mapAssetPath });
+}
+
+export function createMissionTargetBlueprint(
+  blueprintName: string,
+  plan: MissionTargetPreviewPlan,
+  selectedTargetIds?: string[],
+  registerDialogue = false,
+): Promise<MissionTargetBlueprintCreateResult> {
+  return postUe(
+    "/api/ue/mission-targets/create-blueprint",
+    {
+      blueprintName,
+      plan,
+      selectedTargetIds,
+      registerDialogue,
+    },
+    false,
+  );
+}
+
+export function inspectMissionTargetBlueprint(
+  blueprintName: string,
+  plan?: MissionTargetPreviewPlan,
+): Promise<MissionTargetBlueprintInspection> {
+  return postUe("/api/ue/mission-targets/inspect-blueprint", {
+    blueprintName,
+    plan,
+  });
+}
+
+export function registerBlueprintDialogueModels(
+  blueprintName: string,
+  selectedModelIndexes: number[],
+): Promise<DialogueModelRegistrationResult> {
+  return postUe(
+    "/api/ue/mission-targets/register-dialogue",
+    {
+      blueprintName,
+      selectedModelIndexes,
+    },
+    false,
+  );
+}
+
+export function checkMissionTargetBlueprint(
+  blueprintName: string,
+  plan: MissionTargetPreviewPlan,
+  selectedTargetIds?: string[],
+): Promise<MissionTargetBlueprintCompatibility> {
+  return postUe("/api/ue/mission-targets/check-blueprint", {
+    blueprintName,
+    plan,
+    selectedTargetIds,
+  });
+}
+
+export function readSelectedLevelActors(): Promise<SelectedLevelActorsResult> {
+  return postUe("/api/ue/selection/read");
+}
+
+export function scanSelectedNpcRegistration(): Promise<NpcRegistrationScanResult> {
+  return postUe("/api/ue/selection/registration");
+}
+
+export function openConfigTable(
+  table: "missionTarget" | "npc" | "model",
+): Promise<{ table: string; path: string }> {
+  return postUe("/api/ue/config-table/open", { table });
+}
+
+export function writeNpcRegistrationDraft(
+  items: NpcRegistrationWriteItem[],
+): Promise<NpcRegistrationWriteResult> {
+  return postUe("/api/ue/config-registration/write", { items }, false);
+}
+
+export function updateMissionTargetTransforms(
+  items: MissionTargetUpdateItem[],
+): Promise<MissionTargetUpdateResult> {
+  return postUe(
+    "/api/ue/config-registration/update-targets",
+    { items },
+    false,
+  );
 }
 
 export function clearMissionTargetPreview(): Promise<{

@@ -5,6 +5,7 @@ import {
   ExternalLink,
   FolderCog,
   LoaderCircle,
+  PlugZap,
   RefreshCw,
   X,
 } from "lucide-react";
@@ -47,6 +48,7 @@ export function DesktopSetupModal({
   });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [uePort, setUePort] = useState(String(initialStatus.ueMcpPort));
 
   useEffect(() => {
     if (!desktop) {
@@ -85,6 +87,32 @@ export function DesktopSetupModal({
     try {
       setStatus(await desktop.completeSetup());
       onClose();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function updateUeConnection() {
+    if (!desktop) {
+      return;
+    }
+    const port = Number(uePort);
+    if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+      setError("UE MCP 端口必须是 1-65535 的整数");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const nextStatus = await desktop.setUeMcpPort(port);
+      setStatus(nextStatus);
+      setUePort(String(nextStatus.ueMcpPort));
+    } catch (setupError) {
+      setError(
+        setupError instanceof Error
+          ? setupError.message
+          : "无法更新 UE MCP 端口",
+      );
     } finally {
       setBusy(false);
     }
@@ -179,6 +207,43 @@ export function DesktopSetupModal({
                 </small>
               </span>
             </div>
+            <div className={status.ueConnected ? "" : "is-warning"}>
+              {status.ueConnected ? (
+                <Check size={17} />
+              ) : (
+                <CircleAlert size={17} />
+              )}
+              <span>
+                <strong>UE 编辑器</strong>
+                <small title={status.ueConnectionMessage}>
+                  {status.ueConnected
+                    ? status.ueConnectionMessage
+                    : `未连接 OmniMcpCore（${status.ueMcpHost}:${status.ueMcpPort}）`}
+                </small>
+              </span>
+              <div className="setup-port-control">
+                <input
+                  type="number"
+                  min={1}
+                  max={65_535}
+                  value={uePort}
+                  aria-label="UE MCP 端口"
+                  onChange={(event) => setUePort(event.target.value)}
+                />
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void updateUeConnection()}
+                >
+                  {busy ? (
+                    <LoaderCircle className="spin" size={14} />
+                  ) : (
+                    <PlugZap size={14} />
+                  )}
+                  检测
+                </button>
+              </div>
+            </div>
           </section>
 
           <section className="setup-instructions">
@@ -186,6 +251,7 @@ export function DesktopSetupModal({
             <ol>
               <li>生成独立的 TRAE 集成目录。</li>
               <li>在 TRAE 中打开该目录，并启用项目 MCP 与 Skill。</li>
+              <li>启动 UE 编辑器并确认 OmniMcpCore 端口检测通过。</li>
               <li>保持镜头沙盘运行，刷新状态后提交 AI 分镜任务。</li>
             </ol>
             <code title={status.integrationRoot}>{status.integrationRoot}</code>

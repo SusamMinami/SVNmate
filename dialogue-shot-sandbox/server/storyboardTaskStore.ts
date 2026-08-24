@@ -1,11 +1,21 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  open,
+  readFile,
+  readdir,
+  rename,
+  stat,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
 import {
   DirectorInputSchema,
   MiraDirectorResponseSchema,
   type DirectorInput,
   type MiraDirectorResponse,
+  type ReadyDirectorResponse,
 } from "../src/director/contracts";
 import { storyboardRuntimeRoot } from "./storyboardRuntime";
 
@@ -26,11 +36,16 @@ export interface StoryboardTask {
   input: DirectorInput;
   result?: MiraDirectorResponse;
   error?: string;
+  projectionRevisionAttempts?: number;
+  projectionRevisionBase?: ReadyDirectorResponse;
+  projectionRevisionFailedShotIndexes?: number[];
 }
 
 const PROCESSING_LEASE_MS = 20 * 60_000;
+const TASK_LOCK_TIMEOUT_MS = 5_000;
+const TASK_LOCK_STALE_MS = 30_000;
 export const STORYBOARD_CACHE_POLICY =
-  "shot-plan.v5:camera-language-v2";
+  "shot-plan.v5:camera-language-v3-projection-revision";
 
 function taskDirectory(): string {
   return join(storyboardRuntimeRoot(), ".storyboard-data", "tasks");
@@ -85,6 +100,46 @@ async function writeTask(task: StoryboardTask): Promise<void> {
   const temporary = `${destination}.${process.pid}.tmp`;
   await writeFile(temporary, JSON.stringify(task, null, 2), "utf8");
   await rename(temporary, destination);
+}
+
+async function withTaskLock<T>(
+  requestId: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  await mkdir(taskDirectory(), { recursive: true });
+  const lockPath = `${taskPath(requestId)}.lock`;
+  const deadline = Date.now() + TASK_LOCK_TIMEOUT_MS;
+  while (true) {
+    try {
+      const handle = await open(lockPath, "wx");
+      try {
+        return await operation();
+      } finally {
+        await handle.close();
+        await unlink(lockPath).catch(() => undefined);
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+        throw error;
+      }
+      try {
+        const lock = await stat(lockPath);
+        if (Date.now() - lock.mtimeMs > TASK_LOCK_STALE_MS) {
+          await unlink(lockPath).catch(() => undefined);
+          continue;
+        }
+      } catch (statError) {
+        if ((statError as NodeJS.ErrnoException).code === "ENOENT") {
+          continue;
+        }
+        throw statError;
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(`分镜任务 ${requestId} 正在被其他进程更新`);
+      }
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 25));
+    }
+  }
 }
 
 async function readAllTasks(): Promise<StoryboardTask[]> {
@@ -570,6 +625,27 @@ export async function completeStoryboardTask(
     task,
   );
   return task;
+}
+
+export async function recordStoryboardProjectionRevision(
+  requestId: string,
+  basePlan: ReadyDirectorResponse,
+  failedShotIndexes: number[],
+): Promise<number> {
+  return withTaskLock(requestId, async () => {
+    const task = await getStoryboardTask(requestId);
+    if (!task) {
+      throw new Error(`未找到分镜任务 ${requestId}`);
+    }
+    if ((task.projectionRevisionAttempts ?? 0) === 0) {
+      task.projectionRevisionAttempts = 1;
+      task.projectionRevisionBase = basePlan;
+      task.projectionRevisionFailedShotIndexes = [...failedShotIndexes];
+    }
+    task.updatedAt = new Date().toISOString();
+    await writeTask(task);
+    return task.projectionRevisionAttempts ?? 1;
+  });
 }
 
 export async function failStoryboardTask(

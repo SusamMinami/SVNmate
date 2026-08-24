@@ -21,7 +21,12 @@ import {
   runStoryboardMcpServer,
 } from "../mcp/storyboardServer";
 import { routeLarkRequest } from "../server/larkBridge";
-import { routeUeRequest } from "../server/ueBridge";
+import {
+  configureUnrealMcpPort,
+  getUnrealMcpEndpoint,
+  inspectUnrealMcpConnection,
+  routeUeRequest,
+} from "../server/ueBridge";
 import {
   getStoryboardMcpPresence,
   STORYBOARD_MCP_VERSION,
@@ -51,6 +56,7 @@ const contentTypes: Record<string, string> = {
 
 interface DesktopState {
   setupCompleted: boolean;
+  ueMcpPort: number;
 }
 
 interface UpdateSnapshot {
@@ -119,9 +125,20 @@ async function readDesktopState(): Promise<DesktopState> {
     const parsed = JSON.parse(
       await readFile(statePath(), "utf8"),
     ) as Partial<DesktopState>;
-    return { setupCompleted: parsed.setupCompleted === true };
+    return {
+      setupCompleted: parsed.setupCompleted === true,
+      ueMcpPort:
+        Number.isInteger(parsed.ueMcpPort) &&
+        Number(parsed.ueMcpPort) >= 1 &&
+        Number(parsed.ueMcpPort) <= 65_535
+          ? Number(parsed.ueMcpPort)
+          : getUnrealMcpEndpoint().port,
+    };
   } catch {
-    return { setupCompleted: false };
+    return {
+      setupCompleted: false,
+      ueMcpPort: getUnrealMcpEndpoint().port,
+    };
   }
 }
 
@@ -263,13 +280,21 @@ async function migrateLegacyGlobalMcpConfiguration(): Promise<void> {
 }
 
 async function setupStatus() {
-  const [state, traeExecutable, integration, presence, defaultDataReady] =
+  const [
+    state,
+    traeExecutable,
+    integration,
+    presence,
+    defaultDataReady,
+    ueConnection,
+  ] =
     await Promise.all([
       readDesktopState(),
       detectTrae(),
       integrationStatus(),
       getStoryboardMcpPresence(),
       pathExists("C:\\trunk\\doc\\csvdir"),
+      inspectUnrealMcpConnection(),
     ]);
   return {
     firstRun:
@@ -287,6 +312,10 @@ async function setupStatus() {
     mcpVersion: presence.serverVersion,
     expectedMcpVersion: STORYBOARD_MCP_VERSION,
     defaultDataReady,
+    ueConnected: ueConnection.connected,
+    ueMcpHost: ueConnection.host,
+    ueMcpPort: ueConnection.port,
+    ueConnectionMessage: ueConnection.message,
     updateSupported: app.isPackaged,
     updatePage: UPDATE_PAGE,
   };
@@ -365,7 +394,16 @@ function registerDesktopIpc(): void {
     shell.openExternal("https://www.trae.cn/ide/download"),
   );
   ipcMain.handle("desktop:complete-setup", async () => {
-    await writeDesktopState({ setupCompleted: true });
+    const state = await readDesktopState();
+    await writeDesktopState({ ...state, setupCompleted: true });
+    return setupStatus();
+  });
+  ipcMain.handle("desktop:set-ue-port", async (_event, port: unknown) => {
+    const numericPort =
+      typeof port === "number" ? port : Number.parseInt(String(port), 10);
+    configureUnrealMcpPort(numericPort);
+    const state = await readDesktopState();
+    await writeDesktopState({ ...state, ueMcpPort: numericPort });
     return setupStatus();
   });
   ipcMain.handle("desktop:check-update", () => checkForUpdates());
@@ -487,6 +525,8 @@ async function runDesktop(): Promise<void> {
   }
   await app.whenReady();
   configureRuntimeEnvironment();
+  const desktopState = await readDesktopState();
+  configureUnrealMcpPort(desktopState.ueMcpPort);
   await migrateLegacyGlobalMcpConfiguration();
   await installTraeIntegration();
   registerDesktopIpc();

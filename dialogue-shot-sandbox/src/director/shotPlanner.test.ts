@@ -385,6 +385,56 @@ describe("createShotPlan", () => {
     }
   });
 
+  it("revises projection failures and keeps unresolved shots for review", () => {
+    const groupSequence = findDialogueSequence(demoDatabase, "3099");
+    const overlappingSequence = {
+      ...groupSequence,
+      participants: groupSequence.participants.map((participant) => ({
+        ...participant,
+        position: [0, 0, 0] as const,
+      })),
+    };
+    const input = createDirectorInput(
+      overlappingSequence,
+      "projection-revision-test",
+    );
+    const blocking = createDefaultBlocking(input);
+    const stagedSequence = {
+      ...overlappingSequence,
+      participants: resolveBlocking(
+        overlappingSequence.participants,
+        blocking,
+        overlappingSequence.rows.map((row) => row.id),
+        { preserveInputPositions: true },
+      ),
+    };
+    const initialShots = resolveShotDecisions(
+      stagedSequence,
+      createRuleDecisions(input, blocking),
+    );
+    const preview = createShotPreview(overlappingSequence, {
+      preserveInputPositions: true,
+    });
+    const issueScore = (candidateShots: typeof preview.shots) =>
+      candidateShots.reduce(
+        (score, shot) =>
+          score +
+          (shot.projection.valid ? 0 : 1_000) +
+          shot.projection.warnings.length,
+        0,
+      );
+
+    expect(issueScore(preview.shots)).toBeLessThan(issueScore(initialShots));
+    expect(
+      preview.shots.some((shot) =>
+        shot.rationale.includes("投影验收返修"),
+      ),
+    ).toBe(true);
+    expect(
+      preview.shots.some((shot) => !shot.projection.valid),
+    ).toBe(true);
+  });
+
   it("keeps a departing character in the exit shot and removes it afterward", () => {
     const groupSequence = findDialogueSequence(demoDatabase, "3099");
     const input = createDirectorInput(groupSequence, "departure-test");

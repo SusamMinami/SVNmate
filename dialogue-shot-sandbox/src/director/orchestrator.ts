@@ -17,6 +17,7 @@ import {
 import { MiraDirectorProvider } from "./miraDirector";
 import { RuleDirectorProvider } from "./ruleDirector";
 import { resolveShotDecisions } from "./shotResolver";
+import { resolveRuleShotsWithRetry } from "./shotPlanner";
 import { TraeDirectorProvider } from "./traeDirector";
 
 const SHARED_PREVIEW_COLORS = [
@@ -75,10 +76,10 @@ async function runProvider(
     options,
   );
   const stagedSequence = { ...sequence, participants };
-  const shots = resolveShotDecisions(
-    stagedSequence,
-    providerResult.decisions,
-  );
+  const shots =
+    mode === "rule"
+      ? resolveRuleShotsWithRetry(stagedSequence, providerResult.decisions)
+      : resolveShotDecisions(stagedSequence, providerResult.decisions);
   if (shots.length === 0) {
     throw new Error(`${mode} 导演没有生成镜头`);
   }
@@ -255,4 +256,30 @@ export function createSharedPlanPreview(
       sharedSource: "shared-library",
     },
   };
+}
+
+export interface DirectorProjectionFailure {
+  shotIndex: number;
+  dialogueIds: string[];
+  warnings: string[];
+  decision: ReadyDirectorResponse["shots"][number];
+}
+
+export function inspectDirectorProjection(
+  input: DirectorInput,
+  plan: ReadyDirectorResponse,
+): DirectorProjectionFailure[] {
+  const shots = createSharedPlanPreview(input, plan).result.shots;
+  return shots.flatMap((shot, index) =>
+    shot.projection.valid
+      ? []
+      : [
+          {
+            shotIndex: index + 1,
+            dialogueIds: [...shot.dialogueIds],
+            warnings: [...shot.projection.warnings],
+            decision: plan.shots[index],
+          },
+        ],
+  );
 }

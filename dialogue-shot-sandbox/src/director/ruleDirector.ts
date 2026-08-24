@@ -5,7 +5,7 @@ import type {
   DirectorProviderResult,
   ShotDirectorProvider,
 } from "./contracts";
-import type { ParticipantSlot } from "../types";
+import type { ParticipantSlot, ShotPlan } from "../types";
 import {
   createDefaultBlocking,
   defaultEntryDialogueId,
@@ -767,4 +767,57 @@ export function createRuleDecisions(
       };
     },
   );
+}
+
+export function reviseRuleDecisionsForProjection(
+  decisions: DirectorDecision[],
+  shots: ShotPlan[],
+): DirectorDecision[] {
+  return decisions.map((decision, index) => {
+    const shot = shots[index];
+    if (!shot || shot.projection.valid) {
+      return decision;
+    }
+
+    const warnings = shot.projection.warnings.join("；");
+    const singleSubject =
+      decision.subject !== "both" && decision.subject !== "group";
+    const needsGroupCoverage =
+      singleSubject &&
+      shot.projection.warnings.some((warning) =>
+        warning.includes("单人镜头包含其他主要可见角色"),
+      );
+    const template =
+      decision.template === "reverse_medium" &&
+      shot.projection.warnings.some((warning) =>
+        warning.includes("没有可配对的前置反打镜头"),
+      )
+        ? "close_up"
+        : needsGroupCoverage
+          ? "speaker_group_medium"
+          : decision.template;
+    const lensMm = needsGroupCoverage ? 42 : decision.lens_mm;
+
+    return {
+      ...decision,
+      template,
+      lens_mm: lensMm,
+      end_lens_mm: lensMm,
+      lens_intent: needsGroupCoverage
+        ? "natural_perspective"
+        : decision.lens_intent,
+      depth_of_field: needsGroupCoverage
+        ? "moderate"
+        : decision.depth_of_field,
+      camera_movement: "static",
+      movement_intensity: "none",
+      camera_roll_degrees: 0,
+      camera_height: "eye",
+      composition_mode: "asymmetrical_balance",
+      visual_anchor: "balanced",
+      negative_space: "balanced",
+      composition_transition: "contrast",
+      intent: `${decision.intent} 投影验收返修：${warnings}。`,
+    };
+  });
 }

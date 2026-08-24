@@ -448,8 +448,10 @@ function CameraMotionPath({ shot }: { shot: ShotPlan }) {
 
 function TopCamera({
   participants,
+  compact = false,
 }: {
   participants: DialogueParticipant[];
+  compact?: boolean;
 }) {
   const { camera, size } = useThree();
   const frame = useMemo(() => {
@@ -466,18 +468,20 @@ function TopCamera({
     return {
       centerX: (minX + maxX) / 2,
       centerZ: (minZ + maxZ) / 2,
-      worldWidth: Math.max(13, maxX - minX + 11),
-      worldDepth: Math.max(11, maxZ - minZ + 11),
+      worldWidth: compact
+        ? Math.max(4.8, maxX - minX + 2.4)
+        : Math.max(13, maxX - minX + 11),
+      worldDepth: compact
+        ? Math.max(3.6, maxZ - minZ + 2.8)
+        : Math.max(11, maxZ - minZ + 11),
     };
-  }, [participants]);
+  }, [compact, participants]);
   useFrame(() => {
-    const targetZoom = Math.max(
-      12,
-      Math.min(
-        size.width / frame.worldWidth,
-        size.height / frame.worldDepth,
-      ),
+    const fitZoom = Math.min(
+      size.width / frame.worldWidth,
+      size.height / frame.worldDepth,
     );
+    const targetZoom = compact ? fitZoom : Math.max(12, fitZoom);
     camera.position.set(frame.centerX, 10, frame.centerZ);
     camera.up.set(0, 0, -1);
     camera.lookAt(frame.centerX, 0, frame.centerZ);
@@ -507,7 +511,7 @@ function TopStage({
   return (
     <>
       <color attach="background" args={["#eef0f2"]} />
-      <TopCamera participants={frameParticipants} />
+      <TopCamera participants={frameParticipants} compact={inset} />
       <ambientLight intensity={2} />
       <StageFloor compact />
       <Line

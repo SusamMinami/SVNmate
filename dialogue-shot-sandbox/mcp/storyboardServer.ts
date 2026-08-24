@@ -5,6 +5,11 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { z } from "zod";
 import {
+  MiraDirectorResponseSchema,
+  MiraReadyResponseSchema,
+} from "../src/director/contracts";
+import { inspectDirectorProjection } from "../src/director/orchestrator";
+import {
   recordStoryboardMcpActivity,
   startStoryboardMcpHeartbeat,
   STORYBOARD_MCP_VERSION,
@@ -14,7 +19,10 @@ import {
   completeStoryboardTask,
   failStoryboardTask,
   getStoryboardTask,
+  recordStoryboardProjectionRevision,
 } from "../server/storyboardTaskStore";
+
+const MAX_PROJECTION_REVISION_ATTEMPTS = 1;
 
 export function createStoryboardMcpServer(): McpServer {
   const server = new McpServer({
@@ -52,18 +60,98 @@ export function createStoryboardMcpServer(): McpServer {
   "storyboard_submit_plan",
   {
     description:
-      "提交内部 TRAE 设计完成的 shot-plan.v5。服务端会校验 request_id、Schema、动态关系轴、构图语义、焦段意图、镜内运动、单人/多人覆盖策略、镜头模板和字段范围。",
+      "提交内部 TRAE 设计完成的 shot-plan.v5。服务端会校验 request_id、Schema、动态关系轴、构图语义、焦段意图、镜内运动、单人/多人覆盖策略、镜头模板、字段范围和实际投影；首次投影失败会返回 failed_shots，要求定向返修后再次提交。",
     inputSchema: {
       request_id: z.string().min(1),
       plan: z.record(z.string(), z.unknown()),
+      revision_attempt: z.literal(1).optional(),
     },
   },
-  async ({ request_id, plan }) => {
-    const task = await completeStoryboardTask(request_id, plan);
+  async ({ request_id, plan, revision_attempt }) => {
+    const parsedPlan = MiraDirectorResponseSchema.parse(plan);
+    if (parsedPlan.request_id !== request_id) {
+      throw new Error("提交结果的 request_id 与任务不一致");
+    }
+    const sourceTask = await getStoryboardTask(request_id);
+    if (!sourceTask) {
+      throw new Error(`未找到分镜任务 ${request_id}`);
+    }
+    let acceptedPlan = parsedPlan;
+    let projectionFailures: ReturnType<typeof inspectDirectorProjection> = [];
+    if (revision_attempt !== undefined) {
+      if (parsedPlan.status !== "ready") {
+        throw new Error("投影返修只接受 ready 状态的完整方案");
+      }
+      if (
+        revision_attempt !== MAX_PROJECTION_REVISION_ATTEMPTS ||
+        (sourceTask.projectionRevisionAttempts ?? 0) <
+          MAX_PROJECTION_REVISION_ATTEMPTS ||
+        !sourceTask.projectionRevisionBase ||
+        !sourceTask.projectionRevisionFailedShotIndexes
+      ) {
+        throw new Error("当前任务尚未发出对应的投影返修请求");
+      }
+      const failedIndexes = new Set(
+        sourceTask.projectionRevisionFailedShotIndexes,
+      );
+      acceptedPlan = MiraReadyResponseSchema.parse({
+        ...sourceTask.projectionRevisionBase,
+        request_id,
+        shots: sourceTask.projectionRevisionBase.shots.map((shot, index) =>
+          failedIndexes.has(index)
+            ? (parsedPlan.shots[index] ?? shot)
+            : shot,
+        ),
+      });
+      projectionFailures = inspectDirectorProjection(
+        sourceTask.input,
+        acceptedPlan,
+      );
+    } else if (parsedPlan.status === "ready") {
+      projectionFailures = inspectDirectorProjection(
+        sourceTask.input,
+        parsedPlan,
+      );
+      if (projectionFailures.length > 0) {
+        const revisionAttempt =
+          await recordStoryboardProjectionRevision(
+            request_id,
+            parsedPlan,
+            projectionFailures.map((failure) => failure.shotIndex - 1),
+          );
+        const result = {
+          accepted: false,
+          retry_required: true,
+          request_id,
+          revision_attempt: revisionAttempt,
+          message:
+            "投影验收未通过。请保留其他镜头，只重新设计下列失败镜头后再次提交完整方案。",
+          failed_shots: projectionFailures.map((failure) => ({
+            shot_index: failure.shotIndex,
+            dialogue_ids: failure.dialogueIds,
+            warnings: failure.warnings,
+            previous_decision: failure.decision,
+          })),
+        };
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+          structuredContent: result,
+        };
+      }
+    }
+
+    const task = await completeStoryboardTask(request_id, acceptedPlan);
     const result = {
       accepted: true,
       request_id: task.requestId,
       status: task.status,
+      projection_validation:
+        projectionFailures.length === 0 ? "passed" : "failed_after_retry",
+      remaining_failed_shots: projectionFailures.map((failure) => ({
+        shot_index: failure.shotIndex,
+        dialogue_ids: failure.dialogueIds,
+        warnings: failure.warnings,
+      })),
     };
     return {
       content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
