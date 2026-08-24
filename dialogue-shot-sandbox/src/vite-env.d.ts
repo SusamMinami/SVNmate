@@ -14,6 +14,7 @@ interface DesktopSetupStatus {
   mcpVersion: string | null;
   expectedMcpVersion: string;
   defaultDataReady: boolean;
+  dataCsvDirectory: string;
   ueConnected: boolean;
   ueMcpHost: string;
   ueMcpPort: number;
@@ -48,6 +49,10 @@ interface Window {
     openIntegrationFolder: () => Promise<void>;
     openTraeDownload: () => Promise<void>;
     setUeMcpPort: (port: number) => Promise<DesktopSetupStatus>;
+    getPathForFile: (file: File) => string;
+    setDataCsvDirectory: (
+      directoryPath: string,
+    ) => Promise<DesktopSetupStatus>;
     completeSetup: () => Promise<DesktopSetupStatus>;
     checkForUpdates: () => Promise<DesktopUpdateSnapshot>;
     getUpdateSnapshot: () => Promise<DesktopUpdateSnapshot>;

@@ -299,7 +299,7 @@ describe("internal storyboard MCP", () => {
         }
         expect(presence.connected).toBe(true);
         expect(presence.compatible).toBe(true);
-        expect(presence.serverVersion).toBe("0.17.0");
+        expect(presence.serverVersion).toBe("0.17.1");
         expect(presence.transport).toBe("stdio");
 
         let claimed = await client.callTool({

@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, webUtils } from "electron";
 
 contextBridge.exposeInMainWorld("shotSandboxDesktop", {
   getSetupStatus: () => ipcRenderer.invoke("desktop:setup-status"),
@@ -10,6 +10,9 @@ contextBridge.exposeInMainWorld("shotSandboxDesktop", {
     ipcRenderer.invoke("desktop:open-trae-download"),
   setUeMcpPort: (port: number) =>
     ipcRenderer.invoke("desktop:set-ue-port", port),
+  getPathForFile: (file: File) => webUtils.getPathForFile(file),
+  setDataCsvDirectory: (directoryPath: string) =>
+    ipcRenderer.invoke("desktop:set-data-directory", directoryPath),
   completeSetup: () => ipcRenderer.invoke("desktop:complete-setup"),
   checkForUpdates: () => ipcRenderer.invoke("desktop:check-update"),
   getUpdateSnapshot: () => ipcRenderer.invoke("desktop:update-snapshot"),

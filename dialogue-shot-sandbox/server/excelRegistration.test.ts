@@ -116,6 +116,11 @@ describe("Excel PowerShell errors", () => {
   it("accepts target-only writes with existing model and NPC IDs", () => {
     const request = parseNpcRegistrationWriteRequest({
       scope: "target_only",
+      paths: {
+        missionTarget: "D:\\Project\\doc\\xlsdir\\r任务剧情\\m目标物表.xlsm",
+        npc: "D:\\Project\\doc\\xlsdir\\NPC表.xlsm",
+        model: "D:\\Project\\doc\\xlsdir\\m模型资源表.xlsm",
+      },
       items: [
         {
           actorRef: "BP_Guard_C_1",
@@ -138,5 +143,8 @@ describe("Excel PowerShell errors", () => {
 
     expect(request.scope).toBe("target_only");
     expect(request.items[0].existingNpcId).toBe(101999);
+    expect(request.paths.npc).toBe(
+      "D:\\Project\\doc\\xlsdir\\NPC表.xlsm",
+    );
   });
 });

@@ -178,8 +178,8 @@ export function DesktopSetupModal({
                 <strong>对话数据</strong>
                 <small>
                   {status.defaultDataReady
-                    ? "已找到 C:\\trunk\\doc\\csvdir"
-                    : "未找到默认目录，可进入应用后手动选择 doc 文件夹"}
+                    ? `已找到 ${status.dataCsvDirectory}`
+                    : `未找到 ${status.dataCsvDirectory}，可进入应用后重新选择 doc 文件夹`}
                 </small>
               </span>
             </div>

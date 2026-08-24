@@ -1091,7 +1091,7 @@ test("guides an unsigned user to Feishu on first desktop launch", async ({
   await page.addInitScript(() => {
     const status = {
       firstRun: true,
-      version: "0.17.0",
+      version: "0.17.1",
       packaged: true,
       portable: false,
       runtimeBundled: true,
@@ -1103,6 +1103,7 @@ test("guides an unsigned user to Feishu on first desktop launch", async ({
       mcpVersion: null,
       expectedMcpVersion: "test",
       defaultDataReady: true,
+      dataCsvDirectory: "C:\\Test\\doc\\csvdir",
       ueConnected: false,
       ueMcpHost: "127.0.0.1",
       ueMcpPort: 12031,
@@ -1116,6 +1117,8 @@ test("guides an unsigned user to Feishu on first desktop launch", async ({
       openIntegrationFolder: async () => undefined,
       openTraeDownload: async () => undefined,
       setUeMcpPort: async () => status,
+      getPathForFile: () => "C:\\Test\\doc\\csvdir\\NPC表.csv",
+      setDataCsvDirectory: async () => status,
       completeSetup: async () => ({ ...status, firstRun: false }),
       checkForUpdates: async () => ({ state: "idle" }),
       getUpdateSnapshot: async () => ({ state: "idle" }),
@@ -1136,6 +1139,127 @@ test("guides an unsigned user to Feishu on first desktop launch", async ({
   await expect(
     page.getByRole("dialog", { name: "连接飞书数据与 Mira" }),
   ).toBeVisible();
+});
+
+test("syncs the selected desktop doc path for registration data", async ({
+  page,
+}, testInfo) => {
+  let selectedCsvDirectory = "";
+  await page.exposeFunction(
+    "__recordDataCsvDirectory",
+    (directoryPath: string) => {
+      selectedCsvDirectory = directoryPath;
+    },
+  );
+  await page.route("**/api/ue/formation/read", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          status: "not_found",
+          message: "未找到 BP_735000",
+        },
+      }),
+    });
+  });
+  await page.addInitScript(() => {
+    const status = {
+      firstRun: false,
+      version: "0.17.1",
+      packaged: true,
+      portable: false,
+      runtimeBundled: true,
+      traeDetected: true,
+      traeExecutable: "C:\\Test\\Trae.exe",
+      integrationInstalled: true,
+      integrationRoot: "C:\\Test\\Shot Sandbox\\trae-integration",
+      mcpConnected: false,
+      mcpVersion: null,
+      expectedMcpVersion: "0.17.1",
+      defaultDataReady: true,
+      dataCsvDirectory: "C:\\trunk\\doc\\csvdir",
+      ueConnected: false,
+      ueMcpHost: "127.0.0.1",
+      ueMcpPort: 12031,
+      ueConnectionMessage: "未连接",
+      updateSupported: false,
+      updatePage: "https://example.com/update",
+    };
+    window.shotSandboxDesktop = {
+      getSetupStatus: async () => status,
+      installTraeIntegration: async () => status,
+      openIntegrationFolder: async () => undefined,
+      openTraeDownload: async () => undefined,
+      setUeMcpPort: async () => status,
+      getPathForFile: () =>
+        "D:\\TeamProject\\doc\\csvdir\\NPC表.csv",
+      setDataCsvDirectory: async (directoryPath: string) => {
+        await (
+          window as typeof window & {
+            __recordDataCsvDirectory: (
+              value: string,
+            ) => Promise<void>;
+          }
+        ).__recordDataCsvDirectory(directoryPath);
+        return {
+          ...status,
+          dataCsvDirectory: directoryPath,
+        };
+      },
+      completeSetup: async () => status,
+      checkForUpdates: async () => ({ state: "idle" }),
+      getUpdateSnapshot: async () => ({ state: "idle" }),
+      installUpdate: async () => undefined,
+      openUpdatePage: async () => undefined,
+      onUpdateState: () => () => undefined,
+    };
+  });
+  const fixtureDirectory = await writeDirectoryFixture(
+    testInfo.outputPath("custom-doc", "csvdir"),
+    [
+      {
+        name: "对话表.csv",
+        content: [
+          "##&Dialog.id,Dialog.NPCID,Dialog.Content,Dialog.NextID,Dialog.End",
+          "##对话ID,人物,内容,下一ID,结束",
+          "735000,,,735001,false",
+          "735001,1,你来了。,735002,false",
+          "735002,101968,请止步。,,true",
+        ].join("\n"),
+      },
+      {
+        name: "对话表_开始节点.csv",
+        content: [
+          "##&DialogStart.id,DialogStart.Outline",
+          "##对话ID,剧情梗概",
+          "735000,自定义目录测试",
+        ].join("\n"),
+      },
+      {
+        name: "NPC表.csv",
+        content: [
+          "##&NPC.id,NPC.name,NPC.npcintroduce,NPC.resource_id",
+          "##id,名称,介绍,资源",
+          "1,玩家,玩家,",
+          "101968,商会安保,守卫,200135",
+        ].join("\n"),
+      },
+    ],
+  );
+
+  await page.goto("/");
+  await page.locator('input[type="file"]').setInputFiles(fixtureDirectory);
+
+  await expect(page.getByText("自定义目录测试", { exact: true })).toBeVisible();
+  await expect(
+    page.locator(".source-status").getByText(
+      "D:\\TeamProject\\doc\\csvdir",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  expect(selectedCsvDirectory).toBe("D:\\TeamProject\\doc\\csvdir");
 });
 
 test("offers the detected Blueprint formation before designing shots", async ({

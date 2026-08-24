@@ -839,6 +839,10 @@ export default function App() {
   }
 
   async function chooseDirectory() {
+    if (window.shotSandboxDesktop) {
+      fileInputRef.current?.click();
+      return;
+    }
     if (!window.showDirectoryPicker) {
       fileInputRef.current?.click();
       return;
@@ -873,7 +877,28 @@ export default function App() {
     }
     setLoading(true);
     try {
-      await useDatabase(await loadDocFiles(files));
+      let nextDatabase = await loadDocFiles(files);
+      const desktop = window.shotSandboxDesktop;
+      if (desktop) {
+        const npcFile = Array.from(files).find(
+          (file) => file.name === "NPC表.csv",
+        );
+        if (!npcFile) {
+          throw new Error("选择的目录中未找到 csvdir\\NPC表.csv");
+        }
+        const npcPath = desktop.getPathForFile(npcFile);
+        const csvDirectory = npcPath.replace(/[\\/][^\\/]+$/, "");
+        if (!csvDirectory || csvDirectory === npcPath) {
+          throw new Error("无法确定所选 csvdir 的本机路径");
+        }
+        const setup = await desktop.setDataCsvDirectory(csvDirectory);
+        setDesktopSetup(setup);
+        nextDatabase = {
+          ...nextDatabase,
+          sourceName: csvDirectory,
+        };
+      }
+      await useDatabase(nextDatabase);
     } catch (fileError) {
       setError(fileError instanceof Error ? fileError.message : "目录读取失败");
     } finally {
@@ -988,7 +1013,7 @@ export default function App() {
           <div>
             <h1>镜头沙盘</h1>
           </div>
-          <span className="version">v0.17.0</span>
+          <span className="version">v0.17.1</span>
         </div>
 
         <div className="source-status">

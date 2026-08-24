@@ -1,4 +1,4 @@
-# 镜头沙盘 v0.17.0
+# 镜头沙盘 v0.17.1
 
 面向 UE4 镜头对话制作的 Three.js 原型。输入四位数对话 ID，工具从
 `doc\csvdir` 读取真实对话链，通过规则导演、内部 TRAE 协作或 Mira AI
@@ -84,6 +84,8 @@ Blueprint。输入 BP 文件名或完整 `/Game/` 路径后点击“创建 BP”
 在 UE 关卡视口或 World Outliner 中选中 Actor 后，点击顶部“注册 NPC”可读取
 所选实例的 Generated Class、世界 Transform 和当前地图。工具会匹配可复用的
 模型 ID，并列出使用相同模型的 NPC ID、名称、头衔和转身配置供选择。
+桌面端会保存用户选择的 `doc\csvdir` 绝对路径，注册扫描和 Excel 写入均从
+同一个 doc 根目录读取，不要求项目位于 `C:\trunk`。
 
 模型尚未注册时会明确提示先处理模型资源表；没有合适 NPC 时可选择“新建
 NPC”，名字和头衔允许留空。只需要新 NPC ID 时可点击“NPC 表”；已有模型和

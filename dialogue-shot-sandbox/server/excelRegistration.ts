@@ -25,9 +25,23 @@ const VectorSchema = z.object({
   z: z.number().finite(),
 });
 
+const DEFAULT_REGISTRATION_PATHS = {
+  missionTarget:
+    "C:\\trunk\\doc\\xlsdir\\r任务剧情\\m目标物表.xlsm",
+  npc: "C:\\trunk\\doc\\xlsdir\\NPC表.xlsm",
+  model: "C:\\trunk\\doc\\xlsdir\\m模型资源表.xlsm",
+};
+
+const RegistrationPathsSchema = z.object({
+  missionTarget: z.string().trim().min(1),
+  npc: z.string().trim().min(1),
+  model: z.string().trim().min(1),
+});
+
 const RegistrationWriteSchema = z
   .object({
     scope: z.enum(["all", "npc_only", "target_only"]).default("all"),
+    paths: RegistrationPathsSchema.default(DEFAULT_REGISTRATION_PATHS),
     items: z
       .array(
         z.object({
@@ -101,6 +115,11 @@ const RegistrationWriteSchema = z
 
 const TransformUpdateSchema = z
   .object({
+    targetPath: z
+      .string()
+      .trim()
+      .min(1)
+      .default(DEFAULT_REGISTRATION_PATHS.missionTarget),
     items: z
       .array(
         z.object({
@@ -199,9 +218,9 @@ if ($scope -notin @("all", "npc_only", "target_only")) {
   throw "不支持的 NPC 注册范围：$scope"
 }
 $paths = @{
-  missionTarget = "C:\trunk\doc\xlsdir\r任务剧情\m目标物表.xlsm"
-  npc = "C:\trunk\doc\xlsdir\NPC表.xlsm"
-  model = "C:\trunk\doc\xlsdir\m模型资源表.xlsm"
+  missionTarget = [string]$request.paths.missionTarget
+  npc = [string]$request.paths.npc
+  model = [string]$request.paths.model
 }
 $requiredPaths = [Collections.Generic.HashSet[string]]::new(
   [StringComparer]::OrdinalIgnoreCase
@@ -736,7 +755,7 @@ $request = (
   Get-Content -LiteralPath $env:SHOT_SANDBOX_TARGET_UPDATE_PAYLOAD_PATH -Raw -Encoding UTF8 |
     ConvertFrom-Json
 )
-$targetPath = "C:\trunk\doc\xlsdir\r任务剧情\m目标物表.xlsm"
+$targetPath = [string]$request.targetPath
 
 function Invoke-ExcelAction(
   [scriptblock]$action,
@@ -1152,22 +1171,24 @@ async function runExcelOperation<
 function runExcelRegistration(
   items: NpcRegistrationWriteItem[],
   scope: NpcRegistrationWriteScope,
+  paths: z.infer<typeof RegistrationPathsSchema>,
 ): Promise<ExcelRegistrationResponse> {
   return runExcelOperation<ExcelRegistrationResponse>(
     EXCEL_REGISTRATION_SCRIPT,
     "SHOT_SANDBOX_REGISTRATION_PAYLOAD_PATH",
-    { items, scope },
+    { items, scope, paths },
     "Excel 写入",
   );
 }
 
 function runExcelTargetUpdate(
   items: MissionTargetUpdateItem[],
+  targetPath: string,
 ): Promise<ExcelTargetUpdateResponse> {
   return runExcelOperation<ExcelTargetUpdateResponse>(
     EXCEL_TARGET_UPDATE_SCRIPT,
     "SHOT_SANDBOX_TARGET_UPDATE_PAYLOAD_PATH",
-    { items },
+    { items, targetPath },
     "Excel 目标物修改",
   );
 }
@@ -1177,7 +1198,7 @@ export async function writeNpcRegistrationDraft(
 ): Promise<NpcRegistrationWriteResult> {
   const request = parseNpcRegistrationWriteRequest(rawRequest);
   const result = await withExcelRegistrationLock(() =>
-    runExcelRegistration(request.items, request.scope),
+    runExcelRegistration(request.items, request.scope, request.paths),
   );
   return {
     createdModels: result.createdModels,
@@ -1193,10 +1214,12 @@ export function parseNpcRegistrationWriteRequest(
 ): {
   items: NpcRegistrationWriteItem[];
   scope: NpcRegistrationWriteScope;
+  paths: z.infer<typeof RegistrationPathsSchema>;
 } {
   return RegistrationWriteSchema.parse(rawRequest) as {
     items: NpcRegistrationWriteItem[];
     scope: NpcRegistrationWriteScope;
+    paths: z.infer<typeof RegistrationPathsSchema>;
   };
 }
 
@@ -1205,9 +1228,10 @@ export async function updateMissionTargetTransforms(
 ): Promise<MissionTargetUpdateResult> {
   const request = TransformUpdateSchema.parse(rawRequest) as {
     items: MissionTargetUpdateItem[];
+    targetPath: string;
   };
   const result = await withExcelRegistrationLock(() =>
-    runExcelTargetUpdate(request.items),
+    runExcelTargetUpdate(request.items, request.targetPath),
   );
   return {
     updatedTargets: result.updatedTargets,

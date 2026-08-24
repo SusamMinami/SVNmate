@@ -19,7 +19,7 @@ const BASE_TOKEN =
   "Ds5jbxDoxaUYDLsHBvLcFKvMnJc";
 const TABLE_ID =
   process.env.STORYBOARD_CASE_TABLE_ID || "tblaVfeKhPW7rtcE";
-const SOFTWARE_VERSION = "v0.17.0+";
+const SOFTWARE_VERSION = "v0.17.1+";
 const MAX_REFERENCE_CASES = 5;
 
 interface LarkCommandEnvelope {

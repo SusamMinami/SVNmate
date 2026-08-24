@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { access, readFile, unlink } from "node:fs/promises";
 import net from "node:net";
+import { basename, dirname, join, resolve } from "node:path";
 import type { Plugin, PreviewServer, ViteDevServer } from "vite";
 import { z } from "zod";
 import type {
@@ -60,19 +61,39 @@ const CAMERA_COMPONENT_CLASS = "/Script/Engine.CameraComponent";
 const DIALOGUE_SEARCH_PATH = "/Game/Seria/Task/dialoggraph";
 const DIALOG_NPC_TABLE_PATH =
   "/Game/Seria/Task/Mod/DialogNPCTable.DialogNPCTable";
-const CONFIG_TABLE_PATHS = {
-  missionTarget:
-    "C:\\trunk\\doc\\xlsdir\\r任务剧情\\m目标物表.xlsm",
-  npc: "C:\\trunk\\doc\\xlsdir\\NPC表.xlsm",
-  model: "C:\\trunk\\doc\\xlsdir\\m模型资源表.xlsm",
-} as const;
-const CONFIG_CSV_PATHS = {
-  npc: "C:\\trunk\\doc\\csvdir\\NPC表.csv",
-  model: "C:\\trunk\\doc\\csvdir\\m模型资源表.csv",
-  missionTarget: "C:\\trunk\\doc\\csvdir\\m目标物表.csv",
-  map: "C:\\trunk\\doc\\csvdir\\d地图配置表.csv",
-  scene: "C:\\trunk\\doc\\csvdir\\d地图资源表.csv",
-} as const;
+const DEFAULT_CONFIG_CSV_DIRECTORY = "C:\\trunk\\doc\\csvdir";
+let configCsvDirectory = DEFAULT_CONFIG_CSV_DIRECTORY;
+
+export function configureConfigCsvDirectory(directoryPath: string): void {
+  const normalized = resolve(directoryPath.trim());
+  configCsvDirectory =
+    basename(normalized).toLowerCase() === "csvdir"
+      ? normalized
+      : join(normalized, "csvdir");
+}
+
+export function getConfigCsvDirectory(): string {
+  return configCsvDirectory;
+}
+
+function configCsvPaths() {
+  return {
+    npc: join(configCsvDirectory, "NPC表.csv"),
+    model: join(configCsvDirectory, "m模型资源表.csv"),
+    missionTarget: join(configCsvDirectory, "m目标物表.csv"),
+    map: join(configCsvDirectory, "d地图配置表.csv"),
+    scene: join(configCsvDirectory, "d地图资源表.csv"),
+  };
+}
+
+export function getConfigTablePaths() {
+  const xlsDirectory = join(dirname(configCsvDirectory), "xlsdir");
+  return {
+    missionTarget: join(xlsDirectory, "r任务剧情", "m目标物表.xlsm"),
+    npc: join(xlsDirectory, "NPC表.xlsm"),
+    model: join(xlsDirectory, "m模型资源表.xlsm"),
+  };
+}
 
 interface UnrealResponse {
   success?: boolean;
@@ -2667,6 +2688,7 @@ export async function readSelectedLevelActors(
 export async function scanSelectedNpcRegistration(
   connectionFactory: () => UnrealInvoker = () => new UnrealMcpConnection(),
 ): Promise<NpcRegistrationScanResult> {
+  const csvPaths = configCsvPaths();
   const [
     selection,
     npcText,
@@ -2676,11 +2698,11 @@ export async function scanSelectedNpcRegistration(
     sceneText,
   ] = await Promise.all([
     readSelectedLevelActors(connectionFactory),
-    readFile(CONFIG_CSV_PATHS.npc, "utf8"),
-    readFile(CONFIG_CSV_PATHS.model, "utf8"),
-    readFile(CONFIG_CSV_PATHS.missionTarget, "utf8"),
-    readFile(CONFIG_CSV_PATHS.map, "utf8"),
-    readFile(CONFIG_CSV_PATHS.scene, "utf8"),
+    readFile(csvPaths.npc, "utf8"),
+    readFile(csvPaths.model, "utf8"),
+    readFile(csvPaths.missionTarget, "utf8"),
+    readFile(csvPaths.map, "utf8"),
+    readFile(csvPaths.scene, "utf8"),
   ]);
   const database = parseNpcRegistrationDatabase(
     npcText,
@@ -2688,7 +2710,7 @@ export async function scanSelectedNpcRegistration(
     missionTargetText,
     mapText,
     sceneText,
-    "C:\\trunk\\doc\\csvdir",
+    configCsvDirectory,
   );
   return {
     selection,
@@ -2698,9 +2720,12 @@ export async function scanSelectedNpcRegistration(
 
 export async function openConfigTable(
   rawRequest: unknown,
-): Promise<{ table: keyof typeof CONFIG_TABLE_PATHS; path: string }> {
+): Promise<{
+  table: "missionTarget" | "npc" | "model";
+  path: string;
+}> {
   const { table } = ConfigTableOpenSchema.parse(rawRequest);
-  const path = CONFIG_TABLE_PATHS[table];
+  const path = getConfigTablePaths()[table];
   await access(path);
   await new Promise<void>((resolvePromise, reject) => {
     const child = spawn("explorer.exe", [path], {
@@ -3177,14 +3202,20 @@ export async function routeUeRequest(
     if (url.pathname === "/api/ue/config-registration/write") {
       sendJson(response, 200, {
         ok: true,
-        data: await writeNpcRegistrationDraft(body),
+        data: await writeNpcRegistrationDraft({
+          ...body,
+          paths: getConfigTablePaths(),
+        }),
       });
       return true;
     }
     if (url.pathname === "/api/ue/config-registration/update-targets") {
       sendJson(response, 200, {
         ok: true,
-        data: await updateMissionTargetTransforms(body),
+        data: await updateMissionTargetTransforms({
+          ...body,
+          targetPath: getConfigTablePaths().missionTarget,
+        }),
       });
       return true;
     }

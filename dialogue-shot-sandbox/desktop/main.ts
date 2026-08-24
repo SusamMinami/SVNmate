@@ -22,7 +22,9 @@ import {
 } from "../mcp/storyboardServer";
 import { routeLarkRequest } from "../server/larkBridge";
 import {
+  configureConfigCsvDirectory,
   configureUnrealMcpPort,
+  getConfigCsvDirectory,
   getUnrealMcpEndpoint,
   inspectUnrealMcpConnection,
   routeUeRequest,
@@ -57,6 +59,7 @@ const contentTypes: Record<string, string> = {
 interface DesktopState {
   setupCompleted: boolean;
   ueMcpPort: number;
+  dataCsvDirectory: string;
 }
 
 interface UpdateSnapshot {
@@ -133,11 +136,17 @@ async function readDesktopState(): Promise<DesktopState> {
         Number(parsed.ueMcpPort) <= 65_535
           ? Number(parsed.ueMcpPort)
           : getUnrealMcpEndpoint().port,
+      dataCsvDirectory:
+        typeof parsed.dataCsvDirectory === "string" &&
+        parsed.dataCsvDirectory.trim()
+          ? parsed.dataCsvDirectory
+          : getConfigCsvDirectory(),
     };
   } catch {
     return {
       setupCompleted: false,
       ueMcpPort: getUnrealMcpEndpoint().port,
+      dataCsvDirectory: getConfigCsvDirectory(),
     };
   }
 }
@@ -290,8 +299,8 @@ async function migrateLegacyGlobalMcpConfiguration(): Promise<void> {
 }
 
 async function setupStatus() {
+  const state = await readDesktopState();
   const [
-    state,
     traeExecutable,
     integration,
     presence,
@@ -299,11 +308,10 @@ async function setupStatus() {
     ueConnection,
   ] =
     await Promise.all([
-      readDesktopState(),
       detectTrae(),
       integrationStatus(),
       getStoryboardMcpPresence(),
-      pathExists("C:\\trunk\\doc\\csvdir"),
+      pathExists(join(state.dataCsvDirectory, "NPC表.csv")),
       inspectUnrealMcpConnection(),
     ]);
   return {
@@ -322,6 +330,7 @@ async function setupStatus() {
     mcpVersion: presence.serverVersion,
     expectedMcpVersion: STORYBOARD_MCP_VERSION,
     defaultDataReady,
+    dataCsvDirectory: state.dataCsvDirectory,
     ueConnected: ueConnection.connected,
     ueMcpHost: ueConnection.host,
     ueMcpPort: ueConnection.port,
@@ -408,6 +417,26 @@ function registerDesktopIpc(): void {
     await writeDesktopState({ ...state, setupCompleted: true });
     return setupStatus();
   });
+  ipcMain.handle(
+    "desktop:set-data-directory",
+    async (_event, directoryPath: unknown) => {
+      const previousDirectory = getConfigCsvDirectory();
+      try {
+        configureConfigCsvDirectory(String(directoryPath ?? ""));
+        const selectedDirectory = getConfigCsvDirectory();
+        await access(join(selectedDirectory, "NPC表.csv"));
+        const state = await readDesktopState();
+        await writeDesktopState({
+          ...state,
+          dataCsvDirectory: selectedDirectory,
+        });
+        return setupStatus();
+      } catch (error) {
+        configureConfigCsvDirectory(previousDirectory);
+        throw error;
+      }
+    },
+  );
   ipcMain.handle("desktop:set-ue-port", async (_event, port: unknown) => {
     const numericPort =
       typeof port === "number" ? port : Number.parseInt(String(port), 10);
@@ -537,6 +566,7 @@ async function runDesktop(): Promise<void> {
   configureRuntimeEnvironment();
   const desktopState = await readDesktopState();
   configureUnrealMcpPort(desktopState.ueMcpPort);
+  configureConfigCsvDirectory(desktopState.dataCsvDirectory);
   await migrateLegacyGlobalMcpConfiguration();
   await installTraeIntegration();
   registerDesktopIpc();

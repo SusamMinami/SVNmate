@@ -2,11 +2,15 @@
 
 ## 当前范围
 
-“注册 NPC”读取 UE4 编辑器当前关卡中被选中的 Actor，并直接扫描
-`C:\trunk\doc\csvdir` 的模型、NPC、目标物和地图 CSV 生成配表注册草稿。
-该流程不依赖镜头沙盘前端当前加载的是演示数据还是用户选择的 doc。用户确认
-“写入新增项”后，工具通过 Excel COM 将新增行写入 `.xlsm` 的当前编辑会话，
-但不执行保存，也不修改导出的 CSV。
+“注册 NPC”读取 UE4 编辑器当前关卡中被选中的 Actor，并扫描用户当前选择的
+`doc\csvdir` 中的模型、NPC、目标物和地图 CSV 生成配表注册草稿。
+该流程与当前对话分析共用同一个数据目录。用户确认“写入新增项”后，工具通过
+Excel COM 将新增行写入 `.xlsm` 的当前编辑会话，但不执行保存，也不修改导出
+的 CSV。
+
+Windows 桌面端会记录所选 `csvdir` 的绝对路径，并从其父目录推导同一份
+`doc\xlsdir`。下次启动继续使用该目录；只有用户尚未选择时才回退到
+`C:\trunk\doc\csvdir`。
 
 选中范围来自：
 
@@ -81,11 +85,11 @@ NPC 候选按 `NPC.resource_id == Model.id` 查询。界面列出每个候选 NP
 
 ## Excel 边界
 
-当前界面可以打开以下源表：
+当前界面从所选 doc 根目录打开以下源表：
 
-- `C:\trunk\doc\xlsdir\r任务剧情\m目标物表.xlsm`
-- `C:\trunk\doc\xlsdir\NPC表.xlsm`
-- `C:\trunk\doc\xlsdir\m模型资源表.xlsm`
+- `<所选 doc>\xlsdir\r任务剧情\m目标物表.xlsm`
+- `<所选 doc>\xlsdir\NPC表.xlsm`
+- `<所选 doc>\xlsdir\m模型资源表.xlsm`
 
 打开动作使用 Windows 文件关联；新增动作使用本机 Excel COM 操作真实工作簿，
 不通过 JavaScript Excel 库重写文件。这样可以保留 VBA、公式、样式、批注、
