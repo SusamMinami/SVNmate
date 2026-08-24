@@ -172,9 +172,18 @@ async function integrationStatus(): Promise<{
   current: boolean;
 }> {
   try {
-    const actual = JSON.parse(
-      await readFile(storyboardMcpConfigPath(), "utf8"),
-    ) as {
+    const skillPath = join(
+      integrationRoot(),
+      ".agents",
+      "skills",
+      "internal-storyboard-director",
+      "SKILL.md",
+    );
+    const [configText, installedSkill] = await Promise.all([
+      readFile(storyboardMcpConfigPath(), "utf8"),
+      readFile(skillPath, "utf8"),
+    ]);
+    const actual = JSON.parse(configText) as {
       mcpServers?: Record<
         string,
         { command?: string; args?: string[]; url?: string }
@@ -196,7 +205,8 @@ async function integrationStatus(): Promise<{
         actualServer?.url === expectedServer.url &&
         actualServer?.command === expectedServer.command &&
         JSON.stringify(actualServer?.args) ===
-          JSON.stringify(expectedServer.args),
+          JSON.stringify(expectedServer.args) &&
+        installedSkill === storyboardSkill,
     };
   } catch {
     return { exists: false, current: false };

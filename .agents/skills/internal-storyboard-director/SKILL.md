@@ -31,8 +31,11 @@ description: "Designs UE4 dialogue storyboards through the local storyboard MCP 
 6. 生成满足下述要求的 `shot-plan.v5`。
 7. 调用 `storyboard_submit_plan` 提交结果。
 8. 如果 MCP 返回 `accepted=false`、`retry_required=true`，逐项读取
-   `failed_shots` 的台词节点、上一版决策与投影验收原因。保留未列出的镜头，
-   只重新设计失败镜头，然后再次提交完整方案，并在
+   `failed_shots` 的台词节点、上一版决策与投影验收原因，并参考
+   `reference_cases` 中已人工审核通过的相似经验。历史案例只用于判断修改
+   方向，不得照抄与当前人物站位或叙事目标冲突的参数。保留未列出的镜头，
+   只重新设计失败镜头，在顶层 `revision_reflections` 为每个失败镜头填写
+   一条简短的事后总结，然后再次提交完整方案，并在
    `storyboard_submit_plan` 参数中传入返回的 `revision_attempt: 1`。
 9. 每个任务最多执行一次投影返修。第二次提交即使仍有
    `remaining_failed_shots` 也以 MCP 返回状态为准，不得无限重试。
@@ -246,9 +249,22 @@ description: "Designs UE4 dialogue storyboards through the local storyboard MCP 
       "camera_height": "eye",
       "intent": "该镜头推动叙事的原因"
     }
+  ],
+  "revision_reflections": [
+    {
+      "shot_index": 1,
+      "summary": "只在返修提交时填写的修改摘要",
+      "root_cause": "确定性验收失败的直接原因",
+      "strategy": "实际修改了哪些镜头参数以及原因",
+      "applies_when": "该经验适用的站位、人数和镜头条件",
+      "avoid_when": "不应套用该经验的边界条件"
+    }
   ]
 }
 ```
+
+`revision_reflections` 只在投影返修提交时填写。它记录可复用的事后结论，
+不记录或展开模型推理过程。
 
 `formation` 只能使用：
 

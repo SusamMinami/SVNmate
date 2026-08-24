@@ -13,6 +13,7 @@ import {
   MapPinned,
   Search,
   Settings,
+  Upload,
   UserRoundPlus,
   Users,
   X,
@@ -25,6 +26,7 @@ import { MissionTargetModal } from "./components/MissionTargetModal";
 import { NpcRegistrationModal } from "./components/NpcRegistrationModal";
 import { SharedPlanCompareModal } from "./components/SharedPlanCompareModal";
 import { StageView } from "./components/StageView";
+import { StoryboardExportModal } from "./components/StoryboardExportModal";
 import { StoryBriefModal } from "./components/StoryBriefModal";
 import { TraeCollaborationModal } from "./components/TraeCollaborationModal";
 import { loadDocDirectory, loadDocFiles } from "./data/csv";
@@ -57,12 +59,17 @@ import {
   type TraeCollaborationStatus,
   type TraeMcpConfig,
 } from "./trae/client";
-import { getBlueprintFormation } from "./ue/client";
+import {
+  exportDialogueStoryboard,
+  getBlueprintFormation,
+  inspectDialogueStoryboardExport,
+} from "./ue/client";
 import type {
   BlueprintFormationSnapshot,
   CameraMovement,
   DepthOfField,
   DialogueDatabase,
+  DialogueStoryboardExportPreview,
   DialogueSequence,
   CompositionMode,
   CompositionTransition,
@@ -72,6 +79,7 @@ import type {
   ShotCoverage,
   ShotPlan,
   ShotSize,
+  StoryboardExportRequest,
 } from "./types";
 
 function buildSequence(database: DialogueDatabase, prefix: string) {
@@ -80,6 +88,7 @@ function buildSequence(database: DialogueDatabase, prefix: string) {
 }
 
 const initial = buildSequence(demoDatabase, "2048");
+const CASE_COLLECTION_STORAGE_KEY = "shot-sandbox.collect-revision-cases";
 
 interface PendingDirectorPresentation {
   sequence: DialogueSequence;
@@ -322,6 +331,16 @@ export default function App() {
   const [larkError, setLarkError] = useState("");
   const [authStart, setAuthStart] = useState<LarkAuthChallenge | null>(null);
   const [authFinishing, setAuthFinishing] = useState(false);
+  const [collectRevisionCases, setCollectRevisionCases] = useState(
+    () => window.localStorage.getItem(CASE_COLLECTION_STORAGE_KEY) !== "0",
+  );
+  const [storyboardExportPreview, setStoryboardExportPreview] =
+    useState<DialogueStoryboardExportPreview | null>(null);
+  const [storyboardExportRequest, setStoryboardExportRequest] =
+    useState<StoryboardExportRequest | null>(null);
+  const [storyboardExportBusy, setStoryboardExportBusy] = useState(false);
+  const [storyboardExportError, setStoryboardExportError] = useState("");
+  const [storyboardExportResult, setStoryboardExportResult] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const directorRunRef = useRef(0);
   const formationRunRef = useRef(0);
@@ -355,6 +374,14 @@ export default function App() {
       ),
     [sequence.participants],
   );
+  const canExportStoryboard =
+    shots.length > 0 &&
+    sequence.participants.length >= 2 &&
+    sequence.participants.every(
+      (participant) =>
+        participant.positionSource === "blueprint" &&
+        participant.modelIndex !== null,
+    );
   const shotPreparationMessage = formationChecking
     ? "正在查询 UE Blueprint 站位"
     : formationChoice
@@ -493,6 +520,7 @@ export default function App() {
         preserveInputPositions,
         fallbackPreserveInputPositions:
           options.fallbackPreserveInputPositions,
+        collectRevisionCases,
       });
       if (runId !== directorRunRef.current) {
         return;
@@ -770,6 +798,14 @@ export default function App() {
     }
   }
 
+  function changeCaseCollection(enabled: boolean) {
+    setCollectRevisionCases(enabled);
+    window.localStorage.setItem(
+      CASE_COLLECTION_STORAGE_KEY,
+      enabled ? "1" : "0",
+    );
+  }
+
   async function finishAuthorization() {
     if (authFinishingRef.current) {
       return;
@@ -854,6 +890,82 @@ export default function App() {
     );
   }
 
+  function currentStoryboardExportRequest(): StoryboardExportRequest {
+    if (!canExportStoryboard) {
+      throw new Error("当前方案未绑定完整的 UE Blueprint 站位");
+    }
+    return {
+      dialogueId: sequence.prefix,
+      startId: sequence.startId,
+      dialogueIds: sequence.rows.map((row) => row.id),
+      participantModelIndexes: sequence.participants.map(
+        (participant) => participant.modelIndex!,
+      ),
+      usesBlueprintFormation: true,
+      shots: shots.map((shot) => ({
+        dialogueId: shot.dialogueId,
+        dialogueIds: [...shot.dialogueIds],
+        cameraPosition: shot.cameraPosition,
+        cameraTarget: shot.cameraTarget,
+        cameraEndPosition: shot.cameraEndPosition,
+        cameraEndTarget: shot.cameraEndTarget,
+        focalLength: shot.focalLength,
+        endFocalLength: shot.endFocalLength,
+        cameraMovement: shot.cameraMovement,
+        movementIntensity: shot.movementIntensity,
+        cameraRollDegrees: shot.cameraRollDegrees,
+        projectionValid: shot.projection.valid,
+      })),
+    };
+  }
+
+  async function previewStoryboardExport() {
+    setStoryboardExportBusy(true);
+    setStoryboardExportError("");
+    setStoryboardExportResult("");
+    try {
+      const request = currentStoryboardExportRequest();
+      const preview = await inspectDialogueStoryboardExport(request);
+      setStoryboardExportRequest(request);
+      setStoryboardExportPreview(preview);
+    } catch (exportError) {
+      setStoryboardExportError(
+        exportError instanceof Error
+          ? exportError.message
+          : "无法检查 UE 分镜写入",
+      );
+    } finally {
+      setStoryboardExportBusy(false);
+    }
+  }
+
+  async function confirmStoryboardExport() {
+    if (!storyboardExportPreview || !storyboardExportRequest) {
+      return;
+    }
+    setStoryboardExportBusy(true);
+    setStoryboardExportError("");
+    try {
+      const result = await exportDialogueStoryboard(
+        storyboardExportRequest,
+        storyboardExportPreview.reviewToken,
+      );
+      setStoryboardExportResult(
+        result.status === "unchanged"
+          ? "UE 对话资产已与当前分镜一致，无需写入"
+          : `已写入并保存 ${result.changedNodeCount} 个台词节点`,
+      );
+    } catch (exportError) {
+      setStoryboardExportError(
+        exportError instanceof Error
+          ? exportError.message
+          : "分镜导出失败",
+      );
+    } finally {
+      setStoryboardExportBusy(false);
+    }
+  }
+
   return (
     <main className="app-shell">
       <input
@@ -876,7 +988,7 @@ export default function App() {
           <div>
             <h1>镜头沙盘</h1>
           </div>
-          <span className="version">v0.16.1</span>
+          <span className="version">v0.17.0</span>
         </div>
 
         <div className="source-status">
@@ -1000,6 +1112,8 @@ export default function App() {
               onSetupTrae={() => void setupTrae()}
               onRefreshLark={() => void refreshLarkConnection(true)}
               onAuthorize={() => void beginAuthorization()}
+              collectRevisionCases={collectRevisionCases}
+              onCollectRevisionCasesChange={changeCaseCollection}
             />
             {error && (
               <div className="inline-error" role="alert">
@@ -1576,9 +1690,39 @@ export default function App() {
             </section>
           )}
 
-          <footer className="inspector-footer">
-            <Users size={15} />
-            <span>支持 2-12 人动态进出场、群像站位与动态关系轴</span>
+          <footer className="inspector-footer inspector-footer--export">
+            <div>
+              {storyboardExportError ? (
+                <AlertTriangle size={15} />
+              ) : (
+                <Users size={15} />
+              )}
+              <span>
+                {storyboardExportError ||
+                  (canExportStoryboard
+                    ? `${shots.length} 镜已绑定 BP 站位`
+                    : "支持 2-12 人动态进出场、群像站位与动态关系轴")}
+              </span>
+            </div>
+            <button
+              className="button button--primary"
+              type="button"
+              title="预检并导出当前分镜到 UE Dialog Graph"
+              disabled={
+                !canExportStoryboard ||
+                storyboardExportBusy ||
+                directorLoading ||
+                formationChecking
+              }
+              onClick={() => void previewStoryboardExport()}
+            >
+              {storyboardExportBusy ? (
+                <LoaderCircle className="spin" size={16} />
+              ) : (
+                <Upload size={16} />
+              )}
+              {storyboardExportBusy ? "正在检查..." : "导出到 UE"}
+            </button>
           </footer>
             </>
           ) : (
@@ -1614,6 +1758,22 @@ export default function App() {
           )}
         </aside>
       </div>
+
+      {storyboardExportPreview && storyboardExportRequest && (
+        <StoryboardExportModal
+          preview={storyboardExportPreview}
+          busy={storyboardExportBusy}
+          error={storyboardExportError}
+          result={storyboardExportResult}
+          onClose={() => {
+            setStoryboardExportPreview(null);
+            setStoryboardExportRequest(null);
+            setStoryboardExportError("");
+            setStoryboardExportResult("");
+          }}
+          onConfirm={() => void confirmStoryboardExport()}
+        />
+      )}
 
       {sharedComparison && (
         <SharedPlanCompareModal
@@ -1662,6 +1822,11 @@ export default function App() {
           initialStatus={desktopSetup}
           onClose={() => setShowDesktopSetup(false)}
           onRefreshTrae={() => void refreshTraeConnection()}
+          larkLoading={larkLoading}
+          larkStatus={larkStatus}
+          larkError={larkError}
+          onAuthorize={() => void beginAuthorization()}
+          onRefreshLark={() => void refreshLarkConnection(false)}
         />
       )}
 
@@ -1703,7 +1868,7 @@ export default function App() {
             <header>
               <div>
                 <small>飞书增量授权</small>
-                <h2 id="auth-title">连接 Mira AI 导演</h2>
+                <h2 id="auth-title">连接飞书数据与 Mira</h2>
               </div>
               <button
                 className="icon-button"
@@ -1720,7 +1885,8 @@ export default function App() {
               <img src={authStart.qrDataUrl} alt="飞书授权二维码" />
               <div>
                 <p>
-                  使用飞书扫码，只授权搜索机器人和以当前用户身份发送镜头分析请求。
+                  使用飞书扫码，授权共享分镜、返修案例库以及 Mira
+                  消息所需的最小权限。
                 </p>
                 <a
                   href={authStart.verificationUrl}

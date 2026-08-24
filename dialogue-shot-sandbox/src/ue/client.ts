@@ -1,5 +1,7 @@
 import type {
   BlueprintFormationSnapshot,
+  DialogueStoryboardExportPreview,
+  DialogueStoryboardExportResult,
   DialogueModelRegistrationResult,
   MissionTargetBlueprintCreateResult,
   MissionTargetBlueprintCompatibility,
@@ -12,7 +14,9 @@ import type {
   NpcRegistrationScanResult,
   NpcRegistrationWriteItem,
   NpcRegistrationWriteResult,
+  NpcRegistrationWriteScope,
   SelectedLevelActorsResult,
+  StoryboardExportRequest,
 } from "../types";
 
 export interface BlueprintFormationLookup {
@@ -190,6 +194,23 @@ export function registerBlueprintDialogueModels(
   );
 }
 
+export function inspectDialogueStoryboardExport(
+  request: StoryboardExportRequest,
+): Promise<DialogueStoryboardExportPreview> {
+  return postUe("/api/ue/storyboard/inspect", request);
+}
+
+export function exportDialogueStoryboard(
+  request: StoryboardExportRequest,
+  reviewToken: string,
+): Promise<DialogueStoryboardExportResult> {
+  return postUe(
+    "/api/ue/storyboard/export",
+    { ...request, reviewToken },
+    false,
+  );
+}
+
 export function checkMissionTargetBlueprint(
   blueprintName: string,
   plan: MissionTargetPreviewPlan,
@@ -218,8 +239,13 @@ export function openConfigTable(
 
 export function writeNpcRegistrationDraft(
   items: NpcRegistrationWriteItem[],
+  scope: NpcRegistrationWriteScope = "all",
 ): Promise<NpcRegistrationWriteResult> {
-  return postUe("/api/ue/config-registration/write", { items }, false);
+  return postUe(
+    "/api/ue/config-registration/write",
+    { items, scope },
+    false,
+  );
 }
 
 export function updateMissionTargetTransforms(

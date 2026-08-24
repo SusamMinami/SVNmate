@@ -262,6 +262,67 @@ export interface DialogueModelRegistrationResult {
   unresolvedIndexes: number[];
 }
 
+export interface StoryboardExportShot {
+  dialogueId: string;
+  dialogueIds: string[];
+  cameraPosition: Vec3;
+  cameraTarget: Vec3;
+  cameraEndPosition: Vec3;
+  cameraEndTarget: Vec3;
+  focalLength: number;
+  endFocalLength: number;
+  cameraMovement: CameraMovement;
+  movementIntensity: MovementIntensity;
+  cameraRollDegrees: number;
+  projectionValid: boolean;
+}
+
+export interface StoryboardExportRequest {
+  dialogueId: string;
+  startId: string;
+  dialogueIds: string[];
+  participantModelIndexes: number[];
+  usesBlueprintFormation: boolean;
+  shots: StoryboardExportShot[];
+}
+
+export interface StoryboardExportNodePreview {
+  dialogueId: string;
+  shotIndex: number | null;
+  role: "shot_start" | "continuation";
+  action: "create" | "replace" | "clear" | "unchanged";
+  existingCameraPosition: string;
+  desiredCameraPosition: string;
+  existingMovementCount: number;
+  desiredMovementCount: number;
+}
+
+export interface DialogueStoryboardExportPreview {
+  reviewToken: string;
+  dialogueId: string;
+  startId: string;
+  dialogueAssetPath: string;
+  formationAssetPath: string;
+  cameraName: string;
+  shotCount: number;
+  changedNodeCount: number;
+  overwrittenNodeCount: number;
+  clearedNodeCount: number;
+  invalidShotCount: number;
+  blockedReasons: string[];
+  warnings: string[];
+  nodes: StoryboardExportNodePreview[];
+}
+
+export interface DialogueStoryboardExportResult {
+  status: "exported" | "unchanged";
+  dialogueId: string;
+  startId: string;
+  dialogueAssetPath: string;
+  changedNodeCount: number;
+  saved: boolean;
+}
+
 export interface SelectedLevelActor {
   actorRef: string;
   label: string;
@@ -306,6 +367,11 @@ export interface NpcRegistrationWriteItem {
     canTurn: boolean;
   } | null;
 }
+
+export type NpcRegistrationWriteScope =
+  | "all"
+  | "npc_only"
+  | "target_only";
 
 export interface NpcRegistrationWriteResult {
   createdModels: Array<{ actorRef: string; id: number }>;

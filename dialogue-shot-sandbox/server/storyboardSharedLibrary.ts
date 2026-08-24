@@ -51,13 +51,14 @@ function compactPlan(
   plan: Extract<MiraDirectorResponse, { status: "ready" }>,
   requestId: string,
 ): Extract<MiraDirectorResponse, { status: "ready" }> {
-  return { ...plan, request_id: requestId };
+  const { revision_reflections: _reflections, ...sharedPlan } = plan;
+  return { ...sharedPlan, request_id: requestId };
 }
 
 function comparablePlan(
   plan: Extract<MiraDirectorResponse, { status: "ready" }>,
 ): string {
-  return JSON.stringify({ ...plan, request_id: "" });
+  return JSON.stringify(compactPlan(plan, ""));
 }
 
 export function sharedPlansEqual(
@@ -226,7 +227,7 @@ function sharedRecordFields(
     输入JSON: JSON.stringify(input),
     来源: "镜头沙盘自动同步",
     更新时间: new Date().toISOString(),
-    软件版本: "v0.16.1+",
+    软件版本: "v0.17.0+",
   };
 }
 

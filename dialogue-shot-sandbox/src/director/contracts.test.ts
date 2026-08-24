@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { DirectorDecisionSchema } from "./contracts";
+import {
+  DirectorDecisionSchema,
+  DirectorRevisionReflectionSchema,
+} from "./contracts";
 
 const baseDecision = {
   dialogue_ids: ["204801"],
@@ -88,6 +91,21 @@ describe("DirectorDecisionSchema camera language", () => {
     expect(parsed.success).toBe(false);
     expect(
       parsed.error?.issues.some((issue) => issue.path[0] === "lens_intent"),
+    ).toBe(true);
+  });
+});
+
+describe("DirectorRevisionReflectionSchema", () => {
+  it("accepts concise reusable revision conclusions", () => {
+    expect(
+      DirectorRevisionReflectionSchema.safeParse({
+        shot_index: 2,
+        summary: "扩大主体前向视线空间",
+        root_cause: "视觉落点与注视方向冲突",
+        strategy: "将主体移动到反侧三分点",
+        applies_when: "普通双人对话近景",
+        avoid_when: "明确使用短边压迫构图",
+      }).success,
     ).toBe(true);
   });
 });

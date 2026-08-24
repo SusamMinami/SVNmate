@@ -425,6 +425,62 @@ input:focus-visible {
   place-items: center;
 }
 
+.case-collection-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  margin-top: 8px;
+  gap: 7px;
+  padding: 7px;
+  color: #80511d;
+  background: #fff8e9;
+  border: 1px solid #ead3aa;
+  border-radius: 5px;
+}
+
+.case-collection-control.is-ready {
+  color: #256548;
+  background: #edf8f2;
+  border-color: #b9ddcb;
+}
+
+.case-collection-control > label {
+  display: grid;
+  grid-template-columns: 16px 18px minmax(0, 1fr);
+  align-items: center;
+  min-width: 0;
+  gap: 7px;
+  cursor: pointer;
+}
+
+.case-collection-control input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: #287b59;
+}
+
+.case-collection-control span {
+  display: grid;
+  min-width: 0;
+}
+
+.case-collection-control strong,
+.case-collection-control small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.case-collection-control strong {
+  font-size: 10px;
+}
+
+.case-collection-control small {
+  opacity: 0.78;
+  font-size: 8px;
+}
+
 .fallback-notice {
   display: flex;
   align-items: flex-start;
@@ -1460,6 +1516,40 @@ input:focus-visible {
   font-size: 9px;
 }
 
+.inspector-footer--export {
+  position: sticky;
+  z-index: 2;
+  bottom: 0;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+}
+
+.inspector-footer--export > div {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 7px;
+}
+
+.inspector-footer--export > div svg {
+  flex: 0 0 auto;
+}
+
+.inspector-footer--export > div span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inspector-footer--export .button {
+  flex: 0 0 auto;
+  height: 32px;
+  padding: 0 10px;
+  font-size: 10px;
+}
+
 .spin {
   animation: spin 0.9s linear infinite;
 }
@@ -2191,6 +2281,263 @@ input:focus-visible {
   border-top: 1px solid var(--border);
 }
 
+.storyboard-export-backdrop {
+  background: rgba(18, 24, 30, 0.72);
+}
+
+.storyboard-export-modal {
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+  width: min(980px, 97vw);
+  height: min(760px, 94vh);
+  overflow: hidden;
+  background: #ffffff;
+  border: 1px solid #929da6;
+  border-radius: 6px;
+  box-shadow: 0 28px 90px rgba(13, 19, 24, 0.44);
+}
+
+.storyboard-export-modal > header,
+.storyboard-export-modal > footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 18px;
+}
+
+.storyboard-export-modal > header {
+  border-bottom: 1px solid var(--border);
+}
+
+.storyboard-export-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.storyboard-export-title > span {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  color: #ffffff;
+  background: #26313a;
+  border-radius: 5px;
+  place-items: center;
+}
+
+.storyboard-export-title small {
+  color: var(--text-muted);
+  font-size: 9px;
+}
+
+.storyboard-export-title h2 {
+  margin: 2px 0 0;
+  font-size: 18px;
+}
+
+.storyboard-export-summary {
+  padding: 12px 18px;
+  background: var(--surface-muted);
+  border-bottom: 1px solid var(--border);
+}
+
+.storyboard-export-summary dl {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 0 0 9px;
+}
+
+.storyboard-export-summary dl > div {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+}
+
+.storyboard-export-summary dt {
+  color: var(--text-muted);
+  font-size: 9px;
+}
+
+.storyboard-export-summary dd {
+  margin: 0;
+  color: #28343d;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.storyboard-export-summary > code {
+  display: block;
+  overflow: hidden;
+  color: #53616c;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.storyboard-export-messages {
+  border-bottom: 1px solid var(--border);
+}
+
+.storyboard-export-messages p {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 0;
+  padding: 8px 18px;
+  font-size: 10px;
+  line-height: 16px;
+}
+
+.storyboard-export-messages p + p {
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.storyboard-export-messages svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.storyboard-export-messages .is-error {
+  color: #8d401f;
+  background: #fff1e9;
+}
+
+.storyboard-export-messages .is-warning {
+  color: #78501e;
+  background: #fff9ed;
+}
+
+.storyboard-export-messages .is-success {
+  color: #256548;
+  background: #edf8f2;
+}
+
+.storyboard-export-table-wrap {
+  min-height: 0;
+  overflow: auto;
+}
+
+.storyboard-export-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 10px;
+}
+
+.storyboard-export-table th,
+.storyboard-export-table td {
+  padding: 9px 10px;
+  text-align: left;
+  border-bottom: 1px solid #e4e7e9;
+}
+
+.storyboard-export-table th {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+  color: #59636d;
+  background: #f4f6f7;
+  font-size: 9px;
+}
+
+.storyboard-export-table th:nth-child(1) {
+  width: 58px;
+}
+
+.storyboard-export-table th:nth-child(2) {
+  width: 100px;
+}
+
+.storyboard-export-table th:nth-child(3) {
+  width: 100px;
+}
+
+.storyboard-export-table th:nth-child(4),
+.storyboard-export-table th:nth-child(5) {
+  width: 130px;
+}
+
+.storyboard-export-table th:nth-child(6) {
+  width: 105px;
+}
+
+.storyboard-export-table td code,
+.storyboard-export-table td small {
+  display: block;
+}
+
+.storyboard-export-table td code {
+  color: #2f3b45;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 10px;
+}
+
+.storyboard-export-table td small {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 8px;
+}
+
+.storyboard-export-table tr[data-action="clear"],
+.storyboard-export-table tr[data-action="replace"] {
+  background: #fffaf1;
+}
+
+.export-action {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 7px;
+  color: #4f5b65;
+  background: #edf0f2;
+  border: 1px solid #d5dadd;
+  border-radius: 4px;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.export-action--create {
+  color: #256548;
+  background: #edf8f2;
+  border-color: #b9ddcb;
+}
+
+.export-action--replace,
+.export-action--clear {
+  color: #80511d;
+  background: #fff8e9;
+  border-color: #ead3aa;
+}
+
+.storyboard-export-modal > footer {
+  background: var(--surface-muted);
+  border-top: 1px solid var(--border);
+}
+
+.storyboard-export-modal > footer > div {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+.storyboard-export-confirm {
+  display: flex;
+  align-items: flex-start;
+  min-width: 0;
+  gap: 8px;
+  color: #4c5761;
+  font-size: 10px;
+  line-height: 16px;
+}
+
+.storyboard-export-confirm input {
+  flex: 0 0 auto;
+  margin: 2px 0 0;
+}
+
 .mission-target-backdrop {
   background: rgba(18, 24, 30, 0.72);
 }
@@ -2737,7 +3084,7 @@ input:focus-visible {
 .npc-registration-modal {
   display: flex;
   flex-direction: column;
-  width: min(1180px, 97vw);
+  width: min(1280px, 97vw);
   height: min(720px, 94vh);
   overflow: hidden;
   background: #ffffff;
@@ -2821,7 +3168,7 @@ input:focus-visible {
 
 .npc-registration-table {
   width: 100%;
-  min-width: 1160px;
+  min-width: 1240px;
   border-collapse: collapse;
   table-layout: fixed;
 }
@@ -2858,7 +3205,7 @@ input:focus-visible {
 }
 
 .npc-registration-table th:nth-child(3) {
-  width: 280px;
+  width: 360px;
 }
 
 .npc-registration-table th:nth-child(4) {
@@ -2979,9 +3326,9 @@ input:focus-visible {
 
 .npc-registration-new-fields {
   display: grid;
-  grid-template-columns: minmax(90px, 1fr) minmax(70px, 0.8fr) auto;
+  grid-template-columns: repeat(2, minmax(130px, 1fr));
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   margin-top: 6px;
 }
 
@@ -2997,8 +3344,9 @@ input:focus-visible {
   font-size: 9px;
 }
 
-.npc-registration-new-fields > label {
+.npc-registration-turn-field {
   display: flex;
+  grid-column: 1 / -1;
   align-items: center;
   gap: 4px;
   color: var(--text-muted);
@@ -3006,7 +3354,7 @@ input:focus-visible {
   white-space: nowrap;
 }
 
-.npc-registration-new-fields > label input {
+.npc-registration-turn-field input {
   width: 14px;
   height: 14px;
   margin: 0;
@@ -3213,6 +3561,13 @@ input:focus-visible {
   color: #4e5963;
   font-size: 10px;
   line-height: 19px;
+}
+
+.setup-instructions > p {
+  margin: 0 0 10px;
+  color: #56616b;
+  font-size: 10px;
+  line-height: 17px;
 }
 
 .setup-instructions > code {

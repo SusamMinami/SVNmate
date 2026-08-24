@@ -1,4 +1,4 @@
-# 镜头沙盘 v0.16.1
+# 镜头沙盘 v0.17.0
 
 面向 UE4 镜头对话制作的 Three.js 原型。输入四位数对话 ID，工具从
 `doc\csvdir` 读取真实对话链，通过规则导演、内部 TRAE 协作或 Mira AI
@@ -86,10 +86,10 @@ Blueprint。输入 BP 文件名或完整 `/Game/` 路径后点击“创建 BP”
 模型 ID，并列出使用相同模型的 NPC ID、名称、头衔和转身配置供选择。
 
 模型尚未注册时会明确提示先处理模型资源表；没有合适 NPC 时可选择“新建
-NPC”并填写名称、头衔和转身配置。位置与旋转匹配已有目标物时会标绿并显示
-目标物 ID。点击“写入新增项”后，工具通过 Excel COM 按规则顺增 ID 并写入
-`.xlsm` 源表，但保持工作簿未保存，最终检查和保存由用户完成；不会修改导出
-CSV。详细边界见
+NPC”，名字和头衔允许留空。只需要新 NPC ID 时可点击“NPC 表”；已有模型和
+NPC ID 时可点击“目标物表”仅新增目标物；点击“写入新增项”则执行完整注册。
+各范围不会打开无关工作簿，新增单元格会标红，`.xlsm` 工作簿保持未保存，
+最终检查和保存由用户完成；不会修改导出 CSV。详细边界见
 [`docs/npc-registration.md`](docs/npc-registration.md)。
 
 ## Windows 桌面版
@@ -122,9 +122,10 @@ MCP，即可处理镜头沙盘任务。TRAE 分镜 MCP 固定使用
 powershell -ExecutionPolicy Bypass -File scripts\publish-update.ps1
 ```
 
-脚本会重新构建并上传安装包、便携版、`latest.yml` 和 blockmap。当前本地
-构建未配置商业代码签名证书，首次运行时 Windows SmartScreen 可能显示未知
-发布者；正式外部分发前应配置 Windows 代码签名证书。
+脚本会重新构建并上传安装包、便携版、`latest.yml`、blockmap 和校验和，
+同时使用当前版本与 `RELEASE_NOTES.md` 更新固定 Release 的标题和说明。
+当前本地构建未配置商业代码签名证书，首次运行时 Windows SmartScreen
+可能显示未知发布者；正式外部分发前应配置 Windows 代码签名证书。
 
 ## 导演模式
 
@@ -159,7 +160,10 @@ powershell -ExecutionPolicy Bypass -File scripts\publish-update.ps1
 重新加载前端，不会重启由 TRAE 管理的 MCP 进程。
 桌面版和源码 MCP 统一使用 `%APPDATA%\Shot Sandbox\runtime` 任务队列，
 避免旧会话读取仓库内的历史开发任务。
-桌面版每次启动会同步内置分镜 Skill，确保升级后的镜头规则立即生效。
+桌面版每次启动会同步内置 MCP 配置与分镜 Skill，并比较 Skill 实际内容，
+确保应用升级后的镜头规则落到独立集成目录。设置页的“同步配置与 Skill”
+可随时手动重写；如果 TRAE 在同步前已经打开该目录，需要重载 TRAE 窗口以
+重新读取 Skill。
 
 ### 本地结果缓存
 
@@ -186,6 +190,21 @@ TRAE 模式会通过当前飞书用户访问制作组的“分镜设计数据集
 `STORYBOARD_SHARED_TABLE_ID` 环境变量覆盖；测试可设置
 `STORYBOARD_SHARED_LIBRARY_DISABLED=1` 禁用远端访问。
 
+### 返修案例库
+
+Mira 与内部 TRAE 的首轮方案未通过投影验收时，会在第二次定向返修前读取
+“镜头返修案例库”中人工审核通过且返修有效的相似案例。匹配依据包括失败
+签名、原镜头模板、角色数和 BP/自动站位来源，历史案例只作为修改方向参考，
+不会复制具体坐标。
+
+完成二次验收后，每个首轮失败镜头会形成一条独立案例，记录验收原因、返修
+前后决策、修改摘要和返修效果。新案例统一处于“待审核”状态；返修失败的
+案例也会保留，但只有“已通过”审核且结果为“通过”或“改善”的案例会用于
+后续检索。导演模式中的“收集返修案例”复选框可随时关闭读写。
+
+默认案例表可通过 `STORYBOARD_CASE_TABLE_ID` 覆盖；测试或离线环境可设置
+`STORYBOARD_CASE_LIBRARY_DISABLED=1` 禁用案例库。
+
 Skill 位于：
 
 ```text
@@ -200,10 +219,20 @@ dialogue-shot-sandbox/trae-integration/mcp.json
 
 切换到 Mira 不会立即发送消息。只有用户点击查询/生成按钮时，当前对话和 NPC 信息才会以当前飞书用户身份发送给 Mira。
 
-首次使用 Mira 时，点击“授权”并完成增量授权。应用只申请：
+桌面版首次启动且没有飞书用户登录数据时，会在设置窗口引导登录。应用按
+功能申请以下最小权限：
 
 - `search:bot`
 - `im:message.send_as_user`
+- `base:app:read`
+- `base:table:read`
+- `base:field:read`
+- `base:record:read`
+- `base:record:create`
+- `base:record:update`
+
+授权由本机 `lark-cli` 持久化并自动刷新，因此完成一次登录后，后续启动通常
+不需要再次扫码。共享方案和案例库始终显式使用当前飞书用户身份访问。
 
 如自动搜索出现多个 Mira 候选，可在启动前设置：
 
@@ -252,4 +281,5 @@ npm run dev
   单人/多人覆盖意图、焦段/景深、镜内运动与可执行构图语义
 - 飞书桥仅绑定本机 `127.0.0.1`
 
-当前坐标为构图用相对坐标，不可直接作为 UE4 世界坐标。后续可增加场景尺度、站位编辑和 UE4 JSON 导出。
+自动站位坐标仍只用于构图参考。采用 UE Blueprint 站位生成的方案可在逐节点
+差异确认后，将镜头局部坐标、旋转和 FOV 写回对应 Dialog Graph 台词节点。

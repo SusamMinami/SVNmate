@@ -13,6 +13,9 @@ export interface LarkStatus {
   openId: string;
   userStatus: string;
   missingScopes: string[];
+  miraMissingScopes: string[];
+  baseMissingScopes: string[];
+  caseLibraryReady: boolean;
   miraBot: MiraBotInfo | null;
 }
 

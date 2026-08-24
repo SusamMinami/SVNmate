@@ -1,20 +1,28 @@
 import {
   Check,
   CircleAlert,
+  Database,
   Download,
   ExternalLink,
   FolderCog,
   LoaderCircle,
+  LogIn,
   PlugZap,
   RefreshCw,
   X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
+import type { LarkStatus } from "../lark/client";
 
 interface DesktopSetupModalProps {
   initialStatus: DesktopSetupStatus;
   onClose: () => void;
   onRefreshTrae: () => void;
+  larkLoading: boolean;
+  larkStatus: LarkStatus | null;
+  larkError: string;
+  onAuthorize: () => void;
+  onRefreshLark: () => void;
 }
 
 function updateLabel(snapshot: DesktopUpdateSnapshot): string {
@@ -40,6 +48,11 @@ export function DesktopSetupModal({
   initialStatus,
   onClose,
   onRefreshTrae,
+  larkLoading,
+  larkStatus,
+  larkError,
+  onAuthorize,
+  onRefreshLark,
 }: DesktopSetupModalProps) {
   const desktop = window.shotSandboxDesktop;
   const [status, setStatus] = useState(initialStatus);
@@ -49,6 +62,10 @@ export function DesktopSetupModal({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [uePort, setUePort] = useState(String(initialStatus.ueMcpPort));
+  const baseMissingScopes =
+    larkStatus?.baseMissingScopes ?? larkStatus?.missingScopes ?? [];
+  const larkReady =
+    Boolean(larkStatus?.authorized) && baseMissingScopes.length === 0;
 
   useEffect(() => {
     if (!desktop) {
@@ -129,7 +146,7 @@ export function DesktopSetupModal({
         <header>
           <div>
             <small>{status.firstRun ? "首次启动" : "桌面版设置"}</small>
-            <h2 id="desktop-setup-title">运行环境与 TRAE 协作</h2>
+            <h2 id="desktop-setup-title">运行环境与数据协作</h2>
           </div>
           <button
             className="icon-button"
@@ -165,6 +182,43 @@ export function DesktopSetupModal({
                     : "未找到默认目录，可进入应用后手动选择 doc 文件夹"}
                 </small>
               </span>
+            </div>
+            <div className={larkReady ? "" : "is-warning"}>
+              {larkLoading ? (
+                <LoaderCircle className="spin" size={17} />
+              ) : larkReady ? (
+                <Database size={17} />
+              ) : (
+                <CircleAlert size={17} />
+              )}
+              <span>
+                <strong>飞书数据</strong>
+                <small>
+                  {larkLoading
+                    ? "正在检查登录和多维表格权限"
+                    : larkError
+                      ? larkError
+                      : larkReady
+                        ? `已连接 ${larkStatus?.userName || "当前用户"}，可使用共享方案和返修案例`
+                        : larkStatus?.authorized
+                          ? `已登录，但缺少 ${baseMissingScopes.length} 项多维表格权限`
+                          : "首次使用请登录，用于共享方案和返修案例"}
+                </small>
+              </span>
+              <button
+                type="button"
+                disabled={larkLoading}
+                onClick={larkReady ? onRefreshLark : onAuthorize}
+              >
+                {larkLoading ? (
+                  <LoaderCircle className="spin" size={14} />
+                ) : larkReady ? (
+                  <RefreshCw size={14} />
+                ) : (
+                  <LogIn size={14} />
+                )}
+                {larkReady ? "刷新" : "登录"}
+              </button>
             </div>
             <div className={status.traeDetected ? "" : "is-warning"}>
               {status.traeDetected ? (
@@ -249,11 +303,12 @@ export function DesktopSetupModal({
           <section className="setup-instructions">
             <h3>首次配置</h3>
             <ol>
+              <li>登录飞书，连接共享方案与返修案例库。</li>
               <li>生成独立的 TRAE 集成目录。</li>
               <li>在 TRAE 中打开该目录，并启用项目 MCP 与 Skill。</li>
               <li>启动 UE 编辑器并确认 OmniMcpCore 端口检测通过。</li>
-              <li>保持镜头沙盘运行，刷新状态后提交 AI 分镜任务。</li>
             </ol>
+            <p>应用每次启动都会同步内置 Skill；TRAE 已打开时请重载窗口。</p>
             <code title={status.integrationRoot}>{status.integrationRoot}</code>
             <div className="setup-actions">
               <button
@@ -267,7 +322,9 @@ export function DesktopSetupModal({
                 ) : (
                   <FolderCog size={16} />
                 )}
-                {status.integrationInstalled ? "重新生成配置" : "生成 TRAE 配置"}
+                {status.integrationInstalled
+                  ? "同步配置与 Skill"
+                  : "生成 TRAE 配置"}
               </button>
               <button
                 className="button"
@@ -327,7 +384,7 @@ export function DesktopSetupModal({
         </div>
 
         <footer>
-          <span>规则导演无需 TRAE，也可直接使用。</span>
+          <span>规则导演无需飞书或 TRAE，也可直接使用。</span>
           <button
             className="button button--primary"
             type="button"

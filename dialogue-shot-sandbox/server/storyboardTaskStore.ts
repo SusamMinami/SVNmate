@@ -64,8 +64,19 @@ function taskPath(requestId: string): string {
 
 export function storyboardInputContentHash(input: DirectorInput): string {
   const { request_id: _requestId, ...cacheableInput } = input;
+  const {
+    collect_revision_cases: _collectRevisionCases,
+    ...cacheableConstraints
+  } = cacheableInput.constraints;
   return createHash("sha256")
-    .update(JSON.stringify(sortObjectKeys(cacheableInput)))
+    .update(
+      JSON.stringify(
+        sortObjectKeys({
+          ...cacheableInput,
+          constraints: cacheableConstraints,
+        }),
+      ),
+    )
     .digest("hex");
 }
 

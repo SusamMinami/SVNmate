@@ -52,6 +52,7 @@ export interface DirectorRunResult {
 interface DirectorRunOptions {
   preserveInputPositions?: boolean;
   fallbackPreserveInputPositions?: boolean;
+  collectRevisionCases?: boolean;
 }
 
 const providers = {
@@ -67,6 +68,7 @@ async function runProvider(
 ): Promise<Omit<DirectorRunResult, "requestedMode" | "fallbackReason">> {
   const input = createDirectorInput(sequence, undefined, {
     preserveInputFormation: options.preserveInputPositions,
+    collectRevisionCases: options.collectRevisionCases,
   });
   const providerResult = await providers[mode].design(input);
   const participants = resolveBlocking(

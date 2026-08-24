@@ -102,9 +102,14 @@ export function NpcRegistrationModal({
     Record<string, NewNpcDraft>
   >({});
   const [mapChoices, setMapChoices] = useState<Record<string, string>>({});
-  const [writtenActorRefs, setWrittenActorRefs] = useState<Set<string>>(
+  const [writtenTargetActorRefs, setWrittenTargetActorRefs] = useState<
+    Set<string>
+  >(
     new Set(),
   );
+  const [registeredNpcIds, setRegisteredNpcIds] = useState<
+    Record<string, number>
+  >({});
   const [editDrafts, setEditDrafts] = useState<
     Record<string, TargetTransformDraft>
   >(() =>
@@ -132,13 +137,13 @@ export function NpcRegistrationModal({
   ).length;
   const newNpcCount = candidates.filter(
     (candidate) =>
-      candidate.targetMatches.length === 0 &&
-      (npcChoices[candidate.actor.actorRef] ?? "new") === "new",
+      (npcChoices[candidate.actor.actorRef] ?? "new") === "new" &&
+      registeredNpcIds[candidate.actor.actorRef] === undefined,
   ).length;
   const newTargetCount = candidates.filter(
     (candidate) =>
       candidate.targetMatches.length === 0 &&
-      !writtenActorRefs.has(candidate.actor.actorRef),
+      !writtenTargetActorRefs.has(candidate.actor.actorRef),
   ).length;
   const parsedEditItems =
     editRequest?.targets.map((target) => {
@@ -240,7 +245,7 @@ export function NpcRegistrationModal({
                 ? "choose"
                 : "new";
         nextDrafts[candidate.actor.actorRef] = {
-          name: candidate.actor.label.replace(/^BP_/i, ""),
+          name: "",
           title: "",
           canTurn: true,
         };
@@ -250,7 +255,8 @@ export function NpcRegistrationModal({
       setNpcChoices(nextChoices);
       setNewNpcDrafts(nextDrafts);
       setMapChoices(nextMapChoices);
-      setWrittenActorRefs(new Set());
+      setWrittenTargetActorRefs(new Set());
+      setRegisteredNpcIds({});
       setStatus(
         result.selection.actors.length > 0
           ? `已读取 ${result.selection.actors.length} 个 UE Actor`
@@ -432,11 +438,220 @@ export function NpcRegistrationModal({
     }
   }
 
+  function buildRegistrationItem(
+    candidate: NpcRegistrationCandidate,
+    mapId: string,
+  ): NpcRegistrationWriteItem {
+    const actorRef = candidate.actor.actorRef;
+    const choice = npcChoices[actorRef] ?? "new";
+    const registeredNpcId = registeredNpcIds[actorRef];
+    const existingNpc =
+      choice === "new"
+        ? undefined
+        : candidate.npcOptions.find(
+            (npc) => npc.id === Number(choice),
+          );
+    const draft = newNpcDrafts[actorRef] ?? {
+      name: "",
+      title: "",
+      canTurn: true,
+    };
+    const createNewNpc =
+      choice === "new" && registeredNpcId === undefined;
+    return {
+      actorRef,
+      label: candidate.actor.label,
+      classPath: candidate.actor.classPath,
+      transform: candidate.actor.transform,
+      mapId,
+      existingModelId: candidate.modelOptions[0]?.id ?? null,
+      existingNpcId: registeredNpcId ?? existingNpc?.id ?? null,
+      existingTargetId: null,
+      canTurn: existingNpc?.canTurn ?? draft.canTurn,
+      newNpc: createNewNpc
+        ? {
+            name: draft.name.trim(),
+            title: draft.title.trim(),
+            canTurn: draft.canTurn,
+          }
+        : null,
+    };
+  }
+
+  function rememberCreatedNpcs(
+    createdNpcs: Array<{ actorRef: string; id: number }>,
+  ) {
+    if (createdNpcs.length === 0) {
+      return;
+    }
+    setRegisteredNpcIds((current) => ({
+      ...current,
+      ...Object.fromEntries(
+        createdNpcs.map((npc) => [npc.actorRef, npc.id]),
+      ),
+    }));
+    setNpcChoices((current) => ({
+      ...current,
+      ...Object.fromEntries(
+        createdNpcs.map((npc) => [npc.actorRef, String(npc.id)]),
+      ),
+    }));
+  }
+
+  async function writeNpcOnly() {
+    const pendingCandidates = candidates.filter(
+      (candidate) =>
+        (npcChoices[candidate.actor.actorRef] ?? "new") === "new" &&
+        registeredNpcIds[candidate.actor.actorRef] === undefined,
+    );
+    if (pendingCandidates.length === 0) {
+      setStatus("没有需要新增的 NPC");
+      return;
+    }
+    const missingModel = pendingCandidates.find(
+      (candidate) => candidate.modelOptions.length === 0,
+    );
+    if (missingModel) {
+      setError(
+        `${missingModel.actor.label} 尚无模型 ID，请先注册模型资源`,
+      );
+      return;
+    }
+    const items = pendingCandidates.map((candidate) =>
+      buildRegistrationItem(candidate, ""),
+    );
+    if (
+      !window.confirm(
+        `将只向 NPC 表新增 ${items.length} 行，不写入目标物表。\n\n新增单元格会标红，工作簿保持未保存状态，是否继续？`,
+      )
+    ) {
+      setStatus("已取消写入 NPC 表");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setStatus("");
+    try {
+      const result = await writeNpcRegistrationDraft(items, "npc_only");
+      rememberCreatedNpcs(result.createdNpcs);
+      const actorLabels = new Map(
+        items.map((item) => [item.actorRef, item.label]),
+      );
+      const assignments = result.createdNpcs.map(
+        (npc) =>
+          `${actorLabels.get(npc.actorRef) ?? npc.actorRef} → ${npc.id}`,
+      );
+      setStatus(
+        `已写入未保存 NPC 草稿：${assignments.join("，")}`,
+      );
+    } catch (writeError) {
+      setError(
+        writeError instanceof Error
+          ? writeError.message
+          : "写入 NPC 表失败",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function writeTargetOnly() {
+    const pendingCandidates = candidates.filter(
+      (candidate) =>
+        candidate.targetMatches.length === 0 &&
+        !writtenTargetActorRefs.has(candidate.actor.actorRef),
+    );
+    if (pendingCandidates.length === 0) {
+      setStatus("没有需要新增的目标物");
+      return;
+    }
+    const missingMap = pendingCandidates.find(
+      (candidate) => !mapChoices[candidate.actor.actorRef],
+    );
+    if (missingMap) {
+      setError(`Actor ${missingMap.actor.label} 无法匹配 MapID`);
+      return;
+    }
+    const missingChoice = pendingCandidates.find(
+      (candidate) =>
+        (npcChoices[candidate.actor.actorRef] ?? "new") === "choose",
+    );
+    if (missingChoice) {
+      setError(`请选择 ${missingChoice.actor.label} 使用的 NPC`);
+      return;
+    }
+    const items = pendingCandidates.map((candidate) =>
+      buildRegistrationItem(
+        candidate,
+        mapChoices[candidate.actor.actorRef],
+      ),
+    );
+    const missingIdentity = items.find(
+      (item) =>
+        item.existingModelId === null || item.existingNpcId === null,
+    );
+    if (missingIdentity) {
+      setError(
+        `${missingIdentity.label} 需要已有模型 ID 和 NPC ID；请先选择复用 NPC，或先点击“NPC 表”创建 NPC`,
+      );
+      return;
+    }
+    const targetItems = items.map((item) => ({
+      ...item,
+      newNpc: null,
+    }));
+    if (
+      !window.confirm(
+        `将只向目标物表新增 ${targetItems.length} 行，不写入模型资源表或 NPC 表。\n\n新增单元格会标红，工作簿保持未保存状态，是否继续？`,
+      )
+    ) {
+      setStatus("已取消写入目标物表");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setStatus("");
+    try {
+      const result = await writeNpcRegistrationDraft(
+        targetItems,
+        "target_only",
+      );
+      setWrittenTargetActorRefs((current) => new Set([
+        ...current,
+        ...targetItems.map((item) => item.actorRef),
+      ]));
+      const actorLabels = new Map(
+        targetItems.map((item) => [item.actorRef, item.label]),
+      );
+      const assignments = [
+        ...result.createdTargets.map(
+          (target) =>
+            `${actorLabels.get(target.actorRef) ?? target.actorRef} → ${target.id}`,
+        ),
+        ...result.reusedTargets.map(
+          (target) =>
+            `${actorLabels.get(target.actorRef) ?? target.actorRef} → ${target.id}（复用）`,
+        ),
+      ];
+      setStatus(
+        `已写入未保存目标物草稿：${assignments.join("，")}`,
+      );
+    } catch (writeError) {
+      setError(
+        writeError instanceof Error
+          ? writeError.message
+          : "写入目标物表失败",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function writeNewItems() {
     const pendingCandidates = candidates.filter(
       (candidate) =>
         candidate.targetMatches.length === 0 &&
-        !writtenActorRefs.has(candidate.actor.actorRef),
+        !writtenTargetActorRefs.has(candidate.actor.actorRef),
     );
     if (pendingCandidates.length === 0) {
       return;
@@ -457,50 +672,17 @@ export function NpcRegistrationModal({
       return;
     }
     const items: NpcRegistrationWriteItem[] = pendingCandidates.map(
-      (candidate) => {
-        const choice = npcChoices[candidate.actor.actorRef] ?? "new";
-        const existingNpc =
-          choice === "new"
-            ? undefined
-            : candidate.npcOptions.find(
-                (npc) => npc.id === Number(choice),
-              );
-        const draft = newNpcDrafts[candidate.actor.actorRef] ?? {
-          name: candidate.actor.label.replace(/^BP_/i, ""),
-          title: "",
-          canTurn: true,
-        };
-        return {
-          actorRef: candidate.actor.actorRef,
-          label: candidate.actor.label,
-          classPath: candidate.actor.classPath,
-          transform: candidate.actor.transform,
-          mapId: mapChoices[candidate.actor.actorRef],
-          existingModelId: candidate.modelOptions[0]?.id ?? null,
-          existingNpcId: existingNpc?.id ?? null,
-          existingTargetId: null,
-          canTurn: existingNpc?.canTurn ?? draft.canTurn,
-          newNpc:
-            existingNpc === undefined
-              ? {
-                  name: draft.name.trim(),
-                  title: draft.title.trim(),
-                  canTurn: draft.canTurn,
-                }
-              : null,
-        };
-      },
+      (candidate) =>
+        buildRegistrationItem(
+          candidate,
+          mapChoices[candidate.actor.actorRef],
+        ),
     );
-    const unnamed = items.find(
-      (item) => item.newNpc && !item.newNpc.name,
-    );
-    if (unnamed) {
-      setError(`请填写 ${unnamed.label} 的 NPC 名称`);
-      return;
-    }
     if (
       !window.confirm(
-        `将向 Excel 源表写入 ${items.length} 个目标物，并按需新增 ${missingModelCount} 个模型、${newNpcCount} 个 NPC。\n\n工作簿会保持未保存状态，是否继续？`,
+        `将向 Excel 源表写入 ${items.length} 个目标物，并按需新增 ${
+          items.filter((item) => item.existingModelId === null).length
+        } 个模型、${items.filter((item) => item.newNpc !== null).length} 个 NPC。\n\n新增单元格会标红，工作簿保持未保存状态，是否继续？`,
       )
     ) {
       setStatus("已取消写入 Excel");
@@ -510,10 +692,12 @@ export function NpcRegistrationModal({
     setError("");
     setStatus("");
     try {
-      const result = await writeNpcRegistrationDraft(items);
-      setWrittenActorRefs(
-        new Set(items.map((item) => item.actorRef)),
-      );
+      const result = await writeNpcRegistrationDraft(items, "all");
+      rememberCreatedNpcs(result.createdNpcs);
+      setWrittenTargetActorRefs((current) => new Set([
+        ...current,
+        ...items.map((item) => item.actorRef),
+      ]));
       const actorLabels = new Map(
         items.map((item) => [item.actorRef, item.label]),
       );
@@ -799,11 +983,14 @@ export function NpcRegistrationModal({
                   } = candidate;
                   const choice = npcChoices[actor.actorRef] ?? "new";
                   const draft = newNpcDrafts[actor.actorRef] ?? {
-                    name: actor.label.replace(/^BP_/i, ""),
+                    name: "",
                     title: "",
                     canTurn: true,
                   };
-                  const isWritten = writtenActorRefs.has(actor.actorRef);
+                  const registeredNpcId =
+                    registeredNpcIds[actor.actorRef];
+                  const isWritten =
+                    writtenTargetActorRefs.has(actor.actorRef);
                   return (
                     <tr key={actor.actorRef}>
                       <td title={actor.classPath}>
@@ -834,7 +1021,9 @@ export function NpcRegistrationModal({
                         {modelOptions.length > 0 && (
                           <select
                             value={choice}
-                            disabled={busy}
+                            disabled={
+                              busy || registeredNpcId !== undefined
+                            }
                             onChange={(event) =>
                               setNpcChoices((current) => ({
                                 ...current,
@@ -843,6 +1032,12 @@ export function NpcRegistrationModal({
                             }
                             aria-label={`${actor.label} NPC 复用方式`}
                           >
+                            <option value="new">新建 NPC</option>
+                            {registeredNpcId !== undefined && (
+                              <option value={registeredNpcId}>
+                                {registeredNpcId} · 新增待保存
+                              </option>
+                            )}
                             {npcOptions.length > 1 && (
                               <option value="choose">请选择 NPC</option>
                             )}
@@ -853,7 +1048,6 @@ export function NpcRegistrationModal({
                                 {turnLabel(npc.canTurn)}
                               </option>
                             ))}
-                            <option value="new">新建 NPC</option>
                           </select>
                         )}
                         {choice === "new" && (
@@ -870,8 +1064,8 @@ export function NpcRegistrationModal({
                                   },
                                 }))
                               }
-                              aria-label={`${actor.label} 新 NPC 名称`}
-                              placeholder="NPC 名称"
+                              aria-label={`${actor.label} 名字`}
+                              placeholder="名字"
                             />
                             <input
                               value={draft.title}
@@ -885,10 +1079,10 @@ export function NpcRegistrationModal({
                                   },
                                 }))
                               }
-                              aria-label={`${actor.label} 新 NPC 头衔`}
+                              aria-label={`${actor.label} 头衔`}
                               placeholder="头衔"
                             />
-                            <label>
+                            <label className="npc-registration-turn-field">
                               <input
                                 type="checkbox"
                                 checked={draft.canTurn}
@@ -1054,19 +1248,21 @@ export function NpcRegistrationModal({
                 <button
                   className="button"
                   type="button"
-                  onClick={() => void openTable("npc", "NPC 表")}
+                  title="只新增 NPC 并获取 ID，不写入目标物表"
+                  onClick={() => void writeNpcOnly()}
                   disabled={busy || newNpcCount === 0}
                 >
-                  <FileSpreadsheet size={15} />
+                  <FilePenLine size={15} />
                   NPC 表
                 </button>
                 <button
                   className="button"
                   type="button"
-                  onClick={() => void openTable("missionTarget", "目标物表")}
+                  title="只新增目标物，不写入模型资源表或 NPC 表"
+                  onClick={() => void writeTargetOnly()}
                   disabled={busy || newTargetCount === 0}
                 >
-                  <FileSpreadsheet size={15} />
+                  <FilePenLine size={15} />
                   目标物表
                 </button>
                 <button

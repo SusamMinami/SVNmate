@@ -1017,7 +1017,7 @@ test("opens the incremental Feishu authorization dialog", async ({ page }) => {
   await page.getByRole("button", { name: "授权飞书" }).click();
 
   await expect(
-    page.getByRole("dialog", { name: "连接 Mira AI 导演" }),
+    page.getByRole("dialog", { name: "连接飞书数据与 Mira" }),
   ).toBeVisible();
   await expect(page.getByAltText("飞书授权二维码")).toBeVisible();
   await expect(
@@ -1031,14 +1031,118 @@ test("opens the incremental Feishu authorization dialog", async ({ page }) => {
       button.click();
     });
   await expect(
-    page.getByRole("dialog", { name: "连接 Mira AI 导演" }),
+    page.getByRole("dialog", { name: "连接飞书数据与 Mira" }),
   ).toBeHidden();
   expect(finishRequests).toBe(1);
+});
+
+test("guides an unsigned user to Feishu on first desktop launch", async ({
+  page,
+}) => {
+  await page.route("**/api/lark/status", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          cliAvailable: true,
+          authorized: false,
+          identity: "bot",
+          userName: "",
+          openId: "",
+          userStatus: "missing",
+          missingScopes: [
+            "search:bot",
+            "im:message.send_as_user",
+            "base:record:read",
+            "base:record:create",
+          ],
+          miraMissingScopes: [
+            "search:bot",
+            "im:message.send_as_user",
+          ],
+          baseMissingScopes: [
+            "base:record:read",
+            "base:record:create",
+          ],
+          caseLibraryReady: false,
+          miraBot: null,
+        },
+      }),
+    });
+  });
+  await page.route("**/api/lark/auth/start", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          verificationUrl: "https://example.com/feishu-first-run",
+          qrDataUrl:
+            "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+          expiresAt: Date.now() + 300_000,
+          scopes: ["base:record:read", "base:record:create"],
+        },
+      }),
+    });
+  });
+  await page.addInitScript(() => {
+    const status = {
+      firstRun: true,
+      version: "0.17.0",
+      packaged: true,
+      portable: false,
+      runtimeBundled: true,
+      traeDetected: false,
+      traeExecutable: null,
+      integrationInstalled: false,
+      integrationRoot: "C:\\Test\\Shot Sandbox\\trae-integration",
+      mcpConnected: false,
+      mcpVersion: null,
+      expectedMcpVersion: "test",
+      defaultDataReady: true,
+      ueConnected: false,
+      ueMcpHost: "127.0.0.1",
+      ueMcpPort: 12031,
+      ueConnectionMessage: "未连接",
+      updateSupported: false,
+      updatePage: "https://example.com/update",
+    };
+    window.shotSandboxDesktop = {
+      getSetupStatus: async () => status,
+      installTraeIntegration: async () => status,
+      openIntegrationFolder: async () => undefined,
+      openTraeDownload: async () => undefined,
+      setUeMcpPort: async () => status,
+      completeSetup: async () => ({ ...status, firstRun: false }),
+      checkForUpdates: async () => ({ state: "idle" }),
+      getUpdateSnapshot: async () => ({ state: "idle" }),
+      installUpdate: async () => undefined,
+      openUpdatePage: async () => undefined,
+      onUpdateState: () => () => undefined,
+    };
+  });
+
+  await page.goto("/");
+
+  const setup = page.getByRole("dialog", {
+    name: "运行环境与数据协作",
+  });
+  await expect(setup).toBeVisible();
+  await expect(setup.getByText("首次使用请登录")).toBeVisible();
+  await setup.getByRole("button", { name: "登录" }).click();
+  await expect(
+    page.getByRole("dialog", { name: "连接飞书数据与 Mira" }),
+  ).toBeVisible();
 });
 
 test("offers the detected Blueprint formation before designing shots", async ({
   page,
 }, testInfo) => {
+  let inspectedExportRequest: Record<string, unknown> | null = null;
+  let exportRequests = 0;
   let releaseFormation!: () => void;
   const formationGate = new Promise<void>((resolve) => {
     releaseFormation = resolve;
@@ -1087,6 +1191,74 @@ test("offers the detected Blueprint formation before designing shots", async ({
               },
             ],
           },
+        },
+      }),
+    });
+  });
+  await page.route("**/api/ue/storyboard/inspect", async (route) => {
+    inspectedExportRequest = route.request().postDataJSON();
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          reviewToken: "a".repeat(64),
+          dialogueId: "7350",
+          startId: "735000",
+          dialogueAssetPath:
+            "/Game/Seria/Task/dialoggraph/Test/735000.735000",
+          formationAssetPath:
+            "/Game/Seria/Task/Mod/MainQuest/Cha9/BP_735000.BP_735000",
+          cameraName: "c1",
+          shotCount: 1,
+          changedNodeCount: 2,
+          overwrittenNodeCount: 1,
+          clearedNodeCount: 1,
+          invalidShotCount: 1,
+          blockedReasons: [],
+          warnings: ["1 个镜头的投影验收未通过，确认后仍可导出"],
+          nodes: [
+            {
+              dialogueId: "735001",
+              shotIndex: 0,
+              role: "shot_start",
+              action: "replace",
+              existingCameraPosition: "old",
+              desiredCameraPosition: "c1",
+              existingMovementCount: 1,
+              desiredMovementCount: 1,
+            },
+            {
+              dialogueId: "735002",
+              shotIndex: null,
+              role: "continuation",
+              action: "clear",
+              existingCameraPosition: "c2",
+              desiredCameraPosition: "",
+              existingMovementCount: 1,
+              desiredMovementCount: 0,
+            },
+          ],
+        },
+      }),
+    });
+  });
+  await page.route("**/api/ue/storyboard/export", async (route) => {
+    exportRequests += 1;
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          status: "exported",
+          dialogueId: "7350",
+          startId: "735000",
+          dialogueAssetPath:
+            "/Game/Seria/Task/dialoggraph/Test/735000.735000",
+          changedNodeCount: 2,
+          saved: true,
         },
       }),
     });
@@ -1160,6 +1332,37 @@ test("offers the detected Blueprint formation before designing shots", async ({
   await expect(page.locator(".cast-row")).toHaveCount(2);
   await expect(page.locator(".shot-row.is-invalid")).toHaveCount(1);
   await expect(page.getByLabel("投影验收未通过")).toBeVisible();
+  const exportButton = page.getByRole("button", { name: "导出到 UE" });
+  await expect(exportButton).toBeEnabled();
+  await exportButton.click();
+  const exportDialog = page.getByRole("dialog", {
+    name: "导出当前分镜",
+  });
+  await expect(exportDialog).toBeVisible();
+  await expect(exportDialog.getByText("覆盖", { exact: true })).toBeVisible();
+  await expect(
+    exportDialog.getByText("清空旧镜头", { exact: true }),
+  ).toBeVisible();
+  expect(inspectedExportRequest).toMatchObject({
+    dialogueId: "7350",
+    startId: "735000",
+    participantModelIndexes: [0, 1],
+    usesBlueprintFormation: true,
+  });
+  await exportDialog.screenshot({
+    path: testInfo.outputPath("storyboard-export-preview.png"),
+  });
+  const confirmButton = exportDialog.getByRole("button", {
+    name: "确认写入并保存",
+  });
+  await expect(confirmButton).toBeDisabled();
+  await exportDialog.getByRole("checkbox").check();
+  await expect(confirmButton).toBeEnabled();
+  await confirmButton.click();
+  await expect(
+    exportDialog.getByText("已写入并保存 2 个台词节点"),
+  ).toBeVisible();
+  expect(exportRequests).toBe(1);
   await page.screenshot({
     path: testInfo.outputPath("blueprint-invalid-shot.png"),
     fullPage: true,
@@ -1174,12 +1377,19 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
   let createRequests = 0;
   let createdBlueprintName = "";
   let createdTargetIds: string[] = [];
-  let openedConfigTable = "";
-  let registrationWriteItems: Array<{
+  let targetOnlyWriteItems: Array<{
     existingModelId: number | null;
     existingNpcId: number | null;
     mapId: string;
+    newNpc: { name: string; title: string } | null;
   }> = [];
+  let npcOnlyWriteItems: Array<{
+    existingModelId: number | null;
+    existingNpcId: number | null;
+    mapId: string;
+    newNpc: { name: string; title: string } | null;
+  }> = [];
+  let registrationWriteScope = "";
   let targetUpdateItems: Array<{
     targetId: string;
     mapId: string;
@@ -1419,21 +1629,27 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
     });
   });
   await page.route("**/api/ue/config-table/open", async (route) => {
-    openedConfigTable = route.request().postDataJSON().table;
+    const table = route.request().postDataJSON().table;
     await route.fulfill({
       status: 200,
       contentType: "application/json",
       body: JSON.stringify({
         ok: true,
         data: {
-          table: openedConfigTable,
+          table,
           path: "C:\\trunk\\doc\\xlsdir\\test.xlsm",
         },
       }),
     });
   });
   await page.route("**/api/ue/config-registration/write", async (route) => {
-    registrationWriteItems = route.request().postDataJSON().items;
+    const request = route.request().postDataJSON();
+    registrationWriteScope = request.scope;
+    if (request.scope === "npc_only") {
+      npcOnlyWriteItems = request.items;
+    } else if (request.scope === "target_only") {
+      targetOnlyWriteItems = request.items;
+    }
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -1441,11 +1657,19 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
         ok: true,
         data: {
           createdModels: [],
-          createdNpcs: [],
-          createdTargets: [{ actorRef: "BP_Guard_C_1", id: 500005 }],
-          reusedTargets: [{ actorRef: "BP_Guard_C_0", id: "500001" }],
+          createdNpcs:
+            request.scope === "npc_only"
+              ? [{ actorRef: "BP_Guard_C_1", id: 101999 }]
+              : [],
+          createdTargets:
+            request.scope === "target_only"
+              ? [{ actorRef: "BP_Guard_C_1", id: 500005 }]
+              : [],
+          reusedTargets: [],
           openedWorkbooks: [
-            "C:\\trunk\\doc\\xlsdir\\r任务剧情\\m目标物表.xlsm",
+            request.scope === "npc_only"
+              ? "C:\\trunk\\doc\\xlsdir\\NPC表.xlsm"
+              : "C:\\trunk\\doc\\xlsdir\\r任务剧情\\m目标物表.xlsm",
           ],
         },
       }),
@@ -1736,24 +1960,64 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
   await expect(
     registration.getByLabel("守卫预览 NPC 复用方式"),
   ).toHaveValue("101968");
+  const newNpcSelect = registration.getByLabel("守卫新增 NPC 复用方式");
+  await expect(newNpcSelect.locator("option").first()).toHaveText("新建 NPC");
+  await newNpcSelect.selectOption("new");
+  await expect(registration.getByLabel("守卫新增 名字")).toHaveValue("");
+  await expect(registration.getByLabel("守卫新增 名字")).toHaveAttribute(
+    "placeholder",
+    "名字",
+  );
+  await expect(registration.getByLabel("守卫新增 头衔")).toHaveAttribute(
+    "placeholder",
+    "头衔",
+  );
   await expect(registration.getByText("1204").first()).toBeVisible();
   await registration.screenshot({
     path: testInfo.outputPath("npc-registration-selection.png"),
   });
-  await registration.getByRole("button", { name: "目标物表" }).click();
-  expect(openedConfigTable).toBe("missionTarget");
   page.once("dialog", async (confirmation) => {
-    expect(confirmation.message()).toContain("工作簿会保持未保存状态");
+    expect(confirmation.message()).toContain("不写入目标物表");
     await confirmation.accept();
   });
-  await registration.getByRole("button", { name: "写入新增项" }).click();
-  await expect(registration.getByText(/目标物 1/)).toBeVisible();
-  expect(registrationWriteItems).toEqual([
+  await registration.getByRole("button", { name: "NPC 表" }).click();
+  await expect(
+    registration.getByText(/守卫新增 → 101999/),
+  ).toBeVisible();
+  expect(registrationWriteScope).toBe("npc_only");
+  expect(npcOnlyWriteItems).toEqual([
     expect.objectContaining({
       actorRef: "BP_Guard_C_1",
       existingModelId: 200135,
-      existingNpcId: 101968,
-      mapId: "1204",
+      existingNpcId: null,
+      mapId: "",
+      newNpc: expect.objectContaining({
+        name: "",
+        title: "",
+      }),
     }),
   ]);
+  page.once("dialog", async (confirmation) => {
+    expect(confirmation.message()).toContain(
+      "不写入模型资源表或 NPC 表",
+    );
+    await confirmation.accept();
+  });
+  await registration.getByRole("button", { name: "目标物表" }).click();
+  await expect(
+    registration.getByText(/守卫新增 → 500005/),
+  ).toBeVisible();
+  expect(registrationWriteScope).toBe("target_only");
+  expect(targetOnlyWriteItems).toEqual([
+    expect.objectContaining({
+      actorRef: "BP_Guard_C_1",
+      existingModelId: 200135,
+      existingNpcId: 101999,
+      mapId: "1204",
+      newNpc: null,
+    }),
+  ]);
+  await expect(
+    registration.getByRole("button", { name: "写入新增项" }),
+  ).toBeDisabled();
 });

@@ -1,5 +1,6 @@
 import { type IncomingMessage, type ServerResponse } from "node:http";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { access, readFile, unlink } from "node:fs/promises";
 import net from "node:net";
 import type { Plugin, PreviewServer, ViteDevServer } from "vite";
@@ -7,6 +8,8 @@ import { z } from "zod";
 import type {
   BlueprintFormationSlot,
   BlueprintFormationSnapshot,
+  DialogueStoryboardExportPreview,
+  DialogueStoryboardExportResult,
   DialogueModelRegistrationResult,
   DialogueModelRegistrationSlot,
   MissionTargetBlueprintCreateResult,
@@ -19,6 +22,8 @@ import type {
   NpcRegistrationScanResult,
   SelectedLevelActor,
   SelectedLevelActorsResult,
+  StoryboardExportNodePreview,
+  StoryboardExportRequest,
   UnrealTransform,
 } from "../src/types";
 import { parseNpcRegistrationDatabase } from "../src/data/csv";
@@ -274,6 +279,61 @@ const DialogueModelRegistrationRequestSchema = z.object({
   selectedModelIndexes: z
     .array(z.number().int().positive())
     .max(200),
+});
+
+const StoryboardVec3Schema = z.tuple([
+  z.number().finite(),
+  z.number().finite(),
+  z.number().finite(),
+]);
+
+const StoryboardExportRequestSchema = z.object({
+  dialogueId: z.string().regex(/^\d{4}$/),
+  startId: z.string().regex(/^\d{4,}$/),
+  dialogueIds: z.array(z.string().regex(/^\d+$/)).min(1).max(500),
+  participantModelIndexes: z
+    .array(z.number().int().nonnegative())
+    .min(2)
+    .max(12),
+  usesBlueprintFormation: z.literal(true),
+  shots: z
+    .array(
+      z.object({
+        dialogueId: z.string().regex(/^\d+$/),
+        dialogueIds: z.array(z.string().regex(/^\d+$/)).min(1).max(500),
+        cameraPosition: StoryboardVec3Schema,
+        cameraTarget: StoryboardVec3Schema,
+        cameraEndPosition: StoryboardVec3Schema,
+        cameraEndTarget: StoryboardVec3Schema,
+        focalLength: z.number().finite().min(1).max(500),
+        endFocalLength: z.number().finite().min(1).max(500),
+        cameraMovement: z.enum([
+          "static",
+          "pan",
+          "tracking",
+          "dolly_in",
+          "dolly_out",
+          "zoom_in",
+          "zoom_out",
+          "dolly_zoom_in",
+          "dolly_zoom_out",
+        ]),
+        movementIntensity: z.enum([
+          "none",
+          "subtle",
+          "moderate",
+          "strong",
+        ]),
+        cameraRollDegrees: z.number().finite().min(-45).max(45),
+        projectionValid: z.boolean(),
+      }),
+    )
+    .min(1)
+    .max(500),
+});
+
+const StoryboardExportApplyRequestSchema = StoryboardExportRequestSchema.extend({
+  reviewToken: z.string().regex(/^[a-f0-9]{64}$/),
 });
 
 const ConfigTableOpenSchema = z.object({
@@ -794,6 +854,769 @@ async function exportAssetText(
   }
 }
 
+interface ReflectedProperty {
+  Alias?: unknown;
+  CurrentString?: unknown;
+  CurrentUint32?: unknown;
+  [key: string]: unknown;
+}
+
+interface StoryboardDialogueNodeContext {
+  dialogueId: string;
+  nodeDataPath: string;
+  commonProperties: ReflectedProperty[];
+  cameraPropertyIndex: number;
+  existingCameraPosition: string;
+  existingMoveCameras: unknown[];
+}
+
+interface StoryboardExportNodeChange {
+  preview: StoryboardExportNodePreview;
+  nodeDataPath: string;
+  originalCommonProperties: ReflectedProperty[];
+  desiredCommonProperties: ReflectedProperty[];
+  originalMoveCameras: unknown[];
+  desiredMoveCameras: unknown[];
+  writeCommonProperties: boolean;
+  writeMoveCameras: boolean;
+}
+
+interface PreparedStoryboardExport {
+  preview: DialogueStoryboardExportPreview;
+  dialogueAsset: string;
+  changes: StoryboardExportNodeChange[];
+}
+
+interface FormationExportLayout {
+  assetPath: string;
+  cameraName: string;
+  centerX: number;
+  centerY: number;
+}
+
+function reflectedArray(value: unknown, propertyName: string): unknown[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`UE 节点属性 ${propertyName} 不是数组`);
+  }
+  return value;
+}
+
+function clonedValue<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function stagePositionToUnreal(
+  position: StoryboardExportRequest["shots"][number]["cameraPosition"],
+  layout: FormationExportLayout,
+): { X: number; Y: number; Z: number } {
+  return {
+    X: rounded(layout.centerX - position[2] * 100),
+    Y: rounded(layout.centerY + position[0] * 100),
+    Z: rounded(position[1] * 100),
+  };
+}
+
+function cameraRotation(
+  position: { X: number; Y: number; Z: number },
+  target: { X: number; Y: number; Z: number },
+  roll: number,
+): { Pitch: number; Yaw: number; Roll: number } {
+  const x = target.X - position.X;
+  const y = target.Y - position.Y;
+  const z = target.Z - position.Z;
+  return {
+    Pitch: rounded((Math.atan2(z, Math.hypot(x, y)) * 180) / Math.PI),
+    Yaw: rounded((Math.atan2(y, x) * 180) / Math.PI),
+    Roll: rounded(roll),
+  };
+}
+
+function focalLengthToFov(focalLength: number): number {
+  return rounded(
+    (2 * Math.atan(35 / (2 * focalLength)) * 180) / Math.PI,
+  );
+}
+
+function movementVelocity(
+  movement: StoryboardExportRequest["shots"][number]["cameraMovement"],
+  intensity: StoryboardExportRequest["shots"][number]["movementIntensity"],
+): number {
+  if (movement === "static") {
+    return 0;
+  }
+  if (intensity === "strong") {
+    return 10;
+  }
+  if (intensity === "moderate") {
+    return 6;
+  }
+  return 3;
+}
+
+export function buildStoryboardCameraMove(
+  shot: StoryboardExportRequest["shots"][number],
+  layout: Pick<FormationExportLayout, "centerX" | "centerY">,
+): Record<string, unknown> {
+  const startPoint = stagePositionToUnreal(shot.cameraPosition, {
+    ...layout,
+    assetPath: "",
+    cameraName: "c1",
+  });
+  const endPoint = stagePositionToUnreal(shot.cameraEndPosition, {
+    ...layout,
+    assetPath: "",
+    cameraName: "c1",
+  });
+  const startTarget = stagePositionToUnreal(shot.cameraTarget, {
+    ...layout,
+    assetPath: "",
+    cameraName: "c1",
+  });
+  const endTarget = stagePositionToUnreal(shot.cameraEndTarget, {
+    ...layout,
+    assetPath: "",
+    cameraName: "c1",
+  });
+  return {
+    CameraMoveType: "EPush",
+    RotateCameraArg: {
+      bRelative: true,
+      CenterName: "None",
+      CenterPosition: { X: 0, Y: 0, Z: 0 },
+      bClockWise: true,
+      Angle: 0,
+      AngularVelocity: 0,
+      StartPoint: { X: 0, Y: 0, Z: 0 },
+      StartPitch: 0,
+      BlendOutTime: 0,
+    },
+    PushCameraArg: {
+      bRelative: true,
+      Velocity: movementVelocity(
+        shot.cameraMovement,
+        shot.movementIntensity,
+      ),
+      StartRotation: cameraRotation(
+        startPoint,
+        startTarget,
+        shot.cameraRollDegrees,
+      ),
+      EndRotation: cameraRotation(
+        endPoint,
+        endTarget,
+        shot.cameraRollDegrees,
+      ),
+      StartPoint: startPoint,
+      EndPoint: endPoint,
+      BlendOutTime: 1,
+      bWaitOptionShow: false,
+    },
+    LookAtArg: {
+      LookAtActor: 0,
+      DialogLookAtType: "EActor",
+      CenterOffset: { X: 0, Y: 0, Z: 0 },
+      bOverrideRoll: false,
+      Roll: 0,
+    },
+    LookAtPushArg: {
+      bRelative: true,
+      Velocity: 0,
+      StartPoint: { X: 0, Y: 0, Z: 0 },
+      EndPoint: { X: 0, Y: 0, Z: 0 },
+      BlendOutTime: 0,
+      LookAtActor: 0,
+      DialogLookAtType: "EActor",
+      CenterOffset: { X: 0, Y: 0, Z: 0 },
+      bOverrideRoll: false,
+      Roll: 0,
+    },
+    FOV: focalLengthToFov(shot.focalLength),
+  };
+}
+
+function validateStoryboardCoverage(request: StoryboardExportRequest): void {
+  const actualIds = request.shots.flatMap((shot) => shot.dialogueIds);
+  if (
+    actualIds.length !== request.dialogueIds.length ||
+    actualIds.some(
+      (dialogueId, index) => dialogueId !== request.dialogueIds[index],
+    )
+  ) {
+    throw new Error("分镜必须按原顺序覆盖当前对话的全部台词节点");
+  }
+  for (const [index, shot] of request.shots.entries()) {
+    if (shot.dialogueId !== shot.dialogueIds[0]) {
+      throw new Error(`镜头 ${index + 1} 的起始台词节点不一致`);
+    }
+  }
+  if (
+    new Set(request.participantModelIndexes).size !==
+    request.participantModelIndexes.length
+  ) {
+    throw new Error("当前 BP 站位包含重复的模型槽位");
+  }
+}
+
+function objectReferencePath(value: unknown): string {
+  const reference = String(value).trim();
+  const firstQuote = reference.indexOf("'");
+  const lastQuote = reference.lastIndexOf("'");
+  if (firstQuote >= 0 && lastQuote > firstQuote) {
+    return reference
+      .slice(firstQuote + 1, lastQuote)
+      .replace(/^"|"$/g, "");
+  }
+  return reference;
+}
+
+async function readStoryboardDialogueNodes(
+  connection: UnrealInvoker,
+  dialogueAssetPath: string,
+  dialogueIds: string[],
+  exportedText: string,
+): Promise<StoryboardDialogueNodeContext[]> {
+  const graphPath = `${dialogueAssetPath}:Dialog Graph`;
+  const nodes = reflectedArray(
+    await readProperty(connection, graphPath, "Nodes"),
+    "Nodes",
+  );
+  const nodeIndexBySerializedName = new Map<string, number>();
+  for (const match of exportedText.matchAll(
+    /^\s+Nodes\((\d+)\)=SeriaEdDialogGraphNode'"([^"]+)"'/gm,
+  )) {
+    const serializedName = match[2].split(".").at(-1) ?? match[2];
+    nodeIndexBySerializedName.set(
+      serializedName,
+      Number.parseInt(match[1], 10),
+    );
+  }
+  const nodeIndexByDialogueId = new Map<string, number>();
+  for (const match of exportedText.matchAll(
+    /^\s{6}Begin Object Name="(SeriaEdDialogGraphNode_\d+)"\r?\n([\s\S]*?)^\s{9}DialogGraphNodeData=/gm,
+  )) {
+    const idPropertyLine = match[2]
+      .split(/\r?\n/)
+      .find(
+        (line) =>
+          line.includes("CommonDialogGraphProperties(") &&
+          line.includes('Alias="id"'),
+      );
+    const idMatch = idPropertyLine?.match(
+      /CurrentUint32=(\d+)/,
+    );
+    const nodeIndex = nodeIndexBySerializedName.get(match[1]);
+    if (idMatch && nodeIndex !== undefined) {
+      nodeIndexByDialogueId.set(idMatch[1], nodeIndex);
+    }
+  }
+  const missingIds = dialogueIds.filter(
+    (dialogueId) => !nodeIndexByDialogueId.has(dialogueId),
+  );
+  if (missingIds.length > 0) {
+    throw new Error(
+      `对话资产中未找到台词节点：${missingIds.join("、")}`,
+    );
+  }
+  const result: StoryboardDialogueNodeContext[] = [];
+  for (const dialogueId of dialogueIds) {
+    const nodeIndex = nodeIndexByDialogueId.get(dialogueId)!;
+    const nodeValue = nodes[nodeIndex];
+    if (!hasUnrealObjectReference(nodeValue)) {
+      throw new Error(`台词节点 ${dialogueId} 的图节点引用无效`);
+    }
+    const nodePath = objectReferencePath(nodeValue);
+    const nodeDataValue = await readProperty(
+      connection,
+      nodePath,
+      "DialogGraphNodeData",
+    );
+    if (!hasUnrealObjectReference(nodeDataValue)) {
+      throw new Error(`台词节点 ${dialogueId} 的节点数据引用无效`);
+    }
+    const nodeDataPath = objectReferencePath(nodeDataValue);
+    const commonProperties = reflectedArray(
+      await readProperty(
+        connection,
+        nodeDataPath,
+        "CommonDialogGraphProperties",
+      ),
+      "CommonDialogGraphProperties",
+    ) as ReflectedProperty[];
+    const idProperty = commonProperties.find(
+      (property) => String(property.Alias).toLowerCase() === "id",
+    );
+    if (String(Number(idProperty?.CurrentUint32)) !== dialogueId) {
+      throw new Error(`台词节点 ${dialogueId} 的 UE 回读 ID 不一致`);
+    }
+    const cameraPropertyIndex = commonProperties.findIndex(
+      (property) =>
+        String(property.Alias).toLowerCase() === "cameraposition",
+    );
+    if (cameraPropertyIndex < 0) {
+      throw new Error(`台词节点 ${dialogueId} 缺少 CameraPosition 属性`);
+    }
+    const existingMoveCameras = reflectedArray(
+      await readProperty(connection, nodeDataPath, "MoveCameras"),
+      "MoveCameras",
+    );
+    result.push({
+      dialogueId,
+      nodeDataPath,
+      commonProperties,
+      cameraPropertyIndex,
+      existingCameraPosition: String(
+        commonProperties[cameraPropertyIndex].CurrentString ?? "",
+      ),
+      existingMoveCameras,
+    });
+  }
+  return result;
+}
+
+async function readFormationExportLayout(
+  connection: UnrealInvoker,
+  startId: string,
+  formationClassPath: string,
+  participantModelIndexes: number[],
+): Promise<FormationExportLayout> {
+  const assetPath = await resolveAssetPath(
+    connection,
+    startId,
+    formationClassPath,
+  );
+  if (!assetPath) {
+    throw new Error("当前对话没有可用于导出镜头的 Formation BP");
+  }
+  const loaded = await connection.invoke("bp.get_blueprint_by_path", {
+    AssetPath: assetPath,
+  });
+  if (!hasUnrealObjectReference(loaded)) {
+    throw new Error(`无法加载 Formation BP：${assetPath}`);
+  }
+  const classPath = blueprintClassPath(assetPath);
+  const scsPath = `${classPath}:SimpleConstructionScript_0`;
+  const nodes = reflectedArray(
+    await readProperty(connection, scsPath, "AllNodes"),
+    "AllNodes",
+  );
+  const requestedIndexes = new Set(participantModelIndexes);
+  const locations = new Map<number, { x: number; y: number }>();
+  let cameraName = "";
+  for (const nodeValue of nodes) {
+    const nodePath = String(nodeValue);
+    const variableName = String(
+      await readProperty(connection, nodePath, "InternalVariableName"),
+    );
+    const componentClass = String(
+      await readProperty(connection, nodePath, "ComponentClass"),
+    );
+    const componentTemplate = await readProperty(
+      connection,
+      nodePath,
+      "ComponentTemplate",
+    );
+    if (
+      variableName.toLowerCase() === "c1" &&
+      componentClass.endsWith("CameraComponent")
+    ) {
+      cameraName = variableName;
+    }
+    if (
+      !/^\d+$/.test(variableName) ||
+      !requestedIndexes.has(Number(variableName)) ||
+      !componentClass.endsWith("ChildActorComponent") ||
+      !hasUnrealObjectReference(componentTemplate)
+    ) {
+      continue;
+    }
+    const location = vector(
+      await readProperty(
+        connection,
+        String(componentTemplate),
+        "RelativeLocation",
+      ),
+    );
+    locations.set(Number(variableName), {
+      x: location.x,
+      y: location.y,
+    });
+  }
+  if (!cameraName) {
+    throw new Error(`Formation BP ${assetPath} 中没有 c1 摄像机组件`);
+  }
+  const missingIndexes = participantModelIndexes.filter(
+    (modelIndex) => !locations.has(modelIndex),
+  );
+  if (missingIndexes.length > 0) {
+    throw new Error(
+      `Formation BP 缺少当前站位槽：${missingIndexes.join("、")}`,
+    );
+  }
+  const selectedLocations = participantModelIndexes.map(
+    (modelIndex) => locations.get(modelIndex)!,
+  );
+  return {
+    assetPath,
+    cameraName,
+    centerX:
+      selectedLocations.reduce((total, location) => total + location.x, 0) /
+      selectedLocations.length,
+    centerY:
+      selectedLocations.reduce((total, location) => total + location.y, 0) /
+      selectedLocations.length,
+  };
+}
+
+function storyboardExportBlockedReasons(
+  request: StoryboardExportRequest,
+): string[] {
+  return request.shots.flatMap((shot, index) => {
+    const changesFocalLength =
+      Math.abs(shot.endFocalLength - shot.focalLength) > 0.001 ||
+      shot.cameraMovement.includes("zoom");
+    return changesFocalLength
+      ? [
+          `镜头 ${index + 1} 使用焦距连续变化，当前 UE MoveCameras 映射尚不能无损表达`,
+        ]
+      : [];
+  });
+}
+
+function exportAction(
+  role: StoryboardExportNodePreview["role"],
+  existingCameraPosition: string,
+  existingMoveCount: number,
+  desiredCameraPosition: string,
+  desiredMoveCount: number,
+  unchanged: boolean,
+): StoryboardExportNodePreview["action"] {
+  if (unchanged) {
+    return "unchanged";
+  }
+  if (role === "continuation") {
+    return "clear";
+  }
+  return existingCameraPosition || existingMoveCount > 0
+    ? "replace"
+    : desiredCameraPosition || desiredMoveCount > 0
+      ? "create"
+      : "unchanged";
+}
+
+async function prepareStoryboardExport(
+  connection: UnrealInvoker,
+  request: StoryboardExportRequest,
+): Promise<PreparedStoryboardExport> {
+  validateStoryboardCoverage(request);
+  const dialogueAssets = await findDialogueAssetPath(
+    connection,
+    request.startId,
+  );
+  if (dialogueAssets.length === 0) {
+    throw new Error(`未找到对话资产 ${request.startId}`);
+  }
+  if (dialogueAssets.length > 1) {
+    throw new Error(
+      `找到多个名为 ${request.startId} 的对话资产，无法自动确认`,
+    );
+  }
+  const dialogueAssetPath = dialogueAssets[0];
+  const dialogueAsset = await connection.invoke("asset.get_asset_by_path", {
+    AssetPath: dialogueAssetPath,
+  });
+  if (!hasUnrealObjectReference(dialogueAsset)) {
+    throw new Error(`无法加载对话资产：${dialogueAssetPath}`);
+  }
+  const exportedText = await exportAssetText(
+    connection,
+    dialogueAssetPath,
+  );
+  const exportedDialogue = parseDialogueExport(exportedText);
+  const layout = await readFormationExportLayout(
+    connection,
+    request.startId,
+    exportedDialogue.formationClassPath ?? "",
+    request.participantModelIndexes,
+  );
+  const dialogueNodes = await readStoryboardDialogueNodes(
+    connection,
+    dialogueAssetPath,
+    request.dialogueIds,
+    exportedText,
+  );
+  const shotStartByDialogueId = new Map(
+    request.shots.map((shot, index) => [
+      shot.dialogueId,
+      { shot, shotIndex: index },
+    ]),
+  );
+  const changes = dialogueNodes.map((node) => {
+    const shotStart = shotStartByDialogueId.get(node.dialogueId);
+    const role: StoryboardExportNodePreview["role"] = shotStart
+      ? "shot_start"
+      : "continuation";
+    const desiredCameraPosition = shotStart ? layout.cameraName : "";
+    const desiredMoveCameras = shotStart
+      ? [buildStoryboardCameraMove(shotStart.shot, layout)]
+      : [];
+    const desiredCommonProperties = clonedValue(node.commonProperties);
+    desiredCommonProperties[node.cameraPropertyIndex].CurrentString =
+      desiredCameraPosition;
+    const writeCommonProperties =
+      node.existingCameraPosition !== desiredCameraPosition;
+    const writeMoveCameras =
+      JSON.stringify(node.existingMoveCameras) !==
+      JSON.stringify(desiredMoveCameras);
+    const unchanged = !writeCommonProperties && !writeMoveCameras;
+    return {
+      preview: {
+        dialogueId: node.dialogueId,
+        shotIndex: shotStart ? shotStart.shotIndex : null,
+        role,
+        action: exportAction(
+          role,
+          node.existingCameraPosition,
+          node.existingMoveCameras.length,
+          desiredCameraPosition,
+          desiredMoveCameras.length,
+          unchanged,
+        ),
+        existingCameraPosition: node.existingCameraPosition,
+        desiredCameraPosition,
+        existingMovementCount: node.existingMoveCameras.length,
+        desiredMovementCount: desiredMoveCameras.length,
+      },
+      nodeDataPath: node.nodeDataPath,
+      originalCommonProperties: node.commonProperties,
+      desiredCommonProperties,
+      originalMoveCameras: node.existingMoveCameras,
+      desiredMoveCameras,
+      writeCommonProperties,
+      writeMoveCameras,
+    };
+  });
+  const dirtyPackages = new Set(
+    (await dirtyContentPackages(connection)).map((path) =>
+      path.toLowerCase(),
+    ),
+  );
+  const dialoguePackagePath = dialogueAssetPath.split(".")[0];
+  const formationPackagePath = layout.assetPath.split(".")[0];
+  const blockedReasons = [
+    ...storyboardExportBlockedReasons(request),
+    ...(dirtyPackages.has(dialoguePackagePath.toLowerCase())
+      ? [
+          `对话资产 ${dialoguePackagePath} 存在未保存修改，请先在 UE 中保存或撤销`,
+        ]
+      : []),
+    ...(dirtyPackages.has(formationPackagePath.toLowerCase())
+      ? [
+          `Formation BP ${formationPackagePath} 存在未保存修改，请先在 UE 中保存或撤销`,
+        ]
+      : []),
+  ];
+  const invalidShotCount = request.shots.filter(
+    (shot) => !shot.projectionValid,
+  ).length;
+  const warnings = invalidShotCount
+    ? [`${invalidShotCount} 个镜头的投影验收未通过，确认后仍可导出`]
+    : [];
+  const reviewToken = createHash("sha256")
+    .update(
+      JSON.stringify({
+        dialogueAssetPath,
+        formationAssetPath: layout.assetPath,
+        request,
+        nodes: changes.map((change) => ({
+          dialogueId: change.preview.dialogueId,
+          originalCameraPosition:
+            change.preview.existingCameraPosition,
+          originalMoveCameras: change.originalMoveCameras,
+          desiredCameraPosition:
+            change.preview.desiredCameraPosition,
+          desiredMoveCameras: change.desiredMoveCameras,
+        })),
+      }),
+    )
+    .digest("hex");
+  const changed = changes.filter(
+    (change) =>
+      change.writeCommonProperties || change.writeMoveCameras,
+  );
+  return {
+    preview: {
+      reviewToken,
+      dialogueId: request.dialogueId,
+      startId: request.startId,
+      dialogueAssetPath,
+      formationAssetPath: layout.assetPath,
+      cameraName: layout.cameraName,
+      shotCount: request.shots.length,
+      changedNodeCount: changed.length,
+      overwrittenNodeCount: changes.filter(
+        (change) => change.preview.action === "replace",
+      ).length,
+      clearedNodeCount: changes.filter(
+        (change) => change.preview.action === "clear",
+      ).length,
+      invalidShotCount,
+      blockedReasons,
+      warnings,
+      nodes: changes.map((change) => change.preview),
+    },
+    dialogueAsset: String(dialogueAsset),
+    changes,
+  };
+}
+
+export async function inspectDialogueStoryboardExport(
+  rawRequest: unknown,
+  connectionFactory: () => UnrealInvoker = () => new UnrealMcpConnection(),
+): Promise<DialogueStoryboardExportPreview> {
+  const request = StoryboardExportRequestSchema.parse(
+    rawRequest,
+  ) as StoryboardExportRequest;
+  const connection = connectionFactory();
+  try {
+    await connection.connect();
+    return (await prepareStoryboardExport(connection, request)).preview;
+  } finally {
+    connection.close();
+  }
+}
+
+export async function exportDialogueStoryboard(
+  rawRequest: unknown,
+  connectionFactory: () => UnrealInvoker = () => new UnrealMcpConnection(),
+): Promise<DialogueStoryboardExportResult> {
+  const parsed = StoryboardExportApplyRequestSchema.parse(rawRequest);
+  const { reviewToken, ...requestValue } = parsed;
+  const request = requestValue as StoryboardExportRequest;
+  const connection = connectionFactory();
+  try {
+    await connection.connect();
+    const prepared = await prepareStoryboardExport(connection, request);
+    if (prepared.preview.reviewToken !== reviewToken) {
+      throw new Error(
+        "UE 中的对话镜头配置已发生变化，请重新检查后再导出",
+      );
+    }
+    if (prepared.preview.blockedReasons.length > 0) {
+      throw new Error(prepared.preview.blockedReasons.join("；"));
+    }
+    const changed = prepared.changes.filter(
+      (change) =>
+        change.writeCommonProperties || change.writeMoveCameras,
+    );
+    if (changed.length === 0) {
+      return {
+        status: "unchanged",
+        dialogueId: request.dialogueId,
+        startId: request.startId,
+        dialogueAssetPath: prepared.preview.dialogueAssetPath,
+        changedNodeCount: 0,
+        saved: false,
+      };
+    }
+    const written: StoryboardExportNodeChange[] = [];
+    try {
+      for (const change of changed) {
+        written.push(change);
+        if (change.writeCommonProperties) {
+          await connection.invoke("reflect.write_object_property", {
+            ThisPtr: change.nodeDataPath,
+            PropertyName: "CommonDialogGraphProperties",
+            Value: change.desiredCommonProperties,
+          });
+        }
+        if (change.writeMoveCameras) {
+          await connection.invoke("reflect.write_object_property", {
+            ThisPtr: change.nodeDataPath,
+            PropertyName: "MoveCameras",
+            Value: change.desiredMoveCameras,
+          });
+        }
+      }
+      for (const change of changed) {
+        const commonProperties = reflectedArray(
+          await readProperty(
+            connection,
+            change.nodeDataPath,
+            "CommonDialogGraphProperties",
+          ),
+          "CommonDialogGraphProperties",
+        ) as ReflectedProperty[];
+        const cameraPosition = String(
+          commonProperties.find(
+            (property) =>
+              String(property.Alias).toLowerCase() === "cameraposition",
+          )?.CurrentString ?? "",
+        );
+        const moveCameras = reflectedArray(
+          await readProperty(
+            connection,
+            change.nodeDataPath,
+            "MoveCameras",
+          ),
+          "MoveCameras",
+        );
+        if (
+          cameraPosition !== change.preview.desiredCameraPosition ||
+          JSON.stringify(moveCameras) !==
+            JSON.stringify(change.desiredMoveCameras)
+        ) {
+          throw new Error(
+            `台词节点 ${change.preview.dialogueId} 写入后的回读结果不一致`,
+          );
+        }
+      }
+      const saveResult = await connection.invoke("asset.save_asset", {
+        Asset:
+          prepared.dialogueAsset || prepared.preview.dialogueAssetPath,
+      });
+      if (saveResult === false) {
+        throw new Error(
+          `对话资产保存失败：${prepared.preview.dialogueAssetPath}`,
+        );
+      }
+    } catch (error) {
+      for (const change of written.reverse()) {
+        if (change.writeCommonProperties) {
+          await connection
+            .invoke("reflect.write_object_property", {
+              ThisPtr: change.nodeDataPath,
+              PropertyName: "CommonDialogGraphProperties",
+              Value: change.originalCommonProperties,
+            })
+            .catch(() => undefined);
+        }
+        if (change.writeMoveCameras) {
+          await connection
+            .invoke("reflect.write_object_property", {
+              ThisPtr: change.nodeDataPath,
+              PropertyName: "MoveCameras",
+              Value: change.originalMoveCameras,
+            })
+            .catch(() => undefined);
+        }
+      }
+      throw new Error(
+        `${error instanceof Error ? error.message : "分镜导出失败"}；已尝试恢复本轮未保存修改`,
+      );
+    }
+    return {
+      status: "exported",
+      dialogueId: request.dialogueId,
+      startId: request.startId,
+      dialogueAssetPath: prepared.preview.dialogueAssetPath,
+      changedNodeCount: changed.length,
+      saved: true,
+    };
+  } finally {
+    connection.close();
+  }
+}
+
 interface DialogueModelSourceSlot {
   modelIndex: number;
   targetId: string | null;
@@ -833,9 +1656,7 @@ async function findDialogueStartNodeData(
     if (!nodeName.startsWith("SeriaEdDialogGraphNode_")) {
       continue;
     }
-    const nodePath = nodeName.includes("/")
-      ? nodeName
-      : `${graphPath}.${nodeName}`;
+    const nodePath = objectReferencePath(nodeValue);
     const nodeDataValue = await readProperty(
       connection,
       nodePath,
@@ -844,10 +1665,7 @@ async function findDialogueStartNodeData(
     if (!hasUnrealObjectReference(nodeDataValue)) {
       continue;
     }
-    const nodeDataName = String(nodeDataValue);
-    const nodeDataPath = nodeDataName.includes("/")
-      ? nodeDataName
-      : `${nodePath}.${nodeDataName}`;
+    const nodeDataPath = objectReferencePath(nodeDataValue);
     const nodeType = await readProperty(
       connection,
       nodeDataPath,
@@ -1924,6 +2742,26 @@ async function dirtyMapPackages(
   }
 }
 
+async function dirtyContentPackages(
+  connection: UnrealInvoker,
+): Promise<string[]> {
+  const value = await connection.invoke("script.eval_python_expression", {
+    Expression:
+      "__import__('json').dumps([p.get_path_name() for p in unreal.EditorLoadingAndSavingUtils.get_dirty_content_packages()])",
+  });
+  const parsed = parsePythonJson(
+    value,
+    "无法确认对话资产是否存在未保存修改",
+  );
+  if (
+    !Array.isArray(parsed) ||
+    !parsed.every((item) => typeof item === "string")
+  ) {
+    throw new Error("无法确认对话资产是否存在未保存修改");
+  }
+  return parsed;
+}
+
 function actorName(taskId: string, targetId: string): string {
   return `${PREVIEW_ACTOR_PREFIX}_${taskId}_${targetId}`;
 }
@@ -2273,6 +3111,20 @@ export async function routeUeRequest(
       return true;
     }
     const body = (await readJson(request)) as Record<string, unknown>;
+    if (url.pathname === "/api/ue/storyboard/inspect") {
+      sendJson(response, 200, {
+        ok: true,
+        data: await inspectDialogueStoryboardExport(body),
+      });
+      return true;
+    }
+    if (url.pathname === "/api/ue/storyboard/export") {
+      sendJson(response, 200, {
+        ok: true,
+        data: await exportDialogueStoryboard(body),
+      });
+      return true;
+    }
     if (url.pathname === "/api/ue/mission-targets/map-status") {
       sendJson(response, 200, {
         ok: true,

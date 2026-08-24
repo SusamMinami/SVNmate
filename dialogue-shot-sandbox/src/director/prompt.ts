@@ -11,6 +11,16 @@ interface DirectorProjectionRevision {
     dialogueIds: string[];
     warnings: string[];
   }>;
+  referenceCases?: Array<{
+    caseId: string;
+    failureSignature: string;
+    originalTemplate: string;
+    revisedTemplate: string;
+    summary: string;
+    strategy: string;
+    appliesWhen: string;
+    avoidWhen: string;
+  }>;
 }
 
 export function buildDirectorPrompt(
@@ -45,10 +55,14 @@ export function buildDirectorPrompt(
       "只输出完整的 shot-plan.v5 JSON，不要 Markdown 或解释文字。",
       "保留未列出镜头的台词分组和设计，只重新设计失败镜头（failed_shots）；返回结果仍须按原顺序覆盖每个 dialogue_id 一次。",
       "根据每条 warnings 调整失败镜头的模板、主体、注视对象、焦段、机位高度、运动或构图语义。不要只改 intent 文案。",
+      "在顶层 revision_reflections 中为每个失败镜头输出一条简短的事后总结，包含 shot_index、summary、root_cause、strategy、applies_when、avoid_when；只记录可复用结论，不输出推理过程。",
       input.constraints.preserve_input_formation
         ? "角色站位来自 UE Blueprint，不得修改或假设 blocking.position 会改变实际坐标。"
         : "可以调整 blocking，但所有角色位置必须唯一，并保持进出场节点有效。",
       "继续遵守 16:9 主构图、21:9 安全区域、关系轴同侧、视线空间、角色不重叠、运镜起止画面可读和相邻镜头至少 30 度变化等约束。",
+      revision.referenceCases?.length
+        ? `已审核历史案例（仅作经验参考，不得照抄与当前站位冲突的参数）：${JSON.stringify(revision.referenceCases)}`
+        : "当前没有匹配的已审核历史案例，请只依据本次验收证据返修。",
       `failed_shots：${JSON.stringify(failures)}`,
       `上一版完整方案：${JSON.stringify(revision.previousPlan)}`,
       `原始输入：${JSON.stringify(input)}`,

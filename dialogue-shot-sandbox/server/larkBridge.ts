@@ -13,6 +13,10 @@ import {
 } from "../src/director/contracts";
 import { inspectDirectorProjection } from "../src/director/orchestrator";
 import { buildDirectorPrompt } from "../src/director/prompt";
+import {
+  findRelevantStoryboardCases,
+  saveStoryboardRevisionCases,
+} from "./storyboardCaseLibrary";
 
 const execFileAsync = promisify(execFile);
 
@@ -22,7 +26,22 @@ function miraIdempotencyKey(requestId: string, phase: "initial" | "revision") {
     .digest("hex")
     .slice(0, 50);
 }
-const REQUIRED_SCOPES = ["search:bot", "im:message.send_as_user"] as const;
+const MIRA_REQUIRED_SCOPES = [
+  "search:bot",
+  "im:message.send_as_user",
+] as const;
+const BASE_REQUIRED_SCOPES = [
+  "base:app:read",
+  "base:table:read",
+  "base:field:read",
+  "base:record:read",
+  "base:record:create",
+  "base:record:update",
+] as const;
+const REQUIRED_SCOPES = [
+  ...MIRA_REQUIRED_SCOPES,
+  ...BASE_REQUIRED_SCOPES,
+] as const;
 const MIRA_QUERY = process.env.MIRA_BOT_QUERY || "Mira";
 const COMMAND_TIMEOUT_MS = 30_000;
 const MIRA_REPLY_TIMEOUT_MS = 55_000;
@@ -66,6 +85,9 @@ interface AuthStatusSnapshot {
   openId: string;
   userStatus: string;
   missingScopes: string[];
+  miraMissingScopes: string[];
+  baseMissingScopes: string[];
+  caseLibraryReady: boolean;
   miraBot: MiraBot | null;
 }
 
@@ -265,8 +287,7 @@ async function authStatus(): Promise<AuthStatusSnapshot> {
     };
   }>(envelope);
   const user = data.identities?.user;
-  const scopes = new Set((user?.scope || "").split(/\s+/).filter(Boolean));
-  const missingScopes = REQUIRED_SCOPES.filter((scope) => !scopes.has(scope));
+  const scopeStatus = classifyLarkScopes(user?.scope || "");
   return {
     cliAvailable: true as const,
     authorized: Boolean(data.verified && user?.verified),
@@ -274,8 +295,32 @@ async function authStatus(): Promise<AuthStatusSnapshot> {
     userName: user?.userName || "",
     openId: user?.openId || "",
     userStatus: user?.status || "unknown",
-    missingScopes,
+    missingScopes: scopeStatus.missingScopes,
+    miraMissingScopes: scopeStatus.miraMissingScopes,
+    baseMissingScopes: scopeStatus.baseMissingScopes,
+    caseLibraryReady:
+      Boolean(data.verified && user?.verified) &&
+      scopeStatus.baseMissingScopes.length === 0,
     miraBot: state.miraBot,
+  };
+}
+
+export function classifyLarkScopes(scopeText: string): {
+  missingScopes: string[];
+  miraMissingScopes: string[];
+  baseMissingScopes: string[];
+} {
+  const scopes = new Set(scopeText.split(/\s+/).filter(Boolean));
+  const miraMissingScopes = MIRA_REQUIRED_SCOPES.filter(
+    (scope) => !scopes.has(scope),
+  );
+  const baseMissingScopes = BASE_REQUIRED_SCOPES.filter(
+    (scope) => !scopes.has(scope),
+  );
+  return {
+    missingScopes: REQUIRED_SCOPES.filter((scope) => !scopes.has(scope)),
+    miraMissingScopes: [...miraMissingScopes],
+    baseMissingScopes: [...baseMissingScopes],
   };
 }
 
@@ -479,12 +524,21 @@ async function analyzeWithMira(input: DirectorInput): Promise<unknown> {
       ...input,
       request_id: `${input.request_id.slice(0, 80)}-projection-retry`,
     };
+    const referenceCases = await findRelevantStoryboardCases(
+      input,
+      projectionFailures,
+      runLark,
+    ).catch((error) => {
+      console.error("[storyboard-case-library] lookup failed", error);
+      return [];
+    });
     const revisionPrompt = buildDirectorPrompt(
       revisionInput,
       "Mira AI 导演",
       {
         previousPlan: firstResult,
         failures: projectionFailures,
+        referenceCases,
       },
     );
     const revisionStartIso = new Date(Date.now() - 5_000).toISOString();
@@ -523,12 +577,27 @@ async function analyzeWithMira(input: DirectorInput): Promise<unknown> {
           ? (revisedResult.shots[index] ?? shot)
           : shot,
       ),
+      revision_reflections: revisedResult.revision_reflections,
     };
     let revisedFailures: ReturnType<typeof inspectDirectorProjection>;
     try {
       revisedFailures = inspectDirectorProjection(input, mergedResult);
     } catch {
       return firstResult;
+    }
+    if (input.constraints.collect_revision_cases !== false) {
+      await saveStoryboardRevisionCases(
+        input,
+        firstResult,
+        mergedResult,
+        projectionFailures,
+        revisedFailures,
+        "Mira AI",
+        referenceCases,
+        runLark,
+      ).catch((error) => {
+        console.error("[storyboard-case-library] upload failed", error);
+      });
     }
     const failureScore = (
       failures: ReturnType<typeof inspectDirectorProjection>,

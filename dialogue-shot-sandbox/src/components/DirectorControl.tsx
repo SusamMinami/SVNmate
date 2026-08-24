@@ -1,6 +1,7 @@
 import {
   Bot,
   CircleCheck,
+  Database,
   LoaderCircle,
   RefreshCw,
   ShieldAlert,
@@ -26,6 +27,8 @@ interface DirectorControlProps {
   onSetupTrae: () => void;
   onRefreshLark: () => void;
   onAuthorize: () => void;
+  collectRevisionCases: boolean;
+  onCollectRevisionCasesChange: (enabled: boolean) => void;
 }
 
 function connectionLabel(
@@ -73,14 +76,23 @@ export function DirectorControl({
   onSetupTrae,
   onRefreshLark,
   onAuthorize,
+  collectRevisionCases,
+  onCollectRevisionCasesChange,
 }: DirectorControlProps) {
+  const miraMissingScopes =
+    larkStatus?.miraMissingScopes ?? larkStatus?.missingScopes ?? [];
+  const baseMissingScopes =
+    larkStatus?.baseMissingScopes ?? larkStatus?.missingScopes ?? [];
   const needsAuthorization =
     !larkStatus?.authorized || (larkStatus?.missingScopes.length ?? 0) > 0;
   const traeConnected = Boolean(traeStatus?.connected);
   const isReady =
     Boolean(larkStatus?.authorized) &&
-    larkStatus?.missingScopes.length === 0 &&
+    miraMissingScopes.length === 0 &&
     Boolean(larkStatus?.miraBot);
+  const caseLibraryReady =
+    larkStatus?.caseLibraryReady ??
+    (Boolean(larkStatus?.authorized) && baseMissingScopes.length === 0);
 
   return (
     <div className="director-control">
@@ -212,6 +224,47 @@ export function DirectorControl({
           >
             {needsAuthorization ? "授权" : <RefreshCw size={14} />}
           </button>
+        </div>
+      )}
+
+      {mode !== "rule" && (
+        <div
+          className={`case-collection-control ${
+            collectRevisionCases && caseLibraryReady ? "is-ready" : ""
+          }`}
+        >
+          <label>
+            <input
+              type="checkbox"
+              checked={collectRevisionCases}
+              onChange={(event) =>
+                onCollectRevisionCasesChange(event.target.checked)
+              }
+            />
+            <Database size={15} />
+            <span>
+              <strong>收集返修案例</strong>
+              <small>
+                {!collectRevisionCases
+                  ? "本次不读取或写入案例库"
+                  : caseLibraryReady
+                    ? "失败返修将写入待审核，并参考已通过案例"
+                    : "需要飞书登录和多维表格权限"}
+              </small>
+            </span>
+          </label>
+          {collectRevisionCases && (
+            <button
+              type="button"
+              className="mira-status__action"
+              title={caseLibraryReady ? "刷新案例库连接" : "登录飞书"}
+              aria-label={caseLibraryReady ? "刷新案例库连接" : "登录飞书"}
+              onClick={caseLibraryReady ? onRefreshLark : onAuthorize}
+              disabled={larkLoading}
+            >
+              {caseLibraryReady ? <RefreshCw size={14} /> : "登录"}
+            </button>
+          )}
         </div>
       )}
     </div>

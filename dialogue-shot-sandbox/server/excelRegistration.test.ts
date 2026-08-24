@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  EXCEL_REGISTRATION_SCRIPT,
+  parseNpcRegistrationWriteRequest,
   powerShellFileArguments,
   readablePowerShellError,
 } from "./excelRegistration";
@@ -32,5 +34,109 @@ describe("Excel PowerShell errors", () => {
     expect(arguments_).toContain(scriptPath);
     expect(arguments_).not.toContain("-EncodedCommand");
     expect(arguments_.join(" ").length).toBeLessThan(1_000);
+  });
+
+  it("accepts NPC-only writes without a MapID when the model exists", () => {
+    const request = parseNpcRegistrationWriteRequest({
+      scope: "npc_only",
+      items: [
+        {
+          actorRef: "BP_Guard_C_1",
+          label: "守卫新增",
+          classPath: "/Game/Test/BP_Guard.BP_Guard_C",
+          transform: {
+            location: { x: 1, y: 2, z: 3 },
+            rotation: { pitch: 0, yaw: 90, roll: 0 },
+            scale: { x: 1, y: 1, z: 1 },
+          },
+          mapId: "",
+          existingModelId: 200135,
+          existingNpcId: null,
+          existingTargetId: null,
+          canTurn: true,
+          newNpc: {
+            name: "",
+            title: "",
+            canTurn: true,
+          },
+        },
+      ],
+    });
+
+    expect(request.scope).toBe("npc_only");
+    expect(request.items[0].mapId).toBe("");
+    expect(request.items[0].newNpc?.name).toBe("");
+  });
+
+  it("rejects NPC-only writes without an existing model", () => {
+    expect(() =>
+      parseNpcRegistrationWriteRequest({
+        scope: "npc_only",
+        items: [
+          {
+            actorRef: "BP_Guard_C_1",
+            label: "守卫新增",
+            classPath: "/Game/Test/BP_Guard.BP_Guard_C",
+            transform: {
+              location: { x: 1, y: 2, z: 3 },
+              rotation: { pitch: 0, yaw: 90, roll: 0 },
+              scale: { x: 1, y: 1, z: 1 },
+            },
+            mapId: "",
+            existingModelId: null,
+            existingNpcId: null,
+            existingTargetId: null,
+            canTurn: true,
+            newNpc: {
+              name: "新增守卫",
+              title: "",
+              canTurn: true,
+            },
+          },
+        ],
+      }),
+    ).toThrow("仅注册 NPC 时必须复用现有模型");
+  });
+
+  it("marks newly inserted registration cells red", () => {
+    expect(EXCEL_REGISTRATION_SCRIPT).toContain(
+      "$cell.Value2 = [double]$value",
+    );
+    expect(EXCEL_REGISTRATION_SCRIPT).toContain(
+      "$cell.Font.Color = 255",
+    );
+    expect(
+      EXCEL_REGISTRATION_SCRIPT.match(/Set-NewCell \$npcSheet/g)?.length,
+    ).toBeGreaterThan(10);
+    expect(EXCEL_REGISTRATION_SCRIPT).toContain(
+      'if ($scope -eq "all")',
+    );
+  });
+
+  it("accepts target-only writes with existing model and NPC IDs", () => {
+    const request = parseNpcRegistrationWriteRequest({
+      scope: "target_only",
+      items: [
+        {
+          actorRef: "BP_Guard_C_1",
+          label: "守卫新增",
+          classPath: "/Game/Test/BP_Guard.BP_Guard_C",
+          transform: {
+            location: { x: 1, y: 2, z: 3 },
+            rotation: { pitch: 0, yaw: 90, roll: 0 },
+            scale: { x: 1, y: 1, z: 1 },
+          },
+          mapId: "1204",
+          existingModelId: 200135,
+          existingNpcId: 101999,
+          existingTargetId: null,
+          canTurn: true,
+          newNpc: null,
+        },
+      ],
+    });
+
+    expect(request.scope).toBe("target_only");
+    expect(request.items[0].existingNpcId).toBe(101999);
   });
 });

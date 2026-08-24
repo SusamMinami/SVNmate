@@ -36,6 +36,18 @@ describe("buildDirectorPrompt", () => {
           warnings: ["视线后方空白大于前向视线空间"],
         },
       ],
+      referenceCases: [
+        {
+          caseId: "CASE-LOOKROOM",
+          failureSignature: "look_room",
+          originalTemplate: "close_up",
+          revisedTemplate: "reverse_medium",
+          summary: "调整主体落点并扩大前向空间",
+          strategy: "改用互补反打并把主体放到反侧三分点",
+          appliesWhen: "双人对话的普通视线空间不足",
+          avoidWhen: "明确使用短边压迫构图",
+        },
+      ],
     });
 
     expect(prompt).toContain("投影验收后的定向返修");
@@ -43,5 +55,8 @@ describe("buildDirectorPrompt", () => {
     expect(prompt).toContain("204803");
     expect(prompt).toContain("视线后方空白大于前向视线空间");
     expect(prompt).toContain("上一版完整方案");
+    expect(prompt).toContain("CASE-LOOKROOM");
+    expect(prompt).toContain("revision_reflections");
+    expect(prompt).toContain("不输出推理过程");
   });
 });

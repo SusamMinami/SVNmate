@@ -39,10 +39,13 @@ const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const originalProjectRoot = process.env.STORYBOARD_PROJECT_ROOT;
 const originalSharedLibraryDisabled =
   process.env.STORYBOARD_SHARED_LIBRARY_DISABLED;
+const originalCaseLibraryDisabled =
+  process.env.STORYBOARD_CASE_LIBRARY_DISABLED;
 let temporaryRoot = "";
 
 beforeEach(() => {
   process.env.STORYBOARD_SHARED_LIBRARY_DISABLED = "1";
+  process.env.STORYBOARD_CASE_LIBRARY_DISABLED = "1";
 });
 
 afterEach(async () => {
@@ -56,6 +59,12 @@ afterEach(async () => {
   } else {
     process.env.STORYBOARD_SHARED_LIBRARY_DISABLED =
       originalSharedLibraryDisabled;
+  }
+  if (originalCaseLibraryDisabled === undefined) {
+    delete process.env.STORYBOARD_CASE_LIBRARY_DISABLED;
+  } else {
+    process.env.STORYBOARD_CASE_LIBRARY_DISABLED =
+      originalCaseLibraryDisabled;
   }
   if (temporaryRoot) {
     await rm(temporaryRoot, { recursive: true, force: true, maxRetries: 5 });
@@ -290,7 +299,7 @@ describe("internal storyboard MCP", () => {
         }
         expect(presence.connected).toBe(true);
         expect(presence.compatible).toBe(true);
-        expect(presence.serverVersion).toBe("0.16.2");
+        expect(presence.serverVersion).toBe("0.17.0");
         expect(presence.transport).toBe("stdio");
 
         let claimed = await client.callTool({
@@ -495,6 +504,25 @@ describe("internal storyboard MCP", () => {
     };
 
     expect(storyboardInputContentHash(reordered)).toBe(
+      storyboardInputContentHash(input),
+    );
+  });
+
+  it("does not include the case collection preference in content hashes", () => {
+    const input = createDirectorInput(
+      findDialogueSequence(demoDatabase, "2048"),
+      "case-preference-hash-request",
+      { collectRevisionCases: true },
+    );
+    const disabled = {
+      ...input,
+      constraints: {
+        ...input.constraints,
+        collect_revision_cases: false,
+      },
+    };
+
+    expect(storyboardInputContentHash(disabled)).toBe(
       storyboardInputContentHash(input),
     );
   });

@@ -6,6 +6,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $packagePath = Join-Path $PSScriptRoot "..\package.json"
+$releaseNotesPath = Join-Path $PSScriptRoot "..\RELEASE_NOTES.md"
 $package = [System.IO.File]::ReadAllText(
   $packagePath,
   [System.Text.Encoding]::UTF8
@@ -35,9 +36,17 @@ $ErrorActionPreference = "Stop"
 if (-not $releaseExists) {
   gh release create $Tag `
     --repo $Repository `
-    --title "Shot Sandbox update channel" `
-    --notes "Stable update channel for Shot Sandbox desktop releases." `
+    --title "Shot Sandbox v$($package.version)" `
+    --notes-file $releaseNotesPath `
     --latest=false
+} else {
+  gh release edit $Tag `
+    --repo $Repository `
+    --title "Shot Sandbox v$($package.version)" `
+    --notes-file $releaseNotesPath
+}
+if ($LASTEXITCODE -ne 0) {
+  throw "Update release metadata failed."
 }
 
 $checksumTargets = @(

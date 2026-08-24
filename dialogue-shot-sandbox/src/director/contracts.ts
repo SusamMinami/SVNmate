@@ -278,6 +278,15 @@ export const DirectorDecisionSchema = z
     }
   });
 
+export const DirectorRevisionReflectionSchema = z.object({
+  shot_index: z.number().int().positive(),
+  summary: z.string().min(2).max(500),
+  root_cause: z.string().min(2).max(500),
+  strategy: z.string().min(2).max(500),
+  applies_when: z.string().min(2).max(500),
+  avoid_when: z.string().min(2).max(500),
+});
+
 export const MiraReadyResponseSchema = z.object({
   schema_version: z.literal("shot-plan.v5"),
   request_id: z.string().min(1),
@@ -289,6 +298,10 @@ export const MiraReadyResponseSchema = z.object({
   }),
   blocking: DirectorBlockingSchema,
   shots: z.array(DirectorDecisionSchema).min(1),
+  revision_reflections: z
+    .array(DirectorRevisionReflectionSchema)
+    .max(24)
+    .optional(),
 });
 
 export const MiraNeedContextResponseSchema = z.object({
@@ -384,6 +397,7 @@ export const DirectorInputSchema = z.object({
     overlay_aspect_ratio: z.literal("21:9"),
     avoid_character_overlap: z.literal(true),
     preserve_input_formation: z.boolean().optional(),
+    collect_revision_cases: z.boolean().optional(),
     supported_templates: z.array(z.enum(DIRECTOR_TEMPLATES)).min(1),
     supported_camera_movements: z
       .array(z.enum(CAMERA_MOVEMENTS))
@@ -403,6 +417,9 @@ export const DirectorInputSchema = z.object({
 
 export type DirectorDecision = z.infer<typeof DirectorDecisionSchema>;
 export type DirectorBlocking = z.infer<typeof DirectorBlockingSchema>;
+export type DirectorRevisionReflection = z.infer<
+  typeof DirectorRevisionReflectionSchema
+>;
 export type MiraDirectorResponse = z.infer<typeof MiraDirectorResponseSchema>;
 export type DirectorMode = "rule" | "trae" | "mira";
 export type AppliedDirector = DirectorMode;
@@ -468,6 +485,7 @@ export interface DirectorInput {
     overlay_aspect_ratio: "21:9";
     avoid_character_overlap: true;
     preserve_input_formation?: boolean;
+    collect_revision_cases?: boolean;
     supported_templates: ReadonlyArray<(typeof DIRECTOR_TEMPLATES)[number]>;
     supported_camera_movements: ReadonlyArray<
       (typeof CAMERA_MOVEMENTS)[number]
@@ -517,7 +535,10 @@ export interface ShotDirectorProvider {
 export function createDirectorInput(
   sequence: DialogueSequence,
   requestId = `${sequence.prefix}-${Date.now()}`,
-  options: { preserveInputFormation?: boolean } = {},
+  options: {
+    preserveInputFormation?: boolean;
+    collectRevisionCases?: boolean;
+  } = {},
 ): DirectorInput {
   const participantById = new Map<number, DialogueParticipant>();
   const participantBySlot = new Map(
@@ -614,6 +635,7 @@ export function createDirectorInput(
         sequence.participants.every(
           (participant) => participant.positionSource === "blueprint",
         ),
+      collect_revision_cases: options.collectRevisionCases ?? true,
       supported_templates: DIRECTOR_TEMPLATES,
       supported_camera_movements: CAMERA_MOVEMENTS,
       supported_lens_intents: LENS_INTENTS,

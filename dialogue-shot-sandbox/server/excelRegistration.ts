@@ -14,6 +14,7 @@ import { z } from "zod";
 import type {
   NpcRegistrationWriteItem,
   NpcRegistrationWriteResult,
+  NpcRegistrationWriteScope,
   MissionTargetUpdateItem,
   MissionTargetUpdateResult,
 } from "../src/types";
@@ -24,39 +25,79 @@ const VectorSchema = z.object({
   z: z.number().finite(),
 });
 
-const RegistrationWriteSchema = z.object({
-  items: z
-    .array(
-      z.object({
-        actorRef: z.string().min(1),
-        label: z.string().min(1),
-        classPath: z.string().startsWith("/Game/"),
-        transform: z.object({
-          location: VectorSchema,
-          rotation: z.object({
-            pitch: z.number().finite(),
-            yaw: z.number().finite(),
-            roll: z.number().finite(),
+const RegistrationWriteSchema = z
+  .object({
+    scope: z.enum(["all", "npc_only", "target_only"]).default("all"),
+    items: z
+      .array(
+        z.object({
+          actorRef: z.string().min(1),
+          label: z.string().min(1),
+          classPath: z.string().startsWith("/Game/"),
+          transform: z.object({
+            location: VectorSchema,
+            rotation: z.object({
+              pitch: z.number().finite(),
+              yaw: z.number().finite(),
+              roll: z.number().finite(),
+            }),
+            scale: VectorSchema,
           }),
-          scale: VectorSchema,
+          mapId: z.string(),
+          existingModelId: z.number().int().positive().nullable(),
+          existingNpcId: z.number().int().positive().nullable(),
+          existingTargetId: z.string().regex(/^\d+$/).nullable(),
+          canTurn: z.boolean(),
+          newNpc: z
+            .object({
+              name: z.string().trim().max(80),
+              title: z.string().trim().max(80),
+              canTurn: z.boolean(),
+            })
+            .nullable(),
         }),
-        mapId: z.string().regex(/^\d+$/),
-        existingModelId: z.number().int().positive().nullable(),
-        existingNpcId: z.number().int().positive().nullable(),
-        existingTargetId: z.string().regex(/^\d+$/).nullable(),
-        canTurn: z.boolean(),
-        newNpc: z
-          .object({
-            name: z.string().trim().min(1).max(80),
-            title: z.string().trim().max(80),
-            canTurn: z.boolean(),
-          })
-          .nullable(),
-      }),
-    )
-    .min(1)
-    .max(100),
-});
+      )
+      .min(1)
+      .max(100),
+  })
+  .superRefine((request, context) => {
+    request.items.forEach((item, index) => {
+      if (request.scope === "all" && !/^\d+$/.test(item.mapId)) {
+        context.addIssue({
+          code: "custom",
+          path: ["items", index, "mapId"],
+          message: "完整注册必须提供 MapID",
+        });
+      }
+      if (
+        request.scope === "target_only" &&
+        (!/^\d+$/.test(item.mapId) ||
+          item.existingModelId === null ||
+          item.existingNpcId === null ||
+          item.existingTargetId !== null ||
+          item.newNpc !== null)
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["items", index],
+          message: "仅注册目标物时必须复用现有模型和 NPC，并提供 MapID",
+        });
+      }
+      if (
+        request.scope === "npc_only" &&
+        (item.existingModelId === null ||
+          item.existingNpcId !== null ||
+          item.existingTargetId !== null ||
+          item.newNpc === null)
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["items", index],
+          message: "仅注册 NPC 时必须复用现有模型并创建新 NPC",
+        });
+      }
+    });
+  });
 
 const TransformUpdateSchema = z
   .object({
@@ -142,13 +183,21 @@ async function withExcelRegistrationLock<T>(
   }
 }
 
-const EXCEL_REGISTRATION_SCRIPT = String.raw`
+export const EXCEL_REGISTRATION_SCRIPT = String.raw`
 $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 $request = (
   Get-Content -LiteralPath $env:SHOT_SANDBOX_REGISTRATION_PAYLOAD_PATH -Raw -Encoding UTF8 |
     ConvertFrom-Json
 )
+$scope = if ([string]::IsNullOrWhiteSpace([string]$request.scope)) {
+  "all"
+} else {
+  [string]$request.scope
+}
+if ($scope -notin @("all", "npc_only", "target_only")) {
+  throw "不支持的 NPC 注册范围：$scope"
+}
 $paths = @{
   missionTarget = "C:\trunk\doc\xlsdir\r任务剧情\m目标物表.xlsm"
   npc = "C:\trunk\doc\xlsdir\NPC表.xlsm"
@@ -159,9 +208,15 @@ $requiredPaths = [Collections.Generic.HashSet[string]]::new(
 )
 foreach ($item in $request.items) {
   if ($null -eq $item.existingTargetId) {
-    [void]$requiredPaths.Add($paths.missionTarget)
-    [void]$requiredPaths.Add($paths.npc)
-    [void]$requiredPaths.Add($paths.model)
+    if ($scope -eq "npc_only") {
+      [void]$requiredPaths.Add($paths.npc)
+    } elseif ($scope -eq "target_only") {
+      [void]$requiredPaths.Add($paths.missionTarget)
+    } else {
+      [void]$requiredPaths.Add($paths.npc)
+      [void]$requiredPaths.Add($paths.model)
+      [void]$requiredPaths.Add($paths.missionTarget)
+    }
   }
 }
 foreach ($path in $requiredPaths) {
@@ -227,7 +282,30 @@ function Add-BlankRow([object]$sheet, [int]$row, [int]$columnCount) {
 }
 
 function Set-Cell([object]$sheet, [int]$row, [int]$column, $value) {
-  $sheet.Cells.Item($row, $column).Value2 = $value
+  $cell = $sheet.Cells.Item($row, $column)
+  if ($value -is [bool]) {
+    $cell.Value2 = [bool]$value
+  } elseif (
+    $value -is [byte] -or
+    $value -is [int16] -or
+    $value -is [int32] -or
+    $value -is [int64] -or
+    $value -is [single] -or
+    $value -is [double] -or
+    $value -is [decimal]
+  ) {
+    $cell.Value2 = [double]$value
+  } elseif ($null -eq $value) {
+    $cell.ClearContents() | Out-Null
+  } else {
+    $cell.Value2 = [string]$value
+  }
+}
+
+function Set-NewCell([object]$sheet, [int]$row, [int]$column, $value) {
+  Set-Cell $sheet $row $column $value
+  $cell = $sheet.Cells.Item($row, $column)
+  $cell.Font.Color = 255
 }
 
 function Format-Number([double]$value) {
@@ -293,60 +371,73 @@ try {
 
   # Validate every CSV-derived foreign key before inserting into any workbook.
   foreach ($item in $request.items) {
+    if (
+      $scope -eq "npc_only" -and
+      (
+        $null -eq $item.existingModelId -or
+        $null -ne $item.existingNpcId -or
+        $null -ne $item.existingTargetId -or
+        $null -eq $item.newNpc
+      )
+    ) {
+      throw "Actor $($item.label) 仅注册 NPC 时必须复用现有模型并创建新 NPC"
+    }
     if ($null -ne $item.existingTargetId) {
       continue
     }
-    $configuredPath = Get-ConfiguredPath $item.classPath
-    if ($null -ne $item.existingModelId) {
-      $matchingModelRows = [Collections.ArrayList]::new()
-      for ($row = 3; $row -le $modelSheet.UsedRange.Rows.Count; $row++) {
-        if (
-          [string]$modelSheet.Cells.Item($row, 2).Value2 -eq
-          [string]$item.existingModelId
-        ) {
-          [void]$matchingModelRows.Add($row)
+    if ($scope -eq "all") {
+      $configuredPath = Get-ConfiguredPath $item.classPath
+      if ($null -ne $item.existingModelId) {
+        $matchingModelRows = [Collections.ArrayList]::new()
+        for ($row = 3; $row -le $modelSheet.UsedRange.Rows.Count; $row++) {
+          if (
+            [string]$modelSheet.Cells.Item($row, 2).Value2 -eq
+            [string]$item.existingModelId
+          ) {
+            [void]$matchingModelRows.Add($row)
+          }
+        }
+        if ($matchingModelRows.Count -ne 1) {
+          throw "模型 ID $($item.existingModelId) 在模型资源表中不存在或不唯一"
+        }
+        $existingPath = [string]$modelSheet.Cells.Item(
+          [int]$matchingModelRows[0],
+          3
+        ).Value2
+        if (-not [string]::Equals(
+          $existingPath.Replace("\", "/"),
+          $configuredPath,
+          [StringComparison]::OrdinalIgnoreCase
+        )) {
+          throw "模型 ID $($item.existingModelId) 与 Actor $($item.label) 的资源路径不一致"
         }
       }
-      if ($matchingModelRows.Count -ne 1) {
-        throw "模型 ID $($item.existingModelId) 在模型资源表中不存在或不唯一"
-      }
-      $existingPath = [string]$modelSheet.Cells.Item(
-        [int]$matchingModelRows[0],
-        3
-      ).Value2
-      if (-not [string]::Equals(
-        $existingPath.Replace("\", "/"),
-        $configuredPath,
-        [StringComparison]::OrdinalIgnoreCase
-      )) {
-        throw "模型 ID $($item.existingModelId) 与 Actor $($item.label) 的资源路径不一致"
-      }
-    }
-    if ($null -ne $item.existingNpcId) {
-      if ($null -eq $item.existingModelId) {
-        throw "NPC ID $($item.existingNpcId) 缺少可验证的模型 ID"
-      }
-      $matchingNpcRows = [Collections.ArrayList]::new()
-      for ($row = 3; $row -le $npcSheet.UsedRange.Rows.Count; $row++) {
-        if (
-          [string]$npcSheet.Cells.Item($row, 2).Value2 -eq
-          [string]$item.existingNpcId
-        ) {
-          [void]$matchingNpcRows.Add($row)
+      if ($null -ne $item.existingNpcId) {
+        if ($null -eq $item.existingModelId) {
+          throw "NPC ID $($item.existingNpcId) 缺少可验证的模型 ID"
         }
+        $matchingNpcRows = [Collections.ArrayList]::new()
+        for ($row = 3; $row -le $npcSheet.UsedRange.Rows.Count; $row++) {
+          if (
+            [string]$npcSheet.Cells.Item($row, 2).Value2 -eq
+            [string]$item.existingNpcId
+          ) {
+            [void]$matchingNpcRows.Add($row)
+          }
+        }
+        if ($matchingNpcRows.Count -ne 1) {
+          throw "NPC ID $($item.existingNpcId) 在 NPC 表中不存在或不唯一"
+        }
+        $npcModelId = [string]$npcSheet.Cells.Item(
+          [int]$matchingNpcRows[0],
+          5
+        ).Value2
+        if ($npcModelId -ne [string]$item.existingModelId) {
+          throw "NPC ID $($item.existingNpcId) 引用的模型与 Actor $($item.label) 不一致"
+        }
+      } elseif ($null -eq $item.newNpc) {
+        throw "Actor $($item.label) 没有可复用 NPC，也没有填写新 NPC"
       }
-      if ($matchingNpcRows.Count -ne 1) {
-        throw "NPC ID $($item.existingNpcId) 在 NPC 表中不存在或不唯一"
-      }
-      $npcModelId = [string]$npcSheet.Cells.Item(
-        [int]$matchingNpcRows[0],
-        5
-      ).Value2
-      if ($npcModelId -ne [string]$item.existingModelId) {
-        throw "NPC ID $($item.existingNpcId) 引用的模型与 Actor $($item.label) 不一致"
-      }
-    } elseif ($null -eq $item.newNpc) {
-      throw "Actor $($item.label) 没有可复用 NPC，也没有填写新 NPC"
     }
   }
 
@@ -354,41 +445,43 @@ try {
     $request.items | Where-Object { $null -eq $_.existingTargetId }
   )
   $existingTargetByActor = @{}
-  foreach ($item in $pendingItems) {
-    $position = Format-Vector $item.transform.location
-    $rotation = Format-Rotator $item.transform.rotation
-    $existingTargets = [Collections.ArrayList]::new()
-    for ($row = 3; $row -le $targetSheet.UsedRange.Rows.Count; $row++) {
-      if (
-        [string]$targetSheet.Cells.Item($row, 11).Value2 -eq
-          [string]$item.mapId -and
-        [string]$targetSheet.Cells.Item($row, 12).Value2 -eq $position -and
-        [string]$targetSheet.Cells.Item($row, 13).Value2 -eq $rotation
-      ) {
-        [void]$existingTargets.Add(
-          [string]$targetSheet.Cells.Item($row, 2).Value2
-        )
+  if ($scope -ne "npc_only") {
+    foreach ($item in $pendingItems) {
+      $position = Format-Vector $item.transform.location
+      $rotation = Format-Rotator $item.transform.rotation
+      $existingTargets = [Collections.ArrayList]::new()
+      for ($row = 3; $row -le $targetSheet.UsedRange.Rows.Count; $row++) {
+        if (
+          [string]$targetSheet.Cells.Item($row, 11).Value2 -eq
+            [string]$item.mapId -and
+          [string]$targetSheet.Cells.Item($row, 12).Value2 -eq $position -and
+          [string]$targetSheet.Cells.Item($row, 13).Value2 -eq $rotation
+        ) {
+          [void]$existingTargets.Add(
+            [string]$targetSheet.Cells.Item($row, 2).Value2
+          )
+        }
       }
-    }
-    if ($existingTargets.Count -gt 1) {
-      throw "Actor $($item.label) 在 MapID $($item.mapId) 中匹配到多个目标物"
-    }
-    if ($existingTargets.Count -eq 1 -and $existingTargets[0] -ne "") {
-      $existingTargetByActor[$item.actorRef] = [string]$existingTargets[0]
+      if ($existingTargets.Count -gt 1) {
+        throw "Actor $($item.label) 在 MapID $($item.mapId) 中匹配到多个目标物"
+      }
+      if ($existingTargets.Count -eq 1 -and $existingTargets[0] -ne "") {
+        $existingTargetByActor[$item.actorRef] = [string]$existingTargets[0]
+      }
     }
   }
 
   $needsNewModel = @(
     $pendingItems | Where-Object { $null -eq $_.existingModelId }
-  ).Count -gt 0
+  ).Count -gt 0 -and $scope -eq "all"
   $needsNewNpc = @(
     $pendingItems | Where-Object { $null -eq $_.existingNpcId }
-  ).Count -gt 0
+  ).Count -gt 0 -and $scope -ne "target_only"
   $needsNewTarget = @(
     $pendingItems | Where-Object {
       -not $existingTargetByActor.ContainsKey($_.actorRef)
     }
-  ).Count -gt 0
+  ).Count -gt 0 -and $scope -ne "npc_only"
   $nextModelId =
     if ($needsNewModel) { Get-NextId $modelSheet 2 200000 299999 } else { $null }
   $nextNpcId =
@@ -427,6 +520,10 @@ try {
 
   foreach ($item in $request.items) {
     if ($null -ne $item.existingTargetId) {
+      continue
+    }
+    if ($scope -ne "all") {
+      $modelByActor[$item.actorRef] = [int]$item.existingModelId
       continue
     }
     $configuredPath = Get-ConfiguredPath $item.classPath
@@ -492,9 +589,9 @@ try {
         }
       }
       Add-BlankRow $modelSheet $insertRow 4
-      Set-Cell $modelSheet $insertRow 1 0
-      Set-Cell $modelSheet $insertRow 2 $nextModelId
-      Set-Cell $modelSheet $insertRow 3 $configuredPath
+      Set-NewCell $modelSheet $insertRow 1 0
+      Set-NewCell $modelSheet $insertRow 2 $nextModelId
+      Set-NewCell $modelSheet $insertRow 3 $configuredPath
       $existingId = $nextModelId
       [void]$createdModels.Add(
         [PSCustomObject]@{ actorRef = $item.actorRef; id = $existingId }
@@ -523,26 +620,26 @@ try {
     }
     $row = $npcSheet.UsedRange.Rows.Count + 1
     Add-BlankRow $npcSheet $row 35
-    Set-Cell $npcSheet $row 1 0
-    Set-Cell $npcSheet $row 2 $nextNpcId
-    Set-Cell $npcSheet $row 3 $item.label
-    Set-Cell $npcSheet $row 4 $item.newNpc.name
-    Set-Cell $npcSheet $row 5 $modelByActor[$item.actorRef]
-    Set-Cell $npcSheet $row 8 $item.newNpc.title
-    Set-Cell $npcSheet $row 10 $false
-    Set-Cell $npcSheet $row 11 $false
-    Set-Cell $npcSheet $row 14 0
-    Set-Cell $npcSheet $row 19 $item.newNpc.canTurn
-    Set-Cell $npcSheet $row 20 1
-    Set-Cell $npcSheet $row 21 "(Pitch=-20,Yaw=40,Roll=0)"
-    Set-Cell $npcSheet $row 22 400
-    Set-Cell $npcSheet $row 24 200
-    Set-Cell $npcSheet $row 25 1500
-    Set-Cell $npcSheet $row 26 55
-    Set-Cell $npcSheet $row 27 $false
-    Set-Cell $npcSheet $row 28 $false
-    Set-Cell $npcSheet $row 29 $true
-    Set-Cell $npcSheet $row 30 0
+    Set-NewCell $npcSheet $row 1 0
+    Set-NewCell $npcSheet $row 2 $nextNpcId
+    Set-NewCell $npcSheet $row 3 $item.label
+    Set-NewCell $npcSheet $row 4 $item.newNpc.name
+    Set-NewCell $npcSheet $row 5 $modelByActor[$item.actorRef]
+    Set-NewCell $npcSheet $row 8 $item.newNpc.title
+    Set-NewCell $npcSheet $row 10 $false
+    Set-NewCell $npcSheet $row 11 $false
+    Set-NewCell $npcSheet $row 14 0
+    Set-NewCell $npcSheet $row 19 $item.newNpc.canTurn
+    Set-NewCell $npcSheet $row 20 1
+    Set-NewCell $npcSheet $row 21 "(Pitch=-20,Yaw=40,Roll=0)"
+    Set-NewCell $npcSheet $row 22 400
+    Set-NewCell $npcSheet $row 24 200
+    Set-NewCell $npcSheet $row 25 1500
+    Set-NewCell $npcSheet $row 26 55
+    Set-NewCell $npcSheet $row 27 $false
+    Set-NewCell $npcSheet $row 28 $false
+    Set-NewCell $npcSheet $row 29 $true
+    Set-NewCell $npcSheet $row 30 0
     $npcByActor[$item.actorRef] = $nextNpcId
     [void]$createdNpcs.Add(
       [PSCustomObject]@{ actorRef = $item.actorRef; id = $nextNpcId }
@@ -552,51 +649,53 @@ try {
     $lastRow = $row
   }
 
-  foreach ($item in $request.items) {
-    if ($null -ne $item.existingTargetId) {
-      [void]$reusedTargets.Add(
-        [PSCustomObject]@{
-          actorRef = $item.actorRef
-          id = [string]$item.existingTargetId
-        }
+  if ($scope -ne "npc_only") {
+    foreach ($item in $request.items) {
+      if ($null -ne $item.existingTargetId) {
+        [void]$reusedTargets.Add(
+          [PSCustomObject]@{
+            actorRef = $item.actorRef
+            id = [string]$item.existingTargetId
+          }
+        )
+        continue
+      }
+      if ($null -eq $targetWorkbook) {
+        throw "目标物表未打开"
+      }
+      $position = Format-Vector $item.transform.location
+      $rotation = Format-Rotator $item.transform.rotation
+      if ($existingTargetByActor.ContainsKey($item.actorRef)) {
+        [void]$reusedTargets.Add(
+          [PSCustomObject]@{
+            actorRef = $item.actorRef
+            id = [string]$existingTargetByActor[$item.actorRef]
+          }
+        )
+        continue
+      }
+      $row = $targetSheet.UsedRange.Rows.Count + 1
+      Add-BlankRow $targetSheet $row 33
+      Set-NewCell $targetSheet $row 1 0
+      Set-NewCell $targetSheet $row 2 $nextTargetId
+      Set-NewCell $targetSheet $row 4 $item.label
+      Set-NewCell $targetSheet $row 5 1
+      Set-NewCell $targetSheet $row 6 $npcByActor[$item.actorRef]
+      Set-NewCell $targetSheet $row 7 0
+      Set-NewCell $targetSheet $row 11 ([int]$item.mapId)
+      Set-NewCell $targetSheet $row 12 $position
+      Set-NewCell $targetSheet $row 13 $rotation
+      Set-NewCell $targetSheet $row 14 $false
+      Set-NewCell $targetSheet $row 15 0
+      Set-NewCell $targetSheet $row 16 $item.canTurn
+      Set-NewCell $targetSheet $row 17 "瞬间消失"
+      [void]$createdTargets.Add(
+        [PSCustomObject]@{ actorRef = $item.actorRef; id = $nextTargetId }
       )
-      continue
+      $nextTargetId++
+      $lastSheet = $targetSheet
+      $lastRow = $row
     }
-    if ($null -eq $targetWorkbook) {
-      throw "目标物表未打开"
-    }
-    $position = Format-Vector $item.transform.location
-    $rotation = Format-Rotator $item.transform.rotation
-    if ($existingTargetByActor.ContainsKey($item.actorRef)) {
-      [void]$reusedTargets.Add(
-        [PSCustomObject]@{
-          actorRef = $item.actorRef
-          id = [string]$existingTargetByActor[$item.actorRef]
-        }
-      )
-      continue
-    }
-    $row = $targetSheet.UsedRange.Rows.Count + 1
-    Add-BlankRow $targetSheet $row 33
-    Set-Cell $targetSheet $row 1 0
-    Set-Cell $targetSheet $row 2 $nextTargetId
-    Set-Cell $targetSheet $row 4 $item.label
-    Set-Cell $targetSheet $row 5 1
-    Set-Cell $targetSheet $row 6 $npcByActor[$item.actorRef]
-    Set-Cell $targetSheet $row 7 0
-    Set-Cell $targetSheet $row 11 ([int]$item.mapId)
-    Set-Cell $targetSheet $row 12 $position
-    Set-Cell $targetSheet $row 13 $rotation
-    Set-Cell $targetSheet $row 14 $false
-    Set-Cell $targetSheet $row 15 0
-    Set-Cell $targetSheet $row 16 $item.canTurn
-    Set-Cell $targetSheet $row 17 "瞬间消失"
-    [void]$createdTargets.Add(
-      [PSCustomObject]@{ actorRef = $item.actorRef; id = $nextTargetId }
-    )
-    $nextTargetId++
-    $lastSheet = $targetSheet
-    $lastRow = $row
   }
 
   $excel.AutomationSecurity = $previousSecurity
@@ -1052,11 +1151,12 @@ async function runExcelOperation<
 
 function runExcelRegistration(
   items: NpcRegistrationWriteItem[],
+  scope: NpcRegistrationWriteScope,
 ): Promise<ExcelRegistrationResponse> {
   return runExcelOperation<ExcelRegistrationResponse>(
     EXCEL_REGISTRATION_SCRIPT,
     "SHOT_SANDBOX_REGISTRATION_PAYLOAD_PATH",
-    { items },
+    { items, scope },
     "Excel 写入",
   );
 }
@@ -1075,11 +1175,9 @@ function runExcelTargetUpdate(
 export async function writeNpcRegistrationDraft(
   rawRequest: unknown,
 ): Promise<NpcRegistrationWriteResult> {
-  const request = RegistrationWriteSchema.parse(rawRequest) as {
-    items: NpcRegistrationWriteItem[];
-  };
+  const request = parseNpcRegistrationWriteRequest(rawRequest);
   const result = await withExcelRegistrationLock(() =>
-    runExcelRegistration(request.items),
+    runExcelRegistration(request.items, request.scope),
   );
   return {
     createdModels: result.createdModels,
@@ -1087,6 +1185,18 @@ export async function writeNpcRegistrationDraft(
     createdTargets: result.createdTargets,
     reusedTargets: result.reusedTargets,
     openedWorkbooks: result.openedWorkbooks,
+  };
+}
+
+export function parseNpcRegistrationWriteRequest(
+  rawRequest: unknown,
+): {
+  items: NpcRegistrationWriteItem[];
+  scope: NpcRegistrationWriteScope;
+} {
+  return RegistrationWriteSchema.parse(rawRequest) as {
+    items: NpcRegistrationWriteItem[];
+    scope: NpcRegistrationWriteScope;
   };
 }
 

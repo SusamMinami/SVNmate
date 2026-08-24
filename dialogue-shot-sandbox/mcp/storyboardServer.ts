@@ -21,6 +21,12 @@ import {
   getStoryboardTask,
   recordStoryboardProjectionRevision,
 } from "../server/storyboardTaskStore";
+import {
+  findRelevantStoryboardCases,
+  saveStoryboardRevisionCases,
+  type StoryboardRevisionReference,
+} from "../server/storyboardCaseLibrary";
+import { runLark } from "../server/larkBridge";
 
 const MAX_PROJECTION_REVISION_ATTEMPTS = 1;
 
@@ -78,6 +84,10 @@ export function createStoryboardMcpServer(): McpServer {
     }
     let acceptedPlan = parsedPlan;
     let projectionFailures: ReturnType<typeof inspectDirectorProjection> = [];
+    let originalProjectionFailures: ReturnType<
+      typeof inspectDirectorProjection
+    > = [];
+    let referenceCases: StoryboardRevisionReference[] = [];
     if (revision_attempt !== undefined) {
       if (parsedPlan.status !== "ready") {
         throw new Error("投影返修只接受 ready 状态的完整方案");
@@ -102,17 +112,32 @@ export function createStoryboardMcpServer(): McpServer {
             ? (parsedPlan.shots[index] ?? shot)
             : shot,
         ),
+        revision_reflections: parsedPlan.revision_reflections,
       });
+      originalProjectionFailures = inspectDirectorProjection(
+        sourceTask.input,
+        sourceTask.projectionRevisionBase,
+      );
       projectionFailures = inspectDirectorProjection(
         sourceTask.input,
         acceptedPlan,
       );
+      referenceCases = await findRelevantStoryboardCases(
+        sourceTask.input,
+        originalProjectionFailures,
+        runLark,
+      ).catch(() => []);
     } else if (parsedPlan.status === "ready") {
       projectionFailures = inspectDirectorProjection(
         sourceTask.input,
         parsedPlan,
       );
       if (projectionFailures.length > 0) {
+        referenceCases = await findRelevantStoryboardCases(
+          sourceTask.input,
+          projectionFailures,
+          runLark,
+        ).catch(() => []);
         const revisionAttempt =
           await recordStoryboardProjectionRevision(
             request_id,
@@ -132,6 +157,7 @@ export function createStoryboardMcpServer(): McpServer {
             warnings: failure.warnings,
             previous_decision: failure.decision,
           })),
+          reference_cases: referenceCases,
         };
         return {
           content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
@@ -141,6 +167,25 @@ export function createStoryboardMcpServer(): McpServer {
     }
 
     const task = await completeStoryboardTask(request_id, acceptedPlan);
+    if (
+      revision_attempt !== undefined &&
+      acceptedPlan.status === "ready" &&
+      sourceTask.projectionRevisionBase &&
+      sourceTask.input.constraints.collect_revision_cases !== false
+    ) {
+      await saveStoryboardRevisionCases(
+        sourceTask.input,
+        sourceTask.projectionRevisionBase,
+        acceptedPlan,
+        originalProjectionFailures,
+        projectionFailures,
+        "TRAE 协作",
+        referenceCases,
+        runLark,
+      ).catch((error) => {
+        console.error("[storyboard-case-library] upload failed", error);
+      });
+    }
     const result = {
       accepted: true,
       request_id: task.requestId,

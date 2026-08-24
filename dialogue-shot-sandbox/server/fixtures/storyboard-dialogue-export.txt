@@ -1,0 +1,33 @@
+Begin Object Class=/Script/SeriaDialogEditor.SeriaDialogGraph Name="735200"
+   Begin Object Class=/Script/SeriaDialogEditor.SeriaEdDialogGraph Name="Dialog Graph"
+      Begin Object Name="SeriaEdDialogGraphNode_0"
+         Begin Object Name="SeriaDialogGraphNodeData_0"
+            CommonDialogGraphProperties(0)=(ValueIndex=5,CurrentUint32=735200,Alias="id")
+         End Object
+         DialogGraphNodeData=SeriaDialogGraphNodeData'"SeriaDialogGraphNodeData_0"'
+      End Object
+      Begin Object Name="SeriaEdDialogGraphNode_1"
+         Begin Object Name="SeriaDialogGraphNodeData_0"
+            CommonDialogGraphProperties(0)=(ValueIndex=5,CurrentUint32=735201,Alias="id")
+         End Object
+         DialogGraphNodeData=SeriaDialogGraphNodeData'"SeriaDialogGraphNodeData_0"'
+      End Object
+      Begin Object Name="SeriaEdDialogGraphNode_2"
+         Begin Object Name="SeriaDialogGraphNodeData_0"
+            CommonDialogGraphProperties(0)=(ValueIndex=5,CurrentUint32=735202,Alias="id")
+         End Object
+         DialogGraphNodeData=SeriaDialogGraphNodeData'"SeriaDialogGraphNodeData_0"'
+      End Object
+      Begin Object Name="SeriaEdDialogGraphNode_3"
+         Begin Object Name="SeriaDialogGraphNodeData_0"
+            CommonDialogGraphProperties(0)=(ValueIndex=5,CurrentUint32=735203,Alias="id")
+         End Object
+         DialogGraphNodeData=SeriaDialogGraphNodeData'"SeriaDialogGraphNodeData_0"'
+      End Object
+      Formation=/Game/Seria/Task/Mod/Test/BP_735200.BP_735200_C
+      Nodes(0)=SeriaEdDialogGraphNode'"SeriaEdDialogGraphNode_0"'
+      Nodes(1)=SeriaEdDialogGraphNode'"SeriaEdDialogGraphNode_1"'
+      Nodes(2)=SeriaEdDialogGraphNode'"SeriaEdDialogGraphNode_2"'
+      Nodes(3)=SeriaEdDialogGraphNode'"SeriaEdDialogGraphNode_3"'
+   End Object
+End Object

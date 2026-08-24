@@ -2,8 +2,10 @@
 
 ## 当前范围
 
-当前版本只从 UE4 编辑器读取对话 Blueprint 的初始角色站位，不修改或保存
-任何 `.uasset`。该集成只面向 Windows 桌面版，不提供移动端运行或测试目标。
+Blueprint 站位查询本身只读。用户确认基于 BP 站位生成的分镜后，可通过独立
+导出流程预检并写回对应 Dialog Graph 台词节点；只有用户二次确认后才修改并
+保存对话 `.uasset`。该集成只面向 Windows 桌面版，不提供移动端运行或测试
+目标。
 
 用户查询真实配置中的四位数对话 ID 后，程序会：
 
@@ -132,7 +134,8 @@ Node/Electron 主进程默认通过 `127.0.0.1:12031` 连接项目现有的
 因为 TRAE 使用的是独立的 `127.0.0.1:43127/mcp`。
 
 基础站位查询是只读操作；任务目标物预览、BP 填充、DialogGraph 注册和配表
-草稿属于显式写操作，均由各自界面中的确认步骤触发。
+草稿属于显式写操作，均由各自界面中的确认步骤触发。分镜导出同样先回读并
+展示逐节点差异，确认后只更新 `CameraPosition` 与 `MoveCameras`。
 
 ## 主要代码
 
@@ -148,5 +151,6 @@ Node/Electron 主进程默认通过 `127.0.0.1:12031` 连接项目现有的
 1. 将 `RelativeTransformsString` 解析为逐节点 Transform 时间线。
 2. 结合 `CharacterBehaviourString` 的 `AM_Walk` 起止点和时间播放平滑走位。
 3. 对跨越走位节点的镜头执行切镜或跟拍约束。
-4. 增加 BP 写回前的差异确认、SVN checkout、UE Transaction、编译和回读。
+4. 为分镜写回增加 SVN checkout 和 UE Transaction；当前已具备差异确认、
+   写后回读、单次保存和失败恢复。
 5. 单独实现 DialogGraph 节点走位回写；禁止直接修改导出的 CSV。
