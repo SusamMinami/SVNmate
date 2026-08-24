@@ -432,11 +432,6 @@ export function createRuleDecisions(
       .filter((index): index is number => index !== null)
       .map((index) => input.dialogue[index].dialogue_id),
   );
-  const cameraKeyframeBoundaryIds = new Set(
-    (input.camera_keyframes ?? [])
-      .map((keyframe) => keyframe.next_dialogue_id)
-      .filter((dialogueId): dialogueId is string => dialogueId !== null),
-  );
   const drafts: Array<{
     decision: DirectorDecision;
     duration: number;
@@ -447,8 +442,7 @@ export function createRuleDecisions(
 
   const hasHardBoundaryBefore = (index: number): boolean =>
     index > 0 &&
-    (cameraKeyframeBoundaryIds.has(input.dialogue[index].dialogue_id) ||
-      entryDialogueIds.has(input.dialogue[index].dialogue_id) ||
+    (entryDialogueIds.has(input.dialogue[index].dialogue_id) ||
       exitDialogueIds.has(input.dialogue[index - 1].dialogue_id));
 
   const appendToCurrent = (

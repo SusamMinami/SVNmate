@@ -1,6 +1,5 @@
 import type {
   AdjacentDialogueContext,
-  DialogueCameraKeyframe,
   DialogueDatabase,
   DialogueParticipant,
   DialogueRow,
@@ -79,7 +78,7 @@ function followDialogueChain(
   prefix: string,
 ): {
   rows: DialogueRow[];
-  cameraKeyframes: DialogueCameraKeyframe[];
+  ignoredDialogueNodeCount: number;
   warnings: string[];
 } {
   const rowsById = new Map<string, DialogueRow>();
@@ -89,7 +88,8 @@ function followDialogueChain(
     }
   });
 
-  const timeline: DialogueRow[] = [];
+  const rows: DialogueRow[] = [];
+  let ignoredDialogueNodeCount = 0;
   const warnings: string[] = [];
   const visited = new Set<string>();
   let currentId: string | null = startId;
@@ -105,11 +105,10 @@ function followDialogueChain(
       warnings.push(`NextID ${currentId} 在对话表中不存在`);
       break;
     }
-    if (
-      row.nodeKind === "camera_keyframe" ||
-      (row.content && row.npcId !== null && row.npcId > 0)
-    ) {
-      timeline.push(row);
+    if (row.state === 4) {
+      ignoredDialogueNodeCount += 1;
+    } else if (row.content && row.npcId !== null && row.npcId > 0) {
+      rows.push(row);
     }
     if (row.isEnd || !row.nextId) {
       break;
@@ -117,63 +116,27 @@ function followDialogueChain(
     currentId = row.nextId;
   }
 
-  let result = splitDialogueTimeline(timeline);
-  if (result.rows.length === 0) {
-    const fallbackTimeline = database.dialogueRows
+  if (rows.length === 0) {
+    const fallback = database.dialogueRows
       .filter(
         (row) =>
           row.id.startsWith(prefix) &&
-          (row.nodeKind === "camera_keyframe" ||
-            (row.content && row.npcId !== null && row.npcId > 0)),
+          row.state !== 4 &&
+          row.content &&
+          row.npcId !== null &&
+          row.npcId > 0,
       )
       .sort((left, right) => numericSort(left.id, right.id));
-    const fallback = splitDialogueTimeline(fallbackTimeline);
-    if (fallback.rows.length > 0) {
+    if (fallback.length > 0) {
       warnings.push("开始节点无法形成链路，已按对话 ID 顺序预览");
-      result = fallback;
+      ignoredDialogueNodeCount = database.dialogueRows.filter(
+        (row) => row.id.startsWith(prefix) && row.state === 4,
+      ).length;
+      return { rows: fallback, ignoredDialogueNodeCount, warnings };
     }
   }
 
-  return { ...result, warnings };
-}
-
-function splitDialogueTimeline(rows: DialogueRow[]): {
-  rows: DialogueRow[];
-  cameraKeyframes: DialogueCameraKeyframe[];
-} {
-  const dialogueRows: DialogueRow[] = [];
-  const cameraKeyframes: DialogueCameraKeyframe[] = [];
-  let previousDialogueId: string | null = null;
-  let pendingKeyframes: DialogueCameraKeyframe[] = [];
-
-  for (const row of rows) {
-    if (row.nodeKind === "camera_keyframe") {
-      const keyframe: DialogueCameraKeyframe = {
-        dialogueId: row.id,
-        rowNumber: row.rowNumber,
-        previousDialogueId,
-        nextDialogueId: null,
-        hasCameraInstruction: Boolean(
-          row.cameraPosition || row.cameraMoveString,
-        ),
-        hasCharacterAction: Boolean(row.characterBehaviourString),
-      };
-      cameraKeyframes.push(keyframe);
-      pendingKeyframes.push(keyframe);
-      continue;
-    }
-    if (!row.content || row.npcId === null || row.npcId <= 0) {
-      continue;
-    }
-    for (const keyframe of pendingKeyframes) {
-      keyframe.nextDialogueId = row.id;
-    }
-    pendingKeyframes = [];
-    dialogueRows.push(row);
-    previousDialogueId = row.id;
-  }
-
-  return { rows: dialogueRows, cameraKeyframes };
+  return { rows, ignoredDialogueNodeCount, warnings };
 }
 
 function adjacentPrefix(prefix: string, offset: -1 | 1): string | null {
@@ -250,9 +213,9 @@ export function findDialogueSequence(
     new Set(chain.rows.map((row) => row.npcId).filter((id): id is number => id !== null)),
   );
   const warnings = [...chain.warnings];
-  if (chain.cameraKeyframes.length > 0) {
+  if (chain.ignoredDialogueNodeCount > 0) {
     warnings.push(
-      `已识别 ${chain.cameraKeyframes.length} 个关闭对话框 UI 镜头关键帧；其隐藏文本不参与台词分析，原有镜头配置将在导出时保留`,
+      `已忽略 ${chain.ignoredDialogueNodeCount} 个关闭对话框 UI 节点；其隐藏内容不参与台词分析`,
     );
   }
   if (starts.length > 1) {
@@ -321,7 +284,7 @@ export function findDialogueSequence(
     startId,
     outline: starts[0]?.outline ?? "",
     rows: sequenceRows,
-    cameraKeyframes: chain.cameraKeyframes,
+    ignoredDialogueNodeCount: chain.ignoredDialogueNodeCount,
     participants,
     adjacentContext: {
       previous: contextForPrefix(

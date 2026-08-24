@@ -348,8 +348,8 @@ export default function App() {
 
   const activeShot: ShotPlan | undefined = shots[activeIndex] ?? shots[0];
   const dialogueSummary = `${sequence.rows.length} 句台词${
-    sequence.cameraKeyframes.length > 0
-      ? ` · ${sequence.cameraKeyframes.length} 个镜头关键帧`
+    sequence.ignoredDialogueNodeCount > 0
+      ? ` · 已忽略 ${sequence.ignoredDialogueNodeCount} 个关闭 UI 节点`
       : ""
   }`;
   const sourceStats = useMemo(
@@ -1214,8 +1214,8 @@ export default function App() {
                       ? "本地预览"
                       : directorLabel(appliedDirector)}
                     {fallbackReason ? "（已降级）" : ""}
-                    {sequence.cameraKeyframes.length > 0
-                      ? ` · ${sequence.cameraKeyframes.length} 个关键帧已保留`
+                    {sequence.ignoredDialogueNodeCount > 0
+                      ? ` · 已忽略 ${sequence.ignoredDialogueNodeCount} 个关闭 UI 节点`
                       : ""}
                   </>
                 ) : (

@@ -112,11 +112,6 @@ function parseDialogues(text: string): DialogueRow[] {
     "Dialog.End",
   ]);
   const stateIndex = optionalIndex(rows[0], "Dialog.State");
-  const cameraPositionIndex = optionalIndex(
-    rows[0],
-    "Dialog.CameraPosition",
-  );
-  const cameraMoveIndex = optionalIndex(rows[0], "Dialog.CameraMoveString");
   const relativeTransformsIndex = optionalIndex(
     rows[0],
     "Dialog.RelativeTransformsString",
@@ -141,9 +136,6 @@ function parseDialogues(text: string): DialogueRow[] {
         isEnd: valueAt(row, indexes, "Dialog.End").toLowerCase() === "true",
         rowNumber: index + 3,
         state,
-        nodeKind: state === 4 ? "camera_keyframe" : "dialogue",
-        cameraPosition: optionalValueAt(row, cameraPositionIndex),
-        cameraMoveString: optionalValueAt(row, cameraMoveIndex),
         speakerSlot: null,
         speakerModelIndex: speakerModelIndex(
           optionalValueAt(row, characterBehaviourIndex),

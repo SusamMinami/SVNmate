@@ -1262,7 +1262,7 @@ test("syncs the selected desktop doc path for registration data", async ({
   expect(selectedCsvDirectory).toBe("D:\\TeamProject\\doc\\csvdir");
 });
 
-test("keeps close-UI camera keyframes out of visible dialogue analysis", async ({
+test("excludes close-UI node content from visible dialogue analysis", async ({
   page,
 }, testInfo) => {
   await page.route("**/api/ue/formation/read", async (route) => {
@@ -1320,7 +1320,7 @@ test("keeps close-UI camera keyframes out of visible dialogue analysis", async (
   const shotBody = page.locator(".shot-row__body").first();
   await expect(shotBody).toContainText("第一句可见台词。");
   await expect(shotBody).toContainText("第二句可见台词。");
-  await expect(page.getByText("1 个关键帧已保留", { exact: false }))
+  await expect(page.getByText("已忽略 1 个关闭 UI 节点", { exact: false }))
     .toBeVisible();
 });
 
@@ -1516,7 +1516,7 @@ test("offers the detected Blueprint formation before designing shots", async ({
   await dialog.getByRole("button", { name: "使用此站位" }).click();
   await expect(dialog).toBeHidden();
   await expect(page.getByText(/正在使用 .*BP_735000/)).toBeVisible();
-  await expect(page.getByText("1 个关键帧已保留", { exact: false }))
+  await expect(page.getByText("已忽略 1 个关闭 UI 节点", { exact: false }))
     .toBeVisible();
   await expect(page.locator(".cast-row")).toHaveCount(2);
   await expect(page.locator(".shot-row.is-invalid")).toHaveCount(1);

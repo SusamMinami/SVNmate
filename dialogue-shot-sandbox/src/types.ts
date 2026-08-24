@@ -27,22 +27,10 @@ export interface DialogueRow {
   isEnd: boolean;
   rowNumber: number;
   state: number | null;
-  nodeKind: "dialogue" | "camera_keyframe";
-  cameraPosition: string;
-  cameraMoveString: string;
   speakerSlot: ParticipantSlot | null;
   speakerModelIndex: number | null;
   relativeTransformsString: string;
   characterBehaviourString: string;
-}
-
-export interface DialogueCameraKeyframe {
-  dialogueId: string;
-  rowNumber: number;
-  previousDialogueId: string | null;
-  nextDialogueId: string | null;
-  hasCameraInstruction: boolean;
-  hasCharacterAction: boolean;
 }
 
 export interface DialogueStart {
@@ -145,7 +133,7 @@ export interface DialogueSequence {
   startId: string;
   outline: string;
   rows: DialogueRow[];
-  cameraKeyframes: DialogueCameraKeyframe[];
+  ignoredDialogueNodeCount: number;
   participants: DialogueParticipant[];
   adjacentContext: {
     previous: AdjacentDialogueContext | null;

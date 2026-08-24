@@ -508,29 +508,6 @@ describe("internal storyboard MCP", () => {
     );
   });
 
-  it("includes camera keyframe boundaries in content hashes", () => {
-    const input = createDirectorInput(
-      findDialogueSequence(demoDatabase, "2048"),
-      "keyframe-hash-request",
-    );
-    const withKeyframe = {
-      ...input,
-      camera_keyframes: [
-        {
-          dialogue_id: "2048025",
-          previous_dialogue_id: "204802",
-          next_dialogue_id: "204803",
-          has_camera_instruction: true,
-          has_character_action: false,
-        },
-      ],
-    };
-
-    expect(storyboardInputContentHash(withKeyframe)).not.toBe(
-      storyboardInputContentHash(input),
-    );
-  });
-
   it("does not include the case collection preference in content hashes", () => {
     const input = createDirectorInput(
       findDialogueSequence(demoDatabase, "2048"),
