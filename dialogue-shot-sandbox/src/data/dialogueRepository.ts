@@ -1,5 +1,6 @@
 import type {
   AdjacentDialogueContext,
+  DialogueCameraKeyframe,
   DialogueDatabase,
   DialogueParticipant,
   DialogueRow,
@@ -76,7 +77,11 @@ function followDialogueChain(
   database: DialogueDatabase,
   startId: string,
   prefix: string,
-): { rows: DialogueRow[]; warnings: string[] } {
+): {
+  rows: DialogueRow[];
+  cameraKeyframes: DialogueCameraKeyframe[];
+  warnings: string[];
+} {
   const rowsById = new Map<string, DialogueRow>();
   database.dialogueRows.forEach((row) => {
     if (!rowsById.has(row.id)) {
@@ -84,7 +89,7 @@ function followDialogueChain(
     }
   });
 
-  const rows: DialogueRow[] = [];
+  const timeline: DialogueRow[] = [];
   const warnings: string[] = [];
   const visited = new Set<string>();
   let currentId: string | null = startId;
@@ -100,8 +105,11 @@ function followDialogueChain(
       warnings.push(`NextID ${currentId} 在对话表中不存在`);
       break;
     }
-    if (row.content && row.npcId !== null && row.npcId > 0) {
-      rows.push(row);
+    if (
+      row.nodeKind === "camera_keyframe" ||
+      (row.content && row.npcId !== null && row.npcId > 0)
+    ) {
+      timeline.push(row);
     }
     if (row.isEnd || !row.nextId) {
       break;
@@ -109,23 +117,63 @@ function followDialogueChain(
     currentId = row.nextId;
   }
 
-  if (rows.length === 0) {
-    const fallback = database.dialogueRows
+  let result = splitDialogueTimeline(timeline);
+  if (result.rows.length === 0) {
+    const fallbackTimeline = database.dialogueRows
       .filter(
         (row) =>
           row.id.startsWith(prefix) &&
-          row.content &&
-          row.npcId !== null &&
-          row.npcId > 0,
+          (row.nodeKind === "camera_keyframe" ||
+            (row.content && row.npcId !== null && row.npcId > 0)),
       )
       .sort((left, right) => numericSort(left.id, right.id));
-    if (fallback.length > 0) {
+    const fallback = splitDialogueTimeline(fallbackTimeline);
+    if (fallback.rows.length > 0) {
       warnings.push("开始节点无法形成链路，已按对话 ID 顺序预览");
-      return { rows: fallback, warnings };
+      result = fallback;
     }
   }
 
-  return { rows, warnings };
+  return { ...result, warnings };
+}
+
+function splitDialogueTimeline(rows: DialogueRow[]): {
+  rows: DialogueRow[];
+  cameraKeyframes: DialogueCameraKeyframe[];
+} {
+  const dialogueRows: DialogueRow[] = [];
+  const cameraKeyframes: DialogueCameraKeyframe[] = [];
+  let previousDialogueId: string | null = null;
+  let pendingKeyframes: DialogueCameraKeyframe[] = [];
+
+  for (const row of rows) {
+    if (row.nodeKind === "camera_keyframe") {
+      const keyframe: DialogueCameraKeyframe = {
+        dialogueId: row.id,
+        rowNumber: row.rowNumber,
+        previousDialogueId,
+        nextDialogueId: null,
+        hasCameraInstruction: Boolean(
+          row.cameraPosition || row.cameraMoveString,
+        ),
+        hasCharacterAction: Boolean(row.characterBehaviourString),
+      };
+      cameraKeyframes.push(keyframe);
+      pendingKeyframes.push(keyframe);
+      continue;
+    }
+    if (!row.content || row.npcId === null || row.npcId <= 0) {
+      continue;
+    }
+    for (const keyframe of pendingKeyframes) {
+      keyframe.nextDialogueId = row.id;
+    }
+    pendingKeyframes = [];
+    dialogueRows.push(row);
+    previousDialogueId = row.id;
+  }
+
+  return { rows: dialogueRows, cameraKeyframes };
 }
 
 function adjacentPrefix(prefix: string, offset: -1 | 1): string | null {
@@ -202,6 +250,11 @@ export function findDialogueSequence(
     new Set(chain.rows.map((row) => row.npcId).filter((id): id is number => id !== null)),
   );
   const warnings = [...chain.warnings];
+  if (chain.cameraKeyframes.length > 0) {
+    warnings.push(
+      `已识别 ${chain.cameraKeyframes.length} 个关闭对话框 UI 镜头关键帧；其隐藏文本不参与台词分析，原有镜头配置将在导出时保留`,
+    );
+  }
   if (starts.length > 1) {
     warnings.push(`同一前缀存在 ${starts.length} 个开始节点，当前使用 ${startId}`);
   }
@@ -268,6 +321,7 @@ export function findDialogueSequence(
     startId,
     outline: starts[0]?.outline ?? "",
     rows: sequenceRows,
+    cameraKeyframes: chain.cameraKeyframes,
     participants,
     adjacentContext: {
       previous: contextForPrefix(

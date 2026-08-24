@@ -144,7 +144,11 @@ export function StoryBriefModal({
 
         <footer>
           <span>
-            {sequence.rows.length} 条台词 · {sequence.participants.length} 位角色
+            {sequence.rows.length} 条台词
+            {sequence.cameraKeyframes.length > 0
+              ? ` · ${sequence.cameraKeyframes.length} 个镜头关键帧`
+              : ""}{" "}
+            · {sequence.participants.length} 位角色
           </span>
           <div>
             <button className="button" type="button" onClick={onKeepCurrent}>

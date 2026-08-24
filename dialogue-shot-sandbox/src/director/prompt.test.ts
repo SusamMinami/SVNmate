@@ -10,6 +10,28 @@ import { buildDirectorPrompt } from "./prompt";
 import { createRuleDecisions } from "./ruleDirector";
 
 describe("buildDirectorPrompt", () => {
+  it("treats close-UI camera keyframes as non-dialogue cut boundaries", () => {
+    const sequence = findDialogueSequence(demoDatabase, "2048");
+    const input = createDirectorInput(sequence, "camera-keyframe-prompt");
+    input.camera_keyframes = [
+      {
+        dialogue_id: "2048025",
+        previous_dialogue_id: "204802",
+        next_dialogue_id: "204803",
+        has_camera_instruction: true,
+        has_character_action: false,
+      },
+    ];
+
+    const prompt = buildDirectorPrompt(input, "Mira AI 导演");
+
+    expect(prompt).toContain("Dialog.State=4");
+    expect(prompt).toContain("不属于台词");
+    expect(prompt).toContain("不得放入 shots[].dialogue_ids");
+    expect(prompt).toContain("新的镜头边界");
+    expect(prompt).toContain("2048025");
+  });
+
   it("includes focused projection feedback for a model revision", () => {
     const sequence = findDialogueSequence(demoDatabase, "2048");
     const input = createDirectorInput(sequence, "projection-retry-request");

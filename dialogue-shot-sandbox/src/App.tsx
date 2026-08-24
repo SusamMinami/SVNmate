@@ -347,6 +347,11 @@ export default function App() {
   const authFinishingRef = useRef(false);
 
   const activeShot: ShotPlan | undefined = shots[activeIndex] ?? shots[0];
+  const dialogueSummary = `${sequence.rows.length} 句台词${
+    sequence.cameraKeyframes.length > 0
+      ? ` · ${sequence.cameraKeyframes.length} 个镜头关键帧`
+      : ""
+  }`;
   const sourceStats = useMemo(
     () => ({
       dialogues: database.dialogueRows.length,
@@ -1013,7 +1018,7 @@ export default function App() {
           <div>
             <h1>镜头沙盘</h1>
           </div>
-          <span className="version">v0.17.1</span>
+          <span className="version">v0.17.2</span>
         </div>
 
         <div className="source-status">
@@ -1209,9 +1214,12 @@ export default function App() {
                       ? "本地预览"
                       : directorLabel(appliedDirector)}
                     {fallbackReason ? "（已降级）" : ""}
+                    {sequence.cameraKeyframes.length > 0
+                      ? ` · ${sequence.cameraKeyframes.length} 个关键帧已保留`
+                      : ""}
                   </>
                 ) : (
-                  `${sequence.rows.length} 句 · ${shotPreparationMessage}`
+                  `${dialogueSummary} · ${shotPreparationMessage}`
                 )}
               </small>
             </div>
@@ -1360,7 +1368,7 @@ export default function App() {
                 <div>
                   <Camera size={16} />
                   <span>对话 {sequence.prefix}</span>
-                  <small>{sequence.rows.length} 句台词已加载</small>
+                  <small>{dialogueSummary}已加载</small>
                 </div>
                 <div className="axis-status">
                   {formationChecking || directorLoading ? (
@@ -1761,7 +1769,7 @@ export default function App() {
               <section className="inspector-section">
                 <div className="section-label">
                   <span>镜头准备</span>
-                  <small>{sequence.rows.length} 句台词</small>
+                  <small>{dialogueSummary}</small>
                 </div>
                 <p>{shotPreparationMessage}</p>
               </section>

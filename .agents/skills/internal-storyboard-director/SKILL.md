@@ -24,6 +24,8 @@ description: "Designs UE4 dialogue storyboards through the local storyboard MCP 
    - `participants[].first_dialogue_id`：角色第一次发言节点
    - `participants[].last_dialogue_id`：角色最后一次发言节点
    - `dialogue`：按剧情顺序排列的台词
+   - `camera_keyframes`：`Dialog.State=4` 的关闭对话框 UI 节点及其前后
+     可见台词；这些节点只表示镜头或动作关键帧，不是玩家可见台词
    - `adjacent_context.previous/next`：当前四位 ID 前一段和后一段对话
    - `constraints.supported_templates`：允许的镜头模板
 4. 分析戏剧目标、情绪推进、关系变化、信息揭示和视觉节奏。
@@ -53,6 +55,12 @@ description: "Designs UE4 dialogue storyboards through the local storyboard MCP 
 - 把镜头视为景别、角度、画面人数、运动、焦段、焦点层次和构图的组合。
   所有参数共同服务一个主要叙事目标，不为展示技巧而叠加互相竞争的效果。
 - 覆盖每一个 `dialogue_id`，每个 ID 只能出现一次。
+- `camera_keyframes[].dialogue_id` 不属于可见台词，不得放入
+  `shots[].dialogue_ids`，也不得依据其隐藏 `Content` 判断台词重复、
+  角色口吻或台词时长。
+- `camera_keyframes[].next_dialogue_id` 非空时，该可见台词必须作为新的
+  镜头边界，不能与关键帧之前的台词合并。关闭 UI 节点的原有 UE 镜头和
+  动作配置由软件保留。
 - 可以让一个镜头覆盖连续多句台词，但不能改变台词顺序。
 - 只使用 `constraints.supported_templates` 中的模板。
 - 单人主体只使用 `participants` 中实际存在的槽位（`A-L`）。

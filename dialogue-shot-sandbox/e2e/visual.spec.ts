@@ -1091,7 +1091,7 @@ test("guides an unsigned user to Feishu on first desktop launch", async ({
   await page.addInitScript(() => {
     const status = {
       firstRun: true,
-      version: "0.17.1",
+      version: "0.17.2",
       packaged: true,
       portable: false,
       runtimeBundled: true,
@@ -1167,7 +1167,7 @@ test("syncs the selected desktop doc path for registration data", async ({
   await page.addInitScript(() => {
     const status = {
       firstRun: false,
-      version: "0.17.1",
+      version: "0.17.2",
       packaged: true,
       portable: false,
       runtimeBundled: true,
@@ -1177,7 +1177,7 @@ test("syncs the selected desktop doc path for registration data", async ({
       integrationRoot: "C:\\Test\\Shot Sandbox\\trae-integration",
       mcpConnected: false,
       mcpVersion: null,
-      expectedMcpVersion: "0.17.1",
+      expectedMcpVersion: "0.17.2",
       defaultDataReady: true,
       dataCsvDirectory: "C:\\trunk\\doc\\csvdir",
       ueConnected: false,
@@ -1260,6 +1260,68 @@ test("syncs the selected desktop doc path for registration data", async ({
     ),
   ).toBeVisible();
   expect(selectedCsvDirectory).toBe("D:\\TeamProject\\doc\\csvdir");
+});
+
+test("keeps close-UI camera keyframes out of visible dialogue analysis", async ({
+  page,
+}, testInfo) => {
+  await page.route("**/api/ue/formation/read", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          status: "not_found",
+          message: "未找到测试 BP",
+        },
+      }),
+    });
+  });
+  const fixtureDirectory = await writeDirectoryFixture(
+    testInfo.outputPath("camera-keyframe", "csvdir"),
+    [
+      {
+        name: "对话表.csv",
+        content: [
+          "##&Dialog.id,Dialog.NPCID,Dialog.Content,Dialog.NextID,Dialog.End,Dialog.State,Dialog.CameraPosition,Dialog.CameraMoveString",
+          "##对话ID,人物,内容,下一ID,结束,状态,机位,运镜",
+          "735000,,,735001,false,,,",
+          "735001,1,不可见的重复台词,735002,false,4,c1,move",
+          "735002,1,第一句可见台词。,735003,false,0,c1,",
+          "735003,101968,第二句可见台词。,,true,0,,",
+        ].join("\n"),
+      },
+      {
+        name: "对话表_开始节点.csv",
+        content: [
+          "##&DialogStart.id,DialogStart.Outline",
+          "##对话ID,剧情梗概",
+          "735000,镜头关键帧测试",
+        ].join("\n"),
+      },
+      {
+        name: "NPC表.csv",
+        content: [
+          "##&NPC.id,NPC.name,NPC.npcintroduce,NPC.resource_id",
+          "##id,名称,介绍,资源",
+          "1,玩家,玩家,",
+          "101968,商会安保,守卫,200135",
+        ].join("\n"),
+      },
+    ],
+  );
+
+  await page.goto("/");
+  await page.locator('input[type="file"]').setInputFiles(fixtureDirectory);
+
+  await expect(page.getByText("不可见的重复台词", { exact: true }))
+    .toHaveCount(0);
+  const shotBody = page.locator(".shot-row__body").first();
+  await expect(shotBody).toContainText("第一句可见台词。");
+  await expect(shotBody).toContainText("第二句可见台词。");
+  await expect(page.getByText("1 个关键帧已保留", { exact: false }))
+    .toBeVisible();
 });
 
 test("offers the detected Blueprint formation before designing shots", async ({
@@ -1394,11 +1456,12 @@ test("offers the detected Blueprint formation before designing shots", async ({
     {
       name: "对话表.csv",
       content: [
-        "##&Dialog.id,Dialog.NPCID,Dialog.Content,Dialog.NextID,Dialog.End,Dialog.CharacterBehaviourString,Dialog.RelativeTransformsString",
-        "##对话ID,人物,内容,下一ID,结束,动作,相对位置",
-        "735000,,,735001,false,,",
-        '735001,1,你来了。,735002,false,"0.000000,AM_Talk,0,0,0,0,0,0,0,0;",',
-        '735002,101968,请止步。,,true,";0.000000,AM_Talk,0,0,0,0,0,0,0,0",',
+          "##&Dialog.id,Dialog.NPCID,Dialog.Content,Dialog.NextID,Dialog.End,Dialog.State,Dialog.CharacterBehaviourString,Dialog.RelativeTransformsString",
+          "##对话ID,人物,内容,下一ID,结束,状态,动作,相对位置",
+          "735000,,,735009,false,,,",
+          '735009,1,不可见的镜头关键帧,735001,false,4,"0.000000,AM_Talk,0,0,0,0,0,0,0,0;",',
+          '735001,1,你来了。,735002,false,0,"0.000000,AM_Talk,0,0,0,0,0,0,0,0;",',
+          '735002,101968,请止步。,,true,0,";0.000000,AM_Talk,0,0,0,0,0,0,0,0",',
       ].join("\n"),
     },
     {
@@ -1453,6 +1516,8 @@ test("offers the detected Blueprint formation before designing shots", async ({
   await dialog.getByRole("button", { name: "使用此站位" }).click();
   await expect(dialog).toBeHidden();
   await expect(page.getByText(/正在使用 .*BP_735000/)).toBeVisible();
+  await expect(page.getByText("1 个关键帧已保留", { exact: false }))
+    .toBeVisible();
   await expect(page.locator(".cast-row")).toHaveCount(2);
   await expect(page.locator(".shot-row.is-invalid")).toHaveCount(1);
   await expect(page.getByLabel("投影验收未通过")).toBeVisible();
@@ -1470,6 +1535,7 @@ test("offers the detected Blueprint formation before designing shots", async ({
   expect(inspectedExportRequest).toMatchObject({
     dialogueId: "7350",
     startId: "735000",
+    dialogueIds: ["735001", "735002"],
     participantModelIndexes: [0, 1],
     usesBlueprintFormation: true,
   });

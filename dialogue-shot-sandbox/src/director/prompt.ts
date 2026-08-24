@@ -23,6 +23,17 @@ interface DirectorProjectionRevision {
   }>;
 }
 
+function cameraKeyframeGuidance(input: DirectorInput): string {
+  if (!input.camera_keyframes?.length) {
+    return "当前输入没有单独的镜头关键帧节点。";
+  }
+  return [
+    "camera_keyframes 来自 Dialog.State=4（关闭对话框 UI）的控制节点。",
+    "这些节点的 Content 不会显示，不属于台词，不得据此判断重复文本、角色口吻或台词时长，也不得放入 shots[].dialogue_ids。",
+    "它们会保留原有 UE 镜头配置；当 next_dialogue_id 非空时，必须把该可见台词视为新的镜头边界，不能与关键帧之前的台词合并。",
+  ].join("");
+}
+
 export function buildDirectorPrompt(
   input: DirectorInput,
   providerName: string,
@@ -54,6 +65,7 @@ export function buildDirectorPrompt(
       `request_id 必须原样返回：${input.request_id}`,
       "只输出完整的 shot-plan.v5 JSON，不要 Markdown 或解释文字。",
       "保留未列出镜头的台词分组和设计，只重新设计失败镜头（failed_shots）；返回结果仍须按原顺序覆盖每个 dialogue_id 一次。",
+      cameraKeyframeGuidance(input),
       "根据每条 warnings 调整失败镜头的模板、主体、注视对象、焦段、机位高度、运动或构图语义。不要只改 intent 文案。",
       "在顶层 revision_reflections 中为每个失败镜头输出一条简短的事后总结，包含 shot_index、summary、root_cause、strategy、applies_when、avoid_when；只记录可复用结论，不输出推理过程。",
       input.constraints.preserve_input_formation
@@ -76,6 +88,7 @@ export function buildDirectorPrompt(
     "只允许输出一个 JSON 对象，不要 Markdown 代码块，不要解释文字。",
     `request_id 必须原样返回：${input.request_id}`,
     "必须覆盖输入中的每一个 dialogue_id，且每个 ID 只能出现一次。",
+    cameraKeyframeGuidance(input),
     "可以把连续台词合并到一个镜头，但不得改写台词或增删角色。",
     "按约每秒 4-5 个汉字估算台词时长；普通镜头至少覆盖连续两句台词，不能仅因说话人变化就切镜。常规镜头尽量保持 4-8 秒；若新镜头不足两句或预计不足 4 秒，优先与相邻台词合并并保留当前机位，除非遇到进出场边界或明确的重大情绪、动作、信息转折。",
     "不要输出 XYZ 坐标，软件会根据语义模板计算机位。",

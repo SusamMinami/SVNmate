@@ -355,6 +355,18 @@ export const DirectorInputSchema = z.object({
       }),
     )
     .min(1),
+  camera_keyframes: z
+    .array(
+      z.object({
+        dialogue_id: z.string().min(1),
+        previous_dialogue_id: z.string().min(1).nullable(),
+        next_dialogue_id: z.string().min(1).nullable(),
+        has_camera_instruction: z.boolean(),
+        has_character_action: z.boolean(),
+      }),
+    )
+    .max(500)
+    .optional(),
   adjacent_context: z.object({
     previous: z
       .object({
@@ -450,6 +462,13 @@ export interface DirectorInput {
     speaker: ParticipantSlot;
     speaker_name: string;
     content: string;
+  }>;
+  camera_keyframes?: Array<{
+    dialogue_id: string;
+    previous_dialogue_id: string | null;
+    next_dialogue_id: string | null;
+    has_camera_instruction: boolean;
+    has_character_action: boolean;
   }>;
   adjacent_context: {
     previous: {
@@ -589,6 +608,13 @@ export function createDirectorInput(
         },
       ];
     }),
+    camera_keyframes: sequence.cameraKeyframes.map((keyframe) => ({
+      dialogue_id: keyframe.dialogueId,
+      previous_dialogue_id: keyframe.previousDialogueId,
+      next_dialogue_id: keyframe.nextDialogueId,
+      has_camera_instruction: keyframe.hasCameraInstruction,
+      has_character_action: keyframe.hasCharacterAction,
+    })),
     adjacent_context: {
       previous: sequence.adjacentContext.previous
         ? {

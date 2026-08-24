@@ -45,7 +45,7 @@ const PROCESSING_LEASE_MS = 20 * 60_000;
 const TASK_LOCK_TIMEOUT_MS = 5_000;
 const TASK_LOCK_STALE_MS = 30_000;
 export const STORYBOARD_CACHE_POLICY =
-  "shot-plan.v5:camera-language-v3-projection-revision";
+  "shot-plan.v5:camera-language-v4-control-keyframes";
 
 function taskDirectory(): string {
   return join(storyboardRuntimeRoot(), ".storyboard-data", "tasks");
@@ -65,17 +65,23 @@ function taskPath(requestId: string): string {
 export function storyboardInputContentHash(input: DirectorInput): string {
   const { request_id: _requestId, ...cacheableInput } = input;
   const {
+    camera_keyframes: cameraKeyframes,
+    ...cacheableInputWithoutKeyframes
+  } = cacheableInput;
+  const {
     collect_revision_cases: _collectRevisionCases,
     ...cacheableConstraints
   } = cacheableInput.constraints;
+  const normalizedInput = {
+    ...cacheableInputWithoutKeyframes,
+    ...(cameraKeyframes?.length
+      ? { camera_keyframes: cameraKeyframes }
+      : {}),
+    constraints: cacheableConstraints,
+  };
   return createHash("sha256")
     .update(
-      JSON.stringify(
-        sortObjectKeys({
-          ...cacheableInput,
-          constraints: cacheableConstraints,
-        }),
-      ),
+      JSON.stringify(sortObjectKeys(normalizedInput)),
     )
     .digest("hex");
 }

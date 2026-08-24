@@ -152,11 +152,25 @@ function sequenceFromDirectorInput(input: DirectorInput): DialogueSequence {
       nextId: input.dialogue[index + 1]?.dialogue_id ?? null,
       isEnd: index === input.dialogue.length - 1,
       rowNumber: index + 1,
+      state: 0,
+      nodeKind: "dialogue",
+      cameraPosition: "",
+      cameraMoveString: "",
       speakerSlot: line.speaker,
       speakerModelIndex: null,
       relativeTransformsString: "",
       characterBehaviourString: "",
     })),
+    cameraKeyframes: (input.camera_keyframes ?? []).map(
+      (keyframe, index) => ({
+        dialogueId: keyframe.dialogue_id,
+        rowNumber: index + 1,
+        previousDialogueId: keyframe.previous_dialogue_id,
+        nextDialogueId: keyframe.next_dialogue_id,
+        hasCameraInstruction: keyframe.has_camera_instruction,
+        hasCharacterAction: keyframe.has_character_action,
+      }),
+    ),
     participants: input.participants.map((participant, index) => {
       const firstDialogueIndex = input.dialogue.findIndex(
         (line) => line.dialogue_id === participant.first_dialogue_id,

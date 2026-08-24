@@ -299,7 +299,7 @@ describe("internal storyboard MCP", () => {
         }
         expect(presence.connected).toBe(true);
         expect(presence.compatible).toBe(true);
-        expect(presence.serverVersion).toBe("0.17.1");
+        expect(presence.serverVersion).toBe("0.17.2");
         expect(presence.transport).toBe("stdio");
 
         let claimed = await client.callTool({
@@ -504,6 +504,29 @@ describe("internal storyboard MCP", () => {
     };
 
     expect(storyboardInputContentHash(reordered)).toBe(
+      storyboardInputContentHash(input),
+    );
+  });
+
+  it("includes camera keyframe boundaries in content hashes", () => {
+    const input = createDirectorInput(
+      findDialogueSequence(demoDatabase, "2048"),
+      "keyframe-hash-request",
+    );
+    const withKeyframe = {
+      ...input,
+      camera_keyframes: [
+        {
+          dialogue_id: "2048025",
+          previous_dialogue_id: "204802",
+          next_dialogue_id: "204803",
+          has_camera_instruction: true,
+          has_character_action: false,
+        },
+      ],
+    };
+
+    expect(storyboardInputContentHash(withKeyframe)).not.toBe(
       storyboardInputContentHash(input),
     );
   });
