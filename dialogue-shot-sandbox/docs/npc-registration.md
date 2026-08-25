@@ -32,12 +32,18 @@ Content Browser 中只选中 Blueprint 资产不会被识别，因为目标物�
 
 - Actor 引用与编辑器标签。
 - Generated Class 路径。
+- Blueprint 资产路径，或原生 SkeletalMeshActor / StaticMeshActor 使用的实际
+  Mesh 资产路径。
 - 世界坐标。
 - 世界旋转。
 - 世界缩放。
 - 当前关卡路径。
 
 地图路径会与 `d地图配置表.csv` 的资源路径匹配，以提供候选 MapID。
+
+同一份 UE 选择读取协议也被“任务目标物”工作区的“背景资产”功能复用，但不
+复用 NPC 配表界面：Blueprint Actor 作为 ChildActor 写入 BP，原生 Skeletal
+Mesh 和 Static Mesh 写为对应组件；这条路径不创建模型、NPC 或目标物配表。
 
 ## 模型与 NPC 复用
 

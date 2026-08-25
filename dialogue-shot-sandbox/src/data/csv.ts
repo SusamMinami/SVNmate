@@ -410,6 +410,35 @@ export function parseNpcRegistrationDatabase(
   };
 }
 
+export function parseMissionTargetDatabase(
+  npcText: string,
+  modelText: string,
+  missionText: string,
+  dungeonMissionText: string,
+  missionPositionText: string,
+  mapConfigText: string,
+  mapResourceText: string,
+  sourceName: string,
+): DialogueDatabase {
+  return {
+    dialogueRows: [],
+    starts: [],
+    npcs: parseNpcs(npcText),
+    models: parseModels(modelText),
+    missionRows: [
+      ...parseMissions(MISSION_FILENAME, missionText, "任务表"),
+      ...parseMissions(
+        DUNGEON_MISSION_FILENAME,
+        dungeonMissionText,
+        "副本任务表",
+      ),
+    ],
+    missionPositions: parseMissionPositions(missionPositionText),
+    mapConfigs: parseMapConfigs(mapConfigText, mapResourceText),
+    sourceName,
+  };
+}
+
 async function readFile(directory: FileSystemDirectoryHandle, filename: string) {
   const handle = await directory.getFileHandle(filename);
   return (await handle.getFile()).text();
@@ -468,23 +497,32 @@ export async function loadDocDirectory(
   );
 }
 
-function fileByName(files: File[], filename: string, required = true): File | null {
+export function findDocCsvFile(
+  files: File[],
+  filename: string,
+): File | null {
   const normalizedSuffix = `/csvdir/${filename}`.toLowerCase();
   const directDirectoryPath = `csvdir/${filename}`.toLowerCase();
-  const match = files.find((file) => {
-    const relativePath = (file.webkitRelativePath || file.name)
-      .replaceAll("\\", "/")
-      .toLowerCase();
-    return (
-      relativePath.endsWith(normalizedSuffix) ||
-      relativePath === directDirectoryPath ||
-      relativePath === filename.toLowerCase()
-    );
-  });
+  return (
+    files.find((file) => {
+      const relativePath = (file.webkitRelativePath || file.name)
+        .replaceAll("\\", "/")
+        .toLowerCase();
+      return (
+        relativePath.endsWith(normalizedSuffix) ||
+        relativePath === directDirectoryPath ||
+        relativePath === filename.toLowerCase()
+      );
+    }) ?? null
+  );
+}
+
+function fileByName(files: File[], filename: string, required = true): File | null {
+  const match = findDocCsvFile(files, filename);
   if (!match && required) {
     throw new Error(`选择的目录中未找到 csvdir\\${filename}`);
   }
-  return match ?? null;
+  return match;
 }
 
 export async function loadDocFiles(fileList: FileList): Promise<DialogueDatabase> {

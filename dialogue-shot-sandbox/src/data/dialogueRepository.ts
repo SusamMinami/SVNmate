@@ -1,5 +1,6 @@
 import type {
   AdjacentDialogueContext,
+  DialogueContentSearchResult,
   DialogueDatabase,
   DialogueParticipant,
   DialogueRow,
@@ -58,6 +59,9 @@ function profileFor(database: DialogueDatabase, npcId: number): NpcProfile {
 }
 
 function positionFor(index: number, total: number): Vec3 {
+  if (total <= 1) {
+    return [0, 0, 0];
+  }
   if (total === 2) {
     return index === 0 ? [-1.35, 0, 0] : [1.35, 0, 0];
   }
@@ -184,9 +188,10 @@ function contextForPrefix(
   };
 }
 
-export function findDialogueSequence(
+function buildDialogueSequence(
   database: DialogueDatabase,
   rawPrefix: string,
+  requireTwoParticipants: boolean,
 ): DialogueSequence {
   const prefix = rawPrefix.trim();
   if (!/^\d{4}$/.test(prefix)) {
@@ -232,7 +237,7 @@ export function findDialogueSequence(
     selectedIds.push(1);
     warnings.push("仅检测到一位说话人，已补充玩家作为对景角色");
   }
-  if (selectedIds.length < 2) {
+  if (requireTwoParticipants && selectedIds.length < 2) {
     throw new Error(`对话 ${prefix} 至少需要两位可识别的对话参与者`);
   }
 
@@ -301,5 +306,89 @@ export function findDialogueSequence(
             modelNames: starts[0]?.modelNames ?? [],
           }
         : null,
+  };
+}
+
+export function findDialogueSequence(
+  database: DialogueDatabase,
+  rawPrefix: string,
+): DialogueSequence {
+  return buildDialogueSequence(database, rawPrefix, true);
+}
+
+export function searchDialogueContent(
+  database: DialogueDatabase,
+  rawQuery: string,
+  maximumContexts = 100,
+): DialogueContentSearchResult {
+  const query = rawQuery.trim();
+  if (!query) {
+    throw new Error("请输入对话 ID 或对白内容");
+  }
+  const normalizedQuery = query.toLocaleLowerCase();
+  const matches = database.dialogueRows.filter(
+    (row) =>
+      row.state !== 4 &&
+      Boolean(row.content) &&
+      row.content.toLocaleLowerCase().includes(normalizedQuery) &&
+      /^\d{4,}$/.test(row.id),
+  );
+  const matchesByPrefix = new Map<string, DialogueRow[]>();
+  for (const row of matches) {
+    const prefix = row.id.slice(0, 4);
+    const prefixMatches = matchesByPrefix.get(prefix) ?? [];
+    prefixMatches.push(row);
+    matchesByPrefix.set(prefix, prefixMatches);
+  }
+
+  const contexts = Array.from(matchesByPrefix.entries())
+    .sort(([left], [right]) => numericSort(left, right))
+    .flatMap(([prefix, prefixMatches]) => {
+      let sequence: DialogueSequence;
+      try {
+        sequence = buildDialogueSequence(database, prefix, false);
+      } catch {
+        return [];
+      }
+      const sequenceIds = new Set(sequence.rows.map((row) => row.id));
+      const matchedDialogueIds = prefixMatches
+        .map((row) => row.id)
+        .filter((dialogueId) => sequenceIds.has(dialogueId));
+      if (matchedDialogueIds.length === 0) {
+        return [];
+      }
+      const contextDialogueIds = new Set<string>();
+      for (const dialogueId of matchedDialogueIds) {
+        const index = sequence.rows.findIndex((row) => row.id === dialogueId);
+        for (
+          let contextIndex = Math.max(0, index - 1);
+          contextIndex <= Math.min(sequence.rows.length - 1, index + 1);
+          contextIndex += 1
+        ) {
+          contextDialogueIds.add(sequence.rows[contextIndex].id);
+        }
+      }
+      return [
+        {
+          prefix,
+          sequence,
+          matchedDialogueIds,
+          contextDialogueIds: sequence.rows
+            .filter((row) => contextDialogueIds.has(row.id))
+            .map((row) => row.id),
+        },
+      ];
+    });
+  const normalizedMaximum = Math.max(1, Math.floor(maximumContexts));
+
+  return {
+    query,
+    totalMatchCount: contexts.reduce(
+      (total, context) => total + context.matchedDialogueIds.length,
+      0,
+    ),
+    totalContextCount: contexts.length,
+    truncated: contexts.length > normalizedMaximum,
+    contexts: contexts.slice(0, normalizedMaximum),
   };
 }

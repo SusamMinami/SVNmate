@@ -3,6 +3,7 @@ import {
   Bot,
   Boxes,
   Camera,
+  Check,
   ChevronLeft,
   ChevronRight,
   Clapperboard,
@@ -11,6 +12,7 @@ import {
   LoaderCircle,
   LocateFixed,
   MapPinned,
+  Pencil,
   Search,
   Settings,
   Upload,
@@ -18,10 +20,18 @@ import {
   Users,
   X,
 } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import {
+  FormEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { DesktopSetupModal } from "./components/DesktopSetupModal";
 import { BlueprintFormationModal } from "./components/BlueprintFormationModal";
 import { DirectorControl } from "./components/DirectorControl";
+import { LaunchScreen } from "./components/LaunchScreen";
 import { MissionTargetModal } from "./components/MissionTargetModal";
 import { NpcRegistrationModal } from "./components/NpcRegistrationModal";
 import { SharedPlanCompareModal } from "./components/SharedPlanCompareModal";
@@ -29,10 +39,17 @@ import { StageView } from "./components/StageView";
 import { StoryboardExportModal } from "./components/StoryboardExportModal";
 import { StoryBriefModal } from "./components/StoryBriefModal";
 import { TraeCollaborationModal } from "./components/TraeCollaborationModal";
-import { loadDocDirectory, loadDocFiles } from "./data/csv";
+import {
+  findDocCsvFile,
+  loadDocDirectory,
+  loadDocFiles,
+} from "./data/csv";
 import { applyBlueprintFormation } from "./data/blueprintFormation";
 import { demoDatabase } from "./data/demo";
-import { findDialogueSequence } from "./data/dialogueRepository";
+import {
+  findDialogueSequence,
+  searchDialogueContent,
+} from "./data/dialogueRepository";
 import type {
   DirectorBlocking,
   DirectorMode,
@@ -44,6 +61,7 @@ import {
   type DirectorRunResult,
 } from "./director/orchestrator";
 import { createShotPreview } from "./director/shotPlanner";
+import { estimateShotDuration } from "./director/shotTiming";
 import {
   discoverMira,
   finishLarkAuthorization,
@@ -63,12 +81,16 @@ import {
   exportDialogueStoryboard,
   getBlueprintFormation,
   inspectDialogueStoryboardExport,
+  updateDialogueContent,
 } from "./ue/client";
 import type {
   BlueprintFormationSnapshot,
   CameraMovement,
   DepthOfField,
+  DialogueContentSearchContext,
+  DialogueContentSearchResult,
   DialogueDatabase,
+  DialogueRow,
   DialogueStoryboardExportPreview,
   DialogueSequence,
   CompositionMode,
@@ -89,6 +111,7 @@ function buildSequence(database: DialogueDatabase, prefix: string) {
 
 const initial = buildSequence(demoDatabase, "2048");
 const CASE_COLLECTION_STORAGE_KEY = "shot-sandbox.collect-revision-cases";
+const LAUNCH_SCREEN_STORAGE_KEY = "shot-sandbox.launch-screen-seen";
 
 interface PendingDirectorPresentation {
   sequence: DialogueSequence;
@@ -114,6 +137,106 @@ interface ApplySequenceOptions {
   preserveInputPositions?: boolean;
   fallbackPreserveInputPositions?: boolean;
   keepCurrentPreview?: boolean;
+}
+
+type InspectorTab = "camera" | "composition" | "direction" | "ue";
+type WorkspaceView = "storyboard" | "npc" | "targets";
+type WorkspaceDirection = "up" | "down";
+
+const WORKSPACE_ORDER: Record<WorkspaceView, number> = {
+  storyboard: 0,
+  npc: 1,
+  targets: 2,
+};
+
+interface CachedStoryboard {
+  sequence: DialogueSequence;
+  shots: ShotPlan[];
+  appliedDirector: DirectorMode;
+  directorAnalysis: DirectorSceneAnalysis | undefined;
+  directorBlocking: DirectorBlocking;
+  activeFormationSource: "blueprint" | "generated";
+  formationStatus: string;
+}
+
+function refreshShotDialogueText(
+  sequence: DialogueSequence,
+  shots: ShotPlan[],
+): ShotPlan[] {
+  const rowsById = new Map(sequence.rows.map((row) => [row.id, row]));
+  const participantNames = new Map(
+    sequence.participants.map((participant) => [
+      participant.id,
+      participant.name,
+    ]),
+  );
+  return shots.map((shot) => {
+    const rows = shot.dialogueIds.flatMap((dialogueId) => {
+      const row = rowsById.get(dialogueId);
+      return row ? [row] : [];
+    });
+    if (rows.length === 0) {
+      return shot;
+    }
+    return {
+      ...shot,
+      content: rows
+        .map(
+          (row) =>
+            `${participantNames.get(row.npcId ?? -1) ?? "未知"}：${row.content}`,
+        )
+        .join(" "),
+      duration: estimateShotDuration(rows.map((row) => row.content)),
+    };
+  });
+}
+
+function withUpdatedDialogueContent(
+  sequence: DialogueSequence,
+  dialogueNodeId: string,
+  content: string,
+): DialogueSequence {
+  const updateRow = (row: DialogueRow) =>
+    row.id === dialogueNodeId ? { ...row, content } : row;
+  const updateAdjacent = (
+    context: DialogueSequence["adjacentContext"]["previous"],
+  ) =>
+    context
+      ? {
+          ...context,
+          dialogue: context.dialogue.map((row) =>
+            row.dialogueId === dialogueNodeId ? { ...row, content } : row,
+          ),
+        }
+      : null;
+  return {
+    ...sequence,
+    rows: sequence.rows.map(updateRow),
+    adjacentContext: {
+      previous: updateAdjacent(sequence.adjacentContext.previous),
+      next: updateAdjacent(sequence.adjacentContext.next),
+    },
+  };
+}
+
+function HighlightedDialogueText({
+  text,
+  query,
+}: {
+  text: string;
+  query: string;
+}) {
+  const index = text.toLocaleLowerCase().indexOf(query.toLocaleLowerCase());
+  if (index < 0) {
+    return text;
+  }
+  return (
+    <>
+      {text.slice(0, index)}
+      <mark>{text.slice(index, index + query.length)}</mark>
+      {text.slice(index + query.length)}
+    </>
+  );
 }
 
 function directorLabel(mode: DirectorMode): string {
@@ -286,7 +409,437 @@ function blockingPositionLabel(
   return labels[position];
 }
 
+interface ShotInspectorProps {
+  shot: ShotPlan;
+  sequence: DialogueSequence;
+  directorAnalysis: DirectorSceneAnalysis | undefined;
+  directorBlocking: DirectorBlocking;
+  appliedDirector: DirectorMode;
+  activeIndex: number;
+  shotCount: number;
+  tab: InspectorTab;
+  canExport: boolean;
+  exportBusy: boolean;
+  exportError: string;
+  onMove: (offset: number) => void;
+  onTabChange: (tab: InspectorTab) => void;
+  onExport: () => void;
+}
+
+function ShotInspector({
+  shot,
+  sequence,
+  directorAnalysis,
+  directorBlocking,
+  appliedDirector,
+  activeIndex,
+  shotCount,
+  tab,
+  canExport,
+  exportBusy,
+  exportError,
+  onMove,
+  onTabChange,
+  onExport,
+}: ShotInspectorProps) {
+  const tabs: Array<{
+    id: InspectorTab;
+    label: string;
+    icon: typeof Camera;
+  }> = [
+    { id: "camera", label: "摄影", icon: Camera },
+    { id: "composition", label: "构图", icon: LocateFixed },
+    { id: "direction", label: "导演", icon: Clapperboard },
+    { id: "ue", label: "UE", icon: Boxes },
+  ];
+
+  return (
+    <>
+      <section className="inspector-header">
+        <div>
+          <small>
+            SHOT {String(activeIndex + 1).padStart(2, "0")} /{" "}
+            {String(shotCount).padStart(2, "0")}
+          </small>
+          <h2>{shot.label}</h2>
+        </div>
+        <div className="shot-nav">
+          <button
+            className="icon-button"
+            type="button"
+            title="上一个镜头"
+            aria-label="上一个镜头"
+            disabled={activeIndex === 0}
+            onClick={() => onMove(-1)}
+          >
+            <ChevronLeft size={18} />
+          </button>
+          <button
+            className="icon-button"
+            type="button"
+            title="下一个镜头"
+            aria-label="下一个镜头"
+            disabled={activeIndex === shotCount - 1}
+            onClick={() => onMove(1)}
+          >
+            <ChevronRight size={18} />
+          </button>
+        </div>
+      </section>
+
+      <nav className="inspector-tabs" aria-label="镜头检查器" role="tablist">
+        {tabs.map(({ id, label, icon: Icon }) => (
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === id}
+            aria-controls="shot-inspector-panel"
+            className={tab === id ? "is-active" : ""}
+            key={id}
+            onClick={() => onTabChange(id)}
+          >
+            <Icon size={14} />
+            <span>{label}</span>
+          </button>
+        ))}
+      </nav>
+
+      <div
+        className="inspector-tab-panel"
+        id="shot-inspector-panel"
+        role="tabpanel"
+        key={`${shot.id}-${tab}`}
+      >
+        {tab === "camera" && (
+          <section className="inspector-section">
+            <div className="inspector-summary">
+              <div>
+                <small>FOCAL</small>
+                <strong>
+                  {shot.endFocalLength === shot.focalLength
+                    ? shot.focalLength
+                    : `${shot.focalLength}-${shot.endFocalLength}`}
+                  <span> mm</span>
+                </strong>
+              </div>
+              <div>
+                <small>DURATION</small>
+                <strong>
+                  {shot.duration}
+                  <span> s</span>
+                </strong>
+              </div>
+              <div>
+                <small>CHECK</small>
+                <strong
+                  className={
+                    shot.projection.valid
+                      ? "projection-status--valid"
+                      : "projection-status--invalid"
+                  }
+                >
+                  {shot.projection.valid ? "通过" : "未通过"}
+                </strong>
+              </div>
+            </div>
+            <dl className="parameter-grid parameter-grid--inspector">
+              <div>
+                <dt>镜头类型</dt>
+                <dd>{shot.label}</dd>
+              </div>
+              <div>
+                <dt>焦段意图</dt>
+                <dd>{lensIntentLabel(shot.lensIntent)}</dd>
+              </div>
+              <div>
+                <dt>景深</dt>
+                <dd>{depthOfFieldLabel(shot.depthOfField)}</dd>
+              </div>
+              <div>
+                <dt>镜内运动</dt>
+                <dd>
+                  {cameraMovementLabel(shot.cameraMovement)}
+                  {shot.movementIntensity === "none"
+                    ? ""
+                    : ` · ${movementIntensityLabel(shot.movementIntensity)}`}
+                </dd>
+              </div>
+              <div>
+                <dt>主体</dt>
+                <dd>{shot.speakerName}</dd>
+              </div>
+              <div>
+                <dt>对话对象</dt>
+                <dd>
+                  {shot.lookTargetSlot
+                    ? sequence.participants.find(
+                        (participant) =>
+                          participant.slot === shot.lookTargetSlot,
+                      )?.name ?? shot.lookTargetSlot
+                    : "群体中心"}
+                </dd>
+              </div>
+              <div>
+                <dt>当前轴线</dt>
+                <dd>{shot.axis.id}</dd>
+              </div>
+              <div>
+                <dt>横滚角</dt>
+                <dd>{shot.cameraRollDegrees.toFixed(0)}°</dd>
+              </div>
+              <div>
+                <dt>实测景别</dt>
+                <dd>{shotSizeLabel(shot.projection.measuredShotSize)}</dd>
+              </div>
+              <div>
+                <dt>正面偏角</dt>
+                <dd>
+                  {shot.projection.subjectFaceAngle === null
+                    ? "群像"
+                    : `${shot.projection.subjectFaceAngle.toFixed(1)}°`}
+                </dd>
+              </div>
+            </dl>
+          </section>
+        )}
+
+        {tab === "composition" && (
+          <>
+            <section className="inspector-section">
+              <div className="section-label">
+                <span>构图策略</span>
+              </div>
+              <dl className="parameter-grid parameter-grid--inspector">
+                <div>
+                  <dt>画面构成</dt>
+                  <dd>{shotCoverageLabel(shot.projection.coverage)}</dd>
+                </div>
+                <div>
+                  <dt>覆盖意图</dt>
+                  <dd>{coverageIntentLabel(shot.coverageIntent)}</dd>
+                </div>
+                <div>
+                  <dt>构图原则</dt>
+                  <dd>{compositionModeLabel(shot.compositionPlan.mode)}</dd>
+                </div>
+                <div>
+                  <dt>构图衔接</dt>
+                  <dd>
+                    {compositionTransitionLabel(
+                      shot.compositionPlan.transition,
+                    )}
+                  </dd>
+                </div>
+                <div>
+                  <dt>空间策略</dt>
+                  <dd>
+                    {negativeSpaceLabel(shot.compositionPlan.negativeSpace)}
+                  </dd>
+                </div>
+                <div>
+                  <dt>视线前/后</dt>
+                  <dd>
+                    {shot.projection.lookRoom === null ||
+                    shot.projection.backRoom === null
+                      ? "不适用"
+                      : `${shot.projection.lookRoom.toFixed(2)} / ${shot.projection.backRoom.toFixed(2)}`}
+                  </dd>
+                </div>
+                <div>
+                  <dt>视觉落点</dt>
+                  <dd>
+                    {shot.projection.visualAnchor
+                      .map((value) => value.toFixed(2))
+                      .join(", ")}
+                  </dd>
+                </div>
+                <div>
+                  <dt>注视点偏移</dt>
+                  <dd>
+                    {shot.projection.eyeTraceDelta === null
+                      ? "首镜"
+                      : shot.projection.eyeTraceDelta.toFixed(2)}
+                  </dd>
+                </div>
+              </dl>
+            </section>
+            <section className="inspector-section">
+              <div className="section-label">
+                <span>构图说明</span>
+              </div>
+              <p>{shot.composition}</p>
+            </section>
+            {shot.projection.warnings.length > 0 && (
+              <section className="inspector-section warning-section">
+                <div className="section-label">
+                  <span>镜头验收提示</span>
+                </div>
+                {shot.projection.warnings.map((warning) => (
+                  <p key={warning}>{warning}</p>
+                ))}
+              </section>
+            )}
+          </>
+        )}
+
+        {tab === "direction" && (
+          <>
+            <section className="inspector-section">
+              <div className="section-label">
+                <span>导演意图</span>
+              </div>
+              <p>{shot.rationale}</p>
+            </section>
+            {directorAnalysis && (
+              <section className="inspector-section director-analysis">
+                <div className="section-label">
+                  <span>全场导演分析</span>
+                  <small>{directorLabel(appliedDirector)}</small>
+                </div>
+                <dl>
+                  <div>
+                    <dt>戏剧目标</dt>
+                    <dd>{directorAnalysis.dramaticGoal}</dd>
+                  </div>
+                  <div>
+                    <dt>情绪推进</dt>
+                    <dd>{directorAnalysis.emotionalProgression}</dd>
+                  </div>
+                  <div>
+                    <dt>视觉策略</dt>
+                    <dd>{directorAnalysis.visualStrategy}</dd>
+                  </div>
+                </dl>
+              </section>
+            )}
+            <section className="inspector-section blocking-analysis">
+              <div className="section-label">
+                <span>站位调度</span>
+                <small>{formationLabel(directorBlocking.formation)}</small>
+              </div>
+              <p>{directorBlocking.intent}</p>
+              <div className="blocking-roster">
+                {directorBlocking.placements.map((placement) => {
+                  const participant = sequence.participants.find(
+                    (item) => item.slot === placement.subject,
+                  );
+                  return (
+                    <div key={placement.subject}>
+                      <span style={{ backgroundColor: participant?.color }}>
+                        {placement.subject}
+                      </span>
+                      <strong>{participant?.name ?? placement.subject}</strong>
+                      <small title={placement.intent}>
+                        {blockingPositionLabel(placement.position)} · 登场{" "}
+                        {placement.entry_dialogue_id} · 离场{" "}
+                        {placement.exit_dialogue_id ?? "本场结束"} ·{" "}
+                        {placement.intent}
+                      </small>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          </>
+        )}
+
+        {tab === "ue" && (
+          <>
+            <section className="inspector-section">
+              <div className="section-label">
+                <span>UE4 参考</span>
+              </div>
+              <div className="ue-reference">
+                <div>
+                  <span>Camera</span>
+                  <code>
+                    {shot.cameraPosition
+                      .map((value) => value.toFixed(2))
+                      .join(", ")}
+                  </code>
+                </div>
+                <div>
+                  <span>Target</span>
+                  <code>
+                    {shot.cameraTarget
+                      .map((value) => value.toFixed(2))
+                      .join(", ")}
+                  </code>
+                </div>
+                {shot.cameraMovement !== "static" && (
+                  <>
+                    <div>
+                      <span>End Camera</span>
+                      <code>
+                        {shot.cameraEndPosition
+                          .map((value) => value.toFixed(2))
+                          .join(", ")}
+                      </code>
+                    </div>
+                    <div>
+                      <span>End Target</span>
+                      <code>
+                        {shot.cameraEndTarget
+                          .map((value) => value.toFixed(2))
+                          .join(", ")}
+                      </code>
+                    </div>
+                  </>
+                )}
+                <small>
+                  原型坐标为相对站位，用于构图参考，不直接等同于 UE4
+                  世界坐标。
+                </small>
+              </div>
+            </section>
+            {sequence.warnings.length > 0 && (
+              <section className="inspector-section warning-section">
+                <div className="section-label">
+                  <span>数据提示</span>
+                </div>
+                {sequence.warnings.map((warning) => (
+                  <p key={warning}>{warning}</p>
+                ))}
+              </section>
+            )}
+          </>
+        )}
+      </div>
+
+      <footer className="inspector-footer inspector-footer--export">
+        <div>
+          {exportError ? <AlertTriangle size={15} /> : <Users size={15} />}
+          <span>
+            {exportError ||
+              (canExport
+                ? `${shotCount} 镜已绑定 BP 站位`
+                : "支持 2-12 人动态进出场；完成 BP 站位绑定后可导出")}
+          </span>
+        </div>
+        <button
+          className="button button--primary"
+          type="button"
+          title="预检并导出当前分镜到 UE Dialog Graph"
+          disabled={!canExport || exportBusy}
+          onClick={onExport}
+        >
+          {exportBusy ? (
+            <LoaderCircle className="spin" size={16} />
+          ) : (
+            <Upload size={16} />
+          )}
+          {exportBusy ? "正在检查..." : "导出到 UE"}
+        </button>
+      </footer>
+    </>
+  );
+}
+
 export default function App() {
+  const [showLaunchScreen, setShowLaunchScreen] = useState(
+    () =>
+      window.sessionStorage.getItem(LAUNCH_SCREEN_STORAGE_KEY) !== "1",
+  );
   const [database, setDatabase] = useState(demoDatabase);
   const [query, setQuery] = useState("2048");
   const [sequence, setSequence] = useState<DialogueSequence>(initial.sequence);
@@ -319,8 +872,13 @@ export default function App() {
   const [desktopSetup, setDesktopSetup] =
     useState<DesktopSetupStatus | null>(null);
   const [showDesktopSetup, setShowDesktopSetup] = useState(false);
-  const [showMissionTargets, setShowMissionTargets] = useState(false);
-  const [showNpcRegistration, setShowNpcRegistration] = useState(false);
+  const [activeWorkspace, setActiveWorkspace] =
+    useState<WorkspaceView>("storyboard");
+  const [outgoingWorkspace, setOutgoingWorkspace] =
+    useState<WorkspaceView | null>(null);
+  const [workspaceDirection, setWorkspaceDirection] =
+    useState<WorkspaceDirection>("up");
+  const workspaceTransitionTimerRef = useRef<number | null>(null);
   const [traeStatus, setTraeStatus] =
     useState<TraeCollaborationStatus | null>(null);
   const [traeLoading, setTraeLoading] = useState(false);
@@ -341,12 +899,53 @@ export default function App() {
   const [storyboardExportBusy, setStoryboardExportBusy] = useState(false);
   const [storyboardExportError, setStoryboardExportError] = useState("");
   const [storyboardExportResult, setStoryboardExportResult] = useState("");
+  const [contentSearch, setContentSearch] =
+    useState<DialogueContentSearchResult | null>(null);
+  const [designedStoryboards, setDesignedStoryboards] = useState<
+    Map<string, CachedStoryboard>
+  >(
+    () =>
+      new Map([
+        [
+          initial.sequence.prefix,
+          {
+            sequence: initial.sequence,
+            shots: initial.shots,
+            appliedDirector: "rule",
+            directorAnalysis: initial.analysis,
+            directorBlocking: initial.blocking,
+            activeFormationSource: "generated",
+            formationStatus: "",
+          },
+        ],
+      ]),
+  );
+  const [selectedDialogueId, setSelectedDialogueId] = useState(
+    initial.shots[0]?.dialogueId ?? initial.sequence.rows[0]?.id ?? "",
+  );
+  const [editingDialogueId, setEditingDialogueId] = useState<string | null>(
+    null,
+  );
+  const [dialogueDraft, setDialogueDraft] = useState("");
+  const [dialogueSaveBusy, setDialogueSaveBusy] = useState(false);
+  const [dialogueSaveError, setDialogueSaveError] = useState("");
+  const [dialogueSaveStatus, setDialogueSaveStatus] = useState("");
+  const [inspectorTab, setInspectorTab] = useState<InspectorTab>("camera");
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const dialogueEditorRef = useRef<HTMLDivElement>(null);
   const directorRunRef = useRef(0);
   const formationRunRef = useRef(0);
   const authFinishingRef = useRef(false);
 
   const activeShot: ShotPlan | undefined = shots[activeIndex] ?? shots[0];
+  const activeDialogueId =
+    activeShot?.dialogueIds.includes(selectedDialogueId)
+      ? selectedDialogueId
+      : activeShot?.dialogueId;
+  const activeDialogueRow = sequence.rows.find(
+    (row) => row.id === activeDialogueId,
+  );
+  const queryIsDialogueId = /^\d{4}$/.test(query.trim());
   const dialogueSummary = `${sequence.rows.length} 句台词${
     sequence.ignoredDialogueNodeCount > 0
       ? ` · 已忽略 ${sequence.ignoredDialogueNodeCount} 个关闭 UI 节点`
@@ -405,6 +1004,40 @@ export default function App() {
       ? "对话与规则分镜保持可用，完成后再确认 TRAE 方案"
       : "模型繁忙时会继续排队，不会立即判定协作失败";
 
+  const dismissLaunchScreen = useCallback(() => {
+    window.sessionStorage.setItem(LAUNCH_SCREEN_STORAGE_KEY, "1");
+    setShowLaunchScreen(false);
+  }, []);
+
+  function switchWorkspace(nextWorkspace: WorkspaceView) {
+    if (nextWorkspace === activeWorkspace) {
+      return;
+    }
+    if (workspaceTransitionTimerRef.current !== null) {
+      window.clearTimeout(workspaceTransitionTimerRef.current);
+    }
+    setWorkspaceDirection(
+      WORKSPACE_ORDER[nextWorkspace] > WORKSPACE_ORDER[activeWorkspace]
+        ? "up"
+        : "down",
+    );
+    setOutgoingWorkspace(activeWorkspace);
+    setActiveWorkspace(nextWorkspace);
+    workspaceTransitionTimerRef.current = window.setTimeout(() => {
+      setOutgoingWorkspace(null);
+      workspaceTransitionTimerRef.current = null;
+    }, 560);
+  }
+
+  useEffect(
+    () => () => {
+      if (workspaceTransitionTimerRef.current !== null) {
+        window.clearTimeout(workspaceTransitionTimerRef.current);
+      }
+    },
+    [],
+  );
+
   useEffect(() => {
     void refreshTraeConnection();
     void refreshLarkConnection(false);
@@ -425,6 +1058,62 @@ export default function App() {
     }, 2_000);
     return () => window.clearInterval(interval);
   }, [directorLoading, directorMode]);
+
+  useEffect(() => {
+    if (shots.length === 0) {
+      return;
+    }
+    setDesignedStoryboards((current) => {
+      const cached = current.get(sequence.prefix);
+      if (
+        cached?.sequence === sequence &&
+        cached.shots === shots &&
+        cached.appliedDirector === appliedDirector &&
+        cached.directorAnalysis === directorAnalysis &&
+        cached.directorBlocking === directorBlocking &&
+        cached.activeFormationSource === activeFormationSource &&
+        cached.formationStatus === formationStatus
+      ) {
+        return current;
+      }
+      const next = new Map(current);
+      next.set(sequence.prefix, {
+        sequence,
+        shots,
+        appliedDirector,
+        directorAnalysis,
+        directorBlocking,
+        activeFormationSource,
+        formationStatus,
+      });
+      return next;
+    });
+  }, [
+    activeFormationSource,
+    appliedDirector,
+    directorAnalysis,
+    directorBlocking,
+    formationStatus,
+    sequence,
+    shots,
+  ]);
+
+  useEffect(() => {
+    if (!editingDialogueId) {
+      return;
+    }
+    const cancelOnOutsidePointer = (event: PointerEvent) => {
+      if (
+        event.target instanceof Node &&
+        !dialogueEditorRef.current?.contains(event.target)
+      ) {
+        cancelDialogueEdit();
+      }
+    };
+    document.addEventListener("pointerdown", cancelOnOutsidePointer);
+    return () =>
+      document.removeEventListener("pointerdown", cancelOnOutsidePointer);
+  }, [dialogueSaveBusy, editingDialogueId]);
 
   async function refreshTraeConnection(showLoading = true) {
     if (showLoading) {
@@ -512,6 +1201,11 @@ export default function App() {
       setDirectorAnalysis(preview.analysis);
       setDirectorBlocking(preview.blocking);
       setActiveIndex(0);
+      setSelectedDialogueId(
+        preview.shots[0]?.dialogueId ??
+          preview.sequence.rows[0]?.id ??
+          "",
+      );
     }
 
     if (requestedMode === "rule") {
@@ -598,6 +1292,9 @@ export default function App() {
       setFormationStatus(`已采用 ${directorLabel(result.appliedMode)} 建议站位`);
     }
     setActiveIndex(0);
+    setSelectedDialogueId(
+      result.shots[0]?.dialogueId ?? sourceSequence.rows[0]?.id ?? "",
+    );
     setError("");
   }
 
@@ -639,11 +1336,15 @@ export default function App() {
     requestedMode = directorMode,
   ) {
     const nextSequence = findDialogueSequence(nextDatabase, prefix);
+    setContentSearch(null);
+    cancelDialogueEdit();
+    setDialogueSaveStatus("");
     const formationRunId = ++formationRunRef.current;
     directorRunRef.current += 1;
     setSequence(nextSequence);
     setShots([]);
     setActiveIndex(0);
+    setSelectedDialogueId(nextSequence.rows[0]?.id ?? "");
     setFormationChoice(null);
     setPendingDirectorResult(null);
     setSharedComparison(null);
@@ -734,12 +1435,70 @@ export default function App() {
     );
   }
 
+  function openContentSearchContext(
+    context: DialogueContentSearchContext,
+    dialogueNodeId: string,
+  ) {
+    formationRunRef.current += 1;
+    directorRunRef.current += 1;
+    const cached = designedStoryboards.get(context.prefix);
+    const nextSequence = cached?.sequence ?? context.sequence;
+    const nextShots = cached?.shots ?? [];
+    const shotIndex = nextShots.findIndex((shot) =>
+      shot.dialogueIds.includes(dialogueNodeId),
+    );
+    setSequence(nextSequence);
+    setShots(nextShots);
+    setActiveIndex(Math.max(0, shotIndex));
+    setSelectedDialogueId(dialogueNodeId);
+    setFormationChoice(null);
+    setPendingDirectorResult(null);
+    setSharedComparison(null);
+    setFormationChecking(false);
+    setDirectorLoading(false);
+    setFallbackReason(null);
+    setAppliedDirector(cached?.appliedDirector ?? "rule");
+    setDirectorAnalysis(cached?.directorAnalysis);
+    if (cached) {
+      setDirectorBlocking(cached.directorBlocking);
+    }
+    setActiveFormationSource(cached?.activeFormationSource ?? "generated");
+    setFormationStatus(cached?.formationStatus ?? "");
+    setError("");
+    setDialogueSaveStatus("");
+    cancelDialogueEdit();
+  }
+
   function submitSearch(event: FormEvent) {
     event.preventDefault();
-    void applySearch(database, query).catch((searchError) => {
+    const normalizedQuery = query.trim();
+    if (/^\d+$/.test(normalizedQuery)) {
+      if (!/^\d{4}$/.test(normalizedQuery)) {
+        setError("请输入四位数对话 ID，或输入对白文字");
+        return;
+      }
+      void applySearch(database, normalizedQuery).catch((searchError) => {
+        setError(
+          searchError instanceof Error ? searchError.message : "查询失败",
+        );
+        setDirectorLoading(false);
+      });
+      return;
+    }
+    try {
+      const result = searchDialogueContent(database, normalizedQuery);
+      if (result.contexts.length === 0) {
+        throw new Error(`没有找到包含“${normalizedQuery}”的对白`);
+      }
+      setContentSearch(result);
+      const firstContext = result.contexts[0];
+      openContentSearchContext(
+        firstContext,
+        firstContext.matchedDialogueIds[0],
+      );
+    } catch (searchError) {
       setError(searchError instanceof Error ? searchError.message : "查询失败");
-      setDirectorLoading(false);
-    });
+    }
   }
 
   async function useDatabase(nextDatabase: DialogueDatabase) {
@@ -748,6 +1507,8 @@ export default function App() {
       throw new Error("开始节点表中没有可用的四位数对话 ID");
     }
     setDatabase(nextDatabase);
+    setContentSearch(null);
+    setDesignedStoryboards(new Map());
     setQuery(firstPrefix);
     await applySearch(nextDatabase, firstPrefix);
   }
@@ -758,6 +1519,14 @@ export default function App() {
     }
     setDirectorMode(mode);
     setFallbackReason(null);
+    if (contentSearch) {
+      if (mode === "mira") {
+        void refreshLarkConnection(true);
+      } else if (mode === "trae") {
+        void refreshTraeConnection();
+      }
+      return;
+    }
     if (mode === "mira") {
       void refreshLarkConnection(true);
     } else if (mode === "trae") {
@@ -876,6 +1645,25 @@ export default function App() {
     }
   }
 
+  async function openDesktopSetup() {
+    const desktop = window.shotSandboxDesktop;
+    if (!desktop) {
+      return;
+    }
+    setError("");
+    try {
+      const status = await desktop.getSetupStatus();
+      setDesktopSetup(status);
+      setShowDesktopSetup(true);
+    } catch (setupError) {
+      setError(
+        setupError instanceof Error
+          ? setupError.message
+          : "无法读取桌面版设置",
+      );
+    }
+  }
+
   async function importDirectory(files: FileList | null) {
     if (!files?.length) {
       return;
@@ -885,8 +1673,9 @@ export default function App() {
       let nextDatabase = await loadDocFiles(files);
       const desktop = window.shotSandboxDesktop;
       if (desktop) {
-        const npcFile = Array.from(files).find(
-          (file) => file.name === "NPC表.csv",
+        const npcFile = findDocCsvFile(
+          Array.from(files),
+          "NPC表.csv",
         );
         if (!npcFile) {
           throw new Error("选择的目录中未找到 csvdir\\NPC表.csv");
@@ -914,10 +1703,116 @@ export default function App() {
     }
   }
 
+  function selectShot(nextIndex: number) {
+    setActiveIndex(nextIndex);
+    setSelectedDialogueId(shots[nextIndex]?.dialogueId ?? "");
+    setDialogueSaveStatus("");
+    cancelDialogueEdit();
+  }
+
   function moveShot(offset: number) {
-    setActiveIndex((current) =>
-      Math.min(shots.length - 1, Math.max(0, current + offset)),
+    selectShot(
+      Math.min(shots.length - 1, Math.max(0, activeIndex + offset)),
     );
+  }
+
+  function beginDialogueEdit() {
+    if (!activeDialogueRow || database.sourceName === "内置演示数据") {
+      return;
+    }
+    setEditingDialogueId(activeDialogueRow.id);
+    setDialogueDraft(activeDialogueRow.content);
+    setDialogueSaveError("");
+    setDialogueSaveStatus("");
+  }
+
+  function cancelDialogueEdit() {
+    if (dialogueSaveBusy) {
+      return;
+    }
+    setEditingDialogueId(null);
+    setDialogueDraft("");
+    setDialogueSaveError("");
+  }
+
+  async function saveDialogueEdit() {
+    if (
+      !activeDialogueRow ||
+      editingDialogueId !== activeDialogueRow.id ||
+      dialogueSaveBusy
+    ) {
+      return;
+    }
+    const content = dialogueDraft.trim();
+    if (!content) {
+      setDialogueSaveError("对白内容不能为空");
+      return;
+    }
+    setDialogueSaveBusy(true);
+    setDialogueSaveError("");
+    setDialogueSaveStatus("");
+    try {
+      const result = await updateDialogueContent({
+        dialogueId: sequence.prefix,
+        startId: sequence.startId,
+        dialogueNodeId: activeDialogueRow.id,
+        previousContent: activeDialogueRow.content,
+        content,
+      });
+      const nextDatabase = {
+        ...database,
+        dialogueRows: database.dialogueRows.map((row) =>
+          row.id === activeDialogueRow.id ? { ...row, content } : row,
+        ),
+      };
+      const nextSequence = withUpdatedDialogueContent(
+        sequence,
+        activeDialogueRow.id,
+        content,
+      );
+      const nextShots = refreshShotDialogueText(nextSequence, shots);
+      setDatabase(nextDatabase);
+      setSequence(nextSequence);
+      setShots(nextShots);
+      setDesignedStoryboards((current) => {
+        const next = new Map(current);
+        for (const [prefix, cached] of next) {
+          if (
+            !cached.sequence.rows.some(
+              (row) => row.id === activeDialogueRow.id,
+            )
+          ) {
+            continue;
+          }
+          const cachedSequence = withUpdatedDialogueContent(
+            cached.sequence,
+            activeDialogueRow.id,
+            content,
+          );
+          next.set(prefix, {
+            ...cached,
+            sequence: cachedSequence,
+            shots: refreshShotDialogueText(cachedSequence, cached.shots),
+          });
+        }
+        return next;
+      });
+      setQuery(sequence.prefix);
+      setContentSearch(null);
+      setDialogueSaveStatus(
+        result.status === "unchanged"
+          ? `节点 ${activeDialogueRow.id} 已与 UE 一致`
+          : `节点 ${activeDialogueRow.id} 已写入并保存`,
+      );
+      setEditingDialogueId(null);
+      setDialogueDraft("");
+    } catch (saveError) {
+      setDialogueSaveError(
+        saveError instanceof Error ? saveError.message : "对白保存失败",
+      );
+    } finally {
+      setDialogueSaveBusy(false);
+    }
   }
 
   function currentStoryboardExportRequest(): StoryboardExportRequest {
@@ -997,7 +1892,12 @@ export default function App() {
   }
 
   return (
-    <main className="app-shell">
+    <main
+      className="app-shell"
+      data-ark-theme="endfield"
+      data-ark-depth="moderate"
+      data-workspace-direction={workspaceDirection}
+    >
       <input
         ref={(element) => {
           fileInputRef.current = element;
@@ -1010,15 +1910,118 @@ export default function App() {
         onChange={(event) => void importDirectory(event.target.files)}
       />
 
+      <nav className="app-rail" aria-label="全局工具">
+        <div className="app-rail__brand" aria-hidden="true">
+          <Clapperboard size={22} strokeWidth={2} />
+          <span>镜头沙盘</span>
+        </div>
+        <div className="app-rail__tools">
+          <button
+            className={`app-rail__button ${
+              activeWorkspace === "storyboard" ? "is-active" : ""
+            }`}
+            type="button"
+            aria-current={
+              activeWorkspace === "storyboard" ? "page" : undefined
+            }
+            title="分镜工作台"
+            onClick={() => switchWorkspace("storyboard")}
+          >
+            <Camera size={19} />
+            <span>分镜工作台</span>
+          </button>
+          <button
+            className={`app-rail__button ${
+              activeWorkspace === "npc" ? "is-active" : ""
+            }`}
+            type="button"
+            aria-current={activeWorkspace === "npc" ? "page" : undefined}
+            title="注册 NPC"
+            onClick={() => switchWorkspace("npc")}
+          >
+            <UserRoundPlus size={19} />
+            <span>注册 NPC</span>
+          </button>
+          <button
+            className={`app-rail__button ${
+              activeWorkspace === "targets" ? "is-active" : ""
+            }`}
+            type="button"
+            aria-current={
+              activeWorkspace === "targets" ? "page" : undefined
+            }
+            title="任务目标物"
+            onClick={() => switchWorkspace("targets")}
+          >
+            <MapPinned size={19} />
+            <span>任务目标物</span>
+          </button>
+        </div>
+        <div className="app-rail__tools app-rail__tools--bottom">
+          <button
+            className="app-rail__button"
+            type="button"
+            title={
+              window.shotSandboxDesktop
+                ? "桌面版设置与更新"
+                : "设置仅在桌面版可用"
+            }
+            aria-label="桌面版设置与更新"
+            disabled={!window.shotSandboxDesktop}
+            onClick={() => void openDesktopSetup()}
+          >
+            <Settings size={19} />
+            <span>设置与更新</span>
+          </button>
+          <button
+            className="app-rail__button app-rail__button--primary"
+            type="button"
+            title="选择 doc 文件夹"
+            aria-label="选择 doc 文件夹"
+            onClick={() => void chooseDirectory()}
+            disabled={loading}
+          >
+            {loading ? (
+              <LoaderCircle className="spin" size={19} />
+            ) : (
+              <FolderOpen size={19} />
+            )}
+            <span>{loading ? "读取中..." : "选择数据目录"}</span>
+          </button>
+        </div>
+      </nav>
+
       <header className="app-header">
-        <div className="brand">
-          <span className="brand__mark">
-            <Clapperboard size={20} strokeWidth={2} />
+        <div
+          className="brand workspace-identity"
+          key={activeWorkspace}
+        >
+          <span className="workspace-identity__mark" aria-hidden="true">
+            {activeWorkspace === "storyboard" ? (
+              <Clapperboard size={18} />
+            ) : activeWorkspace === "npc" ? (
+              <UserRoundPlus size={18} />
+            ) : (
+              <MapPinned size={18} />
+            )}
           </span>
           <div>
-            <h1>镜头沙盘</h1>
+            <h1>
+              {activeWorkspace === "storyboard"
+                ? "镜头沙盘"
+                : activeWorkspace === "npc"
+                  ? "注册 NPC"
+                  : "任务目标物"}
+            </h1>
+            <p>
+              {activeWorkspace === "storyboard"
+                ? "DIALOGUE CAMERA SYSTEM"
+                : activeWorkspace === "npc"
+                  ? "UE SELECTION REGISTRATION"
+                  : "MISSION TARGET & BLUEPRINT"}
+            </p>
           </div>
-          <span className="version">v0.17.2</span>
+          <span className="version">v0.18.0</span>
         </div>
 
         <div className="source-status">
@@ -1029,55 +2032,26 @@ export default function App() {
           </div>
         </div>
 
-        <div className="header-actions">
-          <button
-            className="button"
-            type="button"
-            onClick={() => setShowNpcRegistration(true)}
-          >
-            <UserRoundPlus size={17} />
-            注册 NPC
-          </button>
-          <button
-            className="button"
-            type="button"
-            onClick={() => setShowMissionTargets(true)}
-          >
-            <MapPinned size={17} />
-            任务目标物
-          </button>
-          {desktopSetup && (
-            <button
-              className="icon-button"
-              type="button"
-              title="桌面版设置与更新"
-              aria-label="桌面版设置与更新"
-              onClick={() => {
-                void window.shotSandboxDesktop
-                  ?.getSetupStatus()
-                  .then((status) => {
-                    setDesktopSetup(status);
-                    setShowDesktopSetup(true);
-                  });
-              }}
-            >
-              <Settings size={18} />
-            </button>
-          )}
-
-          <button
-            className="button button--primary"
-            type="button"
-            onClick={() => void chooseDirectory()}
-            disabled={loading}
-          >
-            <FolderOpen size={17} />
-            {loading ? "读取中..." : "选择 doc 文件夹"}
-          </button>
-        </div>
       </header>
 
-      <div className="workspace">
+      <div
+        className="workspace"
+        data-workspace-state={
+          activeWorkspace === "storyboard"
+            ? outgoingWorkspace
+              ? "entering"
+              : "active"
+            : outgoingWorkspace === "storyboard"
+              ? "exiting"
+              : "inactive"
+        }
+        hidden={
+          activeWorkspace !== "storyboard" &&
+          outgoingWorkspace !== "storyboard"
+        }
+        aria-hidden={activeWorkspace !== "storyboard" || undefined}
+        inert={activeWorkspace !== "storyboard" || undefined}
+      >
         <aside className="left-panel">
           <section className="panel-section query-section">
             <div className="section-label">
@@ -1088,25 +2062,32 @@ export default function App() {
               </small>
             </div>
             <form className="query-form" onSubmit={submitSearch}>
-              <label htmlFor="dialogue-id">四位数对话 ID</label>
+              <label htmlFor="dialogue-id">四位数对话 ID 或对白内容</label>
               <div className="input-row">
                 <input
                   id="dialogue-id"
-                  inputMode="numeric"
-                  maxLength={4}
+                  maxLength={120}
                   value={query}
-                  onChange={(event) =>
-                    setQuery(event.target.value.replace(/\D/g, "").slice(0, 4))
-                  }
-                  placeholder="例如 1001"
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder="例如 7352 或台词关键词"
                 />
                 <button
                   className="button button--primary query-analysis-button"
                   type="submit"
-                  title="分析对话与站位"
-                  aria-label="分析对话与站位"
+                  title={
+                    queryIsDialogueId
+                      ? "分析对话与站位"
+                      : "搜索对白内容"
+                  }
+                  aria-label={
+                    queryIsDialogueId
+                      ? "分析对话与站位"
+                      : "搜索对白内容"
+                  }
                   disabled={
-                    directorLoading || formationChecking || query.length !== 4
+                    directorLoading ||
+                    formationChecking ||
+                    query.trim().length === 0
                   }
                 >
                   {directorLoading || formationChecking ? (
@@ -1114,7 +2095,7 @@ export default function App() {
                   ) : (
                     <Search size={18} />
                   )}
-                  <span>分析</span>
+                  <span>{queryIsDialogueId ? "分析" : "搜索"}</span>
                 </button>
               </div>
             </form>
@@ -1205,9 +2186,21 @@ export default function App() {
 
           <section className="shot-list-section">
             <div className="section-label section-label--sticky">
-              <span>{activeShot ? "镜头列表" : "对话文本"}</span>
+              <span>
+                {contentSearch
+                  ? "文字搜索"
+                  : activeShot
+                    ? "镜头列表"
+                    : "对话文本"}
+              </span>
               <small>
-                {activeShot ? (
+                {contentSearch ? (
+                  <>
+                    {contentSearch.totalMatchCount} 处命中 ·{" "}
+                    {contentSearch.totalContextCount} 组对话
+                    {contentSearch.truncated ? " · 仅显示前 100 组" : ""}
+                  </>
+                ) : activeShot ? (
                   <>
                     {shots.length} 镜 ·{" "}
                     {directorLoading && directorMode !== "rule"
@@ -1224,13 +2217,99 @@ export default function App() {
               </small>
             </div>
             <div className="shot-list">
-              {activeShot
+              {!contentSearch && activeShot && (
+                <span
+                  className={`shot-list__selection ${
+                    activeShot.projection.valid ? "" : "is-invalid"
+                  }`}
+                  style={{
+                    transform: `translateY(${activeIndex * 62}px)`,
+                  }}
+                  aria-hidden="true"
+                />
+              )}
+              {contentSearch
+                ? contentSearch.contexts.map((context) => {
+                    const cached = designedStoryboards.get(context.prefix);
+                    const contextRows = context.sequence.rows.filter((row) =>
+                      context.contextDialogueIds.includes(row.id),
+                    );
+                    const participantsBySlot = new Map(
+                      context.sequence.participants.map((participant) => [
+                        participant.slot,
+                        participant,
+                      ]),
+                    );
+                    return (
+                      <section
+                        className="dialogue-search-context"
+                        key={context.prefix}
+                      >
+                        <header>
+                          <strong>对话 {context.prefix}</strong>
+                          <span>{cached ? "已有分镜" : "仅文本"}</span>
+                        </header>
+                        {contextRows.map((row) => {
+                          const cachedShot = cached?.shots.find((shot) =>
+                            shot.dialogueIds.includes(row.id),
+                          );
+                          const participant = row.speakerSlot
+                            ? participantsBySlot.get(row.speakerSlot)
+                            : undefined;
+                          const matched =
+                            context.matchedDialogueIds.includes(row.id);
+                          const selected =
+                            sequence.prefix === context.prefix &&
+                            activeDialogueId === row.id;
+                          return (
+                            <button
+                              className={`dialogue-search-row ${matched ? "is-match" : ""} ${selected ? "is-active" : ""}`}
+                              type="button"
+                              key={row.id}
+                              aria-label={`对话 ${context.prefix} 节点 ${row.id} ${row.content}`}
+                              onClick={() =>
+                                openContentSearchContext(context, row.id)
+                              }
+                            >
+                              <span
+                                className="shot-row__speaker"
+                                data-slot={row.speakerSlot ?? undefined}
+                                style={{
+                                  backgroundColor: participant?.color,
+                                }}
+                              >
+                                {row.speakerSlot ?? "?"}
+                              </span>
+                              <span className="shot-row__body">
+                                <strong>
+                                  {participant?.name ?? "未知角色"} · {row.id}
+                                </strong>
+                                <small>
+                                  <HighlightedDialogueText
+                                    text={row.content}
+                                    query={contentSearch.query}
+                                  />
+                                </small>
+                              </span>
+                              <span
+                                className={`dialogue-search-row__status ${cachedShot ? "is-designed" : ""}`}
+                              >
+                                {cachedShot && <Clapperboard size={12} />}
+                                {cachedShot?.label ?? "文本"}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </section>
+                    );
+                  })
+                : activeShot
                 ? shots.map((shot, index) => (
                     <button
                       className={`shot-row ${index === activeIndex ? "is-active" : ""} ${shot.projection.valid ? "" : "is-invalid"}`}
                       type="button"
                       key={shot.id}
-                      onClick={() => setActiveIndex(index)}
+                      onClick={() => selectShot(index)}
                     >
                       <span className="shot-row__number">
                         {String(index + 1).padStart(2, "0")}
@@ -1306,7 +2385,9 @@ export default function App() {
               <div>
                   <Camera size={16} />
                   <span>镜头 {String(activeIndex + 1).padStart(2, "0")}</span>
-                  <small>台词节点 {activeShot.dialogueId}</small>
+                  <small>
+                    台词节点 {activeDialogueRow?.id ?? activeShot.dialogueId}
+                  </small>
                 </div>
                 <div className="axis-status">
                   <LocateFixed size={15} />
@@ -1322,6 +2403,9 @@ export default function App() {
               <StageView
                 participants={sequence.participants}
                 shot={activeShot}
+                shotIndex={activeIndex}
+                shotCount={shots.length}
+                active={activeWorkspace === "storyboard"}
               />
               {directorLoading && (
                 <div className="director-loading" role="status">
@@ -1344,21 +2428,110 @@ export default function App() {
                   </div>
                 </div>
               )}
-              <div className="dialogue-strip">
+              <div
+                className={`dialogue-strip ${editingDialogueId ? "is-editing" : ""}`}
+                ref={dialogueEditorRef}
+              >
                 <span
                   className="dialogue-strip__slot"
-                  data-slot={activeShot.speakerSlot}
+                  data-slot={
+                    activeDialogueRow?.speakerSlot ?? activeShot.speakerSlot
+                  }
                   style={{
                     backgroundColor: participantColorsBySlot.get(
-                      activeShot.speakerSlot,
+                      activeDialogueRow?.speakerSlot ?? activeShot.speakerSlot,
                     ),
                   }}
                 >
-                  {activeShot.speakerSlot}
+                  {activeDialogueRow?.speakerSlot ?? activeShot.speakerSlot}
                 </span>
-                <div>
-                  <strong>{activeShot.speakerName}</strong>
-                  <p>{activeShot.content}</p>
+                <div className="dialogue-strip__content">
+                  <strong>
+                    {activeDialogueRow?.speakerSlot
+                      ? participantNamesBySlot.get(
+                          activeDialogueRow.speakerSlot,
+                        )
+                      : activeShot.speakerName}
+                    <small>
+                      节点 {activeDialogueRow?.id ?? activeShot.dialogueId}
+                    </small>
+                  </strong>
+                  {editingDialogueId === activeDialogueRow?.id ? (
+                    <textarea
+                      autoFocus
+                      aria-label={`编辑节点 ${activeDialogueRow.id} 的对白`}
+                      value={dialogueDraft}
+                      onChange={(event) => setDialogueDraft(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Escape") {
+                          cancelDialogueEdit();
+                        }
+                      }}
+                    />
+                  ) : (
+                    <p>{activeDialogueRow?.content ?? activeShot.content}</p>
+                  )}
+                  {dialogueSaveError && (
+                    <small className="dialogue-strip__message is-error">
+                      {dialogueSaveError}
+                    </small>
+                  )}
+                  {dialogueSaveStatus && (
+                    <small
+                      className="dialogue-strip__message is-success"
+                      role="status"
+                    >
+                      {dialogueSaveStatus}
+                    </small>
+                  )}
+                </div>
+                <div className="dialogue-strip__actions">
+                  {editingDialogueId === activeDialogueRow?.id ? (
+                    <>
+                      <button
+                        className="icon-button"
+                        type="button"
+                        title="保存对白到 UE"
+                        aria-label="保存对白"
+                        disabled={dialogueSaveBusy || !dialogueDraft.trim()}
+                        onClick={() => void saveDialogueEdit()}
+                      >
+                        {dialogueSaveBusy ? (
+                          <LoaderCircle className="spin" size={16} />
+                        ) : (
+                          <Check size={16} />
+                        )}
+                      </button>
+                      <button
+                        className="icon-button"
+                        type="button"
+                        title="取消编辑"
+                        aria-label="取消编辑"
+                        disabled={dialogueSaveBusy}
+                        onClick={cancelDialogueEdit}
+                      >
+                        <X size={16} />
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      className="icon-button"
+                      type="button"
+                      title={
+                        database.sourceName === "内置演示数据"
+                          ? "内置演示数据不能写入 UE"
+                          : "编辑当前对白"
+                      }
+                      aria-label="编辑当前对白"
+                      disabled={
+                        !activeDialogueRow ||
+                        database.sourceName === "内置演示数据"
+                      }
+                      onClick={beginDialogueEdit}
+                    >
+                      <Pencil size={16} />
+                    </button>
+                  )}
                 </div>
               </div>
             </>
@@ -1420,343 +2593,24 @@ export default function App() {
         <aside className="right-panel">
           {activeShot ? (
             <>
-          <section className="inspector-header">
-            <div>
-              <small>当前镜头</small>
-              <h2>{activeShot.label}</h2>
-            </div>
-            <div className="shot-nav">
-              <button
-                className="icon-button"
-                type="button"
-                title="上一个镜头"
-                aria-label="上一个镜头"
-                disabled={activeIndex === 0}
-                onClick={() => moveShot(-1)}
-              >
-                <ChevronLeft size={18} />
-              </button>
-              <button
-                className="icon-button"
-                type="button"
-                title="下一个镜头"
-                aria-label="下一个镜头"
-                disabled={activeIndex === shots.length - 1}
-                onClick={() => moveShot(1)}
-              >
-                <ChevronRight size={18} />
-              </button>
-            </div>
-          </section>
-
-          <section className="inspector-section">
-            <div className="section-label">
-              <span>摄影参数</span>
-            </div>
-            <dl className="parameter-grid">
-              <div>
-                <dt>镜头类型</dt>
-                <dd>{activeShot.label}</dd>
-              </div>
-              <div>
-                <dt>焦距</dt>
-                <dd>
-                  {activeShot.endFocalLength === activeShot.focalLength
-                    ? `${activeShot.focalLength} mm`
-                    : `${activeShot.focalLength} → ${activeShot.endFocalLength} mm`}
-                </dd>
-              </div>
-              <div>
-                <dt>焦段意图</dt>
-                <dd>{lensIntentLabel(activeShot.lensIntent)}</dd>
-              </div>
-              <div>
-                <dt>景深</dt>
-                <dd>{depthOfFieldLabel(activeShot.depthOfField)}</dd>
-              </div>
-              <div>
-                <dt>镜内运动</dt>
-                <dd>
-                  {cameraMovementLabel(activeShot.cameraMovement)}
-                  {activeShot.movementIntensity === "none"
-                    ? ""
-                    : ` · ${movementIntensityLabel(activeShot.movementIntensity)}`}
-                </dd>
-              </div>
-              <div>
-                <dt>横滚角</dt>
-                <dd>{activeShot.cameraRollDegrees.toFixed(0)}°</dd>
-              </div>
-              <div>
-                <dt>预计时长</dt>
-                <dd>{activeShot.duration} s</dd>
-              </div>
-              <div>
-                <dt>主体</dt>
-                <dd>{activeShot.speakerName}</dd>
-              </div>
-              <div>
-                <dt>对话对象</dt>
-                <dd>
-                  {activeShot.lookTargetSlot
-                    ? sequence.participants.find(
-                        (participant) =>
-                          participant.slot === activeShot.lookTargetSlot,
-                      )?.name ?? activeShot.lookTargetSlot
-                    : "群体中心"}
-                </dd>
-              </div>
-              <div>
-                <dt>当前轴线</dt>
-                <dd>{activeShot.axis.id}</dd>
-              </div>
-              <div>
-                <dt>实测景别</dt>
-                <dd>{shotSizeLabel(activeShot.projection.measuredShotSize)}</dd>
-              </div>
-              <div>
-                <dt>正面偏角</dt>
-                <dd>
-                  {activeShot.projection.subjectFaceAngle === null
-                    ? "群像"
-                    : `${activeShot.projection.subjectFaceAngle.toFixed(1)}°`}
-                </dd>
-              </div>
-              <div>
-                <dt>画面构成</dt>
-                <dd>{shotCoverageLabel(activeShot.projection.coverage)}</dd>
-              </div>
-              <div>
-                <dt>覆盖意图</dt>
-                <dd>{coverageIntentLabel(activeShot.coverageIntent)}</dd>
-              </div>
-              <div>
-                <dt>构图原则</dt>
-                <dd>{compositionModeLabel(activeShot.compositionPlan.mode)}</dd>
-              </div>
-              <div>
-                <dt>构图衔接</dt>
-                <dd>
-                  {compositionTransitionLabel(
-                    activeShot.compositionPlan.transition,
-                  )}
-                </dd>
-              </div>
-              <div>
-                <dt>空间策略</dt>
-                <dd>
-                  {negativeSpaceLabel(
-                    activeShot.compositionPlan.negativeSpace,
-                  )}
-                </dd>
-              </div>
-              <div>
-                <dt>视线前/后</dt>
-                <dd>
-                  {activeShot.projection.lookRoom === null ||
-                  activeShot.projection.backRoom === null
-                    ? "不适用"
-                    : `${activeShot.projection.lookRoom.toFixed(2)} / ${activeShot.projection.backRoom.toFixed(2)}`}
-                </dd>
-              </div>
-              <div>
-                <dt>视觉落点</dt>
-                <dd>
-                  {activeShot.projection.visualAnchor
-                    .map((value) => value.toFixed(2))
-                    .join(", ")}
-                </dd>
-              </div>
-              <div>
-                <dt>注视点偏移</dt>
-                <dd>
-                  {activeShot.projection.eyeTraceDelta === null
-                    ? "首镜"
-                    : activeShot.projection.eyeTraceDelta.toFixed(2)}
-                </dd>
-              </div>
-              <div>
-                <dt>投影验收</dt>
-                <dd
-                  className={
-                    activeShot.projection.valid
-                      ? "projection-status--valid"
-                      : "projection-status--invalid"
-                  }
-                >
-                  {activeShot.projection.valid ? "通过" : "未通过"}
-                </dd>
-              </div>
-            </dl>
-          </section>
-
-          <section className="inspector-section">
-            <div className="section-label">
-              <span>构图说明</span>
-            </div>
-            <p>{activeShot.composition}</p>
-          </section>
-
-          <section className="inspector-section">
-            <div className="section-label">
-              <span>导演意图</span>
-            </div>
-            <p>{activeShot.rationale}</p>
-          </section>
-
-          {activeShot.projection.warnings.length > 0 && (
-            <section className="inspector-section warning-section">
-              <div className="section-label">
-                <span>镜头验收提示</span>
-              </div>
-              {activeShot.projection.warnings.map((warning) => (
-                <p key={warning}>{warning}</p>
-              ))}
-            </section>
-          )}
-
-          {directorAnalysis && (
-            <section className="inspector-section director-analysis">
-              <div className="section-label">
-                <span>全场导演分析</span>
-                <small>
-                  {directorLabel(appliedDirector)}
-                </small>
-              </div>
-              <dl>
-                <div>
-                  <dt>戏剧目标</dt>
-                  <dd>{directorAnalysis.dramaticGoal}</dd>
-                </div>
-                <div>
-                  <dt>情绪推进</dt>
-                  <dd>{directorAnalysis.emotionalProgression}</dd>
-                </div>
-                <div>
-                  <dt>视觉策略</dt>
-                  <dd>{directorAnalysis.visualStrategy}</dd>
-                </div>
-              </dl>
-            </section>
-          )}
-
-          <section className="inspector-section blocking-analysis">
-            <div className="section-label">
-              <span>站位调度</span>
-              <small>{formationLabel(directorBlocking.formation)}</small>
-            </div>
-            <p>{directorBlocking.intent}</p>
-            <div className="blocking-roster">
-              {directorBlocking.placements.map((placement) => {
-                const participant = sequence.participants.find(
-                  (item) => item.slot === placement.subject,
-                );
-                return (
-                  <div key={placement.subject}>
-                    <span
-                      style={{ backgroundColor: participant?.color }}
-                    >
-                      {placement.subject}
-                    </span>
-                    <strong>{participant?.name ?? placement.subject}</strong>
-                    <small title={placement.intent}>
-                      {blockingPositionLabel(placement.position)} ·{" "}
-                      登场 {placement.entry_dialogue_id} ·{" "}
-                      离场 {placement.exit_dialogue_id ?? "本场结束"} ·{" "}
-                      {placement.intent}
-                    </small>
-                  </div>
-                );
-              })}
-            </div>
-          </section>
-
-          <section className="inspector-section">
-            <div className="section-label">
-              <span>UE4 参考</span>
-            </div>
-            <div className="ue-reference">
-              <div>
-                <span>Camera</span>
-                <code>
-                  {activeShot.cameraPosition.map((value) => value.toFixed(2)).join(", ")}
-                </code>
-              </div>
-              <div>
-                <span>Target</span>
-                <code>
-                  {activeShot.cameraTarget.map((value) => value.toFixed(2)).join(", ")}
-                </code>
-              </div>
-              {activeShot.cameraMovement !== "static" && (
-                <>
-                  <div>
-                    <span>End Camera</span>
-                    <code>
-                      {activeShot.cameraEndPosition
-                        .map((value) => value.toFixed(2))
-                        .join(", ")}
-                    </code>
-                  </div>
-                  <div>
-                    <span>End Target</span>
-                    <code>
-                      {activeShot.cameraEndTarget
-                        .map((value) => value.toFixed(2))
-                        .join(", ")}
-                    </code>
-                  </div>
-                </>
-              )}
-              <small>原型坐标为相对站位，用于构图参考，不直接等同于 UE4 世界坐标。</small>
-            </div>
-          </section>
-
-          {sequence.warnings.length > 0 && (
-            <section className="inspector-section warning-section">
-              <div className="section-label">
-                <span>数据提示</span>
-              </div>
-              {sequence.warnings.map((warning) => (
-                <p key={warning}>{warning}</p>
-              ))}
-            </section>
-          )}
-
-          <footer className="inspector-footer inspector-footer--export">
-            <div>
-              {storyboardExportError ? (
-                <AlertTriangle size={15} />
-              ) : (
-                <Users size={15} />
-              )}
-              <span>
-                {storyboardExportError ||
-                  (canExportStoryboard
-                    ? `${shots.length} 镜已绑定 BP 站位`
-                    : "支持 2-12 人动态进出场、群像站位与动态关系轴")}
-              </span>
-            </div>
-            <button
-              className="button button--primary"
-              type="button"
-              title="预检并导出当前分镜到 UE Dialog Graph"
-              disabled={
-                !canExportStoryboard ||
-                storyboardExportBusy ||
-                directorLoading ||
-                formationChecking
-              }
-              onClick={() => void previewStoryboardExport()}
-            >
-              {storyboardExportBusy ? (
-                <LoaderCircle className="spin" size={16} />
-              ) : (
-                <Upload size={16} />
-              )}
-              {storyboardExportBusy ? "正在检查..." : "导出到 UE"}
-            </button>
-          </footer>
+          <ShotInspector
+            shot={activeShot}
+            sequence={sequence}
+            directorAnalysis={directorAnalysis}
+            directorBlocking={directorBlocking}
+            appliedDirector={appliedDirector}
+            activeIndex={activeIndex}
+            shotCount={shots.length}
+            tab={inspectorTab}
+            canExport={canExportStoryboard}
+            exportBusy={
+              storyboardExportBusy || directorLoading || formationChecking
+            }
+            exportError={storyboardExportError}
+            onMove={moveShot}
+            onTabChange={setInspectorTab}
+            onExport={() => void previewStoryboardExport()}
+          />
             </>
           ) : (
             <>
@@ -1791,6 +2645,54 @@ export default function App() {
           )}
         </aside>
       </div>
+
+      <section
+        className="tool-workspace"
+        data-workspace-state={
+          activeWorkspace === "npc"
+            ? outgoingWorkspace
+              ? "entering"
+              : "active"
+            : outgoingWorkspace === "npc"
+              ? "exiting"
+              : "inactive"
+        }
+        hidden={activeWorkspace !== "npc" && outgoingWorkspace !== "npc"}
+        aria-hidden={activeWorkspace !== "npc" || undefined}
+        inert={activeWorkspace !== "npc" || undefined}
+        aria-label="NPC 注册工作区"
+      >
+        <NpcRegistrationModal
+          embedded
+          onClose={() => switchWorkspace("storyboard")}
+        />
+      </section>
+
+      <section
+        className="tool-workspace"
+        data-workspace-state={
+          activeWorkspace === "targets"
+            ? outgoingWorkspace
+              ? "entering"
+              : "active"
+            : outgoingWorkspace === "targets"
+              ? "exiting"
+              : "inactive"
+        }
+        hidden={
+          activeWorkspace !== "targets" &&
+          outgoingWorkspace !== "targets"
+        }
+        aria-hidden={activeWorkspace !== "targets" || undefined}
+        inert={activeWorkspace !== "targets" || undefined}
+        aria-label="任务目标物工作区"
+      >
+        <MissionTargetModal
+          embedded
+          database={database}
+          onClose={() => switchWorkspace("storyboard")}
+        />
+      </section>
 
       {storyboardExportPreview && storyboardExportRequest && (
         <StoryboardExportModal
@@ -1860,19 +2762,6 @@ export default function App() {
           larkError={larkError}
           onAuthorize={() => void beginAuthorization()}
           onRefreshLark={() => void refreshLarkConnection(false)}
-        />
-      )}
-
-      {showMissionTargets && (
-        <MissionTargetModal
-          database={database}
-          onClose={() => setShowMissionTargets(false)}
-        />
-      )}
-
-      {showNpcRegistration && (
-        <NpcRegistrationModal
-          onClose={() => setShowNpcRegistration(false)}
         />
       )}
 
@@ -1962,6 +2851,14 @@ export default function App() {
             </footer>
           </section>
         </div>
+      )}
+
+      {showLaunchScreen && (
+        <LaunchScreen
+          sourceName={database.sourceName}
+          version="v0.18.0"
+          onComplete={dismissLaunchScreen}
+        />
       )}
     </main>
   );

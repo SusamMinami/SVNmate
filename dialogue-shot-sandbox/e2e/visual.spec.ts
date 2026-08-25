@@ -65,12 +65,166 @@ async function writeDirectoryFixture(
   return directory;
 }
 
+test("shows the launch screen once per window session", async ({
+  page,
+}, testInfo) => {
+  await page.goto("/");
+
+  const launchScreen = page.locator(".launch-screen");
+  await expect(launchScreen).toBeVisible();
+  await expect(launchScreen.getByRole("heading", { name: "镜头 沙盘" }))
+    .toBeVisible();
+  await page.waitForTimeout(700);
+  await launchScreen.screenshot({
+    path: testInfo.outputPath("launch-screen.png"),
+  });
+
+  await launchScreen.getByRole("button", { name: "进入工作台" }).click();
+  await expect(launchScreen).toHaveCount(0);
+
+  await page.reload();
+  await expect(page.locator(".launch-screen")).toHaveCount(0);
+  await expect(page.locator(".stage-view")).toBeVisible();
+  const rail = page.locator(".app-rail");
+  expect((await rail.boundingBox())!.width).toBeLessThanOrEqual(60);
+  await page.getByRole("button", { name: "注册 NPC" }).hover();
+  await page.waitForTimeout(350);
+  expect((await rail.boundingBox())!.width).toBeGreaterThan(180);
+});
+
+test("provides button morph and viewport pointer feedback", async ({
+  page,
+}) => {
+  await page.goto("/");
+
+  const analyzeButton = page.getByRole("button", {
+    name: "分析对话与站位",
+  });
+  const markerBefore = await analyzeButton.evaluate(
+    (element) => getComputedStyle(element, "::before").clipPath,
+  );
+  await analyzeButton.hover();
+  await page.waitForTimeout(240);
+  const markerAfter = await analyzeButton.evaluate(
+    (element) => getComputedStyle(element, "::before").clipPath,
+  );
+  expect(markerAfter).not.toBe(markerBefore);
+
+  const stage = page.locator(".stage-main");
+  const bounds = await stage.boundingBox();
+  expect(bounds).not.toBeNull();
+  await page.mouse.move(
+    bounds!.x + bounds!.width * 0.3,
+    bounds!.y + bounds!.height * 0.4,
+  );
+  const probe = page.locator(".stage-pointer-probe");
+  await expect(probe).toHaveAttribute("data-active", "true");
+  const firstValue = await probe.locator("span").textContent();
+  await page.mouse.move(
+    bounds!.x + bounds!.width * 0.7,
+    bounds!.y + bounds!.height * 0.6,
+  );
+  await page.waitForTimeout(140);
+  expect(await probe.locator("span").textContent()).not.toBe(firstValue);
+  await page.mouse.move(10, 10);
+  await expect(probe).toHaveAttribute("data-active", "false");
+});
+
+test("keeps rail icons fixed and slides between workspace levels", async ({
+  page,
+}) => {
+  await page.goto("/");
+
+  const rail = page.locator(".app-rail");
+  const npcButton = page.getByRole("button", { name: "注册 NPC" });
+  const npcIcon = npcButton.locator("svg");
+  const iconBefore = await npcIcon.boundingBox();
+  const frameBefore = await npcButton.evaluate(
+    (element) => getComputedStyle(element, "::after").opacity,
+  );
+
+  await rail.hover();
+  await page.waitForTimeout(320);
+  await npcButton.hover();
+  await page.waitForTimeout(220);
+  const iconAfter = await npcIcon.boundingBox();
+  const frameAfter = await npcButton.evaluate((element) => ({
+    opacity: getComputedStyle(element, "::after").opacity,
+    transform: getComputedStyle(element, "::after").transform,
+  }));
+  expect(iconAfter).toEqual(iconBefore);
+  expect(frameBefore).toBe("0");
+  expect(frameAfter.opacity).toBe("1");
+  expect(frameAfter.transform).toContain("matrix(1");
+
+  await npcButton.click({ position: { x: 22, y: 22 } });
+  await expect(page.getByRole("heading", { name: "注册 NPC" })).toBeVisible();
+  await expect(page.locator(".header-context")).toHaveCount(0);
+  await expect(page.locator(".npc-registration-modal > header")).toHaveCount(0);
+  await expect(
+    page.locator(".tool-workspace:not([hidden]) .workspace-floating-actions button"),
+  ).toHaveCount(2);
+  await expect(page.locator(".app-shell")).toHaveAttribute(
+    "data-workspace-direction",
+    "up",
+  );
+  await expect(
+    page.locator('[data-workspace-state="entering"]'),
+  ).toHaveCSS(
+    "animation-name",
+    "workspace-page-enter-up",
+  );
+  await expect(
+    page.locator('[data-workspace-state="exiting"]'),
+  ).toHaveCSS(
+    "animation-name",
+    "workspace-page-exit-up",
+  );
+  await page.waitForTimeout(600);
+  await expect(page.locator('[data-workspace-state="exiting"]')).toHaveCount(0);
+
+  const refreshButton = page.locator(
+    '.tool-workspace:not([hidden]) .workspace-floating-command',
+  );
+  await refreshButton.hover();
+  await page.waitForTimeout(220);
+  await expect(refreshButton).toHaveCSS("background-color", "rgb(56, 56, 56)");
+  expect(await refreshButton.evaluate(
+    (element) => getComputedStyle(element).boxShadow,
+  )).not.toContain("rgb(255, 250, 0)");
+
+  await page.getByRole("button", { name: "分镜工作台", exact: true }).click({
+    position: { x: 22, y: 22 },
+  });
+  await expect(page.getByRole("heading", { name: "镜头沙盘" })).toBeVisible();
+  await expect(page.locator(".app-shell")).toHaveAttribute(
+    "data-workspace-direction",
+    "down",
+  );
+  await expect(
+    page.locator('[data-workspace-state="entering"]'),
+  ).toHaveCSS(
+    "animation-name",
+    "workspace-page-enter-down",
+  );
+  await expect(
+    page.locator('[data-workspace-state="exiting"]'),
+  ).toHaveCSS(
+    "animation-name",
+    "workspace-page-exit-down",
+  );
+});
+
 test("renders nonblank shot and blocking canvases without horizontal overflow", async ({
   page,
 }, testInfo) => {
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "镜头沙盘" })).toBeVisible();
   await page.locator(".shot-row").nth(1).click();
+  await expect(page.locator(".stage-transition")).toHaveCSS(
+    "animation-name",
+    "stage-curtain-out",
+  );
   await page.locator(".viewport-panel").scrollIntoViewIfNeeded();
   const movementStart = await page.locator("canvas").first().screenshot();
   await page.waitForTimeout(1_200);
@@ -116,12 +270,13 @@ test("renders nonblank shot and blocking canvases without horizontal overflow", 
   await expect(page.locator(".ultrawide-frame").first()).toBeVisible();
   await expect(page.getByText("21:9")).toBeVisible();
   await expect(page.locator(".golden")).toHaveCount(4);
+  await expect(page.getByText("浅景深", { exact: true })).toBeVisible();
+  await expect(page.getByText("推近 · 轻微", { exact: true })).toBeVisible();
+  await expect(page.getByText("压缩亲密", { exact: true })).toBeVisible();
+  await page.getByRole("tab", { name: "构图" }).click();
   await expect(page.getByText("黄金分割", { exact: true })).toBeVisible();
   await expect(page.getByText("渐进转移", { exact: true })).toBeVisible();
   await expect(page.getByText("个人强调", { exact: true })).toBeVisible();
-  await expect(page.getByText("压缩亲密", { exact: true })).toBeVisible();
-  await expect(page.getByText("浅景深", { exact: true })).toBeVisible();
-  await expect(page.getByText("推近 · 轻微", { exact: true })).toBeVisible();
   await expect(
     page.getByText("前向视线空间", { exact: true }),
   ).toBeVisible();
@@ -133,8 +288,11 @@ test("renders nonblank shot and blocking canvases without horizontal overflow", 
   expect(hasHorizontalOverflow).toBe(false);
 
   await page.locator(".shot-row").nth(2).click();
+  await page.getByRole("tab", { name: "摄影" }).click();
   await expect(page.getByText("固定机位", { exact: true })).toBeVisible();
+  await page.getByRole("tab", { name: "构图" }).click();
   await expect(page.getByText("0.39 / 0.17", { exact: true })).toBeVisible();
+  await page.getByRole("tab", { name: "导演" }).click();
   await expect(
     page.getByText(/普通停顿不会被额外解释为孤立|不额外推断孤立/),
   ).toBeVisible();
@@ -392,8 +550,10 @@ test("switches the main canvas between shot and blocking views", async ({
   const blockingPreview = page.getByRole("button", {
     name: "切换到俯视调度",
   });
+  const viewModeButton = page.locator(".top-view");
   await expect(blockingPreview).toBeVisible();
   await blockingPreview.click();
+  await expect(viewModeButton).toHaveAttribute("aria-pressed", "true");
 
   const shotPreview = page.getByRole("button", {
     name: "切换到镜头示意",
@@ -1193,8 +1353,12 @@ test("syncs the selected desktop doc path for registration data", async ({
       openIntegrationFolder: async () => undefined,
       openTraeDownload: async () => undefined,
       setUeMcpPort: async () => status,
-      getPathForFile: () =>
-        "D:\\TeamProject\\doc\\csvdir\\NPC表.csv",
+      getPathForFile: (file: File) =>
+        file.webkitRelativePath.replaceAll("\\", "/").includes(
+          "/csvspecial/",
+        )
+          ? "D:\\TeamProject\\doc\\csvspecial\\NPC表.csv"
+          : "D:\\TeamProject\\doc\\csvdir\\NPC表.csv",
       setDataCsvDirectory: async (directoryPath: string) => {
         await (
           window as typeof window & {
@@ -1216,8 +1380,9 @@ test("syncs the selected desktop doc path for registration data", async ({
       onUpdateState: () => () => undefined,
     };
   });
-  const fixtureDirectory = await writeDirectoryFixture(
-    testInfo.outputPath("custom-doc", "csvdir"),
+  const fixtureRoot = testInfo.outputPath("custom-doc");
+  await writeDirectoryFixture(
+    `${fixtureRoot}/csvdir`,
     [
       {
         name: "对话表.csv",
@@ -1248,9 +1413,31 @@ test("syncs the selected desktop doc path for registration data", async ({
       },
     ],
   );
+  await writeDirectoryFixture(`${fixtureRoot}/csvspecial`, [
+    {
+      name: "NPC表.csv",
+      content: [
+        "##&NPC.id,NPC.name,NPC.npcintroduce,NPC.resource_id",
+        "##id,名称,介绍,资源",
+        "999999,不应选择的 NPC,错误目录,",
+      ].join("\n"),
+    },
+  ]);
 
   await page.goto("/");
-  await page.locator('input[type="file"]').setInputFiles(fixtureDirectory);
+  const settingsButton = page.getByRole("button", {
+    name: "桌面版设置与更新",
+  });
+  await expect(settingsButton).toBeVisible();
+  await expect(settingsButton).toBeEnabled();
+  await settingsButton.click();
+  const settingsDialog = page.getByRole("dialog", {
+    name: "运行环境与数据协作",
+  });
+  await expect(settingsDialog).toBeVisible();
+  await settingsDialog.getByRole("button", { name: "关闭桌面版设置" }).click();
+
+  await page.locator('input[type="file"]').setInputFiles(fixtureRoot);
 
   await expect(page.getByText("自定义目录测试", { exact: true })).toBeVisible();
   await expect(
@@ -1322,6 +1509,154 @@ test("excludes close-UI node content from visible dialogue analysis", async ({
   await expect(shotBody).toContainText("第二句可见台词。");
   await expect(page.getByText("已忽略 1 个关闭 UI 节点", { exact: false }))
     .toBeVisible();
+});
+
+test("searches dialogue text and reuses only previously designed storyboards", async ({
+  page,
+}, testInfo) => {
+  await page.goto("/");
+  const searchInput = page.getByLabel("四位数对话 ID 或对白内容");
+
+  await searchInput.fill("谁拿走了钥匙");
+  await page.getByRole("button", { name: "搜索对白内容" }).click();
+
+  await expect(page.getByText("文字搜索", { exact: true })).toBeVisible();
+  await expect(page.getByText(/1 处命中 · 1 组对话/)).toBeVisible();
+  await expect(
+    page.locator(".dialogue-search-context").getByText("对话 2048"),
+  ).toBeVisible();
+  await expect(
+    page.locator(".dialogue-search-context").getByText("已有分镜"),
+  ).toBeVisible();
+  await expect(page.locator(".dialogue-search-row")).toHaveCount(3);
+  await expect(page.locator(".dialogue-search-row.is-match mark")).toHaveText(
+    "谁拿走了钥匙",
+  );
+  await expect(page.locator(".stage-view")).toBeVisible();
+
+  await searchInput.fill("我们先合作");
+  await page.getByRole("button", { name: "搜索对白内容" }).click();
+  await expect(
+    page.locator(".dialogue-search-context").getByText("对话 2049"),
+  ).toBeVisible();
+  await expect(
+    page.locator(".dialogue-search-context").getByText("仅文本"),
+  ).toBeVisible();
+  await expect(page.locator(".stage-view")).toHaveCount(0);
+  await expect(
+    page.locator(".dialogue-preview").getByText("我们先合作", {
+      exact: false,
+    }),
+  ).toBeVisible();
+
+  await page.screenshot({
+    path: testInfo.outputPath("dialogue-text-search.png"),
+    fullPage: true,
+  });
+});
+
+test("edits the active dialogue, cancels on outside click and saves to UE", async ({
+  page,
+}, testInfo) => {
+  let updateRequest: Record<string, unknown> | null = null;
+  await page.route("**/api/ue/formation/read", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          status: "not_found",
+          message: "未找到测试 BP",
+        },
+      }),
+    });
+  });
+  await page.route("**/api/ue/dialogue/content", async (route) => {
+    updateRequest = route.request().postDataJSON();
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          status: "updated",
+          dialogueId: "7352",
+          startId: "735200",
+          dialogueNodeId: "735201",
+          dialogueAssetPath:
+            "/Game/Seria/Task/dialoggraph/Test/735200.735200",
+          content: "修改后的对白。",
+          saved: true,
+        },
+      }),
+    });
+  });
+  const fixtureDirectory = await writeDirectoryFixture(
+    testInfo.outputPath("dialogue-edit", "csvdir"),
+    [
+      {
+        name: "对话表.csv",
+        content: [
+          "##&Dialog.id,Dialog.NPCID,Dialog.Content,Dialog.NextID,Dialog.End",
+          "##对话ID,人物,内容,下一ID,结束",
+          "735200,,,735201,false",
+          "735201,1,你来了。,735202,false",
+          "735202,101968,请止步。,,true",
+        ].join("\n"),
+      },
+      {
+        name: "对话表_开始节点.csv",
+        content: [
+          "##&DialogStart.id,DialogStart.Outline",
+          "##对话ID,剧情梗概",
+          "735200,对白编辑测试",
+        ].join("\n"),
+      },
+      {
+        name: "NPC表.csv",
+        content: [
+          "##&NPC.id,NPC.name,NPC.npcintroduce,NPC.resource_id",
+          "##id,名称,介绍,资源",
+          "1,玩家,玩家,",
+          "101968,商会安保,守卫,200135",
+        ].join("\n"),
+      },
+    ],
+  );
+
+  await page.goto("/");
+  await page.locator('input[type="file"]').setInputFiles(fixtureDirectory);
+  await expect(page.getByRole("button", { name: "编辑当前对白" })).toBeEnabled();
+
+  await page.getByRole("button", { name: "编辑当前对白" }).click();
+  const editor = page.getByLabel("编辑节点 735201 的对白");
+  await expect(editor).toBeVisible();
+  await editor.fill("这次不保存。");
+  await page.locator(".viewport-toolbar").click();
+  await expect(editor).toHaveCount(0);
+  await expect(page.getByText("你来了。", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "编辑当前对白" }).click();
+  await page.getByLabel("编辑节点 735201 的对白").fill("修改后的对白。");
+  await page.getByRole("button", { name: "保存对白" }).click();
+
+  await expect(
+    page.getByText("节点 735201 已写入并保存", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText("修改后的对白。", { exact: true })).toBeVisible();
+  expect(updateRequest).toEqual({
+    dialogueId: "7352",
+    startId: "735200",
+    dialogueNodeId: "735201",
+    previousContent: "你来了。",
+    content: "修改后的对白。",
+  });
+
+  await page.screenshot({
+    path: testInfo.outputPath("dialogue-content-edited.png"),
+    fullPage: true,
+  });
 });
 
 test("offers the detected Blueprint formation before designing shots", async ({
@@ -2021,7 +2356,10 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
   await expect(page.locator(".shot-row")).toHaveCount(1);
   expect(formationRequests).toBe(1);
   await page.getByRole("button", { name: "任务目标物" }).click();
-  const dialog = page.getByRole("dialog", { name: "任务目标物" });
+  const dialog = page.getByRole("region", {
+    name: "任务目标物",
+    exact: true,
+  });
 
   await dialog.getByLabel("任务节点 ID").fill("900001");
   await dialog.getByRole("button", { name: "解析任务目标物" }).click();
@@ -2089,8 +2427,9 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
   mapStatusMatches = true;
 
   await dialog.getByRole("button", { name: "修改位置" }).click();
-  const targetEditor = page.getByRole("dialog", {
+  const targetEditor = page.getByRole("region", {
     name: "修改目标物位置",
+    exact: true,
   });
   await expect(targetEditor.getByText("500001", { exact: true })).toBeVisible();
   await expect(
@@ -2127,7 +2466,7 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
     }),
   ]);
   await targetEditor
-    .getByRole("button", { name: "关闭修改目标物位置" })
+    .getByRole("button", { name: "返回任务目标物" })
     .click();
   await expect(dialog.getByText("15, 25, 35")).toBeVisible();
   await expect(dialog.getByText("0°, 95°, 0°")).toBeVisible();
@@ -2140,9 +2479,12 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
   ).toBeDisabled();
   expect(loadRequests).toBe(2);
 
-  await dialog.getByRole("button", { name: "关闭任务目标物" }).click();
+  await dialog.getByRole("button", { name: "返回分镜工作台" }).click();
   await page.getByRole("button", { name: "注册 NPC" }).click();
-  const registration = page.getByRole("dialog", { name: "注册 NPC" });
+  const registration = page.getByRole("region", {
+    name: "注册 NPC",
+    exact: true,
+  });
   await registration.getByRole("button", { name: "读取 UE 选择" }).click();
   await expect(registration.getByText("守卫预览")).toBeVisible();
   await expect(registration.getByText("已有 500001")).toBeVisible();
@@ -2210,4 +2552,409 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
   await expect(
     registration.getByRole("button", { name: "写入新增项" }),
   ).toBeDisabled();
+
+  await page.getByRole("button", { name: "任务目标物" }).click();
+  await expect(dialog.getByLabel("任务节点 ID")).toHaveValue("900002");
+  await expect(dialog.getByText(/目标物 MapID 不一致/)).toBeVisible();
+
+  await page.getByRole("button", { name: "注册 NPC" }).click();
+  await expect(
+    registration.getByText(/守卫新增 → 500005/),
+  ).toBeVisible();
+});
+
+test("offers bidirectional position sync for a registered Blueprint", async ({
+  page,
+}, testInfo) => {
+  let updateBlueprintRequest: Record<string, unknown> | null = null;
+  let updateTargetsRequest: Record<string, unknown> | null = null;
+  let backgroundApplyRequest: Record<string, unknown> | null = null;
+  await page.route("**/api/ue/formation/read", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: { status: "not_found", message: "未找到测试 BP" },
+      }),
+    });
+  });
+  await page.route(
+    "**/api/ue/mission-targets/inspect-blueprint",
+    async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          data: {
+            blueprintState: "populated",
+            blueprintAssetPath:
+              "/Game/Seria/Task/Mod/Test/BP_735000.BP_735000",
+            blueprintClassPath:
+              "/Game/Seria/Task/Mod/Test/BP_735000.BP_735000_C",
+            parentClassPath:
+              "/Game/Seria/Task/Mod/PositionMode/PositionModeBase.PositionModeBase_C",
+            dialogueId: "735000",
+            dialogueAssetPath:
+              "/Game/Seria/Task/dialoggraph/Test/735000.735000",
+            formationClassPath:
+              "/Game/Seria/Task/Mod/Test/BP_735000.BP_735000_C",
+            slots: [
+              {
+                modelIndex: 0,
+                targetId: null,
+                modelClassPath:
+                  "/Game/Seria/Characters/Eric/BP_Eric.BP_Eric_C",
+                existingModelName: "player",
+                existingModelClassPath:
+                  "/Game/Seria/Characters/Eric/BP_Eric.BP_Eric_C",
+                registrationMatchesModel: true,
+                suggestedModelName: "player",
+                candidateModelNames: ["player"],
+                status: "registered",
+              },
+              {
+                modelIndex: 1,
+                targetId: "500001",
+                modelClassPath:
+                  "/Game/Seria/NPC/Guard/BP_Guard.BP_Guard_C",
+                existingModelName: "Guard",
+                existingModelClassPath:
+                  "/Game/Seria/NPC/Guard/BP_Guard.BP_Guard_C",
+                registrationMatchesModel: true,
+                suggestedModelName: "Guard",
+                candidateModelNames: ["Guard"],
+                status: "registered",
+              },
+            ],
+            message:
+              "BP 已有 1 个模型槽；对话已注册 1 个模型；匹配 1 个任务目标物",
+            sync: {
+              sourceName: "D:\\TeamProject\\doc\\csvdir",
+              rootTransform: {
+                location: { x: 100, y: 200, z: 200 },
+                rotation: { pitch: 0, yaw: 0, roll: 0 },
+              },
+              hasExplicitRoot: true,
+              mappings: [
+                {
+                  modelIndex: 1,
+                  targetId: "500001",
+                  modelClassPath:
+                    "/Game/Seria/NPC/Guard/BP_Guard.BP_Guard_C",
+                  currentBlueprintTransform: {
+                    location: { x: 0, y: 0, z: 100 },
+                    rotation: { pitch: 0, yaw: 0, roll: 0 },
+                    scale: { x: 1, y: 1, z: 1 },
+                  },
+                  desiredBlueprintTransform: {
+                    location: { x: 10, y: 20, z: 130 },
+                    rotation: { pitch: 0, yaw: 90, roll: 0 },
+                    scale: { x: 1, y: 1, z: 1 },
+                  },
+                  currentTargetTransform: {
+                    location: { x: 110, y: 220, z: 330 },
+                    rotation: { pitch: 0, yaw: 90, roll: 0 },
+                  },
+                  blueprintWorldTransform: {
+                    location: { x: 100, y: 200, z: 300 },
+                    rotation: { pitch: 0, yaw: 0, roll: 0 },
+                  },
+                  positionDelta: 37.416574,
+                  rotationDelta: 90,
+                },
+              ],
+              unmatchedTargetIds: [],
+              unmatchedModelIndexes: [],
+              canUpdateBlueprint: true,
+              canUpdateTargets: true,
+              blockedReasons: [],
+            },
+          },
+        }),
+      });
+    },
+  );
+  await page.route(
+    "**/api/ue/mission-targets/update-blueprint",
+    async (route) => {
+      updateBlueprintRequest = route.request().postDataJSON();
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          data: {
+            status: "updated",
+            taskId: "900001",
+            blueprintAssetPath:
+              "/Game/Seria/Task/Mod/Test/BP_735000.BP_735000",
+            dialogueAssetPath:
+              "/Game/Seria/Task/dialoggraph/Test/735000.735000",
+            updatedModelIndexes: [1],
+            blueprintSaved: true,
+            dialogueSaved: true,
+          },
+        }),
+      });
+    },
+  );
+  await page.route(
+    "**/api/ue/mission-targets/update-from-blueprint",
+    async (route) => {
+      updateTargetsRequest = route.request().postDataJSON();
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          data: {
+            taskId: "900001",
+            blueprintAssetPath:
+              "/Game/Seria/Task/Mod/Test/BP_735000.BP_735000",
+            items: [
+              {
+                targetId: "500001",
+                mapId: "1204",
+                originalTransform: {
+                  location: { x: 110, y: 220, z: 330 },
+                  rotation: { pitch: 0, yaw: 90, roll: 0 },
+                },
+                transform: {
+                  location: { x: 100, y: 200, z: 300 },
+                  rotation: { pitch: 0, yaw: 0, roll: 0 },
+                },
+              },
+            ],
+            updatedTargets: [{ targetId: "500001", rowNumber: 3 }],
+            unchangedTargetIds: [],
+            openedWorkbooks: [
+              "C:\\trunk\\doc\\xlsdir\\r任务剧情\\m目标物表.xlsm",
+            ],
+          },
+        }),
+      });
+    },
+  );
+  await page.route(
+    "**/api/ue/mission-targets/background-props/inspect",
+    async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          data: {
+            reviewToken: "a".repeat(64),
+            blueprintAssetPath:
+              "/Game/Seria/Task/Mod/Test/BP_735000.BP_735000",
+            mapAssetPath: "/Game/Test/Maps/TestMap",
+            rootTransform: {
+              location: { x: 100, y: 200, z: 200 },
+              rotation: { pitch: 0, yaw: 0, roll: 0 },
+            },
+            items: [
+              {
+                actorRef: "PersistentLevel.SkeletalMeshActor_1",
+                actorLabel: "场景旗帜",
+                assetKind: "skeletal_mesh",
+                assetPath:
+                  "/Game/Test/Props/SK_Banner.SK_Banner",
+                componentName: "SK_Banner",
+                componentClass:
+                  "/Script/Engine.SkeletalMeshComponent",
+                assetPropertyName: "SkeletalMesh",
+                worldTransform: {
+                  location: { x: 130, y: 260, z: 340 },
+                  rotation: { pitch: 0, yaw: 45, roll: 0 },
+                  scale: { x: 1.5, y: 0.75, z: 2 },
+                },
+                relativeTransform: {
+                  location: { x: 30, y: 60, z: 140 },
+                  rotation: { pitch: 0, yaw: 45, roll: 0 },
+                  scale: { x: 1.5, y: 0.75, z: 2 },
+                },
+                action: "create",
+                message: "新增背景组件",
+              },
+            ],
+            blockedReasons: [],
+          },
+        }),
+      });
+    },
+  );
+  await page.route(
+    "**/api/ue/mission-targets/background-props/apply",
+    async (route) => {
+      backgroundApplyRequest = route.request().postDataJSON();
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          data: {
+            status: "updated",
+            blueprintAssetPath:
+              "/Game/Seria/Task/Mod/Test/BP_735000.BP_735000",
+            createdComponentNames: ["SK_Banner"],
+            updatedComponentNames: [],
+            saved: true,
+          },
+        }),
+      });
+    },
+  );
+  const fixtureDirectory = await writeDirectoryFixture(
+    testInfo.outputPath("blueprint-sync", "csvdir"),
+    [
+      {
+        name: "对话表.csv",
+        content: [
+          "##&Dialog.id,Dialog.NPCID,Dialog.Content,Dialog.NextID,Dialog.End",
+          "##对话ID,人物,内容,下一ID,结束",
+          "735000,,,735001,false",
+          "735001,1,测试。,,true",
+        ].join("\n"),
+      },
+      {
+        name: "对话表_开始节点.csv",
+        content: [
+          "##&DialogStart.id,DialogStart.Outline",
+          "##对话ID,剧情梗概",
+          "735000,BP 双向同步",
+        ].join("\n"),
+      },
+      {
+        name: "NPC表.csv",
+        content: [
+          "##&NPC.id,NPC.name,NPC.npcintroduce,NPC.resource_id",
+          "##id,名称,介绍,资源",
+          "1,玩家,玩家,",
+          "700001,守卫,测试,200777",
+        ].join("\n"),
+      },
+      {
+        name: "m模型资源表.csv",
+        content: [
+          "##&Model.id,,Model.path",
+          "##id,配置路径,生成路径",
+          "200777,/Game/Test/BP_Guard,/Game/Seria/NPC/Guard/BP_Guard.BP_Guard_C",
+        ].join("\n"),
+      },
+      {
+        name: "任务表.csv",
+        content: [
+          "##&字段标记,Mission.id,Mission.Name,Mission.ShowNPC",
+          "##任务类型,任务ID,任务名称,显示目标物",
+          ",900001,同步任务,500001",
+        ].join("\n"),
+      },
+      {
+        name: "m目标物表.csv",
+        content: [
+          "##&MissionPosition.ID,,,MissionPosition.type,MissionPosition.NPCID,MissionPosition.ItemID,MissionPosition.BluePrint,MissionPosition.MapID,MissionPosition.Position,MissionPosition.Rotation",
+          "##ID,类型,描述,坐标类型,NPCID,物品ID,蓝图路径,地图ID,座标,旋转",
+          '500001,剧情 NPC,守卫,1,700001,0,,1204,"(X=110,Y=220,Z=330)","(Pitch=0,Yaw=90,Roll=0)"',
+        ].join("\n"),
+      },
+      {
+        name: "d地图配置表.csv",
+        content: [
+          "##&MapConfig.id,MapConfig.name,,,MapConfig.resourceid",
+          "##ID,地图名称,地图备注,地图资源（注释用）,资源ID",
+          "1204,测试地图,,,100128",
+        ].join("\n"),
+      },
+      {
+        name: "d地图资源表.csv",
+        content: [
+          "##&Scene.id,Scene.path",
+          "##id,path",
+          "100128,/Game/Test/Maps/TestMap",
+        ].join("\n"),
+      },
+    ],
+  );
+
+  await page.goto("/");
+  await page.locator('input[type="file"]').setInputFiles(fixtureDirectory);
+  await page.getByRole("button", { name: "任务目标物" }).click();
+  const dialog = page.getByRole("region", {
+    name: "任务目标物",
+    exact: true,
+  });
+  await dialog.getByLabel("BP 文件名").fill("BP_735000");
+  await dialog.getByLabel("任务节点 ID").fill("900001");
+  await dialog.getByRole("button", { name: "解析任务目标物" }).click();
+
+  await expect(
+    dialog.getByRole("button", { name: "修改 BP 位置" }),
+  ).toBeEnabled();
+  const reverseButton = dialog.getByRole("button", {
+    name: "BP → 目标物",
+  });
+  await expect(reverseButton).toBeEnabled();
+  await expect(reverseButton).toHaveClass(/button--primary/);
+  await expect(
+    dialog.getByText(/已选择 1 \/ 1 个已映射目标物/),
+  ).toBeVisible();
+
+  await dialog.getByRole("button", { name: "背景资产" }).click();
+  const backgroundDialog = dialog.getByRole("dialog", {
+    name: "导入背景资产",
+  });
+  await expect(backgroundDialog.getByText("场景旗帜")).toBeVisible();
+  await expect(backgroundDialog.getByText("Skeletal Mesh")).toBeVisible();
+  await expect(
+    backgroundDialog.getByText("SK_Banner", { exact: true }),
+  ).toBeVisible();
+  await expect(backgroundDialog.getByText("1.50, 0.75, 2.00")).toBeVisible();
+  await backgroundDialog.screenshot({
+    path: testInfo.outputPath("background-prop-import.png"),
+  });
+  page.once("dialog", async (confirmation) => {
+    expect(confirmation.message()).toContain("保留位置、旋转和缩放");
+    await confirmation.accept();
+  });
+  await backgroundDialog.getByRole("button", { name: "写入 BP" }).click();
+  await expect(dialog.getByText(/已写入背景资产：新增 1 个/)).toBeVisible();
+  expect(backgroundApplyRequest).toEqual({
+    blueprintName: "BP_735000",
+    reviewToken: "a".repeat(64),
+    selectedActorRefs: ["PersistentLevel.SkeletalMeshActor_1"],
+  });
+
+  await dialog.screenshot({
+    path: testInfo.outputPath("blueprint-bidirectional-sync.png"),
+  });
+
+  page.once("dialog", async (confirmation) => {
+    expect(confirmation.message()).toContain("最新配置");
+    await confirmation.accept();
+  });
+  await dialog.getByRole("button", { name: "修改 BP 位置" }).click();
+  await expect(dialog.getByText(/已更新 BP 槽位 1/)).toBeVisible();
+  expect(updateBlueprintRequest).toEqual({
+    blueprintName: "BP_735000",
+    taskId: "900001",
+    selectedTargetIds: ["500001"],
+    targetOverrides: [],
+  });
+
+  page.once("dialog", async (confirmation) => {
+    expect(confirmation.message()).toContain("写入目标物表");
+    await confirmation.accept();
+  });
+  await reverseButton.click();
+  await expect(
+    dialog.getByText(/已将 BP 位置写入 1 个目标物/),
+  ).toBeVisible();
+  expect(updateTargetsRequest).toEqual({
+    blueprintName: "BP_735000",
+    taskId: "900001",
+    selectedTargetIds: ["500001"],
+    targetOverrides: [],
+  });
 });

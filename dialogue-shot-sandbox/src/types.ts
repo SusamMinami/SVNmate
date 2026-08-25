@@ -146,6 +146,21 @@ export interface DialogueSequence {
   } | null;
 }
 
+export interface DialogueContentSearchContext {
+  prefix: string;
+  sequence: DialogueSequence;
+  matchedDialogueIds: string[];
+  contextDialogueIds: string[];
+}
+
+export interface DialogueContentSearchResult {
+  query: string;
+  totalMatchCount: number;
+  totalContextCount: number;
+  truncated: boolean;
+  contexts: DialogueContentSearchContext[];
+}
+
 export interface UnrealTransform {
   location: { x: number; y: number; z: number };
   rotation: { pitch: number; yaw: number; roll: number };
@@ -236,9 +251,35 @@ export interface DialogueModelRegistrationSlot {
   targetId: string | null;
   modelClassPath: string;
   existingModelName: string;
+  existingModelClassPath?: string | null;
+  registrationMatchesModel?: boolean;
   suggestedModelName: string | null;
   candidateModelNames: string[];
   status: "registered" | "available" | "unmapped";
+}
+
+export interface MissionTargetBlueprintSyncMapping {
+  modelIndex: number;
+  targetId: string;
+  modelClassPath: string;
+  currentBlueprintTransform: UnrealTransform;
+  desiredBlueprintTransform: UnrealTransform;
+  currentTargetTransform: MissionTargetTransform;
+  blueprintWorldTransform: MissionTargetTransform;
+  positionDelta: number;
+  rotationDelta: number;
+}
+
+export interface MissionTargetBlueprintSyncState {
+  sourceName: string;
+  rootTransform: MissionTargetTransform;
+  hasExplicitRoot: boolean;
+  mappings: MissionTargetBlueprintSyncMapping[];
+  unmatchedTargetIds: string[];
+  unmatchedModelIndexes: number[];
+  canUpdateBlueprint: boolean;
+  canUpdateTargets: boolean;
+  blockedReasons: string[];
 }
 
 export interface MissionTargetBlueprintInspection {
@@ -251,6 +292,8 @@ export interface MissionTargetBlueprintInspection {
   formationClassPath: string | null;
   slots: DialogueModelRegistrationSlot[];
   message: string;
+  refreshedPlan?: MissionTargetPreviewPlan;
+  sync?: MissionTargetBlueprintSyncState;
 }
 
 export interface DialogueModelRegistrationResult {
@@ -262,6 +305,26 @@ export interface DialogueModelRegistrationResult {
   registeredCount: number;
   emptyCount: number;
   unresolvedIndexes: number[];
+  spatialStatus?: "configured" | "unchanged" | "not_configured";
+  spatialSource?: "selected_actor" | "level_scan" | "task_targets";
+  spatialMapAssetPath?: string;
+}
+
+export interface MissionTargetBlueprintUpdateResult {
+  status: "updated" | "unchanged";
+  taskId: string;
+  blueprintAssetPath: string;
+  dialogueAssetPath: string;
+  updatedModelIndexes: number[];
+  blueprintSaved: boolean;
+  dialogueSaved: boolean;
+}
+
+export interface MissionTargetBlueprintToTargetsResult
+  extends MissionTargetUpdateResult {
+  taskId: string;
+  blueprintAssetPath: string;
+  items: MissionTargetUpdateItem[];
 }
 
 export interface StoryboardExportShot {
@@ -325,16 +388,75 @@ export interface DialogueStoryboardExportResult {
   saved: boolean;
 }
 
+export interface DialogueContentUpdateRequest {
+  dialogueId: string;
+  startId: string;
+  dialogueNodeId: string;
+  previousContent: string;
+  content: string;
+}
+
+export interface DialogueContentUpdateResult {
+  status: "updated" | "unchanged";
+  dialogueId: string;
+  startId: string;
+  dialogueNodeId: string;
+  dialogueAssetPath: string;
+  content: string;
+  saved: boolean;
+}
+
 export interface SelectedLevelActor {
   actorRef: string;
   label: string;
   classPath: string;
+  assetKind?:
+    | "blueprint_actor"
+    | "skeletal_mesh"
+    | "static_mesh"
+    | "unsupported";
+  assetPath?: string;
   transform: UnrealTransform;
 }
 
 export interface SelectedLevelActorsResult {
   mapAssetPath: string;
   actors: SelectedLevelActor[];
+}
+
+export interface BackgroundPropPreviewItem {
+  actorRef: string;
+  actorLabel: string;
+  assetKind:
+    | "blueprint_actor"
+    | "skeletal_mesh"
+    | "static_mesh"
+    | "unsupported";
+  assetPath: string;
+  componentName: string;
+  componentClass: string;
+  assetPropertyName: string;
+  worldTransform: UnrealTransform;
+  relativeTransform: UnrealTransform;
+  action: "create" | "update" | "unchanged" | "blocked";
+  message: string;
+}
+
+export interface BackgroundPropImportPreview {
+  reviewToken: string;
+  blueprintAssetPath: string;
+  mapAssetPath: string;
+  rootTransform: MissionTargetTransform;
+  items: BackgroundPropPreviewItem[];
+  blockedReasons: string[];
+}
+
+export interface BackgroundPropImportResult {
+  status: "updated" | "unchanged";
+  blueprintAssetPath: string;
+  createdComponentNames: string[];
+  updatedComponentNames: string[];
+  saved: boolean;
 }
 
 export interface NpcRegistrationCandidate {

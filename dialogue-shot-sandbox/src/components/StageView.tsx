@@ -6,7 +6,13 @@ import {
   Line,
 } from "@react-three/drei";
 import { Camera, Map } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  type PointerEvent as ReactPointerEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import * as THREE from "three";
 import type {
   DialogueParticipant,
@@ -17,6 +23,9 @@ import type {
 interface StageViewProps {
   participants: DialogueParticipant[];
   shot: ShotPlan;
+  shotIndex?: number;
+  shotCount?: number;
+  active?: boolean;
 }
 
 interface CharacterProps {
@@ -603,8 +612,16 @@ function CameraFrameGuides({
   );
 }
 
-export function StageView({ participants, shot }: StageViewProps) {
+export function StageView({
+  participants,
+  shot,
+  shotIndex = 0,
+  shotCount = 1,
+  active = true,
+}: StageViewProps) {
   const [viewMode, setViewMode] = useState<"shot" | "blocking">("shot");
+  const pointerProbeRef = useRef<HTMLDivElement>(null);
+  const pointerProbeValueRef = useRef<HTMLSpanElement>(null);
   const showingShot = viewMode === "shot";
   const presentParticipants = useMemo(
     () =>
@@ -643,10 +660,47 @@ export function StageView({ participants, shot }: StageViewProps) {
   );
   const pendingCount =
     blockingParticipants.length - stagedPresentParticipants.length;
+  const visualAnchorX = Math.max(
+    0,
+    Math.min(100, (shot.projection.visualAnchor[0] + 1) * 50),
+  );
+  const visualAnchorY = Math.max(
+    0,
+    Math.min(100, (1 - shot.projection.visualAnchor[1]) * 50),
+  );
+
+  function updatePointerProbe(event: ReactPointerEvent<HTMLDivElement>) {
+    const probe = pointerProbeRef.current;
+    if (!probe || !showingShot) {
+      return;
+    }
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const localX = Math.max(0, Math.min(bounds.width, event.clientX - bounds.left));
+    const localY = Math.max(0, Math.min(bounds.height, event.clientY - bounds.top));
+    const normalizedX = (localX / bounds.width) * 2 - 1;
+    const normalizedY = 1 - (localY / bounds.height) * 2;
+    probe.style.setProperty("--probe-x", `${localX}px`);
+    probe.style.setProperty("--probe-y", `${localY}px`);
+    probe.dataset.active = "true";
+    if (pointerProbeValueRef.current) {
+      pointerProbeValueRef.current.textContent =
+        `FRAME ${normalizedX.toFixed(2)} / ${normalizedY.toFixed(2)}`;
+    }
+  }
+
+  function hidePointerProbe() {
+    if (pointerProbeRef.current) {
+      pointerProbeRef.current.dataset.active = "false";
+    }
+  }
 
   return (
     <div className={`stage-view stage-view--${viewMode}`}>
-      <div className="stage-main">
+      <div
+        className="stage-main"
+        onPointerMove={updatePointerProbe}
+        onPointerLeave={hidePointerProbe}
+      >
         <div
           className={`stage-main__frame ${
             showingShot ? "" : "stage-main__frame--blocking"
@@ -657,6 +711,7 @@ export function StageView({ participants, shot }: StageViewProps) {
               key="shot-main"
               shadows
               dpr={[1, 1.6]}
+              frameloop={active ? "always" : "never"}
               camera={{ position: [...shot.cameraPosition], fov: 42 }}
               gl={{ antialias: true }}
             >
@@ -669,6 +724,7 @@ export function StageView({ participants, shot }: StageViewProps) {
             <Canvas
               key="blocking-main"
               orthographic
+              frameloop={active ? "always" : "never"}
               camera={{ position: [0, 10, 0], zoom: 24, near: 0.1, far: 40 }}
               dpr={[1, 1.5]}
               gl={{ antialias: true }}
@@ -682,6 +738,49 @@ export function StageView({ participants, shot }: StageViewProps) {
           )}
 
           {showingShot && <CameraFrameGuides shot={shot} />}
+
+          <div
+            className="stage-transition"
+            key={`${shot.id}-${viewMode}`}
+            aria-hidden="true"
+          >
+            <i />
+          </div>
+
+          <div className="stage-instrumentation" aria-hidden="true">
+            <div className="stage-sequence">
+              <span>SHOT</span>
+              <strong>{String(shotIndex + 1).padStart(2, "0")}</strong>
+              <small>/{String(Math.max(shotCount, 1)).padStart(2, "0")}</small>
+            </div>
+            <i className="stage-ruler stage-ruler--top" />
+            <i className="stage-ruler stage-ruler--left" />
+            <i className="stage-corner stage-corner--top-left" />
+            <i className="stage-corner stage-corner--top-right" />
+            <i className="stage-corner stage-corner--bottom-left" />
+            <i className="stage-corner stage-corner--bottom-right" />
+            {showingShot && (
+              <>
+                <span
+                  className="stage-visual-anchor"
+                  style={{
+                    left: `${visualAnchorX}%`,
+                    top: `${visualAnchorY}%`,
+                  }}
+                >
+                  <i />
+                </span>
+                <div
+                  className="stage-pointer-probe"
+                  data-active="false"
+                  ref={pointerProbeRef}
+                >
+                  <i />
+                  <span ref={pointerProbeValueRef}>FRAME 0.00 / 0.00</span>
+                </div>
+              </>
+            )}
+          </div>
 
           <div className="shot-hud">
             <span>{showingShot ? shot.label : "俯视调度"}</span>
@@ -701,6 +800,7 @@ export function StageView({ participants, shot }: StageViewProps) {
       <button
         className="top-view"
         type="button"
+        aria-pressed={!showingShot}
         aria-label={
           showingShot ? "切换到俯视调度" : "切换到镜头示意"
         }
@@ -715,13 +815,14 @@ export function StageView({ participants, shot }: StageViewProps) {
             {showingShot ? <Map size={12} /> : <Camera size={12} />}
             {showingShot ? "俯视调度" : "镜头示意"}
           </span>
-          <small>点击切换</small>
+          <small>{showingShot ? "TOP" : "CAM"}</small>
         </header>
         <div className="top-view__canvas">
           {showingShot ? (
             <Canvas
               key="blocking-inset"
               orthographic
+              frameloop={active ? "always" : "never"}
               camera={{ position: [0, 10, 0], zoom: 24, near: 0.1, far: 40 }}
               dpr={[1, 1.5]}
               gl={{ antialias: true }}
@@ -738,6 +839,7 @@ export function StageView({ participants, shot }: StageViewProps) {
               key="shot-inset"
               shadows
               dpr={[1, 1.4]}
+              frameloop={active ? "always" : "never"}
               camera={{ position: [...shot.cameraPosition], fov: 42 }}
               gl={{ antialias: true }}
             >

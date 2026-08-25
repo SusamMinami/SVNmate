@@ -1,20 +1,23 @@
 import { defineConfig } from "@playwright/test";
 
+const port = Number.parseInt(process.env.PLAYWRIGHT_PORT || "4173", 10);
+const baseURL = `http://127.0.0.1:${port}`;
+
 export default defineConfig({
   testDir: "./e2e",
   outputDir: "./test-results",
   reporter: "list",
   fullyParallel: false,
   use: {
-    baseURL: "http://127.0.0.1:4173",
+    baseURL,
     channel: "msedge",
     colorScheme: "light",
     screenshot: "only-on-failure",
   },
   webServer: {
     command:
-      "npm run dev -- --host 127.0.0.1 --port 4173 --strictPort",
-    url: "http://127.0.0.1:4173",
+      `npm run dev -- --host 127.0.0.1 --port ${port} --strictPort`,
+    url: baseURL,
     reuseExistingServer: false,
     timeout: 30_000,
   },

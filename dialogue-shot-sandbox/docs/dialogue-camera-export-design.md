@@ -27,6 +27,8 @@
 - `DialogBlendCameraData` 默认使用 `ECutShot`。首版不修改该字段。
 - Formation BP 中存在名为 `c1` 的 `CameraComponent`，因此节点填写
   `c1` 后可启用该相机。
+- Formation BP 中以资产名命名的背景 ChildActor、SkeletalMesh 和 StaticMesh
+  组件不会进入数字角色槽或 DialogModels，但会随 BP 在对白镜头中显示。
 
 现有 UE bridge 已经支持资产搜索、子对象属性读写、回读和
 `asset.save_asset`，无需新增 UE 插件。
@@ -106,6 +108,26 @@ FOV = 2 * atan(35 / (2 * focalLength))
 - 只有全部回读通过后调用一次 `asset.save_asset`。
 - 保存失败时同样恢复本轮内存修改并返回错误。
 - 不修改导出的 CSV，不自动执行 SVN checkout。
+
+## 对白编辑复用
+
+对白编辑复用同一条 Dialog Graph 访问链路：
+
+1. 使用开始节点 ID（通常为四位数对话 ID 加 `00`）在
+   `/Game/Seria/Task/dialoggraph` 精确定位对话资产。
+2. 临时导出资产文本，建立台词 ID 到 `Dialog Graph.Nodes` 下图节点的索引。
+3. 通过 `DialogGraphNodeData` 读取 `CommonDialogGraphProperties`，定位
+   `Alias="Content"` 的 `CurrentString`。
+4. 写入前检查对话资产是否有未保存修改，并核对 UE 当前原文与界面加载的原文，
+   避免覆盖编辑器中的新改动。
+5. 写入整个 `CommonDialogGraphProperties` 数组，回读确认 `Content` 后调用
+   `asset.save_asset`。
+6. 写入、回读或保存失败时恢复该节点原始属性。
+
+公共实现位于 `server/ueBridge.ts` 的 `findDialogueAssetPath`、
+`exportAssetText`、`readDialogueNodes`、`dirtyContentPackages` 和
+`readProperty`。分镜导出在此基础上继续处理 `CameraPosition` 与
+`MoveCameras`；对白编辑只处理一个节点的 `Content`。
 
 ## 后续验证
 

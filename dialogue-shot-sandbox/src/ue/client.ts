@@ -1,11 +1,17 @@
 import type {
+  BackgroundPropImportPreview,
+  BackgroundPropImportResult,
   BlueprintFormationSnapshot,
+  DialogueContentUpdateRequest,
+  DialogueContentUpdateResult,
   DialogueStoryboardExportPreview,
   DialogueStoryboardExportResult,
   DialogueModelRegistrationResult,
+  MissionTargetBlueprintToTargetsResult,
   MissionTargetBlueprintCreateResult,
   MissionTargetBlueprintCompatibility,
   MissionTargetBlueprintInspection,
+  MissionTargetBlueprintUpdateResult,
   MissionTargetMapStatus,
   MissionTargetUpdateItem,
   MissionTargetUpdateResult,
@@ -173,22 +179,84 @@ export function createMissionTargetBlueprint(
 export function inspectMissionTargetBlueprint(
   blueprintName: string,
   plan?: MissionTargetPreviewPlan,
+  taskId?: string,
+  targetOverrides?: Array<
+    Pick<MissionTargetUpdateItem, "targetId" | "transform">
+  >,
 ): Promise<MissionTargetBlueprintInspection> {
   return postUe("/api/ue/mission-targets/inspect-blueprint", {
     blueprintName,
     plan,
+    taskId,
+    targetOverrides,
   });
+}
+
+export function updateMissionTargetBlueprintPositions(
+  blueprintName: string,
+  taskId: string,
+  selectedTargetIds?: string[],
+  targetOverrides?: Array<
+    Pick<MissionTargetUpdateItem, "targetId" | "transform">
+  >,
+): Promise<MissionTargetBlueprintUpdateResult> {
+  return postUe(
+    "/api/ue/mission-targets/update-blueprint",
+    { blueprintName, taskId, selectedTargetIds, targetOverrides },
+    false,
+  );
+}
+
+export function updateMissionTargetsFromBlueprint(
+  blueprintName: string,
+  taskId: string,
+  selectedTargetIds?: string[],
+  targetOverrides?: Array<
+    Pick<MissionTargetUpdateItem, "targetId" | "transform">
+  >,
+): Promise<MissionTargetBlueprintToTargetsResult> {
+  return postUe(
+    "/api/ue/mission-targets/update-from-blueprint",
+    { blueprintName, taskId, selectedTargetIds, targetOverrides },
+    false,
+  );
+}
+
+export function inspectBackgroundPropImport(
+  blueprintName: string,
+): Promise<BackgroundPropImportPreview> {
+  return postUe("/api/ue/mission-targets/background-props/inspect", {
+    blueprintName,
+  });
+}
+
+export function applyBackgroundPropImport(
+  blueprintName: string,
+  reviewToken: string,
+  selectedActorRefs: string[],
+): Promise<BackgroundPropImportResult> {
+  return postUe(
+    "/api/ue/mission-targets/background-props/apply",
+    { blueprintName, reviewToken, selectedActorRefs },
+    false,
+  );
 }
 
 export function registerBlueprintDialogueModels(
   blueprintName: string,
   selectedModelIndexes: number[],
+  taskId?: string,
+  targetOverrides?: Array<
+    Pick<MissionTargetUpdateItem, "targetId" | "transform">
+  >,
 ): Promise<DialogueModelRegistrationResult> {
   return postUe(
     "/api/ue/mission-targets/register-dialogue",
     {
       blueprintName,
       selectedModelIndexes,
+      taskId,
+      targetOverrides,
     },
     false,
   );
@@ -209,6 +277,12 @@ export function exportDialogueStoryboard(
     { ...request, reviewToken },
     false,
   );
+}
+
+export function updateDialogueContent(
+  request: DialogueContentUpdateRequest,
+): Promise<DialogueContentUpdateResult> {
+  return postUe("/api/ue/dialogue/content", request, false);
 }
 
 export function checkMissionTargetBlueprint(

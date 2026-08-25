@@ -71,7 +71,9 @@ UE bridge 从 Blueprint 的 `SimpleConstructionScript` 读取：
 - `RelativeScale3D`
 
 只有变量名为整数的 `ChildActorComponent` 被视为角色站位。相机等其他组件
-不会进入角色列表。
+不会进入角色列表。任务目标物工作区导入的背景组件直接使用资产名，因此不会
+参与角色站位或 DialogModels；其 `RelativeLocation`、`RelativeRotation` 和
+`RelativeScale3D` 仍会写入并回读。
 
 ### 对话节点
 
@@ -134,16 +136,22 @@ Node/Electron 主进程默认通过 `127.0.0.1:12031` 连接项目现有的
 因为 TRAE 使用的是独立的 `127.0.0.1:43127/mcp`。
 
 基础站位查询是只读操作；任务目标物预览、BP 填充、DialogGraph 注册和配表
-草稿属于显式写操作，均由各自界面中的确认步骤触发。分镜导出同样先回读并
-展示逐节点差异，确认后只更新 `CameraPosition` 与 `MoveCameras`。
+草稿属于显式写操作，均由各自界面中的确认步骤触发。已注册 BP 还支持目标物
+与数字角色槽的双向 Transform 同步，以及把 UE 当前选择写入非数字背景组件。
+背景组件不进入 DialogModels；Blueprint Actor、Skeletal Mesh 和 Static Mesh
+分别写为 ChildActor、SkeletalMesh 和 StaticMesh 组件，并保留缩放。
+分镜导出同样先回读并展示逐节点差异，确认后只更新 `CameraPosition` 与
+`MoveCameras`。
 
 ## 主要代码
 
 - `server/ueBridge.ts`：UE TCP 协议、资产检索和 SCS 读取。
-- `src/ue/client.ts`：前端只读 API 客户端。
+- `src/ue/client.ts`：前端 UE 查询、预检与显式写入 API 客户端。
 - `src/data/csv.ts`：Formation、Model、模型资源和动作字段解析。
 - `src/data/blueprintFormation.ts`：模型槽与 NPC 实例映射、坐标转换。
 - `src/components/BlueprintFormationModal.tsx`：BP/导演站位选择。
+- `src/components/MissionTargetModal.tsx`：目标物双向同步、空间配置与背景
+  资产导入。
 - `src/director/blockingResolver.ts`：保留输入站位的镜头求解模式。
 
 ## 后续阶段

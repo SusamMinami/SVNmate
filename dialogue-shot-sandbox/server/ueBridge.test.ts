@@ -239,8 +239,19 @@ class FakeDialogueRegistrationConnection implements UnrealInvoker {
   readonly blueprintClassPath = `${this.blueprintAssetPath}_C`;
   readonly dialogueAssetPath =
     "/Game/Seria/Task/dialoggraph/Test/735200.735200";
-  dialogueModels = ["player", "ExistingOne", "None", "OldThree"];
+  dialogueModels = ["player", "One_Sit", "None", "OldThree"];
   formationClassPath = this.blueprintClassPath;
+  commonProperties = [
+    { Alias: "Virtual", CurrentBool: true },
+    {
+      Alias: "PlayerInitPosition",
+      CurrentVector: { X: 10, Y: 20, Z: 30 },
+    },
+    {
+      Alias: "PlayerForward",
+      CurrentRotator: { Pitch: 0, Yaw: 0, Roll: 0 },
+    },
+  ];
   connected = false;
   closed = false;
 
@@ -341,6 +352,24 @@ class FakeDialogueRegistrationConnection implements UnrealInvoker {
         propertyName === "Formation"
       ) {
         return this.formationClassPath;
+      }
+      if (
+        object.endsWith("SeriaDialogGraphNodeData_0") &&
+        propertyName === "CommonDialogGraphProperties"
+      ) {
+        return this.commonProperties;
+      }
+      if (
+        object.endsWith("SeriaDialogGraphNodeData_0") &&
+        propertyName === "SpecialDialogGraphProperties"
+      ) {
+        return [{ Alias: "Virtual", CurrentBool: true }];
+      }
+      if (
+        object.endsWith("SeriaDialogGraphNodeData_0") &&
+        propertyName === "PreviewLevel"
+      ) {
+        return "/Game/Test/Maps/TestMap.TestMap";
       }
     }
     if (
@@ -891,7 +920,7 @@ describe("dialogue model registration", () => {
         { modelIndex: 0, status: "registered" },
         {
           modelIndex: 1,
-          existingModelName: "ExistingOne",
+          existingModelName: "One_Sit",
           status: "registered",
         },
         {
@@ -902,7 +931,7 @@ describe("dialogue model registration", () => {
         {
           modelIndex: 3,
           existingModelName: "OldThree",
-          status: "registered",
+          status: "unmapped",
         },
       ],
     });
@@ -920,20 +949,31 @@ describe("dialogue model registration", () => {
     expect(result).toMatchObject({
       status: "registered",
       dialogueId: "735200",
-      dialogueModels: ["player", "ExistingOne", "Two", "None"],
+      dialogueModels: ["player", "One_Sit", "Two", "None"],
       registeredCount: 2,
       emptyCount: 1,
       unresolvedIndexes: [],
+      spatialStatus: "unchanged",
+      spatialMapAssetPath: "/Game/Test/Maps/TestMap.TestMap",
     });
     expect(
       connection.calls.find(
         (call) => call.action === "reflect.write_object_property",
       )?.args.Value,
-    ).toEqual(["player", "ExistingOne", "Two", "None"]);
+    ).toEqual(["player", "One_Sit", "Two", "None"]);
     expect(
       connection.calls.some((call) => call.action === "asset.save_asset"),
     ).toBe(true);
     expect(connection.formationClassPath).toBe(connection.blueprintClassPath);
+    expect(
+      connection.calls.some(
+        (call) =>
+          call.action === "script.eval_python_expression" &&
+          String(call.args.Expression).includes(
+            "get_selected_level_actors",
+          ),
+      ),
+    ).toBe(false);
     expect(connection.closed).toBe(true);
   });
 });
@@ -969,6 +1009,9 @@ describe("UE editor selection", () => {
           label: "守卫 A",
           classPath:
             "/Game/Seria/NPC/Guard/BP_Guard.BP_Guard_C",
+          assetKind: "blueprint_actor",
+          assetPath:
+            "/Game/Seria/NPC/Guard/BP_Guard.BP_Guard",
           transform: {
             location: { x: 10, y: 20, z: 30 },
             rotation: { pitch: 1, yaw: 90, roll: 2 },

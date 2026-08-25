@@ -6,6 +6,7 @@ import {
   configureConfigCsvDirectory,
   getConfigCsvDirectory,
   getConfigTablePaths,
+  readConfiguredMissionTargetPlan,
   scanSelectedNpcRegistration,
   type UnrealInvoker,
 } from "./ueBridge";
@@ -82,6 +83,16 @@ describe("config data directory", () => {
         [
           "##&MissionPosition.ID,,,MissionPosition.type,MissionPosition.NPCID,MissionPosition.ItemID,MissionPosition.BluePrint,MissionPosition.MapID,MissionPosition.Position,MissionPosition.Rotation",
           "##ID,类型,描述,坐标类型,NPCID,物品ID,蓝图路径,地图ID,座标,旋转",
+          '500001,剧情 NPC,自定义 NPC,1,700001,0,,9901,"(X=10,Y=20,Z=30)","(Pitch=0,Yaw=90,Roll=0)"',
+        ].join("\n"),
+        "utf8",
+      ),
+      writeFile(
+        join(csvDirectory, "任务表.csv"),
+        [
+          "##&字段标记,Mission.id,Mission.Name,Mission.ShowNPC",
+          "##任务类型,任务ID,任务名称,显示目标物",
+          ",900001,自定义任务,500001",
         ].join("\n"),
         "utf8",
       ),
@@ -126,6 +137,28 @@ describe("config data directory", () => {
       modelOptions: [{ id: 200777 }],
       npcOptions: [{ id: 700001, name: "自定义 NPC" }],
       mapId: "9901",
+    });
+
+    const firstPlan = await readConfiguredMissionTargetPlan("900001");
+    expect(firstPlan.targets[0].transform.location).toEqual({
+      x: 10,
+      y: 20,
+      z: 30,
+    });
+
+    await writeFile(
+      join(csvDirectory, "m目标物表.csv"),
+      [
+        "##&MissionPosition.ID,,,MissionPosition.type,MissionPosition.NPCID,MissionPosition.ItemID,MissionPosition.BluePrint,MissionPosition.MapID,MissionPosition.Position,MissionPosition.Rotation",
+        "##ID,类型,描述,坐标类型,NPCID,物品ID,蓝图路径,地图ID,座标,旋转",
+        '500001,剧情 NPC,自定义 NPC,1,700001,0,,9901,"(X=40,Y=50,Z=60)","(Pitch=0,Yaw=45,Roll=0)"',
+      ].join("\n"),
+      "utf8",
+    );
+    const refreshedPlan = await readConfiguredMissionTargetPlan("900001");
+    expect(refreshedPlan.targets[0].transform).toMatchObject({
+      location: { x: 40, y: 50, z: 60 },
+      rotation: { pitch: 0, yaw: 45, roll: 0 },
     });
   });
 });

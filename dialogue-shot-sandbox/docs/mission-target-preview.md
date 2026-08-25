@@ -1,4 +1,4 @@
-# 任务目标物反向预览
+# 任务目标物与 Blueprint 工作流
 
 ## 数据链路
 
@@ -154,10 +154,73 @@ BP 输入框右侧的检查按钮会读取 BP、对应数字槽位、同名 Dial
 写入通过 OmniMcpCore 的对象属性与资产保存接口完成，不直接修改 `.uasset`
 二进制；写后回读整个数组，完全一致才执行保存。
 
+注册已有 BP 时还会检查对话空间配置。`Virtual=true`、主角初始坐标和
+`PreviewLevel` 均已配置时保持原值，不扫描关卡。如果存在缺失项：
+
+1. 优先读取 UE 当前选择中与目标 BP Generated Class 完全一致的 Actor。
+2. 当前选择没有匹配项时，扫描当前地图中的同类 BP Actor。
+3. 唯一匹配时，用 Actor 世界位置补 `PlayerInitPosition`，用世界旋转补
+   `PlayerForward`，并把当前地图写入 `PreviewLevel`。
+4. 多个匹配实例时停止写入，要求用户在 UE 中只选择一个。
+5. 已存在的坐标或地图字段不会被覆盖；只补缺失值并勾选虚拟场景。
+
+如果关卡中没有对应 BP Actor，但同时提供了任务节点，仍可使用任务目标物
+映射推算坐标和地图。两种方式都不可用时只完成模型注册并提示空间配置仍
+不完整，不猜测世界坐标。
+
+## BP 与目标物位置同步
+
+同时输入任务节点 ID 和已有 BP 后，检查流程会从桌面端保存的 `csvdir` 路径
+重新读取任务、目标物、NPC、模型和地图配置，不再要求重新选择 doc 文件夹。
+如果 BP 的 Formation、DialogModels 和目标物模型能够可靠对应，窗口提供两个
+显式操作：
+
+- “修改 BP 位置”：以最新目标物世界坐标更新 BP 中对应数字槽位的
+  `RelativeLocation` 和 `RelativeRotation`。
+- “BP → 目标物”：结合对话开始节点的 `PlayerInitPosition` 和
+  `PlayerForward`，把 BP 局部变换还原为世界坐标，再按目标物 ID 写入 Excel
+  源表；位置和旋转单元格标红，工作簿保持未保存。
+
+映射不依赖任务顺序。工具优先按模型类路径匹配；同一模型存在多个实例时，
+使用当前 BP 世界位置进行距离消歧。没有匹配的目标物和 BP 额外槽位都会列出
+并保持不变。缺少有效 `PlayerInitPosition` 时允许“目标物 → BP”建立坐标
+原点，但阻止“BP → 目标物”，避免把局部坐标误写成世界坐标。
+
+正向同步还会补齐同一开始节点上的空间配置：
+
+- `Formation` 指向当前 BP Generated Class。
+- `PreviewLevel` 使用任务 MapID 对应地图的完整对象路径。
+- `CommonDialogGraphProperties.Virtual=true`，并同步特殊属性镜像。
+- `PlayerInitPosition` 写入 BP 在地图中的世界坐标。
+
+新建 BP 时，首个实际目标物仍位于局部 `(0,0,100)`，因此 BP 世界坐标为该
+目标物世界坐标减去 `(0,0,100)`。已有 BP 优先保留已配置的世界原点。
+
+## 导入背景资产
+
+已有 BP 检查完成后，可以在 UE 关卡中选择 Actor，并点击任务目标物工作区
+固定底部操作栏中的“背景资产”。该流程
+只向 BP 添加非数字命名的展示组件，不新增目标物，不修改 DialogModels：
+
+- Blueprint Actor 写为 `ChildActorComponent` 和对应 Generated Class。
+- SkeletalMeshActor 写为 `SkeletalMeshComponent` 和实际 Skeletal Mesh。
+- StaticMeshActor 写为 `StaticMeshComponent` 和实际 Static Mesh。
+- 其他 Actor 显示为不支持，不参与写入。
+
+组件名直接使用资产名，例如 `SK_Banner` 或 `BP_BackgroundNpc`。BP 中已有同名
+同资产组件时更新 Transform；已有同名不同资产或一次选择中存在多个同名资产
+时停止该项，不自动重命名。
+
+工具使用 `PlayerInitPosition` 和 `PlayerForward` 把所选 Actor 的世界 Transform
+转换为 BP 局部 Transform，并完整写入位置、旋转和 `RelativeScale3D`。因此
+均匀、非均匀和负缩放都可保留。当前地图必须与 Preview Level 一致，BP 或
+选择变化会使预检令牌失效并要求重新检查。
+
 ## 主要代码
 
 - `src/data/csv.ts`：读取任务、目标物、NPC、模型、地图和场景资源 CSV。
 - `src/data/missionTargetResolver.ts`：执行跨表解析和加载前硬校验。
+- `src/data/missionTargetBlueprintSync.ts`：目标物与 BP 槽位映射及双向坐标换算。
 - `server/ueBridge.ts`：自动开图、目标物预览及空 Blueprint 填充。
 - `src/components/MissionTargetModal.tsx`：任务输入、变更摘要与目标物详情。
 - `src/ue/client.ts`：前端 UE API 客户端。

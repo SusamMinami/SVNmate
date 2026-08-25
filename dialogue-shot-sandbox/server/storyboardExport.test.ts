@@ -5,10 +5,15 @@ import {
   buildStoryboardCameraMove,
   exportDialogueStoryboard,
   inspectDialogueStoryboardExport,
+  updateDialogueContent,
   type UnrealInvoker,
 } from "./ueBridge";
 
-function commonProperties(dialogueId: string, cameraPosition = "") {
+function commonProperties(
+  dialogueId: string,
+  cameraPosition = "",
+  content = `对白 ${dialogueId}`,
+) {
   return [
     {
       Alias: "id",
@@ -19,6 +24,11 @@ function commonProperties(dialogueId: string, cameraPosition = "") {
       Alias: "CameraPosition",
       CurrentUint32: 0,
       CurrentString: cameraPosition,
+    },
+    {
+      Alias: "Content",
+      CurrentUint32: 0,
+      CurrentString: content,
     },
   ];
 }
@@ -356,5 +366,105 @@ describe("dialogue storyboard export", () => {
       originalCamera,
     );
     expect(connection.movesByData.get("ActionData1")).toEqual([]);
+  });
+});
+
+describe("dialogue content update", () => {
+  it("updates one Content property, verifies it and saves the dialogue asset", async () => {
+    const connection = new FakeStoryboardExportConnection();
+
+    const result = await updateDialogueContent(
+      {
+        dialogueId: "7352",
+        startId: "735200",
+        dialogueNodeId: "735201",
+        previousContent: "对白 735201",
+        content: "修改后的对白",
+      },
+      () => connection,
+    );
+
+    expect(result).toMatchObject({
+      status: "updated",
+      dialogueNodeId: "735201",
+      content: "修改后的对白",
+      saved: true,
+    });
+    expect(connection.commonByData.get("ActionData1")?.[2].CurrentString).toBe(
+      "修改后的对白",
+    );
+    expect(
+      connection.calls.filter(
+        (call) => call.action === "reflect.write_object_property",
+      ),
+    ).toHaveLength(1);
+    expect(
+      connection.calls.some((call) => call.action === "asset.save_asset"),
+    ).toBe(true);
+  });
+
+  it("blocks stale or dirty dialogue content before writing", async () => {
+    const stale = new FakeStoryboardExportConnection();
+
+    await expect(
+      updateDialogueContent(
+        {
+          dialogueId: "7352",
+          startId: "735200",
+          dialogueNodeId: "735201",
+          previousContent: "过期内容",
+          content: "修改后的对白",
+        },
+        () => stale,
+      ),
+    ).rejects.toThrow("UE 内容已发生变化");
+    expect(
+      stale.calls.some(
+        (call) => call.action === "reflect.write_object_property",
+      ),
+    ).toBe(false);
+
+    const dirty = new FakeStoryboardExportConnection();
+    dirty.dirtyPackages = [
+      "/Game/Seria/Task/dialoggraph/Test/735200",
+    ];
+    await expect(
+      updateDialogueContent(
+        {
+          dialogueId: "7352",
+          startId: "735200",
+          dialogueNodeId: "735201",
+          previousContent: "对白 735201",
+          content: "修改后的对白",
+        },
+        () => dirty,
+      ),
+    ).rejects.toThrow("存在未保存修改");
+    expect(
+      dirty.calls.some(
+        (call) => call.action === "reflect.write_object_property",
+      ),
+    ).toBe(false);
+  });
+
+  it("restores the original Content property when saving fails", async () => {
+    const connection = new FakeStoryboardExportConnection();
+    connection.saveResult = false;
+
+    await expect(
+      updateDialogueContent(
+        {
+          dialogueId: "7352",
+          startId: "735200",
+          dialogueNodeId: "735201",
+          previousContent: "对白 735201",
+          content: "修改后的对白",
+        },
+        () => connection,
+      ),
+    ).rejects.toThrow("已尝试恢复本轮未保存修改");
+    expect(connection.commonByData.get("ActionData1")?.[2].CurrentString).toBe(
+      "对白 735201",
+    );
   });
 });

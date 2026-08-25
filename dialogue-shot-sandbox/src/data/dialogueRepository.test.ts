@@ -4,7 +4,10 @@ import { createDirectorInput } from "../director/contracts";
 import { createRuleDecisions } from "../director/ruleDirector";
 import { parseDialogueDatabase } from "./csv";
 import { demoDatabase } from "./demo";
-import { findDialogueSequence } from "./dialogueRepository";
+import {
+  findDialogueSequence,
+  searchDialogueContent,
+} from "./dialogueRepository";
 
 describe("findDialogueSequence", () => {
   it("follows the start node and NextID chain", () => {
@@ -38,6 +41,24 @@ describe("findDialogueSequence", () => {
     expect(() => findDialogueSequence(demoDatabase, "204")).toThrow(
       "请输入四位数对话 ID",
     );
+  });
+
+  it("finds dialogue text with one row of context on each side", () => {
+    const result = searchDialogueContent(demoDatabase, "谁拿走了钥匙");
+
+    expect(result).toMatchObject({
+      query: "谁拿走了钥匙",
+      totalMatchCount: 1,
+      totalContextCount: 1,
+      truncated: false,
+    });
+    expect(result.contexts[0].prefix).toBe("2048");
+    expect(result.contexts[0].matchedDialogueIds).toEqual(["204804"]);
+    expect(result.contexts[0].contextDialogueIds).toEqual([
+      "204803",
+      "204804",
+      "204805",
+    ]);
   });
 
   it("keeps every speaker in a multi-character dialogue", () => {
@@ -136,5 +157,25 @@ describe("findDialogueSequence", () => {
     expect(result.warnings[0]).toContain(
       "已忽略 2 个关闭对话框 UI 节点",
     );
+    expect(
+      searchDialogueContent(database, "第一句可见台词").totalMatchCount,
+    ).toBe(1);
+    expect(
+      searchDialogueContent(database, "第二句可见台词").contexts[0]
+        .contextDialogueIds,
+    ).toEqual(["880002", "880004", "880005"]);
+    expect(searchDialogueContent(database, "第一句可见台词").contexts[0]
+      .matchedDialogueIds).toEqual(["880002"]);
+    expect(searchDialogueContent(database, "不存在的隐藏文字").contexts).toEqual(
+      [],
+    );
+  });
+
+  it("can return text context for a player-only dialogue", () => {
+    const result = searchDialogueContent(demoDatabase, "我们先合作");
+
+    expect(result.contexts[0].prefix).toBe("2049");
+    expect(result.contexts[0].sequence.participants).toHaveLength(1);
+    expect(result.contexts[0].sequence.participants[0].name).toBe("玩家");
   });
 });

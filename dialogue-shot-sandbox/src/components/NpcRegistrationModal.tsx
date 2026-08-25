@@ -1,5 +1,6 @@
 import {
   AlertTriangle,
+  ArrowLeft,
   CheckCircle2,
   FilePenLine,
   FileSpreadsheet,
@@ -36,6 +37,7 @@ interface NpcRegistrationModalProps {
   editRequest?: MissionTargetEditRequest;
   onClose: () => void;
   onTargetsUpdated?: (items: MissionTargetUpdateItem[]) => void;
+  embedded?: boolean;
 }
 
 interface NewNpcDraft {
@@ -90,8 +92,12 @@ export function NpcRegistrationModal({
   editRequest,
   onClose,
   onTargetsUpdated,
+  embedded = false,
 }: NpcRegistrationModalProps) {
   const editMode = Boolean(editRequest);
+  const titleId = editMode
+    ? "npc-target-edit-title"
+    : "npc-registration-title";
   const [selection, setSelection] =
     useState<SelectedLevelActorsResult | null>(null);
   const [candidates, setCandidates] = useState<
@@ -747,58 +753,96 @@ export function NpcRegistrationModal({
     }
   }
 
+  const refreshButton = (
+    <button
+      className={embedded ? "button workspace-floating-command" : "button"}
+      type="button"
+      onClick={() => void refreshSelection()}
+      disabled={busy}
+    >
+      {busy ? (
+        <LoaderCircle className="spin" size={16} />
+      ) : (
+        <RefreshCw size={16} />
+      )}
+      读取 UE 选择
+    </button>
+  );
+  const returnButton = (
+    <button
+      className={embedded ? "icon-button workspace-floating-back" : "icon-button"}
+      type="button"
+      title={embedded ? "返回上一级工作区" : "关闭"}
+      aria-label={
+        embedded
+          ? editMode
+            ? "返回任务目标物"
+            : "返回分镜工作台"
+          : editMode
+            ? "关闭修改目标物位置"
+            : "关闭注册 NPC"
+      }
+      onClick={onClose}
+      disabled={busy}
+    >
+      {embedded ? <ArrowLeft size={17} /> : <X size={17} />}
+    </button>
+  );
+
   return (
-    <div className="modal-backdrop npc-registration-backdrop" role="presentation">
+    <div
+      className={`modal-backdrop npc-registration-backdrop ${
+        embedded ? "tool-workspace__embedded" : ""
+      }`}
+      role={embedded ? undefined : "presentation"}
+    >
       <section
         className="npc-registration-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="npc-registration-title"
+        role={embedded ? "region" : "dialog"}
+        aria-modal={embedded ? undefined : true}
+        aria-label={
+          embedded ? (editMode ? "修改目标物位置" : "注册 NPC") : undefined
+        }
+        aria-labelledby={embedded ? undefined : titleId}
       >
-        <header>
-          <div className="npc-registration-title">
-            <span>
-              {editMode ? (
-                <PencilLine size={18} />
-              ) : (
-                <UserRoundPlus size={18} />
-              )}
-            </span>
-            <div>
-              <small>
-                {editMode ? "按目标物 ID 更新配置" : "UE 选择注册草稿"}
-              </small>
-              <h2 id="npc-registration-title">
-                {editMode ? "修改目标物位置" : "注册 NPC"}
-              </h2>
+        {embedded ? (
+          <>
+            {editMode && (
+              <div className="workspace-subview-title">
+                <small>任务目标物 / POSITION EDIT</small>
+                <strong>修改目标物位置</strong>
+              </div>
+            )}
+            <div className="workspace-floating-actions">
+              {refreshButton}
+              {returnButton}
             </div>
-          </div>
-          <div className="npc-registration-header-actions">
-            <button
-              className="button"
-              type="button"
-              onClick={() => void refreshSelection()}
-              disabled={busy}
-            >
-              {busy ? (
-                <LoaderCircle className="spin" size={16} />
-              ) : (
-                <RefreshCw size={16} />
-              )}
-              读取 UE 选择
-            </button>
-            <button
-              className="icon-button"
-              type="button"
-              title="关闭"
-              aria-label={editMode ? "关闭修改目标物位置" : "关闭注册 NPC"}
-              onClick={onClose}
-              disabled={busy}
-            >
-              <X size={17} />
-            </button>
-          </div>
-        </header>
+          </>
+        ) : (
+          <header>
+            <div className="npc-registration-title">
+              <span>
+                {editMode ? (
+                  <PencilLine size={18} />
+                ) : (
+                  <UserRoundPlus size={18} />
+                )}
+              </span>
+              <div>
+                <small>
+                  {editMode ? "按目标物 ID 更新配置" : "UE 选择注册草稿"}
+                </small>
+                <h2 id={titleId}>
+                  {editMode ? "修改目标物位置" : "注册 NPC"}
+                </h2>
+              </div>
+            </div>
+            <div className="npc-registration-header-actions">
+              {refreshButton}
+              {returnButton}
+            </div>
+          </header>
+        )}
 
         {error && (
           <div className="npc-registration-message is-error" role="alert">

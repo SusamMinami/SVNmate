@@ -421,9 +421,10 @@ function registerDesktopIpc(): void {
     "desktop:set-data-directory",
     async (_event, directoryPath: unknown) => {
       const previousDirectory = getConfigCsvDirectory();
+      let selectedDirectory = "";
       try {
         configureConfigCsvDirectory(String(directoryPath ?? ""));
-        const selectedDirectory = getConfigCsvDirectory();
+        selectedDirectory = getConfigCsvDirectory();
         await access(join(selectedDirectory, "NPC表.csv"));
         const state = await readDesktopState();
         await writeDesktopState({
@@ -433,6 +434,11 @@ function registerDesktopIpc(): void {
         return setupStatus();
       } catch (error) {
         configureConfigCsvDirectory(previousDirectory);
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          throw new Error(
+            `所选位置未找到 csvdir\\NPC表.csv：${selectedDirectory || String(directoryPath ?? "")}`,
+          );
+        }
         throw error;
       }
     },
