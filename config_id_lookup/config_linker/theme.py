@@ -54,6 +54,12 @@ def configure_styles(root: Tk, style: ttk.Style, dark: bool) -> dict[str, str]:
     style.configure("Subtitle.TLabel", background=colors["bg"], foreground=colors["muted"], font=("Segoe UI", 9))
     style.configure("Section.TLabel", background=colors["card"], foreground=colors["text"], font=("Segoe UI Semibold", 12))
     style.configure(
+        "DetailName.TLabel",
+        background=colors["card"],
+        foreground=colors["text"],
+        font=("Segoe UI Semibold", 12),
+    )
+    style.configure(
         "ProfileName.TLabel",
         background=colors["bg"],
         foreground=colors["text"],

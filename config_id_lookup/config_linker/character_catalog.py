@@ -10,7 +10,7 @@ import tempfile
 import threading
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator
@@ -20,8 +20,9 @@ BASE_TOKEN = "InxgbLPW1a8WiRs2KR4cDmevnhg"
 ROLE_TABLE_ID = "tblAUpM02flmHgJt"
 NAMED_ROLE_VIEW_ID = "vewD6vnEri"
 NPC_TABLE_ID = "tblry088Tp8n1qwL"
+VISUAL_ASSET_TABLE_ID = "tblenFgAcEG8RaB6"
 
-CACHE_SCHEMA_VERSION = 2
+CACHE_SCHEMA_VERSION = 3
 RATE_LIMIT_CODE = 800050828
 
 
@@ -49,6 +50,21 @@ class CharacterProfile:
     evidence_level: str
     analysis_status: str
     dialogue_count: int
+
+
+@dataclass(frozen=True)
+class CharacterVisualAsset:
+    kind: str
+    resource_id: str
+    record_id: str
+    file_token: str
+    file_name: str
+
+
+@dataclass(frozen=True)
+class CharacterVisuals:
+    avatar: CharacterVisualAsset | None = None
+    portrait: CharacterVisualAsset | None = None
 
 
 @dataclass(frozen=True)
@@ -87,6 +103,7 @@ class CharacterIndex:
     profiles: tuple[CharacterProfile, ...]
     npc_links: dict[int, str]
     fetched_at: datetime
+    visuals_by_npc: dict[int, CharacterVisuals] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -148,6 +165,15 @@ def _link_ids(value: Any) -> tuple[str, ...]:
             if record_id:
                 result.append(record_id)
     return tuple(result)
+
+
+def _attachment(value: Any) -> tuple[str, str]:
+    if not isinstance(value, list) or not value:
+        return "", ""
+    item = value[0]
+    if not isinstance(item, dict):
+        return "", ""
+    return _text(item.get("file_token")), _text(item.get("name"))
 
 
 def _split_tags(value: Any) -> tuple[str, ...]:
@@ -214,6 +240,15 @@ class CharacterCatalogCache:
                 );
                 CREATE INDEX IF NOT EXISTS idx_npc_map_character
                     ON npc_map(character_id);
+                CREATE TABLE IF NOT EXISTS visual_assets (
+                    npc_id INTEGER NOT NULL,
+                    kind TEXT NOT NULL,
+                    resource_id TEXT NOT NULL,
+                    record_id TEXT NOT NULL,
+                    file_token TEXT NOT NULL,
+                    file_name TEXT NOT NULL,
+                    PRIMARY KEY(npc_id, kind)
+                );
                 DROP TABLE IF EXISTS details;
                 """
             )
@@ -227,6 +262,7 @@ class CharacterCatalogCache:
             connection.execute("BEGIN IMMEDIATE")
             connection.execute("DELETE FROM characters")
             connection.execute("DELETE FROM npc_map")
+            connection.execute("DELETE FROM visual_assets")
             connection.executemany(
                 """
                 INSERT INTO characters(
@@ -254,6 +290,30 @@ class CharacterCatalogCache:
             connection.executemany(
                 "INSERT INTO npc_map(npc_id, character_id) VALUES(?, ?)",
                 sorted(index.npc_links.items()),
+            )
+            visual_rows = []
+            for npc_id, visuals in sorted(index.visuals_by_npc.items()):
+                for asset in (visuals.avatar, visuals.portrait):
+                    if asset is None:
+                        continue
+                    visual_rows.append(
+                        (
+                            npc_id,
+                            asset.kind,
+                            asset.resource_id,
+                            asset.record_id,
+                            asset.file_token,
+                            asset.file_name,
+                        )
+                    )
+            connection.executemany(
+                """
+                INSERT INTO visual_assets(
+                    npc_id, kind, resource_id, record_id,
+                    file_token, file_name
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                visual_rows,
             )
             connection.execute(
                 "INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)",
@@ -293,6 +353,31 @@ class CharacterCatalogCache:
                 (character_id,),
             ).fetchall()
         return tuple(int(row["npc_id"]) for row in rows)
+
+    def visuals_for_npc(self, npc_id: int) -> CharacterVisuals:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT kind, resource_id, record_id, file_token, file_name
+                FROM visual_assets
+                WHERE npc_id = ?
+                """,
+                (npc_id,),
+            ).fetchall()
+        assets = {
+            row["kind"]: CharacterVisualAsset(
+                kind=row["kind"],
+                resource_id=row["resource_id"],
+                record_id=row["record_id"],
+                file_token=row["file_token"],
+                file_name=row["file_name"],
+            )
+            for row in rows
+        }
+        return CharacterVisuals(
+            avatar=assets.get("avatar"),
+            portrait=assets.get("portrait"),
+        )
 
     def index_fetched_at(self) -> datetime | None:
         with self._connect() as connection:
@@ -419,6 +504,23 @@ class LarkCliBaseClient:
                     ],
                 },
             )
+            visual_rows = self._record_list(
+                VISUAL_ASSET_TABLE_ID,
+                (
+                    "资源ID",
+                    "资源类型",
+                    "预览图",
+                    "头像引用NPC",
+                    "立绘引用NPC",
+                    "源状态",
+                ),
+                filter_json={
+                    "logic": "and",
+                    "conditions": [
+                        ["源状态", "intersects", ["有效"]],
+                    ],
+                },
+            )
 
         profiles = tuple(
             profile
@@ -427,8 +529,10 @@ class LarkCliBaseClient:
         )
         profile_ids = {profile.record_id for profile in profiles}
         npc_links: dict[int, str] = {}
+        npc_ids_by_record: dict[str, int] = {}
         for row in npc_rows:
             npc_id = _integer(row.get("NPC.id"))
+            npc_record_id = _text(row.get("record_id"))
             links = _link_ids(row.get("关联角色"))
             if (
                 npc_id > 0
@@ -437,7 +541,65 @@ class LarkCliBaseClient:
                 and _active(row.get("源状态"))
             ):
                 npc_links[npc_id] = links[0]
-        return CharacterIndex(profiles, npc_links, _utc_now())
+                if npc_record_id:
+                    npc_ids_by_record[npc_record_id] = npc_id
+
+        visual_candidates: dict[int, dict[str, CharacterVisualAsset]] = {}
+        for row in sorted(
+            visual_rows,
+            key=lambda item: (
+                _integer(item.get("资源ID")),
+                _text(item.get("资源ID")),
+                _text(item.get("record_id")),
+            ),
+        ):
+            resource_type = _first_option(row.get("资源类型"))
+            if resource_type == "圆形头像":
+                kind = "avatar"
+                npc_record_ids = _link_ids(row.get("头像引用NPC"))
+            elif resource_type == "立绘":
+                kind = "portrait"
+                npc_record_ids = _link_ids(row.get("立绘引用NPC"))
+            else:
+                continue
+            file_token, file_name = _attachment(row.get("预览图"))
+            asset = CharacterVisualAsset(
+                kind=kind,
+                resource_id=_text(row.get("资源ID")),
+                record_id=_text(row.get("record_id")),
+                file_token=file_token,
+                file_name=file_name,
+            )
+            if not all(
+                (
+                    asset.resource_id,
+                    asset.record_id,
+                    asset.file_token,
+                    asset.file_name,
+                )
+            ):
+                continue
+            for npc_record_id in npc_record_ids:
+                npc_id = npc_ids_by_record.get(npc_record_id)
+                if npc_id is None:
+                    continue
+                visual_candidates.setdefault(npc_id, {}).setdefault(
+                    kind,
+                    asset,
+                )
+        visuals_by_npc = {
+            npc_id: CharacterVisuals(
+                avatar=assets.get("avatar"),
+                portrait=assets.get("portrait"),
+            )
+            for npc_id, assets in visual_candidates.items()
+        }
+        return CharacterIndex(
+            profiles,
+            npc_links,
+            _utc_now(),
+            visuals_by_npc,
+        )
 
     def _record_list(
         self,
@@ -449,60 +611,118 @@ class LarkCliBaseClient:
     ) -> list[dict[str, Any]]:
         with tempfile.TemporaryDirectory(prefix="configlinker-base-") as temp:
             directory = Path(temp)
-            output_name = "records.ndjson"
+            records = []
+            offset = 0
+            for page in range(100):
+                output_name = f"records-{page}.ndjson"
+                args = [
+                    "base",
+                    "+record-list",
+                    "--base-token",
+                    BASE_TOKEN,
+                    "--table-id",
+                    table_id,
+                ]
+                for field_name in fields:
+                    args.extend(("--field-id", field_name))
+                if view_id is not None:
+                    args.extend(("--view-id", view_id))
+                if filter_json is not None:
+                    filter_path = directory / "filter.json"
+                    filter_path.write_text(
+                        json.dumps(filter_json, ensure_ascii=False),
+                        encoding="utf-8",
+                    )
+                    args.extend(("--filter-json", "@filter.json"))
+                if offset:
+                    args.extend(("--offset", str(offset)))
+                args.extend(
+                    (
+                        "--limit",
+                        "2000",
+                        "--format",
+                        "ndjson",
+                        "--output",
+                        f"./{output_name}",
+                        "--overwrite",
+                        "--as",
+                        "user",
+                    )
+                )
+                self._throttle()
+                payload = self._run_json(
+                    args,
+                    cwd=directory,
+                    retry_rate_limit=True,
+                )
+                self._last_record_request = time.monotonic()
+                output_path = directory / output_name
+                if not output_path.is_file():
+                    raise CharacterCatalogError(
+                        f"飞书返回成功，但未生成记录文件：{table_id}"
+                    )
+                page_count = 0
+                with output_path.open("r", encoding="utf-8") as handle:
+                    for line in handle:
+                        if line.strip():
+                            value = json.loads(line)
+                            if isinstance(value, dict):
+                                records.append(value)
+                                page_count += 1
+                if not payload.get("has_more"):
+                    return records
+                next_offset = _integer(payload.get("next_offset"))
+                if next_offset <= offset or page_count == 0:
+                    raise CharacterCatalogError(
+                        f"表 {table_id} 分页游标无效，已停止刷新。"
+                    )
+                offset = next_offset
+            raise CharacterCatalogError(
+                f"表 {table_id} 分页超过安全上限，已停止刷新。"
+            )
+
+    def download_asset(
+        self,
+        asset: CharacterVisualAsset,
+        destination: Path,
+    ) -> Path:
+        destination = Path(destination)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temporary = destination.with_name(
+            f"{destination.stem}.download{destination.suffix}"
+        )
+        with self._request_lock:
+            self.check_ready()
             args = [
                 "base",
-                "+record-list",
+                "+record-download-attachment",
                 "--base-token",
                 BASE_TOKEN,
                 "--table-id",
-                table_id,
+                VISUAL_ASSET_TABLE_ID,
+                "--record-id",
+                asset.record_id,
+                "--file-token",
+                asset.file_token,
+                "--output",
+                f"./{temporary.name}",
+                "--overwrite",
+                "--as",
+                "user",
             ]
-            for field in fields:
-                args.extend(("--field-id", field))
-            if view_id is not None:
-                args.extend(("--view-id", view_id))
-            if filter_json is not None:
-                filter_path = directory / "filter.json"
-                filter_path.write_text(
-                    json.dumps(filter_json, ensure_ascii=False),
-                    encoding="utf-8",
-                )
-                args.extend(("--filter-json", "@filter.json"))
-            args.extend(
-                (
-                    "--limit",
-                    "2000",
-                    "--format",
-                    "ndjson",
-                    "--output",
-                    f"./{output_name}",
-                    "--overwrite",
-                    "--as",
-                    "user",
-                )
-            )
             self._throttle()
-            payload = self._run_json(args, cwd=directory, retry_rate_limit=True)
+            self._run_json(
+                args,
+                cwd=destination.parent,
+                retry_rate_limit=True,
+            )
             self._last_record_request = time.monotonic()
-            if payload.get("has_more"):
-                raise CharacterCatalogError(
-                    f"表 {table_id} 的角色筛选结果超过 2000 条，"
-                    "为避免显示不完整已停止刷新。"
-                )
-            output_path = directory / output_name
-            if not output_path.is_file():
-                raise CharacterCatalogError(
-                    f"飞书返回成功，但未生成记录文件：{table_id}"
-                )
-            records = []
-            with output_path.open("r", encoding="utf-8") as handle:
-                for line in handle:
-                    if line.strip():
-                        value = json.loads(line)
-                        if isinstance(value, dict):
-                            records.append(value)
-            return records
+        if not temporary.is_file():
+            raise CharacterCatalogError(
+                f"资源 {asset.resource_id} 下载成功但未生成图片文件"
+            )
+        temporary.replace(destination)
+        return destination
 
     def _throttle(self) -> None:
         elapsed = time.monotonic() - self._last_record_request
@@ -660,6 +880,29 @@ class CharacterCatalogService:
 
     def npc_ids_for_character(self, character_id: str) -> tuple[int, ...]:
         return self.cache.npc_ids_for_character(character_id)
+
+    def visuals_for_npc(self, npc_id: int) -> CharacterVisuals:
+        return self.cache.visuals_for_npc(npc_id)
+
+    def asset_path(self, asset: CharacterVisualAsset | None) -> Path | None:
+        if asset is None:
+            return None
+        suffix = Path(asset.file_name).suffix.casefold()
+        if suffix not in {".png", ".jpg", ".jpeg", ".webp", ".bmp"}:
+            suffix = ".img"
+        resource_id = re.sub(r"[^0-9A-Za-z_-]+", "_", asset.resource_id)
+        token_hint = re.sub(r"[^0-9A-Za-z_-]+", "", asset.file_token[:10])
+        filename = f"{asset.kind}_{resource_id}_{token_hint}{suffix}"
+        return self.cache.path.parent / "character_art" / filename
+
+    def ensure_visuals(self, npc_id: int) -> CharacterVisuals:
+        visuals = self.visuals_for_npc(npc_id)
+        for asset in (visuals.avatar, visuals.portrait):
+            path = self.asset_path(asset)
+            if asset is None or path is None or path.is_file():
+                continue
+            self.client.download_asset(asset, path)
+        return visuals
 
     def refresh_index(self) -> CharacterIndex:
         index = self.client.fetch_index()

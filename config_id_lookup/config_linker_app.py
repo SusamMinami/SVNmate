@@ -27,8 +27,8 @@ def _app_version() -> str:
     try:
         version = version_file.read_text(encoding="utf-8").strip()
     except (OSError, UnicodeError):
-        return "1.3.1"
-    return version or "1.3.1"
+        return "1.4.0"
+    return version or "1.4.0"
 
 
 def main() -> None:

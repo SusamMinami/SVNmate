@@ -13,6 +13,8 @@ from config_linker.character_catalog import (
     CharacterProfile,
     CharacterStory,
     CharacterTask,
+    CharacterVisualAsset,
+    CharacterVisuals,
 )
 from config_linker.models import NpcRecord, QueryKey, QueryKind, ResourceRecord, TargetRecord
 from config_linker.settings import AppSettings
@@ -21,8 +23,14 @@ from tests.fixture_factory import write_fixture
 
 
 class FakeCharacterService:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        visuals: CharacterVisuals | None = None,
+        visual_paths: dict[str, Path] | None = None,
+    ) -> None:
         self.cache = SimpleNamespace(profile_count=lambda: 1)
+        self.visuals = visuals or CharacterVisuals()
+        self.visual_paths = visual_paths or {}
         self.profile = CharacterProfile(
             record_id="rec_role",
             role_key="named:测试NPC甲",
@@ -44,6 +52,15 @@ class FakeCharacterService:
 
     def npc_ids_for_character(self, character_id: str) -> tuple[int, ...]:
         return (2001,) if character_id == self.profile.record_id else ()
+
+    def visuals_for_npc(self, npc_id: int) -> CharacterVisuals:
+        return self.visuals if npc_id == 2001 else CharacterVisuals()
+
+    def asset_path(self, asset: CharacterVisualAsset | None) -> Path | None:
+        return self.visual_paths.get(asset.kind) if asset is not None else None
+
+    def ensure_visuals(self, npc_id: int) -> CharacterVisuals:
+        return self.visuals_for_npc(npc_id)
 
 
 class FakeCharacterContentRepository:
@@ -93,7 +110,7 @@ class UiSmokeTests(unittest.TestCase):
                 str(app.choose_doc_button.cget("text")),
                 "选择 doc 目录",
             )
-            self.assertEqual(app.version_text.get(), "v1.3.1")
+            self.assertEqual(app.version_text.get(), "v1.4.0")
         finally:
             root.destroy()
 
@@ -341,10 +358,79 @@ class UiSmokeTests(unittest.TestCase):
                 set(window.tab_buttons),
                 {"tasks", "dialogues", "stories"},
             )
-            self.assertNotIn("2001", window.meta_label.cget("text"))
-            self.assertNotIn("3001", window.meta_label.cget("text"))
+            self.assertNotIn("2001", window.portrait_banner.meta)
+            self.assertNotIn("3001", window.portrait_banner.meta)
         finally:
             root.destroy()
+
+    def test_character_visuals_show_ids_and_portrait_background(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            from PIL import Image
+
+            directory = Path(temp_dir)
+            avatar_path = directory / "avatar.png"
+            portrait_path = directory / "portrait.png"
+            Image.new("RGBA", (84, 84), "#4B78C2").save(avatar_path)
+            Image.new("RGBA", (512, 100), "#7A8798").save(portrait_path)
+            visuals = CharacterVisuals(
+                avatar=CharacterVisualAsset(
+                    "avatar",
+                    "16",
+                    "rec_avatar",
+                    "avatar-token",
+                    "avatar.png",
+                ),
+                portrait=CharacterVisualAsset(
+                    "portrait",
+                    "100",
+                    "rec_portrait",
+                    "portrait-token",
+                    "portrait.png",
+                ),
+            )
+            service = FakeCharacterService(
+                visuals,
+                {
+                    "avatar": avatar_path,
+                    "portrait": portrait_path,
+                },
+            )
+            root = Tk()
+            root.withdraw()
+            try:
+                app = ConfigLinkerApp(
+                    root,
+                    config_path=Path("__missing_config_for_test__.json"),
+                    auto_load=False,
+                    character_service=service,
+                    character_content_repository=FakeCharacterContentRepository(),
+                    auto_refresh_characters=False,
+                )
+                app._show_record_detail(
+                    NpcRecord(2001, "主线角色", "测试NPC甲", 3001, 3)
+                )
+                root.update_idletasks()
+
+                self.assertEqual(
+                    app.character_avatar.winfo_manager(),
+                    "pack",
+                )
+                self.assertEqual(
+                    app.character_avatar.tooltip.text,
+                    "头像 ID：16",
+                )
+
+                app._open_character_detail()
+                root.update_idletasks()
+                window = app.character_window
+                self.assertIsNotNone(window)
+                self.assertEqual(
+                    window.portrait_banner.tooltip.text,
+                    "立绘 ID：100",
+                )
+                self.assertIsNotNone(window.portrait_banner._source_image)
+            finally:
+                root.destroy()
 
 
 if __name__ == "__main__":

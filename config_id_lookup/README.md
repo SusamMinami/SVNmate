@@ -1,6 +1,6 @@
 # 配置关系检索器
 
-当前版本：`1.3.1`
+当前版本：`1.4.0`
 
 一个只读的 Windows 桌面工具，用于检索以下三张配置表之间的关系：
 
@@ -21,6 +21,8 @@ m目标物表.csv -> NPC表.csv -> m模型资源表.csv
 - 反查同一 NPC 下的其他目标物
 - 反查使用同一资源的其他 NPC
 - 只为飞书 Base 中的有效命名角色提供角色档案
+- 在选中详情中显示对应 NPC 的头像，角色档案使用立绘作为顶部背景
+- 鼠标悬停头像或立绘时显示对应的视觉资源 ID
 - 展示角色标签、设定摘要、性格分析和故事经历
 - 从本地配置按角色查看具体任务、台词和剧情，支持正文筛选
 - 飞书仅同步命名角色档案与 NPC 归属，断网时继续使用档案缓存
@@ -80,13 +82,13 @@ npm install -g @larksuite/cli
 
 首次手动点击“同步角色档案”时，如果用户授权无效，ConfigLinker 会询问是否打开飞书授权页面。只申请 Base 记录和视图读取权限，Token 继续由 `lark-cli` 管理，ConfigLinker 不保存 Token。
 
-角色档案与 NPC 归属每天最多自动同步一次，缓存位置：
+角色档案、NPC 归属和视觉资源映射每天最多自动同步一次，缓存位置：
 
 ```text
 %LOCALAPPDATA%\SVNmate\ConfigLinker\character_catalog.sqlite3
 ```
 
-任务、台词和剧情不从飞书下载。点击“重新加载”时，工具直接扫描当前 `doc\csvdir` 中的三张本地配置表并建立内存索引。飞书或网络暂时不可用时，工具保留上一份角色档案缓存；本地内容仍按当前工作区读取。公开 GitHub Release 不包含角色资料。
+头像和立绘在首次查看对应 NPC 时按需下载，并缓存在同目录的 `character_art` 文件夹。任务、台词和剧情不从飞书下载。点击“重新加载”时，工具直接扫描当前 `doc\csvdir` 中的三张本地配置表并建立内存索引。飞书或网络暂时不可用时，工具保留上一份角色档案和图片缓存；本地内容仍按当前工作区读取。公开 GitHub Release 不包含角色资料。
 
 ## 安装与更新
 
@@ -145,6 +147,12 @@ python -m PyInstaller --noconfirm ConfigLinker.spec
 
 ```text
 python generate_icon.py
+```
+
+ConfigLinker 的头像与立绘显示同样依赖 Pillow；开发运行或构建前请确保已安装：
+
+```text
+python -m pip install -r requirements.txt
 ```
 
 构建产物：

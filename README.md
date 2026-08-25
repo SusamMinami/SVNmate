@@ -71,7 +71,7 @@ KindleLarkStatus 源码仓保持私有，Windows ZIP 与 manifest 发布在 SVNm
 
 ConfigLinker 的完整操作说明见：[ConfigLinker 使用指南](config_id_lookup/USER_GUIDE.md)。
 
-ConfigLinker `1.3.1` 支持按 NPC 名称片段查找对应 ID；命名角色档案与 NPC 归属使用 `lark-cli` 从飞书 Base 只读同步并缓存在本机，任务、台词和剧情直接读取当前 `doc\csvdir`。通用角色和待确认角色不会展示。
+ConfigLinker `1.4.0` 支持按 NPC 名称片段查找对应 ID，并在命名角色的选中详情和档案页展示头像、立绘及资源 ID；角色档案、NPC 归属和视觉资源映射使用 `lark-cli` 从飞书 Base 只读同步并缓存在本机，任务、台词和剧情直接读取当前 `doc\csvdir`。通用角色和待确认角色不会展示。
 
 模块配置只记录在 `svn_auto_tool_config.json`。SVNmate 不读取 ConfigLinker 的配置仓数据，也不读取 KindleLarkStatus 的 OAuth Token、SSH 私钥或运行时配置。
 

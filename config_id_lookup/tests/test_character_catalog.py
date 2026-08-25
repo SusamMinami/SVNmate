@@ -10,9 +10,12 @@ from config_linker.character_catalog import (
     CharacterCatalogService,
     CharacterIndex,
     CharacterProfile,
+    CharacterVisualAsset,
+    CharacterVisuals,
     LarkCliBaseClient,
     NPC_TABLE_ID,
     ROLE_TABLE_ID,
+    VISUAL_ASSET_TABLE_ID,
 )
 
 
@@ -35,6 +38,19 @@ def _profile(
     )
 
 
+def _asset(
+    kind: str = "avatar",
+    resource_id: str = "9001",
+) -> CharacterVisualAsset:
+    return CharacterVisualAsset(
+        kind=kind,
+        resource_id=resource_id,
+        record_id=f"rec_{kind}",
+        file_token=f"token_{kind}",
+        file_name=f"{kind}_{resource_id}.png",
+    )
+
+
 class CharacterCatalogCacheTests(unittest.TestCase):
     def test_index_and_reverse_npc_mapping_round_trip(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -52,6 +68,28 @@ class CharacterCatalogCacheTests(unittest.TestCase):
             )
             self.assertEqual(cache.profile_count(), 1)
             self.assertEqual(cache.index_fetched_at(), fetched_at)
+
+    def test_visual_assets_round_trip_by_npc(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache = CharacterCatalogCache(Path(temp_dir) / "catalog.sqlite3")
+            visuals = CharacterVisuals(
+                avatar=_asset(),
+                portrait=_asset("portrait", "8001"),
+            )
+            cache.replace_index(
+                CharacterIndex(
+                    (_profile(),),
+                    {100001: "rec_role"},
+                    datetime.now(timezone.utc),
+                    {100001: visuals},
+                )
+            )
+
+            self.assertEqual(cache.visuals_for_npc(100001), visuals)
+            self.assertEqual(
+                cache.visuals_for_npc(999999),
+                CharacterVisuals(),
+            )
 
     def test_replacing_index_removes_stale_profiles_and_links(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -155,21 +193,54 @@ class LarkCliBaseClientTests(unittest.TestCase):
             ],
             NPC_TABLE_ID: [
                 {
+                    "record_id": "rec_npc_named",
                     "NPC.id": "100002",
                     "关联角色": [{"id": "rec_named"}],
                     "源状态": ["有效"],
                 },
                 {
+                    "record_id": "rec_npc_stale",
                     "NPC.id": "100003",
                     "关联角色": [{"id": "rec_stale"}],
                     "源状态": ["有效"],
                 },
                 {
+                    "record_id": "rec_npc_ambiguous",
                     "NPC.id": "100004",
                     "关联角色": [
                         {"id": "rec_named"},
                         {"id": "rec_other"},
                     ],
+                    "源状态": ["有效"],
+                },
+            ],
+            VISUAL_ASSET_TABLE_ID: [
+                {
+                    "record_id": "rec_avatar",
+                    "资源ID": "16",
+                    "资源类型": ["圆形头像"],
+                    "预览图": [
+                        {
+                            "file_token": "avatar-token",
+                            "name": "head_16.png",
+                        }
+                    ],
+                    "头像引用NPC": [{"id": "rec_npc_named"}],
+                    "立绘引用NPC": [],
+                    "源状态": ["有效"],
+                },
+                {
+                    "record_id": "rec_portrait",
+                    "资源ID": "100",
+                    "资源类型": ["立绘"],
+                    "预览图": [
+                        {
+                            "file_token": "portrait-token",
+                            "name": "portrait_100.png",
+                        }
+                    ],
+                    "头像引用NPC": [],
+                    "立绘引用NPC": [{"id": "rec_npc_named"}],
                     "源状态": ["有效"],
                 },
             ],
@@ -180,6 +251,62 @@ class LarkCliBaseClientTests(unittest.TestCase):
         self.assertEqual([profile.name for profile in index.profiles], ["艾丽"])
         self.assertEqual(index.profiles[0].tags, ("冷静", "谨慎"))
         self.assertEqual(index.npc_links, {100002: "rec_named"})
+        self.assertEqual(
+            index.visuals_by_npc[100002].avatar.resource_id,
+            "16",
+        )
+        self.assertEqual(
+            index.visuals_by_npc[100002].portrait.resource_id,
+            "100",
+        )
+
+    def test_record_list_follows_pagination_offsets(self) -> None:
+        calls: list[list[str]] = []
+
+        def runner(
+            args: list[str],
+            cwd: Path,
+        ) -> subprocess.CompletedProcess[str]:
+            calls.append(args)
+            output = cwd / args[args.index("--output") + 1]
+            offset = (
+                int(args[args.index("--offset") + 1])
+                if "--offset" in args
+                else 0
+            )
+            rows = (
+                [{"record_id": "rec_1"}, {"record_id": "rec_2"}]
+                if offset == 0
+                else [{"record_id": "rec_3"}]
+            )
+            output.write_text(
+                "".join(json.dumps(row) + "\n" for row in rows),
+                encoding="utf-8",
+            )
+            data = {
+                "has_more": offset == 0,
+                "next_offset": 2 if offset == 0 else 0,
+            }
+            return subprocess.CompletedProcess(
+                args,
+                0,
+                stdout=json.dumps({"ok": True, "data": data}),
+                stderr="",
+            )
+
+        client = LarkCliBaseClient(
+            cli_path=Path("unused"),
+            runner=runner,
+            minimum_interval=0,
+        )
+        rows = client._record_list("tbl_test", ("Name",))
+
+        self.assertEqual(
+            [row["record_id"] for row in rows],
+            ["rec_1", "rec_2", "rec_3"],
+        )
+        self.assertNotIn("--offset", calls[0])
+        self.assertEqual(calls[1][calls[1].index("--offset") + 1], "2")
 
 class CharacterCatalogServiceTests(unittest.TestCase):
     def test_cache_freshness(self) -> None:

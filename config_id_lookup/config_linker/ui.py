@@ -9,9 +9,11 @@ from .character_catalog import (
     CharacterCatalogService,
     CharacterIndex,
     CharacterProfile,
+    CharacterVisuals,
     LarkAuthenticationRequired,
 )
 from .character_detail import CharacterDetailWindow
+from .character_visuals import CharacterAvatar
 from .dpi import configure_tk_dpi, get_window_dpi, get_work_area, window_geometry
 from .interactions import ClickArbiter
 from .local_character_content import (
@@ -86,7 +88,7 @@ class ConfigLinkerApp:
         *,
         config_path: Path | None = None,
         auto_load: bool = True,
-        app_version: str = "1.3.1",
+        app_version: str = "1.4.0",
         update_controller: ConfigLinkerUpdateController | None = None,
         character_service: CharacterCatalogService | None = None,
         character_content_repository: (
@@ -126,7 +128,11 @@ class ConfigLinkerApp:
         self.character_content_error = ""
         self.selected_record: Any = None
         self.selected_character_profile: CharacterProfile | None = None
+        self.selected_character_visuals = CharacterVisuals()
+        self.selected_character_npc_id: int | None = None
         self.character_window: CharacterDetailWindow | None = None
+        self.character_window_npc_id: int | None = None
+        self.visual_loading_npcs: set[int] = set()
 
         self.style = ttk.Style()
         self.colors = configure_styles(self.root, self.style, self._should_use_dark_theme())
@@ -138,6 +144,7 @@ class ConfigLinkerApp:
         self.message_text = StringVar(
             value=settings_warning or "输入 ID 或 NPC 名称开始查询"
         )
+        self.selected_name_text = StringVar(value="")
         self.detail_text = StringVar(value="选择任意结果行可查看完整信息")
         self.resource_path_text = StringVar(value="")
         self.target_position_text = StringVar(value="")
@@ -365,15 +372,34 @@ class ConfigLinkerApp:
             style="Accent.TButton",
             command=self._open_character_detail,
         )
+        self.detail_body = ttk.Frame(detail_card, style="Card.TFrame")
+        self.detail_body.pack(fill=X, pady=(3, 0))
+        self.character_avatar = CharacterAvatar(
+            self.detail_body,
+            self.colors,
+        )
+        self.detail_content = ttk.Frame(
+            self.detail_body,
+            style="Card.TFrame",
+        )
+        self.detail_content.pack(side=LEFT, fill=X, expand=True)
+        self.selected_name_label = ttk.Label(
+            self.detail_content,
+            textvariable=self.selected_name_text,
+            style="DetailName.TLabel",
+        )
         self.detail_label = ttk.Label(
-            detail_card,
+            self.detail_content,
             textvariable=self.detail_text,
             style="Muted.TLabel",
             justify="left",
             wraplength=1110,
         )
-        self.detail_label.pack(fill=X, anchor="w", pady=(3, 0))
-        self.resource_detail_frame = ttk.Frame(detail_card, style="Card.TFrame")
+        self.detail_label.pack(fill=X, anchor="w")
+        self.resource_detail_frame = ttk.Frame(
+            self.detail_content,
+            style="Card.TFrame",
+        )
         ttk.Label(
             self.resource_detail_frame,
             text="配置路径",
@@ -385,7 +411,10 @@ class ConfigLinkerApp:
             state="readonly",
         )
         self.resource_path_entry.pack(side=LEFT, fill=X, expand=True)
-        self.target_detail_frame = ttk.Frame(detail_card, style="Card.TFrame")
+        self.target_detail_frame = ttk.Frame(
+            self.detail_content,
+            style="Card.TFrame",
+        )
         ttk.Label(
             self.target_detail_frame,
             text="坐标",
@@ -1196,6 +1225,8 @@ class ConfigLinkerApp:
 
     def _show_record_detail(self, record: Any) -> None:
         self.selected_record = record
+        self.selected_name_label.pack_forget()
+        self.selected_name_text.set("")
         self.resource_detail_frame.pack_forget()
         self.target_detail_frame.pack_forget()
         self.resource_path_text.set("")
@@ -1211,8 +1242,14 @@ class ConfigLinkerApp:
             self.target_rotation_text.set(record.rotation)
             self.target_detail_frame.pack(fill=X, pady=(6, 0))
         elif isinstance(record, NpcRecord):
+            self.selected_name_text.set(record.name or "未命名 NPC")
+            self.selected_name_label.pack(
+                fill=X,
+                anchor="w",
+                before=self.detail_label,
+            )
             text = (
-                f"NPC ID：{record.id}  |  名称：{record.name or '未填写'}  |  "
+                f"NPC ID：{record.id}  |  "
                 f"资源 ID：{record.resource_id if record.resource_id is not None else '未填写'}  |  "
                 f"CSV 行：{record.row_number}\n备注：{record.note or '未填写'}"
             )
@@ -1229,7 +1266,11 @@ class ConfigLinkerApp:
 
     def _update_character_action(self, record: Any) -> None:
         self.character_detail_button.pack_forget()
+        self.character_avatar.pack_forget()
+        self.character_avatar.set_visual("", None, None)
         self.selected_character_profile = None
+        self.selected_character_visuals = CharacterVisuals()
+        self.selected_character_npc_id = None
         if (
             not isinstance(record, NpcRecord)
             or not record.name.strip()
@@ -1240,19 +1281,139 @@ class ConfigLinkerApp:
         if profile is None:
             return
         self.selected_character_profile = profile
+        self.selected_character_npc_id = record.id
+        visuals = self.character_service.visuals_for_npc(record.id)
+        self.selected_character_visuals = visuals
+        self._render_character_avatar(profile, visuals)
         self.character_detail_button.pack(side=RIGHT)
+        self._ensure_character_visuals_async(record.id)
+
+    def _render_character_avatar(
+        self,
+        profile: CharacterProfile,
+        visuals: CharacterVisuals,
+    ) -> None:
+        if visuals.avatar is None:
+            self.character_avatar.pack_forget()
+            return
+        service = self.character_service
+        image_path = (
+            service.asset_path(visuals.avatar)
+            if service is not None
+            else None
+        )
+        self.character_avatar.set_visual(
+            profile.name,
+            visuals.avatar,
+            image_path,
+        )
+        if not self.character_avatar.winfo_manager():
+            self.character_avatar.pack(
+                side=LEFT,
+                padx=(0, 12),
+                anchor="n",
+                before=self.detail_content,
+            )
+
+    def _ensure_character_visuals_async(self, npc_id: int) -> None:
+        service = self.character_service
+        if service is None or npc_id in self.visual_loading_npcs:
+            return
+        visuals = service.visuals_for_npc(npc_id)
+        assets = tuple(
+            asset
+            for asset in (visuals.avatar, visuals.portrait)
+            if asset is not None
+        )
+        if not assets:
+            return
+        if all(
+            (path := service.asset_path(asset)) is not None and path.is_file()
+            for asset in assets
+        ):
+            self._character_visuals_ready(npc_id, visuals)
+            return
+        self.visual_loading_npcs.add(npc_id)
+        threading.Thread(
+            target=self._load_character_visuals_worker,
+            args=(npc_id,),
+            daemon=True,
+        ).start()
+
+    def _load_character_visuals_worker(self, npc_id: int) -> None:
+        service = self.character_service
+        if service is None:
+            return
+        try:
+            visuals = service.ensure_visuals(npc_id)
+        except Exception as exc:
+            self.root.after(
+                0,
+                lambda error=exc: self._character_visuals_failed(
+                    npc_id,
+                    error,
+                ),
+            )
+            return
+        self.root.after(
+            0,
+            lambda: self._character_visuals_ready(npc_id, visuals),
+        )
+
+    def _character_visuals_ready(
+        self,
+        npc_id: int,
+        visuals: CharacterVisuals,
+    ) -> None:
+        self.visual_loading_npcs.discard(npc_id)
+        if (
+            self.selected_character_npc_id == npc_id
+            and self.selected_character_profile is not None
+        ):
+            self.selected_character_visuals = visuals
+            self._render_character_avatar(
+                self.selected_character_profile,
+                visuals,
+            )
+        if (
+            self.character_window_npc_id == npc_id
+            and self.character_window is not None
+            and self.character_window.exists()
+        ):
+            service = self.character_service
+            portrait_path = (
+                service.asset_path(visuals.portrait)
+                if service is not None
+                else None
+            )
+            self.character_window.set_visuals(visuals, portrait_path)
+
+    def _character_visuals_failed(
+        self,
+        npc_id: int,
+        error: Exception,
+    ) -> None:
+        self.visual_loading_npcs.discard(npc_id)
+        if self.selected_character_npc_id == npc_id:
+            self._set_message(f"角色图片加载失败：{error}", "warning")
 
     def _open_character_detail(self) -> None:
         profile = self.selected_character_profile
         service = self.character_service
-        if profile is None or service is None:
+        npc_id = self.selected_character_npc_id
+        if profile is None or service is None or npc_id is None:
             return
+        visuals = service.visuals_for_npc(npc_id)
+        portrait_path = service.asset_path(visuals.portrait)
         if (
             self.character_window is not None
             and self.character_window.exists()
             and self.character_window.profile.record_id == profile.record_id
         ):
+            self.character_window_npc_id = npc_id
+            self.character_window.set_visuals(visuals, portrait_path)
             self.character_window.focus()
+            self._ensure_character_visuals_async(npc_id)
             return
         if self.character_window is not None and self.character_window.exists():
             self.character_window.close()
@@ -1260,9 +1421,13 @@ class ConfigLinkerApp:
             self.root,
             profile,
             self.colors,
+            visuals=visuals,
+            portrait_path=portrait_path,
             on_close=self._character_window_closed,
         )
         self.character_window = window
+        self.character_window_npc_id = npc_id
+        self._ensure_character_visuals_async(npc_id)
         content_repository = self.character_content_repository
         if content_repository is None:
             window.set_error(
@@ -1282,6 +1447,7 @@ class ConfigLinkerApp:
 
     def _character_window_closed(self) -> None:
         self.character_window = None
+        self.character_window_npc_id = None
 
     def _copy_text(self, value: str, label: str) -> None:
         if not value:
@@ -1338,6 +1504,13 @@ class ConfigLinkerApp:
             return
         self.current_theme = theme
         self.colors = configure_styles(self.root, self.style, theme == "dark")
+        if hasattr(self, "character_avatar"):
+            self.character_avatar.set_colors(self.colors)
+        if (
+            self.character_window is not None
+            and self.character_window.exists()
+        ):
+            self.character_window.set_colors(self.colors)
         for tree in self.result_trees.values():
             tree.tag_configure(
                 "focus",

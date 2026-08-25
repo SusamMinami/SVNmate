@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from datetime import datetime
+from pathlib import Path
 from tkinter import BOTH, END, LEFT, RIGHT, X, Y, StringVar, Text, Toplevel, ttk
 from typing import Any
 
@@ -11,7 +12,9 @@ from .character_catalog import (
     CharacterProfile,
     CharacterStory,
     CharacterTask,
+    CharacterVisuals,
 )
+from .character_visuals import CharacterPortraitBanner
 
 
 TAB_TASKS = "tasks"
@@ -26,6 +29,8 @@ class CharacterDetailWindow:
         profile: CharacterProfile,
         colors: dict[str, str],
         *,
+        visuals: CharacterVisuals | None = None,
+        portrait_path: Path | None = None,
         on_close: Callable[[], None] | None = None,
     ) -> None:
         self.parent = parent
@@ -35,6 +40,8 @@ class CharacterDetailWindow:
         self.details: CharacterDetails | None = None
         self.current_tab = TAB_TASKS
         self.item_records: dict[str, Any] = {}
+        self.visuals = visuals or CharacterVisuals()
+        self.portrait_path = portrait_path
 
         self.window = Toplevel(parent)
         self.window.title(f"{profile.name} · 角色档案")
@@ -71,19 +78,16 @@ class CharacterDetailWindow:
         )
         main.pack(fill=BOTH, expand=True)
 
-        header = ttk.Frame(main, style="App.TFrame")
-        header.pack(fill=X)
-        self.name_label = ttk.Label(
-            header,
-            text=self.profile.name,
-            style="ProfileName.TLabel",
+        self.portrait_banner = CharacterPortraitBanner(
+            main,
+            self.colors,
+            name=self.profile.name,
         )
-        self.name_label.pack(side=LEFT)
-        self.meta_label = ttk.Label(
-            header,
-            style="ProfileMeta.TLabel",
+        self.portrait_banner.pack(fill=X)
+        self.portrait_banner.set_visual(
+            self.visuals.portrait,
+            self.portrait_path,
         )
-        self.meta_label.pack(side=RIGHT, padx=(14, 0))
 
         self.tags_frame = ttk.Frame(main, style="App.TFrame")
         self.tags_frame.pack(fill=X, pady=(8, 10))
@@ -288,7 +292,21 @@ class CharacterDetailWindow:
             )
             if value
         ]
-        self.meta_label.configure(text=" · ".join(meta))
+        self.portrait_banner.set_meta(" · ".join(meta))
+
+    def set_visuals(
+        self,
+        visuals: CharacterVisuals,
+        portrait_path: Path | None,
+    ) -> None:
+        self.visuals = visuals
+        self.portrait_path = portrait_path
+        self.portrait_banner.set_visual(visuals.portrait, portrait_path)
+
+    def set_colors(self, colors: dict[str, str]) -> None:
+        self.colors = colors
+        self.window.configure(bg=colors["bg"])
+        self.portrait_banner.set_colors(colors)
 
     def set_loading(self, cached: bool = False) -> None:
         del cached
