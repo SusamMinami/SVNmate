@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   EXCEL_REGISTRATION_SCRIPT,
+  EXCEL_TARGET_UPDATE_SCRIPT,
   parseNpcRegistrationWriteRequest,
   powerShellFileArguments,
   readablePowerShellError,
@@ -103,13 +104,31 @@ describe("Excel PowerShell errors", () => {
       "$cell.Value2 = [double]$value",
     );
     expect(EXCEL_REGISTRATION_SCRIPT).toContain(
-      "$cell.Font.Color = 255",
+      "$sheet.Cells.Item($row, $column).Font.Color = 255",
     );
     expect(
       EXCEL_REGISTRATION_SCRIPT.match(/Set-NewCell \$npcSheet/g)?.length,
     ).toBeGreaterThan(10);
     expect(EXCEL_REGISTRATION_SCRIPT).toContain(
       'if ($scope -eq "all")',
+    );
+  });
+
+  it("retries busy COM calls and bulk-reads source tables", () => {
+    expect(EXCEL_REGISTRATION_SCRIPT).toContain(
+      "for ($attempt = 1; $attempt -le 20; $attempt++)",
+    );
+    expect(EXCEL_REGISTRATION_SCRIPT).toContain(
+      "批量读取目标物表",
+    );
+    expect(EXCEL_REGISTRATION_SCRIPT).not.toContain(
+      "Start-Process -FilePath $path",
+    );
+    expect(EXCEL_TARGET_UPDATE_SCRIPT).toContain(
+      "Get-RangeValues $targetSheet",
+    );
+    expect(EXCEL_TARGET_UPDATE_SCRIPT).toContain(
+      "$excel.Workbooks.Open($targetPath, 0, $false)",
     );
   });
 

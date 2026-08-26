@@ -365,13 +365,20 @@ export interface StoryboardExportRequest {
 
 export interface StoryboardExportNodePreview {
   dialogueId: string;
-  shotIndex: number | null;
+  shotIndex: number;
   role: "shot_start" | "continuation";
   action: "create" | "replace" | "clear" | "unchanged";
   existingCameraPosition: string;
   desiredCameraPosition: string;
   existingMovementCount: number;
   desiredMovementCount: number;
+}
+
+export interface StoryboardExportShotPreview {
+  shotIndex: number;
+  dialogueIds: string[];
+  projectionValid: boolean;
+  blockedReasons: string[];
 }
 
 export interface DialogueStoryboardExportPreview {
@@ -386,8 +393,10 @@ export interface DialogueStoryboardExportPreview {
   overwrittenNodeCount: number;
   clearedNodeCount: number;
   invalidShotCount: number;
+  globalBlockedReasons: string[];
   blockedReasons: string[];
   warnings: string[];
+  shots: StoryboardExportShotPreview[];
   nodes: StoryboardExportNodePreview[];
 }
 

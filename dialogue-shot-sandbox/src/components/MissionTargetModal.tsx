@@ -4,6 +4,8 @@ import {
   ArrowRightLeft,
   Boxes,
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   FileSearch,
   Link2,
   LoaderCircle,
@@ -19,6 +21,7 @@ import {
 import { type FormEvent, useState } from "react";
 import { NpcRegistrationModal } from "./NpcRegistrationModal";
 import { resolveMissionTargets } from "../data/missionTargetResolver";
+import { classifyMissionTargetSelection } from "../data/missionTargetSelection";
 import type {
   BackgroundPropImportPreview,
   DialogueModelRegistrationSlot,
@@ -39,6 +42,7 @@ import {
   inspectMissionTargetBlueprint,
   inspectBackgroundPropImport,
   loadMissionTargetPreview,
+  readSelectedLevelActors,
   registerBlueprintDialogueModels,
   updateMissionTargetBlueprintPositions,
   updateMissionTargetsFromBlueprint,
@@ -166,6 +170,10 @@ export function MissionTargetModal({
     useState<BackgroundPropImportPreview | null>(null);
   const [selectedBackgroundActorRefs, setSelectedBackgroundActorRefs] =
     useState<Set<string>>(new Set());
+  const [backgroundMatchedTargetIds, setBackgroundMatchedTargetIds] = useState<
+    string[]
+  >([]);
+  const [existingSlotsExpanded, setExistingSlotsExpanded] = useState(false);
   const [backgroundPropError, setBackgroundPropError] = useState("");
   const [mapLoadDecision, setMapLoadDecision] =
     useState<MapLoadDecision | null>(null);
@@ -283,6 +291,15 @@ export function MissionTargetModal({
           inspection.sync?.mappings.map((mapping) => mapping.targetId) ?? [],
         ),
       );
+      setExistingSlotsExpanded(
+        inspection.slots.some(
+          (slot) =>
+            slot.status !== "registered" ||
+            slot.registrationMatchesModel === false,
+        ),
+      );
+    } else {
+      setExistingSlotsExpanded(false);
     }
     if (updateStatus) {
       setStatus(inspection.message);
@@ -357,6 +374,7 @@ export function MissionTargetModal({
     if (!blueprintName.trim()) {
       return;
     }
+    const matchedTargetIds = backgroundMatchedTargetIds;
     if (
       !window.confirm(
         "将补齐当前 BP 对应对话的 Formation、Preview Level、虚拟场景和主角初始 Transform。" +
@@ -385,8 +403,18 @@ export function MissionTargetModal({
         targetOverrideItems,
       );
       applyBlueprintInspection(inspection, false);
+      if (matchedTargetIds.length > 0) {
+        const refreshedExistingTargetIds =
+          inspection.sync?.mappings.map((mapping) => mapping.targetId) ?? [];
+        setSelectedTargetIds(
+          new Set([...refreshedExistingTargetIds, ...matchedTargetIds]),
+        );
+      }
+      const reviewedActorRefs =
+        backgroundPropPreview?.items.map((item) => item.actorRef) ?? [];
       const preview = await inspectBackgroundPropImport(
         blueprintName.trim(),
+        reviewedActorRefs.length > 0 ? reviewedActorRefs : undefined,
       );
       setBackgroundPropPreview(preview);
       setSelectedBackgroundActorRefs((current) =>
@@ -538,10 +566,45 @@ export function MissionTargetModal({
     setStatus("");
     setBackgroundPropError("");
     try {
+      const selection = await readSelectedLevelActors();
+      const classification =
+        plan && selection.actors.length > 0
+          ? classifyMissionTargetSelection(plan, selection)
+          : null;
+      const matchedTargetIds = classification?.matchedTargetIds ?? [];
+      const unmatchedActorRefs = classification?.unmatchedActorRefs ?? [];
+      if (matchedTargetIds.length > 0) {
+        setSelectedTargetIds(
+          new Set([...existingTargetIds, ...matchedTargetIds]),
+        );
+        const existingMatchCount = matchedTargetIds.filter((targetId) =>
+          existingTargetIds.has(targetId),
+        ).length;
+        setStatus(
+          `已根据 UE 选择勾选 ${matchedTargetIds.length} 个任务目标物，其他可选目标物已取消${
+            existingMatchCount > 0
+              ? `；其中 ${existingMatchCount} 个已在 BP 中固定保留`
+              : ""
+          }`,
+        );
+      }
+      if (
+        matchedTargetIds.length > 0 &&
+        unmatchedActorRefs.length === 0
+      ) {
+        setBackgroundPropPreview(null);
+        setSelectedBackgroundActorRefs(new Set());
+        setBackgroundMatchedTargetIds([]);
+        return;
+      }
+      const reviewedActorRefs =
+        matchedTargetIds.length > 0 ? unmatchedActorRefs : undefined;
       const preview = await inspectBackgroundPropImport(
         blueprintName.trim(),
+        reviewedActorRefs,
       );
       setBackgroundPropPreview(preview);
+      setBackgroundMatchedTargetIds(matchedTargetIds);
       setSelectedBackgroundActorRefs(
         new Set(
           preview.items
@@ -550,10 +613,11 @@ export function MissionTargetModal({
         ),
       );
     } catch (previewError) {
+      setBackgroundMatchedTargetIds([]);
       setError(
         previewError instanceof Error
           ? previewError.message
-          : "读取 UE 背景资产失败",
+          : "读取 UE 选择失败",
       );
     } finally {
       setBusy(false);
@@ -607,13 +671,20 @@ export function MissionTargetModal({
         blueprintName.trim(),
         backgroundPropPreview.reviewToken,
         Array.from(selectedBackgroundActorRefs),
+        backgroundPropPreview.items.map((item) => item.actorRef),
       );
       setBackgroundPropPreview(null);
       setSelectedBackgroundActorRefs(new Set());
+      const selectionPrefix =
+        backgroundMatchedTargetIds.length > 0
+          ? `已勾选 ${backgroundMatchedTargetIds.length} 个任务目标物；`
+          : "";
+      setBackgroundMatchedTargetIds([]);
       setStatus(
-        result.status === "unchanged"
+        selectionPrefix +
+          (result.status === "unchanged"
           ? "所选 UE Actor 已经与 BP 一致"
-          : `已直接写入 BP：新增 ${result.createdComponentNames.length} 个，更新 ${result.updatedComponentNames.length} 个`,
+          : `已直接写入 BP：新增 ${result.createdComponentNames.length} 个，更新 ${result.updatedComponentNames.length} 个`),
       );
     } catch (importError) {
       setBackgroundPropError(
@@ -1117,7 +1188,9 @@ export function MissionTargetModal({
       disabled={busy || !blueprintName.trim()}
       title={
         blueprintName.trim()
-          ? "读取 UE 当前选择，审核后直接写入当前 BP"
+          ? plan
+            ? "读取 UE 当前选择，匹配任务目标物并审核未匹配资源"
+            : "读取 UE 当前选择，审核后直接写入当前 BP"
           : "请先填写 BP 文件名"
       }
     >
@@ -1275,69 +1348,90 @@ export function MissionTargetModal({
                   {blueprintInspection.dialogueAssetPath}
                 </code>
               </section>
-              <div className="mission-target-section-label">
-                <strong>BP 已有内容</strong>
-                <span>固定保留 · 不重新编号</span>
-              </div>
-              <div className="mission-target-table-wrap">
-                <table className="mission-target-table mission-target-dialogue-table">
-                  <thead>
-                    <tr>
-                      <th className="mission-target-select">
-                        <input
-                          type="checkbox"
-                          checked
-                          disabled
-                          readOnly
-                          aria-label="已有 BP 模型固定保留"
-                        />
-                      </th>
-                      <th>槽位</th>
-                      <th>BP 模型资源</th>
-                      <th>DialogNPCTable 名称</th>
-                      <th>对话状态</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {blueprintRegistrationSlots.map((slot) => {
-                      const label = dialogueModelLabel(slot, true);
-                      return (
-                        <tr
-                          className="mission-target-row--existing"
-                          key={slot.modelIndex}
-                        >
-                          <td className="mission-target-select">
-                            <input
-                              type="checkbox"
-                              checked
-                              disabled
-                              readOnly
-                              aria-label={`BP 已有槽位 ${slot.modelIndex} 固定保留`}
-                            />
-                          </td>
-                          <td>
-                            <strong>{slot.modelIndex}</strong>
-                          </td>
-                          <td title={slot.modelClassPath}>
-                            <code>
-                              {slot.modelClassPath.split("/").at(-1)}
-                            </code>
-                          </td>
-                          <td>
-                            <code>{label.name}</code>
-                          </td>
-                          <td>
-                            <span className="dialogue-model-status dialogue-model-status--registered">
-                              BP 已有
-                            </span>
-                            <small>{label.status}</small>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+              <button
+                className="mission-target-section-label mission-target-section-toggle"
+                type="button"
+                aria-expanded={existingSlotsExpanded}
+                aria-controls="mission-target-existing-slots"
+                aria-label={`${existingSlotsExpanded ? "收起" : "展开"} BP 已有内容`}
+                onClick={() => setExistingSlotsExpanded((current) => !current)}
+              >
+                <span className="mission-target-section-toggle__title">
+                  {existingSlotsExpanded ? (
+                    <ChevronDown size={15} />
+                  ) : (
+                    <ChevronRight size={15} />
+                  )}
+                  <strong>BP 已有内容</strong>
+                </span>
+                <span>
+                  {blueprintRegistrationSlots.length} 个固定槽位 · 不重新编号
+                </span>
+              </button>
+              {existingSlotsExpanded && (
+                <div
+                  className="mission-target-table-wrap"
+                  id="mission-target-existing-slots"
+                >
+                  <table className="mission-target-table mission-target-dialogue-table">
+                    <thead>
+                      <tr>
+                        <th className="mission-target-select">
+                          <input
+                            type="checkbox"
+                            checked
+                            disabled
+                            readOnly
+                            aria-label="已有 BP 模型固定保留"
+                          />
+                        </th>
+                        <th>槽位</th>
+                        <th>BP 模型资源</th>
+                        <th>DialogNPCTable 名称</th>
+                        <th>对话状态</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {blueprintRegistrationSlots.map((slot) => {
+                        const label = dialogueModelLabel(slot, true);
+                        return (
+                          <tr
+                            className="mission-target-row--existing"
+                            key={slot.modelIndex}
+                          >
+                            <td className="mission-target-select">
+                              <input
+                                type="checkbox"
+                                checked
+                                disabled
+                                readOnly
+                                aria-label={`BP 已有槽位 ${slot.modelIndex} 固定保留`}
+                              />
+                            </td>
+                            <td>
+                              <strong>{slot.modelIndex}</strong>
+                            </td>
+                            <td title={slot.modelClassPath}>
+                              <code>
+                                {slot.modelClassPath.split("/").at(-1)}
+                              </code>
+                            </td>
+                            <td>
+                              <code>{label.name}</code>
+                            </td>
+                            <td>
+                              <span className="dialogue-model-status dialogue-model-status--registered">
+                                BP 已有
+                              </span>
+                              <small>{label.status}</small>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </>
           )}
           {plan ? (
@@ -1764,6 +1858,7 @@ export function MissionTargetModal({
                   onClick={() => {
                     setBackgroundPropPreview(null);
                     setSelectedBackgroundActorRefs(new Set());
+                    setBackgroundMatchedTargetIds([]);
                     setBackgroundPropError("");
                   }}
                   disabled={busy}
@@ -1778,6 +1873,13 @@ export function MissionTargetModal({
                 <span>
                   当前地图：{backgroundPropPreview.mapAssetPath}
                 </span>
+                {backgroundMatchedTargetIds.length > 0 && (
+                  <span className="background-prop-choice__routing">
+                    已识别任务目标物{" "}
+                    <code>{backgroundMatchedTargetIds.join("、")}</code>
+                    ，下列未匹配 Actor 按背景资源审核
+                  </span>
+                )}
               </div>
               {backgroundPropPreview.blockedReasons.length > 0 && (
                 <div
@@ -1918,6 +2020,7 @@ export function MissionTargetModal({
                     onClick={() => {
                       setBackgroundPropPreview(null);
                       setSelectedBackgroundActorRefs(new Set());
+                      setBackgroundMatchedTargetIds([]);
                       setBackgroundPropError("");
                     }}
                     disabled={busy}

@@ -34,6 +34,23 @@ function commonProperties(
   ];
 }
 
+function normalizeUnrealReadback(value: unknown): unknown {
+  if (typeof value === "number") {
+    return Math.fround(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map(normalizeUnrealReadback);
+  }
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .reverse()
+        .map(([key, child]) => [key, normalizeUnrealReadback(child)]),
+    );
+  }
+  return value;
+}
+
 class FakeStoryboardExportConnection implements UnrealInvoker {
   readonly calls: Array<{
     action: string;
@@ -55,6 +72,8 @@ class FakeStoryboardExportConnection implements UnrealInvoker {
   ]);
   saveResult = true;
   dirtyPackages: string[] = [];
+  normalizeMoveReadback = false;
+  forcePushBlendOutTime: number | null = null;
   connected = false;
   closed = false;
 
@@ -148,7 +167,23 @@ class FakeStoryboardExportConnection implements UnrealInvoker {
         return structuredClone(this.commonByData.get(dataName));
       }
       if (property === "MoveCameras") {
-        return structuredClone(this.movesByData.get(dataName));
+        const moves = structuredClone(this.movesByData.get(dataName));
+        if (!this.normalizeMoveReadback) {
+          return moves;
+        }
+        const normalized = normalizeUnrealReadback(moves) as Array<
+          Record<string, unknown>
+        >;
+        for (const move of normalized) {
+          move.FutureDefault = 0;
+          const push = move.PushCameraArg as
+            | Record<string, unknown>
+            | undefined;
+          if (push && this.forcePushBlendOutTime !== null) {
+            push.BlendOutTime = this.forcePushBlendOutTime;
+          }
+        }
+        return normalized;
       }
     }
     if (
@@ -271,6 +306,7 @@ describe("dialogue storyboard export", () => {
       "clear",
       "replace",
     ]);
+    expect(preview.nodes.map((node) => node.shotIndex)).toEqual([0, 0, 1]);
 
     const result = await exportDialogueStoryboard(
       { ...request, reviewToken: preview.reviewToken },
@@ -295,6 +331,76 @@ describe("dialogue storyboard export", () => {
     expect(
       connection.calls.some((call) => call.action === "asset.save_asset"),
     ).toBe(true);
+  });
+
+  it("writes only the requested shot and leaves other nodes unchanged", async () => {
+    const connection = new FakeStoryboardExportConnection();
+    const fullRequest = exportRequest();
+    const request: StoryboardExportRequest = {
+      ...fullRequest,
+      dialogueIds: ["735203"],
+      shots: [fullRequest.shots[1]],
+    };
+    const preview = await inspectDialogueStoryboardExport(
+      request,
+      () => connection,
+    );
+
+    const result = await exportDialogueStoryboard(
+      { ...request, reviewToken: preview.reviewToken },
+      () => connection,
+    );
+
+    expect(result.changedNodeCount).toBe(1);
+    expect(connection.commonByData.get("ActionData1")?.[1].CurrentString).toBe(
+      "",
+    );
+    expect(connection.commonByData.get("ActionData2")?.[1].CurrentString).toBe(
+      "c2",
+    );
+    expect(connection.commonByData.get("ActionData3")?.[1].CurrentString).toBe(
+      "c1",
+    );
+  });
+
+  it("accepts UE float32 normalization and additional default fields", async () => {
+    const connection = new FakeStoryboardExportConnection();
+    connection.normalizeMoveReadback = true;
+    const request = exportRequest("dolly_in");
+    const preview = await inspectDialogueStoryboardExport(
+      request,
+      () => connection,
+    );
+
+    await expect(
+      exportDialogueStoryboard(
+        { ...request, reviewToken: preview.reviewToken },
+        () => connection,
+      ),
+    ).resolves.toMatchObject({
+      status: "exported",
+      saved: true,
+    });
+  });
+
+  it("reports the exact camera field when UE changes a written value", async () => {
+    const connection = new FakeStoryboardExportConnection();
+    connection.normalizeMoveReadback = true;
+    connection.forcePushBlendOutTime = 0;
+    const request = exportRequest("dolly_in");
+    const preview = await inspectDialogueStoryboardExport(
+      request,
+      () => connection,
+    );
+
+    await expect(
+      exportDialogueStoryboard(
+        { ...request, reviewToken: preview.reviewToken },
+        () => connection,
+      ),
+    ).rejects.toThrow(
+      "MoveCameras[0].PushCameraArg.BlendOutTime 期望 1，回读 0",
+    );
   });
 
   it("blocks focal-length animation instead of silently losing it", async () => {

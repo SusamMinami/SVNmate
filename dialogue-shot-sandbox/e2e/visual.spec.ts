@@ -135,6 +135,13 @@ test("keeps rail icons fixed and slides between workspace levels", async ({
 }) => {
   await page.goto("/");
 
+  const hoveredShot = page.locator(".shot-row").nth(1);
+  const shotNumber = hoveredShot.locator(".shot-row__number");
+  const shotNumberBefore = await shotNumber.boundingBox();
+  await hoveredShot.hover();
+  await page.waitForTimeout(220);
+  expect(await shotNumber.boundingBox()).toEqual(shotNumberBefore);
+
   const rail = page.locator(".app-rail");
   const npcButton = page.getByRole("button", { name: "注册 NPC" });
   const npcIcon = npcButton.locator("svg");
@@ -180,7 +187,21 @@ test("keeps rail icons fixed and slides between workspace levels", async ({
     "animation-name",
     "workspace-page-exit-up",
   );
-  await page.waitForTimeout(600);
+  await page.waitForTimeout(320);
+  const enteringPage = page.locator('[data-workspace-state="entering"]');
+  const exitingPage = page.locator('[data-workspace-state="exiting"]');
+  const enteringMotion = await enteringPage.evaluate((element) => ({
+    shadow: getComputedStyle(element).boxShadow,
+    y: new DOMMatrixReadOnly(getComputedStyle(element).transform).m42,
+  }));
+  const exitingY = await exitingPage.evaluate(
+    (element) =>
+      new DOMMatrixReadOnly(getComputedStyle(element).transform).m42,
+  );
+  expect(enteringMotion.shadow).not.toBe("none");
+  expect(enteringMotion.y).toBeGreaterThan(100);
+  expect(exitingY).toBeLessThan(-100);
+  await page.waitForTimeout(460);
   await expect(page.locator('[data-workspace-state="exiting"]')).toHaveCount(0);
 
   const refreshButton = page.locator(
@@ -1794,7 +1815,7 @@ test("batch edits text search results without requiring a storyboard", async ({
 test("offers the detected Blueprint formation before designing shots", async ({
   page,
 }, testInfo) => {
-  let inspectedExportRequest: Record<string, unknown> | null = null;
+  const inspectedExportRequests: Record<string, unknown>[] = [];
   let exportRequests = 0;
   let releaseFormation!: () => void;
   const formationGate = new Promise<void>((resolve) => {
@@ -1849,7 +1870,7 @@ test("offers the detected Blueprint formation before designing shots", async ({
     });
   });
   await page.route("**/api/ue/storyboard/inspect", async (route) => {
-    inspectedExportRequest = route.request().postDataJSON();
+    inspectedExportRequests.push(route.request().postDataJSON());
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -1869,8 +1890,17 @@ test("offers the detected Blueprint formation before designing shots", async ({
           overwrittenNodeCount: 1,
           clearedNodeCount: 1,
           invalidShotCount: 1,
+          globalBlockedReasons: [],
           blockedReasons: [],
           warnings: ["1 个镜头的投影验收未通过，确认后仍可导出"],
+          shots: [
+            {
+              shotIndex: 0,
+              dialogueIds: ["735001", "735002"],
+              projectionValid: false,
+              blockedReasons: [],
+            },
+          ],
           nodes: [
             {
               dialogueId: "735001",
@@ -1884,7 +1914,7 @@ test("offers the detected Blueprint formation before designing shots", async ({
             },
             {
               dialogueId: "735002",
-              shotIndex: null,
+              shotIndex: 0,
               role: "continuation",
               action: "clear",
               existingCameraPosition: "c2",
@@ -1991,15 +2021,19 @@ test("offers the detected Blueprint formation before designing shots", async ({
   const exportButton = page.getByRole("button", { name: "导出到 UE" });
   await expect(exportButton).toBeEnabled();
   await exportButton.click();
-  const exportDialog = page.getByRole("dialog", {
-    name: "导出当前分镜",
-  });
+  const exportDialog = page.getByRole("dialog");
   await expect(exportDialog).toBeVisible();
+  await expect(
+    exportDialog.getByRole("heading", { name: "导出当前镜头 01" }),
+  ).toBeVisible();
+  await expect(
+    exportDialog.getByRole("checkbox", { name: "选择镜头 01" }),
+  ).toHaveCount(0);
   await expect(exportDialog.getByText("覆盖", { exact: true })).toBeVisible();
   await expect(
     exportDialog.getByText("清空旧镜头", { exact: true }),
   ).toBeVisible();
-  expect(inspectedExportRequest).toMatchObject({
+  expect(inspectedExportRequests[0]).toMatchObject({
     dialogueId: "7350",
     startId: "735000",
     dialogueIds: ["735001", "735002"],
@@ -2007,13 +2041,43 @@ test("offers the detected Blueprint formation before designing shots", async ({
     usesBlueprintFormation: true,
   });
   await exportDialog.screenshot({
+    path: testInfo.outputPath("storyboard-export-current.png"),
+  });
+  await exportDialog.getByRole("button", { name: "全部导出" }).click();
+  await expect(
+    exportDialog.getByRole("heading", { name: "导出全部分镜" }),
+  ).toBeVisible();
+  expect(inspectedExportRequests).toHaveLength(2);
+  await exportDialog.screenshot({
     path: testInfo.outputPath("storyboard-export-preview.png"),
   });
   const confirmButton = exportDialog.getByRole("button", {
     name: "确认写入并保存",
   });
+  const shotCheckbox = exportDialog.getByRole("checkbox", {
+    name: "选择镜头 01",
+  });
+  await expect(shotCheckbox).toBeChecked();
+  await shotCheckbox.uncheck();
+  await expect(exportDialog.getByText("0 / 1")).toBeVisible();
   await expect(confirmButton).toBeDisabled();
-  await exportDialog.getByRole("checkbox").check();
+  await expect(confirmButton).toBeInViewport();
+  await expect(
+    exportDialog.getByRole("button", { name: "取消" }),
+  ).toBeInViewport();
+  const exportDialogBox = await exportDialog.boundingBox();
+  const exportFooterBox = await exportDialog.locator("footer").boundingBox();
+  expect(exportDialogBox).not.toBeNull();
+  expect(exportFooterBox).not.toBeNull();
+  expect(exportFooterBox!.y + exportFooterBox!.height).toBeLessThanOrEqual(
+    exportDialogBox!.y + exportDialogBox!.height + 1,
+  );
+  await exportDialog.screenshot({
+    path: testInfo.outputPath("storyboard-export-no-selection.png"),
+  });
+  await shotCheckbox.check();
+  await expect(confirmButton).toBeDisabled();
+  await exportDialog.getByLabel(/已核对 2 个节点的覆盖内容/).check();
   await expect(confirmButton).toBeEnabled();
   await confirmButton.click();
   await expect(
@@ -2820,6 +2884,15 @@ test("locks and registers every existing numeric Blueprint slot", async ({
   await expect(
     workspace.getByText("BP 已有内容", { exact: true }),
   ).toBeVisible();
+  await workspace
+    .getByRole("button", { name: "收起 BP 已有内容" })
+    .click();
+  await expect(
+    workspace.locator(".mission-target-dialogue-table tbody tr"),
+  ).toHaveCount(0);
+  await workspace
+    .getByRole("button", { name: "展开 BP 已有内容" })
+    .click();
   await expect(
     workspace.locator(".mission-target-dialogue-table tbody tr"),
   ).toHaveCount(4);
@@ -2853,6 +2926,7 @@ test("offers bidirectional position sync for a registered Blueprint", async ({
   let appendBlueprintRequest: Record<string, unknown> | null = null;
   let backgroundApplyRequest: Record<string, unknown> | null = null;
   let backgroundDialogueRequest: Record<string, unknown> | null = null;
+  const backgroundInspectRequests: Record<string, unknown>[] = [];
   let backgroundInspectCount = 0;
   await page.route("**/api/ue/formation/read", async (route) => {
     await route.fulfill({
@@ -3073,9 +3147,55 @@ test("offers bidirectional position sync for a registered Blueprint", async ({
     },
   );
   await page.route(
+    "**/api/ue/selection/read",
+    async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          data: {
+            mapAssetPath: "/Game/Test/Maps/TestMap",
+            actors: [
+              {
+                actorRef:
+                  "PersistentLevel.ShotSandboxMissionTargetPreview_900001_500002",
+                label:
+                  "ShotSandboxMissionTargetPreview_900001_500002",
+                classPath:
+                  "/Game/Seria/NPC/Added/BP_Added.BP_Added_C",
+                assetKind: "blueprint_actor",
+                assetPath:
+                  "/Game/Seria/NPC/Added/BP_Added.BP_Added",
+                transform: {
+                  location: { x: 150, y: 260, z: 350 },
+                  rotation: { pitch: 0, yaw: 45, roll: 0 },
+                  scale: { x: 1, y: 1, z: 1 },
+                },
+              },
+              {
+                actorRef: "PersistentLevel.SkeletalMeshActor_1",
+                label: "场景旗帜",
+                classPath: "/Script/Engine.SkeletalMeshActor",
+                assetKind: "skeletal_mesh",
+                assetPath: "/Game/Test/Props/SK_Banner.SK_Banner",
+                transform: {
+                  location: { x: 130, y: 260, z: 340 },
+                  rotation: { pitch: 0, yaw: 45, roll: 0 },
+                  scale: { x: 1.5, y: 0.75, z: 2 },
+                },
+              },
+            ],
+          },
+        }),
+      });
+    },
+  );
+  await page.route(
     "**/api/ue/mission-targets/background-props/inspect",
     async (route) => {
       backgroundInspectCount += 1;
+      backgroundInspectRequests.push(route.request().postDataJSON());
       await route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -3273,6 +3393,12 @@ test("offers bidirectional position sync for a registered Blueprint", async ({
     dialog.getByText(/BP 已有 2 个固定角色位；待追加 0 \/ 1 个目标物/),
   ).toBeVisible();
   await expect(dialog.getByText("BP 已有内容", { exact: true })).toBeVisible();
+  await expect(
+    dialog.getByRole("button", { name: "展开 BP 已有内容" }),
+  ).toBeVisible();
+  await dialog
+    .getByRole("button", { name: "展开 BP 已有内容" })
+    .click();
   const existingRows = dialog.locator(
     ".mission-target-dialogue-table tbody .mission-target-row--existing",
   );
@@ -3305,7 +3431,12 @@ test("offers bidirectional position sync for a registered Blueprint", async ({
   const backgroundDialog = dialog.getByRole("dialog", {
     name: "UE 选择写入 BP",
   });
+  await expect(dialog.getByLabel("选择目标物 500002")).toBeChecked();
+  await expect(
+    backgroundDialog.getByText(/已识别任务目标物\s+500002/),
+  ).toBeVisible();
   await expect(backgroundDialog.getByText("场景旗帜")).toBeVisible();
+  await expect(backgroundDialog.getByText(/ShotSandboxMissionTargetPreview/)).toHaveCount(0);
   await expect(backgroundDialog.getByText("Skeletal Mesh")).toBeVisible();
   await expect(
     backgroundDialog.getByText("SK_Banner", { exact: true }),
@@ -3327,6 +3458,7 @@ test("offers bidirectional position sync for a registered Blueprint", async ({
       exact: true,
     }),
   ).toBeEnabled();
+  await expect(dialog.getByLabel("选择目标物 500002")).toBeChecked();
   expect(backgroundDialogueRequest).toEqual({
     blueprintName: "BP_735000",
     selectedModelIndexes: [],
@@ -3334,6 +3466,16 @@ test("offers bidirectional position sync for a registered Blueprint", async ({
     targetOverrides: [],
     preserveModels: true,
   });
+  expect(backgroundInspectRequests).toEqual([
+    {
+      blueprintName: "BP_735000",
+      actorRefs: ["PersistentLevel.SkeletalMeshActor_1"],
+    },
+    {
+      blueprintName: "BP_735000",
+      actorRefs: ["PersistentLevel.SkeletalMeshActor_1"],
+    },
+  ]);
   await backgroundDialog.screenshot({
     path: testInfo.outputPath("background-prop-import.png"),
   });
@@ -3349,6 +3491,7 @@ test("offers bidirectional position sync for a registered Blueprint", async ({
     blueprintName: "BP_735000",
     reviewToken: "a".repeat(64),
     selectedActorRefs: ["PersistentLevel.SkeletalMeshActor_1"],
+    reviewedActorRefs: ["PersistentLevel.SkeletalMeshActor_1"],
   });
 
   await dialog.screenshot({

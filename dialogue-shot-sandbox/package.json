@@ -1,7 +1,7 @@
 {
   "name": "dialogue-shot-sandbox",
   "private": true,
-  "version": "0.20.0",
+  "version": "0.20.1",
   "description": "面向 UE4 对话制作的 AI 分镜与角色调度工具",
   "author": "Shot Sandbox Team",
   "main": "desktop-dist/main.cjs",

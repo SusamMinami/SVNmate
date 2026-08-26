@@ -2727,6 +2727,7 @@ textarea:focus-visible {
 }
 
 .storyboard-export-modal > header {
+  grid-row: 1;
   border-bottom: 1px solid var(--border);
 }
 
@@ -2756,7 +2757,19 @@ textarea:focus-visible {
   font-size: 18px;
 }
 
+.storyboard-export-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.storyboard-export-all-button {
+  min-height: 34px;
+  padding: 0 12px;
+}
+
 .storyboard-export-summary {
+  grid-row: 2;
   padding: 12px 18px;
   background: var(--surface-muted);
   border-bottom: 1px solid var(--border);
@@ -2798,6 +2811,7 @@ textarea:focus-visible {
 }
 
 .storyboard-export-messages {
+  grid-row: 3;
   border-bottom: 1px solid var(--border);
 }
 
@@ -2836,6 +2850,7 @@ textarea:focus-visible {
 }
 
 .storyboard-export-table-wrap {
+  grid-row: 4;
   min-height: 0;
   overflow: auto;
 }
@@ -2863,25 +2878,41 @@ textarea:focus-visible {
   font-size: 9px;
 }
 
-.storyboard-export-table th:nth-child(1) {
+.storyboard-export-table__select {
+  width: 42px;
+}
+
+.storyboard-export-table__shot {
   width: 58px;
 }
 
-.storyboard-export-table th:nth-child(2) {
+.storyboard-export-table__dialogue,
+.storyboard-export-table__role {
   width: 100px;
 }
 
-.storyboard-export-table th:nth-child(3) {
-  width: 100px;
-}
-
-.storyboard-export-table th:nth-child(4),
-.storyboard-export-table th:nth-child(5) {
+.storyboard-export-table__camera {
   width: 130px;
 }
 
-.storyboard-export-table th:nth-child(6) {
+.storyboard-export-table__action {
   width: 105px;
+}
+
+.storyboard-export-table__select {
+  text-align: center !important;
+}
+
+.storyboard-export-table__select input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: #26313a;
+  cursor: pointer;
+}
+
+.storyboard-export-table__select input:disabled {
+  cursor: not-allowed;
 }
 
 .storyboard-export-table td code,
@@ -2904,6 +2935,16 @@ textarea:focus-visible {
 .storyboard-export-table tr[data-action="clear"],
 .storyboard-export-table tr[data-action="replace"] {
   background: #fffaf1;
+}
+
+.storyboard-export-table tr[data-selected="false"] > td:not(.storyboard-export-table__select) {
+  color: #89939b;
+  background: #f5f6f7;
+}
+
+.storyboard-export-table tr[data-selected="false"] td code,
+.storyboard-export-table tr[data-selected="false"] td small {
+  color: #89939b;
 }
 
 .export-action {
@@ -2933,6 +2974,9 @@ textarea:focus-visible {
 }
 
 .storyboard-export-modal > footer {
+  position: relative;
+  z-index: 2;
+  grid-row: 5;
   background: var(--surface-muted);
   border-top: 1px solid var(--border);
 }
@@ -3180,6 +3224,37 @@ textarea:focus-visible {
 .mission-target-section-label span {
   color: var(--text-muted);
   font-size: 9px;
+}
+
+.mission-target-section-toggle {
+  width: 100%;
+  border-top: 0;
+  border-right: 0;
+  border-left: 0;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mission-target-section-toggle:hover {
+  color: var(--ink);
+  background: #eceeeb;
+}
+
+.mission-target-section-toggle:focus-visible {
+  outline: 2px solid var(--ark-cyan);
+  outline-offset: -2px;
+}
+
+.mission-target-section-toggle .mission-target-section-toggle__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #42505a;
+}
+
+.mission-target-section-toggle__title svg {
+  flex: 0 0 auto;
 }
 
 .mission-target-table-wrap {
@@ -3566,6 +3641,21 @@ textarea:focus-visible {
   font-family: "Cascadia Code", Consolas, monospace;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.background-prop-choice__summary .background-prop-choice__routing {
+  grid-column: 1 / -1;
+  padding-top: 8px;
+  color: #315e4b;
+  border-top: 1px solid #d2ddd6;
+  line-height: 15px;
+}
+
+.background-prop-choice__routing code {
+  overflow: visible;
+  color: #235d43;
+  text-overflow: clip;
+  white-space: normal;
 }
 
 .background-prop-choice > .mission-map-choice__error {
@@ -4645,13 +4735,11 @@ textarea:focus-visible {
   border-color: #d2d3cd;
   transition:
     background 180ms ease,
-    color 180ms ease,
-    transform 180ms ease;
+    color 180ms ease;
 }
 
 .app-shell[data-ark-theme="endfield"] .shot-row:hover {
   background: #e5e5e0;
-  transform: translateX(2px);
 }
 
 .app-shell[data-ark-theme="endfield"] .shot-row.is-active {
@@ -5549,25 +5637,25 @@ textarea:focus-visible {
 
 .app-shell[data-workspace-direction="up"]
   > :is(.workspace, .tool-workspace)[data-workspace-state="entering"] {
-  animation: workspace-page-enter-up 560ms
+  animation: workspace-page-enter-up 720ms
     cubic-bezier(0.455, 0.03, 0.515, 0.955) both;
 }
 
 .app-shell[data-workspace-direction="up"]
   > :is(.workspace, .tool-workspace)[data-workspace-state="exiting"] {
-  animation: workspace-page-exit-up 560ms
+  animation: workspace-page-exit-up 720ms
     cubic-bezier(0.455, 0.03, 0.515, 0.955) both;
 }
 
 .app-shell[data-workspace-direction="down"]
   > :is(.workspace, .tool-workspace)[data-workspace-state="entering"] {
-  animation: workspace-page-enter-down 560ms
+  animation: workspace-page-enter-down 720ms
     cubic-bezier(0.455, 0.03, 0.515, 0.955) both;
 }
 
 .app-shell[data-workspace-direction="down"]
   > :is(.workspace, .tool-workspace)[data-workspace-state="exiting"] {
-  animation: workspace-page-exit-down 560ms
+  animation: workspace-page-exit-down 720ms
     cubic-bezier(0.455, 0.03, 0.515, 0.955) both;
 }
 
@@ -6071,9 +6159,11 @@ textarea:focus-visible {
 
 @keyframes workspace-page-enter-up {
   from {
+    box-shadow: 0 -28px 52px rgba(25, 25, 25, 0.18);
     transform: translate3d(0, 100%, 0);
   }
   to {
+    box-shadow: 0 0 0 rgba(25, 25, 25, 0);
     transform: translate3d(0, 0, 0);
   }
 }
@@ -6089,9 +6179,11 @@ textarea:focus-visible {
 
 @keyframes workspace-page-enter-down {
   from {
+    box-shadow: 0 28px 52px rgba(25, 25, 25, 0.18);
     transform: translate3d(0, -100%, 0);
   }
   to {
+    box-shadow: 0 0 0 rgba(25, 25, 25, 0);
     transform: translate3d(0, 0, 0);
   }
 }
@@ -6302,7 +6394,7 @@ textarea:focus-visible {
     color: #ffffff;
     background-color: #383838;
     border-color: #383838;
-    box-shadow: inset 3px 0 0 var(--signal);
+    box-shadow: none;
   }
 
   .app-shell[data-ark-theme="endfield"]
@@ -6320,21 +6412,9 @@ textarea:focus-visible {
     transform: translateX(4px);
   }
 
-  .shot-row:not(.is-active):hover .shot-row__number,
-  .dialogue-search-row:not(.is-active):hover .shot-row__speaker {
-    transform: translateX(3px);
-  }
-
-  .shot-row__number,
-  .dialogue-search-row .shot-row__speaker {
-    transition:
-      color 200ms ease,
-      transform 200ms ease;
-  }
-
   .tool-workspace tbody tr:hover {
-    background: #f7f7df;
-    box-shadow: inset 3px 0 0 var(--signal);
+    background: #f2f2ef;
+    box-shadow: none;
   }
 
   .mira-status__action:hover,

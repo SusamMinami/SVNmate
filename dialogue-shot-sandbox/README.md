@@ -107,11 +107,16 @@ Formation、Preview Level、虚拟场景和主角初始坐标。
 的 0 号玩家。解析任务后，尚未映射到 BP 的目标物继续显示在下方；勾选后会从
 现有最大槽位号开始连续追加，并将全部 BP 角色位按原序写入 `DialogModels`。
 没有勾选新增项时，主按钮仍只执行原有的对话注册。
+清除或重新加载预览时会等待 UE 完成 Actor 销毁并多次回读，避免删除后的下一
+编辑器 Tick 仍能枚举对象而误报失败。
 
-任务目标物页右上角的“读取 UE 选择”可将 Blueprint Actor、Skeletal Mesh 或
-Static Mesh 直接写入 BP，跳过 NPC 与目标物配表。组件使用资产原名且不进入
-DialogModels，并保留关卡中的位置、旋转和缩放；缺少 Formation、Preview
-Level 或主角 Transform 时可先在审核层补齐，同名冲突仍会阻止写入。
+任务目标物页右上角的“读取 UE 选择”会优先匹配当前任务目标物，只勾选匹配项
+并取消其他可追加项；混合选择中只有未匹配 Actor 才进入背景资源审核。预览
+Actor 按任务与目标物 ID 精确识别，普通 Actor 按模型类路径和世界坐标消歧。
+背景审核可将 Blueprint Actor、Skeletal Mesh 或 Static Mesh 直接写入 BP，
+跳过 NPC 与目标物配表。组件使用资产原名且不进入 DialogModels，并保留关卡中
+的位置、旋转和缩放；缺少 Formation、Preview Level 或主角 Transform 时可先
+在审核层补齐，同名冲突仍会阻止写入。
 
 ### UE NPC 注册草稿
 
@@ -127,7 +132,9 @@ Level 或主角 Transform 时可先在审核层补齐，同名冲突仍会阻止
 NPC”，名字和头衔允许留空。只需要新 NPC ID 时可点击“NPC 表”；已有模型和
 NPC ID 时可点击“目标物表”仅新增目标物；点击“写入新增项”则执行完整注册。
 各范围不会打开无关工作簿，新增单元格会标红，`.xlsm` 工作簿保持未保存，
-最终检查和保存由用户完成；不会修改导出 CSV。详细边界见
+最终检查和保存由用户完成；不会修改导出 CSV。写入时会复用同一 Excel 实例，
+批量读取校验范围并重试短暂的 COM 忙状态，避免大表逐单元格扫描导致超时。
+详细边界见
 [`docs/npc-registration.md`](docs/npc-registration.md)。
 
 ## Windows 桌面版
@@ -323,3 +330,6 @@ npm run dev
 
 自动站位坐标仍只用于构图参考。采用 UE Blueprint 站位生成的方案可在逐节点
 差异确认后，将镜头局部坐标、旋转和 FOV 写回对应 Dialog Graph 台词节点。
+点击“导出到 UE”默认只预检并导出当前激活镜头；弹窗右上角“全部导出”切换到
+全量页面后，可逐镜头勾选导出范围。未勾选镜头及其台词节点保持原状，底部二次
+确认和保存操作始终固定显示。

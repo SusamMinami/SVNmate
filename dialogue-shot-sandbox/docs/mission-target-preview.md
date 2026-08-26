@@ -78,8 +78,9 @@ ShotSandboxMissionTargetPreview_<TaskId>_<TargetId>
 
 “清除预览”不会只依赖镜头沙盘进程内保存的 Actor 引用。每次执行时都会扫描
 UE 当前关卡中名称或标签以 `ShotSandboxMissionTargetPreview_` 开头的 Actor，
-批量删除后再次扫描确认。因此开发服务热更新、重启或重新打开页面后，当前
-关卡中的预览对象仍可被清理。重新加载目标物前也会执行相同扫描，避免重复生成。
+批量删除后等待 UE 完成销毁并多次扫描确认。因此开发服务热更新、重启或重新
+打开页面后，当前关卡中的预览对象仍可被清理，也不会因 Actor 在删除后的下一
+编辑器 Tick 才消失而误报失败。重新加载目标物前也会执行相同流程，避免重复生成。
 
 ## 创建镜头 Blueprint 内容
 
@@ -219,8 +220,19 @@ BP 输入框右侧的检查按钮会读取 BP、对应数字槽位、同名 Dial
 ## 导入背景资产
 
 输入 BP 文件名后，可以在 UE 关卡中选择 Actor，并点击任务目标物工作区
-右上角的“读取 UE 选择”。该流程
-只向 BP 添加非数字命名的展示组件，不新增目标物，不修改 DialogModels：
+右上角的“读取 UE 选择”。如果当前已经解析任务节点，工具会先识别所选 Actor
+是否属于当前任务目标物：
+
+- 优先按 `ShotSandboxMissionTargetPreview_<任务ID>_<目标物ID>` 精确匹配。
+- 普通关卡 Actor 按模型类路径匹配；同模型存在多个实例时按世界坐标距离
+  一对一消歧。
+- 匹配成功后只勾选对应目标物并取消其他可追加项；已经存在于 BP 的槽位仍固定
+  保留。
+- 混合选择时，已匹配 Actor 不进入背景审核，只有未匹配 Actor 继续下面的
+  背景资源流程。没有解析任务节点或完全未匹配时，保持原背景资源导入行为。
+
+背景资源流程只向 BP 添加非数字命名的展示组件，不新增目标物，不修改
+`DialogModels`：
 
 - Blueprint Actor 写为 `ChildActorComponent` 和对应 Generated Class。
 - SkeletalMeshActor 写为 `SkeletalMeshComponent` 和实际 Skeletal Mesh。

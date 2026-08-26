@@ -43,9 +43,10 @@ Content Browser 中只选中 Blueprint 资产不会被识别，因为目标物�
 读取后候选 Actor 默认全选，可通过表头或逐行复选框排除不需要注册的对象；
 NPC 表、目标物表和完整注册都只处理当前勾选项。
 
-同一份 UE 选择读取协议也被“任务目标物”工作区的“背景资产”功能复用，但不
-复用 NPC 配表界面：Blueprint Actor 作为 ChildActor 写入 BP，原生 Skeletal
-Mesh 和 Static Mesh 写为对应组件；这条路径不创建模型、NPC 或目标物配表。
+同一份 UE 选择读取协议也被“任务目标物”工作区复用。已解析任务节点时先识别
+任务目标物并更新对应勾选，只有未匹配 Actor 才进入背景资产审核；Blueprint
+Actor 作为 ChildActor 写入 BP，原生 Skeletal Mesh 和 Static Mesh 写为对应
+组件。这条背景路径不创建模型、NPC 或目标物配表。
 
 ## 模型与 NPC 复用
 
@@ -181,8 +182,11 @@ ShotSandboxMissionTargetPreview_<TaskId>_<TargetId>
 方便保存前复核，修改仍只落到 Excel 的未保存编辑会话中。
 
 Excel 返回 `0x800AC472` 表示它正在编辑单元格、显示对话框或执行其他阻塞操作，
-因而拒绝 COM 调用。工具会短暂重试并返回可读提示；用户应先在 Excel 中按
-Enter 或 Esc 退出单元格编辑，再重新写入。
+因而拒绝 COM 调用。工具会对关键 COM 操作重试并返回可读提示；用户应先在
+Excel 中按 Enter 或 Esc 退出单元格编辑，再重新写入。工具直接复用或打开所需
+工作簿，不再通过系统外壳并行启动多个文件；模型、NPC 和目标物校验数据按整段
+Range 一次读取后在内存中匹配，避免大表逐单元格跨进程扫描。单次写入的最终
+保护超时为 180 秒。
 
 ## 主要代码
 

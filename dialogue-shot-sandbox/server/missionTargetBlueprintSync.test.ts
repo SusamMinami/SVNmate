@@ -1276,6 +1276,68 @@ describe("background prop import", () => {
     });
   });
 
+  it("reviews and imports only the requested unmatched Actor subset", async () => {
+    await writeConfigFixture();
+    const connection = new BackgroundPropConnection();
+    connection.commonProperties[0].CurrentBool = true;
+    connection.specialProperties[0].CurrentBool = true;
+    connection.previewLevel = "/Game/Test/Maps/PlacedMap.PlacedMap";
+    connection.selectedPlacementActors = [
+      {
+        actor_ref:
+          "PersistentLevel.ShotSandboxMissionTargetPreview_900001_500001",
+        label: "任务 NPC",
+        class_path: "/Game/Test/BP_Guard.BP_Guard_C",
+        skeletal_mesh_path: "",
+        static_mesh_path: "",
+        location: [110, 220, 330],
+        rotation: [0, 90, 0],
+        scale: [1, 1, 1],
+      },
+      {
+        actor_ref: "PersistentLevel.SkeletalMeshActor_1",
+        label: "旗帜",
+        class_path: "/Script/Engine.SkeletalMeshActor",
+        skeletal_mesh_path: "/Game/Test/Props/SK_Banner.SK_Banner",
+        static_mesh_path: "",
+        location: [130, 260, 340],
+        rotation: [0, 45, 0],
+        scale: [1.5, 0.75, 2],
+      },
+    ];
+    const reviewedActorRefs = ["PersistentLevel.SkeletalMeshActor_1"];
+
+    const preview = await inspectBackgroundPropImport(
+      {
+        blueprintName: "BP_735200",
+        actorRefs: reviewedActorRefs,
+      },
+      () => connection,
+    );
+
+    expect(preview.items).toHaveLength(1);
+    expect(preview.items[0]).toMatchObject({
+      actorRef: "PersistentLevel.SkeletalMeshActor_1",
+      actorLabel: "旗帜",
+      componentName: "SK_Banner",
+    });
+
+    const result = await applyBackgroundPropImport(
+      {
+        blueprintName: "BP_735200",
+        reviewToken: preview.reviewToken,
+        selectedActorRefs: reviewedActorRefs,
+        reviewedActorRefs,
+      },
+      () => connection,
+    );
+
+    expect(result.createdComponentNames).toEqual(["SK_Banner"]);
+    expect(
+      connection.backgroundComponents.has("BP_Guard"),
+    ).toBe(false);
+  });
+
   it("fills missing dialogue metadata without changing DialogModels before import", async () => {
     await writeConfigFixture();
     const connection = new BackgroundPropConnection();

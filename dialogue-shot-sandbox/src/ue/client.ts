@@ -243,9 +243,11 @@ export function updateMissionTargetsFromBlueprint(
 
 export function inspectBackgroundPropImport(
   blueprintName: string,
+  actorRefs?: string[],
 ): Promise<BackgroundPropImportPreview> {
   return postUe("/api/ue/mission-targets/background-props/inspect", {
     blueprintName,
+    actorRefs,
   });
 }
 
@@ -253,10 +255,16 @@ export function applyBackgroundPropImport(
   blueprintName: string,
   reviewToken: string,
   selectedActorRefs: string[],
+  reviewedActorRefs?: string[],
 ): Promise<BackgroundPropImportResult> {
   return postUe(
     "/api/ue/mission-targets/background-props/apply",
-    { blueprintName, reviewToken, selectedActorRefs },
+    {
+      blueprintName,
+      reviewToken,
+      selectedActorRefs,
+      reviewedActorRefs,
+    },
     false,
   );
 }

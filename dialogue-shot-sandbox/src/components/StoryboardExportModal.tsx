@@ -1,20 +1,24 @@
 import {
   AlertTriangle,
   CheckCircle2,
+  Layers3,
   LoaderCircle,
   Upload,
   X,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { DialogueStoryboardExportPreview } from "../types";
 
 interface StoryboardExportModalProps {
   preview: DialogueStoryboardExportPreview;
+  mode: "current" | "all";
+  currentShotNumber: number;
   busy: boolean;
   error: string;
   result: string;
   onClose: () => void;
-  onConfirm: () => void;
+  onShowAll: () => void;
+  onConfirm: (selectedShotIndexes: number[]) => void;
 }
 
 const ACTION_LABELS: Record<
@@ -29,17 +33,68 @@ const ACTION_LABELS: Record<
 
 export function StoryboardExportModal({
   preview,
+  mode,
+  currentShotNumber,
   busy,
   error,
   result,
   onClose,
+  onShowAll,
   onConfirm,
 }: StoryboardExportModalProps) {
   const [confirmed, setConfirmed] = useState(false);
-  const blocked = preview.blockedReasons.length > 0;
-  const changedNodes = preview.nodes.filter(
+  const [selectedShotIndexes, setSelectedShotIndexes] = useState<number[]>(
+    () => Array.from({ length: preview.shotCount }, (_, index) => index),
+  );
+  const selectedShots = new Set(selectedShotIndexes);
+  const selectedNodes = preview.nodes.filter((node) =>
+    selectedShots.has(node.shotIndex),
+  );
+  const changedNodes = selectedNodes.filter(
     (node) => node.action !== "unchanged",
   );
+  const selectedBlockedReasons = [
+    ...preview.globalBlockedReasons,
+    ...preview.shots
+      .filter((shot) => selectedShots.has(shot.shotIndex))
+      .flatMap((shot) => shot.blockedReasons),
+  ];
+  const selectedInvalidShotCount = preview.shots.filter(
+    (shot) =>
+      selectedShots.has(shot.shotIndex) && !shot.projectionValid,
+  ).length;
+  const selectedWarnings = selectedInvalidShotCount
+    ? [
+        `${selectedInvalidShotCount} 个镜头的投影验收未通过，确认后仍可导出`,
+      ]
+    : [];
+  const blocked = selectedBlockedReasons.length > 0;
+  const allSelected = selectedShotIndexes.length === preview.shotCount;
+
+  useEffect(() => {
+    setSelectedShotIndexes(
+      Array.from({ length: preview.shotCount }, (_, index) => index),
+    );
+    setConfirmed(false);
+  }, [preview.reviewToken]);
+
+  function selectAllShots(checked: boolean) {
+    setSelectedShotIndexes(
+      checked
+        ? Array.from({ length: preview.shotCount }, (_, index) => index)
+        : [],
+    );
+    setConfirmed(false);
+  }
+
+  function selectShot(shotIndex: number, checked: boolean) {
+    setSelectedShotIndexes((current) =>
+      checked
+        ? [...current, shotIndex].sort((left, right) => left - right)
+        : current.filter((index) => index !== shotIndex),
+    );
+    setConfirmed(false);
+  }
 
   return (
     <div className="modal-backdrop storyboard-export-backdrop" role="presentation">
@@ -56,19 +111,40 @@ export function StoryboardExportModal({
             </span>
             <div>
               <small>UE Dialog Graph 写入预检</small>
-              <h2 id="storyboard-export-title">导出当前分镜</h2>
+              <h2 id="storyboard-export-title">
+                {mode === "current"
+                  ? `导出当前镜头 ${String(currentShotNumber).padStart(2, "0")}`
+                  : "导出全部分镜"}
+              </h2>
             </div>
           </div>
-          <button
-            className="icon-button"
-            type="button"
-            title="关闭"
-            aria-label="关闭导出预检"
-            onClick={onClose}
-            disabled={busy}
-          >
-            <X size={18} />
-          </button>
+          <div className="storyboard-export-header-actions">
+            {mode === "current" && (
+              <button
+                className="button storyboard-export-all-button"
+                type="button"
+                onClick={onShowAll}
+                disabled={busy || Boolean(result)}
+              >
+                {busy ? (
+                  <LoaderCircle className="spin" size={15} />
+                ) : (
+                  <Layers3 size={15} />
+                )}
+                全部导出
+              </button>
+            )}
+            <button
+              className="icon-button"
+              type="button"
+              title="关闭"
+              aria-label="关闭导出预检"
+              onClick={onClose}
+              disabled={busy}
+            >
+              <X size={18} />
+            </button>
+          </div>
         </header>
 
         <section className="storyboard-export-summary">
@@ -79,11 +155,15 @@ export function StoryboardExportModal({
             </div>
             <div>
               <dt>分镜</dt>
-              <dd>{preview.shotCount}</dd>
+              <dd>
+                {mode === "current"
+                  ? String(currentShotNumber).padStart(2, "0")
+                  : `${selectedShotIndexes.length} / ${preview.shotCount}`}
+              </dd>
             </div>
             <div>
               <dt>变更节点</dt>
-              <dd>{preview.changedNodeCount}</dd>
+              <dd>{changedNodes.length}</dd>
             </div>
             <div>
               <dt>启用相机</dt>
@@ -95,18 +175,18 @@ export function StoryboardExportModal({
           </code>
         </section>
 
-        {(preview.blockedReasons.length > 0 ||
-          preview.warnings.length > 0 ||
+        {(selectedBlockedReasons.length > 0 ||
+          selectedWarnings.length > 0 ||
           error ||
           result) && (
           <div className="storyboard-export-messages">
-            {preview.blockedReasons.map((reason) => (
+            {selectedBlockedReasons.map((reason) => (
               <p className="is-error" key={reason}>
                 <AlertTriangle size={14} />
                 <span>{reason}</span>
               </p>
             ))}
-            {preview.warnings.map((warning) => (
+            {selectedWarnings.map((warning) => (
               <p className="is-warning" key={warning}>
                 <AlertTriangle size={14} />
                 <span>{warning}</span>
@@ -131,12 +211,26 @@ export function StoryboardExportModal({
           <table className="storyboard-export-table">
             <thead>
               <tr>
-                <th>镜头</th>
-                <th>台词节点</th>
-                <th>节点用途</th>
-                <th>当前相机</th>
-                <th>导出后</th>
-                <th>处理</th>
+                {mode === "all" && (
+                  <th className="storyboard-export-table__select">
+                    <input
+                      type="checkbox"
+                      aria-label="选择全部镜头"
+                      title="选择全部镜头"
+                      checked={allSelected}
+                      disabled={busy || Boolean(result)}
+                      onChange={(event) =>
+                        selectAllShots(event.target.checked)
+                      }
+                    />
+                  </th>
+                )}
+                <th className="storyboard-export-table__shot">镜头</th>
+                <th className="storyboard-export-table__dialogue">台词节点</th>
+                <th className="storyboard-export-table__role">节点用途</th>
+                <th className="storyboard-export-table__camera">当前相机</th>
+                <th className="storyboard-export-table__camera">导出后</th>
+                <th className="storyboard-export-table__action">处理</th>
               </tr>
             </thead>
             <tbody>
@@ -144,11 +238,34 @@ export function StoryboardExportModal({
                 <tr
                   key={node.dialogueId}
                   data-action={node.action}
+                  data-selected={selectedShots.has(node.shotIndex)}
                 >
+                  {mode === "all" && (
+                    <td className="storyboard-export-table__select">
+                      {node.role === "shot_start" && (
+                        <input
+                          type="checkbox"
+                          aria-label={`选择镜头 ${String(node.shotIndex + 1).padStart(2, "0")}`}
+                          checked={selectedShots.has(node.shotIndex)}
+                          disabled={busy || Boolean(result)}
+                          onChange={(event) =>
+                            selectShot(
+                              node.shotIndex,
+                              event.target.checked,
+                            )
+                          }
+                        />
+                      )}
+                    </td>
+                  )}
                   <td>
-                    {node.shotIndex === null
-                      ? "-"
-                      : String(node.shotIndex + 1).padStart(2, "0")}
+                    {node.role === "shot_start"
+                      ? String(
+                          mode === "current"
+                            ? currentShotNumber
+                            : node.shotIndex + 1,
+                        ).padStart(2, "0")
+                      : "↳"}
                   </td>
                   <td>
                     <code>{node.dialogueId}</code>
@@ -180,7 +297,12 @@ export function StoryboardExportModal({
             <input
               type="checkbox"
               checked={confirmed}
-              disabled={busy || blocked || Boolean(result)}
+              disabled={
+                busy ||
+                blocked ||
+                selectedShotIndexes.length === 0 ||
+                Boolean(result)
+              }
               onChange={(event) => setConfirmed(event.target.checked)}
             />
             <span>
@@ -200,13 +322,14 @@ export function StoryboardExportModal({
             <button
               className="button button--primary"
               type="button"
-              onClick={onConfirm}
               disabled={
                 busy ||
                 blocked ||
+                selectedShotIndexes.length === 0 ||
                 !confirmed ||
                 Boolean(result)
               }
+              onClick={() => onConfirm(selectedShotIndexes)}
             >
               {busy ? (
                 <LoaderCircle className="spin" size={16} />

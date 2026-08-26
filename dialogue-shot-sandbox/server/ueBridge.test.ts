@@ -33,6 +33,8 @@ class FakeUnrealConnection implements UnrealInvoker {
   blueprintResult: unknown;
   scriptExpressionResult: unknown;
   previewActors: string[];
+  deleteVisibilityLagReads: number;
+  pendingDeletedActors = new Set<string>();
 
   constructor(options?: {
     currentMaps?: string[];
@@ -41,6 +43,7 @@ class FakeUnrealConnection implements UnrealInvoker {
     blueprintResult?: unknown;
     scriptExpressionResult?: unknown;
     previewActors?: string[];
+    deleteVisibilityLagReads?: number;
   }) {
     this.currentMaps = options?.currentMaps ?? [
       "/Game/Seria/Maps/Test/Test",
@@ -53,6 +56,7 @@ class FakeUnrealConnection implements UnrealInvoker {
         : true;
     this.scriptExpressionResult = options?.scriptExpressionResult;
     this.previewActors = [...(options?.previewActors ?? [])];
+    this.deleteVisibilityLagReads = options?.deleteVisibilityLagReads ?? 0;
   }
 
   async connect(): Promise<void> {
@@ -71,6 +75,16 @@ class FakeUnrealConnection implements UnrealInvoker {
       if (
         String(args.Expression ?? "").includes("get_all_level_actors")
       ) {
+        if (this.pendingDeletedActors.size > 0) {
+          if (this.deleteVisibilityLagReads > 0) {
+            this.deleteVisibilityLagReads -= 1;
+          } else {
+            this.previewActors = this.previewActors.filter(
+              (actor) => !this.pendingDeletedActors.has(actor),
+            );
+            this.pendingDeletedActors.clear();
+          }
+        }
         return {
           bSuccess: true,
           Result: `'${JSON.stringify(this.previewActors)}'`,
@@ -97,9 +111,13 @@ class FakeUnrealConnection implements UnrealInvoker {
     }
     if (action === "world.delete_actors") {
       const deleted = new Set((args.Actors as string[]) ?? []);
-      this.previewActors = this.previewActors.filter(
-        (actor) => !deleted.has(actor),
-      );
+      if (this.deleteVisibilityLagReads > 0) {
+        this.pendingDeletedActors = deleted;
+      } else {
+        this.previewActors = this.previewActors.filter(
+          (actor) => !deleted.has(actor),
+        );
+      }
       return true;
     }
     return true;
@@ -617,6 +635,27 @@ describe("mission target UE preview", () => {
           String(call.args.Expression).includes("get_all_level_actors"),
       ),
     ).toHaveLength(2);
+  });
+
+  it("waits for UE to stop enumerating actors after deletion", async () => {
+    const actor =
+      "PersistentLevel.ShotSandboxMissionTargetPreview_900001_500001";
+    const connection = new FakeUnrealConnection({
+      previewActors: [actor],
+      deleteVisibilityLagReads: 2,
+    });
+
+    await expect(
+      clearMissionTargetPreview(() => connection),
+    ).resolves.toEqual({ clearedCount: 1 });
+    expect(connection.previewActors).toEqual([]);
+    expect(
+      connection.calls.filter(
+        (call) =>
+          call.action === "script.eval_python_expression" &&
+          String(call.args.Expression).includes("get_all_level_actors"),
+      ),
+    ).toHaveLength(4);
   });
 
   it("rejects mixed MapIDs before connecting to Unreal", async () => {

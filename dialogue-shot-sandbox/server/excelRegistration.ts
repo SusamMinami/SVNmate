@@ -164,11 +164,13 @@ const EXCEL_REGISTRATION_LOCK = join(
   tmpdir(),
   "shot-sandbox-excel-registration.lock",
 );
+const EXCEL_OPERATION_TIMEOUT_MS = 3 * 60_000;
+const EXCEL_LOCK_WAIT_TIMEOUT_MS = EXCEL_OPERATION_TIMEOUT_MS + 5_000;
 
 async function withExcelRegistrationLock<T>(
   operation: () => Promise<T>,
 ): Promise<T> {
-  const deadline = Date.now() + 65_000;
+  const deadline = Date.now() + EXCEL_LOCK_WAIT_TIMEOUT_MS;
   while (true) {
     try {
       const handle = await open(EXCEL_REGISTRATION_LOCK, "wx");
@@ -204,6 +206,7 @@ async function withExcelRegistrationLock<T>(
 
 export const EXCEL_REGISTRATION_SCRIPT = String.raw`
 $ErrorActionPreference = "Stop"
+$ProgressPreference = "SilentlyContinue"
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 $request = (
   Get-Content -LiteralPath $env:SHOT_SANDBOX_REGISTRATION_PAYLOAD_PATH -Raw -Encoding UTF8 |
@@ -217,6 +220,34 @@ $scope = if ([string]::IsNullOrWhiteSpace([string]$request.scope)) {
 if ($scope -notin @("all", "npc_only", "target_only")) {
   throw "不支持的 NPC 注册范围：$scope"
 }
+
+function Invoke-ExcelAction(
+  [scriptblock]$action,
+  [string]$description
+) {
+  $lastError = $null
+  for ($attempt = 1; $attempt -le 20; $attempt++) {
+    try {
+      return & $action
+    } catch [Runtime.InteropServices.COMException] {
+      $lastError = $_.Exception
+      Start-Sleep -Milliseconds 500
+    }
+  }
+  throw "$description 失败：Excel 正忙或正处于单元格编辑状态，请退出编辑后重试。$($lastError.Message)"
+}
+
+function Get-ExcelApplication {
+  try {
+    return [Runtime.InteropServices.Marshal]::GetActiveObject("Excel.Application")
+  } catch [Runtime.InteropServices.COMException] {
+    if ($_.Exception.HResult -ne -2147221021) {
+      throw
+    }
+    return New-Object -ComObject Excel.Application
+  }
+}
+
 $paths = @{
   missionTarget = [string]$request.paths.missionTarget
   npc = [string]$request.paths.npc
@@ -242,10 +273,6 @@ foreach ($path in $requiredPaths) {
   if (-not (Test-Path -LiteralPath $path)) {
     throw "找不到 Excel 源表：$path"
   }
-  Start-Process -FilePath $path | Out-Null
-}
-if ($requiredPaths.Count -gt 0) {
-  Start-Sleep -Milliseconds 1200
 }
 
 function Get-Workbook([object]$excel, [string]$path) {
@@ -262,23 +289,67 @@ function Get-Workbook([object]$excel, [string]$path) {
       return $book
     }
   }
-  $book = $excel.Workbooks.Open($path)
+  $book = $excel.Workbooks.Open($path, 0, $false)
   if ($book.ReadOnly) {
     throw "工作簿无法写入：$path"
   }
   return $book
 }
 
-function Get-NextId(
+function Get-RangeValues(
   [object]$sheet,
-  [int]$column,
+  [int]$firstRow,
+  [int]$lastRow,
+  [int]$firstColumn,
+  [int]$lastColumn,
+  [string]$description
+) {
+  if ($lastRow -lt $firstRow) {
+    return $null
+  }
+  $values = Invoke-ExcelAction {
+    $rangeValues = $sheet.Range(
+      $sheet.Cells.Item($firstRow, $firstColumn),
+      $sheet.Cells.Item($lastRow, $lastColumn)
+    ).Value2
+    Write-Output -NoEnumerate $rangeValues
+  } $description
+  Write-Output -NoEnumerate $values
+}
+
+function Get-RangeValue(
+  $values,
+  [int]$rowOffset,
+  [int]$columnOffset
+) {
+  if ($null -eq $values) {
+    return $null
+  }
+  if ($values -is [Array]) {
+    if ($values.Rank -eq 2) {
+      return $values.GetValue(
+        $values.GetLowerBound(0) + $rowOffset,
+        $values.GetLowerBound(1) + $columnOffset
+      )
+    }
+    return $values.GetValue($values.GetLowerBound(0) + $rowOffset)
+  }
+  if ($rowOffset -eq 0 -and $columnOffset -eq 0) {
+    return $values
+  }
+  return $null
+}
+
+function Get-NextId(
+  $values,
+  [int]$rowCount,
+  [int]$columnOffset,
   [int]$minimum,
   [int]$maximum
 ) {
   $maxId = $minimum - 1
-  $lastRow = $sheet.UsedRange.Rows.Count
-  for ($row = 3; $row -le $lastRow; $row++) {
-    $raw = $sheet.Cells.Item($row, $column).Value2
+  for ($rowOffset = 0; $rowOffset -lt $rowCount; $rowOffset++) {
+    $raw = Get-RangeValue $values $rowOffset $columnOffset
     $value = 0
     if ($null -ne $raw -and [int]::TryParse([string]$raw, [ref]$value)) {
       if ($value -ge $minimum -and $value -le $maximum -and $value -gt $maxId) {
@@ -293,38 +364,43 @@ function Get-NextId(
 }
 
 function Add-BlankRow([object]$sheet, [int]$row, [int]$columnCount) {
-  $sheet.Rows.Item($row).Insert(-4121, 0) | Out-Null
-  $sheet.Range(
-    $sheet.Cells.Item($row, 1),
-    $sheet.Cells.Item($row, $columnCount)
-  ).ClearContents() | Out-Null
+  [void](Invoke-ExcelAction {
+    $sheet.Rows.Item($row).Insert(-4121, 0) | Out-Null
+    $sheet.Range(
+      $sheet.Cells.Item($row, 1),
+      $sheet.Cells.Item($row, $columnCount)
+    ).ClearContents() | Out-Null
+  } "插入工作表行")
 }
 
 function Set-Cell([object]$sheet, [int]$row, [int]$column, $value) {
-  $cell = $sheet.Cells.Item($row, $column)
-  if ($value -is [bool]) {
-    $cell.Value2 = [bool]$value
-  } elseif (
-    $value -is [byte] -or
-    $value -is [int16] -or
-    $value -is [int32] -or
-    $value -is [int64] -or
-    $value -is [single] -or
-    $value -is [double] -or
-    $value -is [decimal]
-  ) {
-    $cell.Value2 = [double]$value
-  } elseif ($null -eq $value) {
-    $cell.ClearContents() | Out-Null
-  } else {
-    $cell.Value2 = [string]$value
-  }
+  [void](Invoke-ExcelAction {
+    $cell = $sheet.Cells.Item($row, $column)
+    if ($value -is [bool]) {
+      $cell.Value2 = [bool]$value
+    } elseif (
+      $value -is [byte] -or
+      $value -is [int16] -or
+      $value -is [int32] -or
+      $value -is [int64] -or
+      $value -is [single] -or
+      $value -is [double] -or
+      $value -is [decimal]
+    ) {
+      $cell.Value2 = [double]$value
+    } elseif ($null -eq $value) {
+      $cell.ClearContents() | Out-Null
+    } else {
+      $cell.Value2 = [string]$value
+    }
+  } "写入单元格")
 }
 
 function Set-NewCell([object]$sheet, [int]$row, [int]$column, $value) {
   Set-Cell $sheet $row $column $value
-  $cell = $sheet.Cells.Item($row, $column)
-  $cell.Font.Color = 255
+  [void](Invoke-ExcelAction {
+    $sheet.Cells.Item($row, $column).Font.Color = 255
+  } "标记新增单元格")
 }
 
 function Format-Number([double]$value) {
@@ -347,6 +423,21 @@ function Get-ConfiguredPath([string]$classPath) {
   return $normalized -replace "_C$", ""
 }
 
+function Add-IndexEntry([hashtable]$index, [string]$key, $value) {
+  if (-not $index.ContainsKey($key)) {
+    $index[$key] = [Collections.ArrayList]::new()
+  }
+  [void]$index[$key].Add($value)
+}
+
+function Get-TargetTransformKey(
+  [string]$mapId,
+  [string]$position,
+  [string]$rotation
+) {
+  return [string]::Join([char]31, @($mapId, $position, $rotation))
+}
+
 $createdModels = [Collections.ArrayList]::new()
 $createdNpcs = [Collections.ArrayList]::new()
 $createdTargets = [Collections.ArrayList]::new()
@@ -361,32 +452,135 @@ $excel = $null
 $previousSecurity = $null
 
 try {
-  try {
-    $excel = [Runtime.InteropServices.Marshal]::GetActiveObject("Excel.Application")
-  } catch {
-    $excel = New-Object -ComObject Excel.Application
-  }
-  $previousSecurity = $excel.AutomationSecurity
-  $excel.AutomationSecurity = 3
-  $excel.Visible = $true
-  $excel.DisplayAlerts = $true
+  $excel = Invoke-ExcelAction {
+    return Get-ExcelApplication
+  } "连接 Excel"
+  $previousSecurity = Invoke-ExcelAction {
+    return $excel.AutomationSecurity
+  } "读取 Excel 安全设置"
+  [void](Invoke-ExcelAction {
+    $excel.AutomationSecurity = 3
+    $excel.Visible = $true
+    $excel.DisplayAlerts = $false
+  } "准备 Excel")
 
   $workbooks = @{}
   foreach ($path in $requiredPaths) {
-    $book = Get-Workbook $excel $path
+    $book = Invoke-ExcelAction {
+      return Get-Workbook $excel $path
+    } "打开或查找工作簿 $path"
     $workbooks[$path] = $book
     [void]$openedWorkbooks.Add($path)
   }
+  [void](Invoke-ExcelAction {
+    $excel.DisplayAlerts = $true
+  } "恢复 Excel 提示")
 
   $modelWorkbook = $workbooks[$paths.model]
   $modelSheet =
-    if ($null -ne $modelWorkbook) { $modelWorkbook.Worksheets.Item(1) } else { $null }
+    if ($null -ne $modelWorkbook) {
+      Invoke-ExcelAction {
+        return $modelWorkbook.Worksheets.Item(1)
+      } "读取模型资源工作表"
+    } else { $null }
   $npcWorkbook = $workbooks[$paths.npc]
   $npcSheet =
-    if ($null -ne $npcWorkbook) { $npcWorkbook.Worksheets.Item(1) } else { $null }
+    if ($null -ne $npcWorkbook) {
+      Invoke-ExcelAction {
+        return $npcWorkbook.Worksheets.Item(1)
+      } "读取 NPC 工作表"
+    } else { $null }
   $targetWorkbook = $workbooks[$paths.missionTarget]
   $targetSheet =
-    if ($null -ne $targetWorkbook) { $targetWorkbook.Worksheets.Item(1) } else { $null }
+    if ($null -ne $targetWorkbook) {
+      Invoke-ExcelAction {
+        return $targetWorkbook.Worksheets.Item(1)
+      } "读取目标物工作表"
+    } else { $null }
+
+  $modelLastRow = 2
+  $modelRowCount = 0
+  $modelValues = $null
+  $modelEntriesById = @{}
+  $modelRows = [Collections.ArrayList]::new()
+  if ($null -ne $modelSheet) {
+    $modelLastRow = [int](Invoke-ExcelAction {
+      return $modelSheet.UsedRange.Rows.Count
+    } "读取模型资源表行数")
+    $modelRowCount = [Math]::Max(0, $modelLastRow - 2)
+    $modelValues =
+      Get-RangeValues $modelSheet 3 $modelLastRow 2 3 "批量读取模型资源表"
+    for ($rowOffset = 0; $rowOffset -lt $modelRowCount; $rowOffset++) {
+      $rowId = [string](Get-RangeValue $modelValues $rowOffset 0)
+      $rowPath = [string](Get-RangeValue $modelValues $rowOffset 1)
+      if (-not [string]::IsNullOrWhiteSpace($rowId)) {
+        $entry = [PSCustomObject]@{
+          row = $rowOffset + 3
+          id = $rowId
+          path = $rowPath
+        }
+        Add-IndexEntry $modelEntriesById $rowId $entry
+        [void]$modelRows.Add($entry)
+      }
+      if (-not [string]::IsNullOrWhiteSpace($rowPath)) {
+        $pathKey = $rowPath.Replace("\", "/").ToLowerInvariant()
+        if (-not $modelByPath.ContainsKey($pathKey)) {
+          $parsedModelId = 0
+          if ([int]::TryParse($rowId, [ref]$parsedModelId)) {
+            $modelByPath[$pathKey] = $parsedModelId
+          }
+        }
+      }
+    }
+  }
+
+  $npcLastRow = 2
+  $npcRowCount = 0
+  $npcValues = $null
+  $npcEntriesById = @{}
+  if ($null -ne $npcSheet) {
+    $npcLastRow = [int](Invoke-ExcelAction {
+      return $npcSheet.UsedRange.Rows.Count
+    } "读取 NPC 表行数")
+    $npcRowCount = [Math]::Max(0, $npcLastRow - 2)
+    $npcValues =
+      Get-RangeValues $npcSheet 3 $npcLastRow 2 5 "批量读取 NPC 表"
+    for ($rowOffset = 0; $rowOffset -lt $npcRowCount; $rowOffset++) {
+      $rowId = [string](Get-RangeValue $npcValues $rowOffset 0)
+      if ([string]::IsNullOrWhiteSpace($rowId)) {
+        continue
+      }
+      Add-IndexEntry $npcEntriesById $rowId ([PSCustomObject]@{
+        row = $rowOffset + 3
+        id = $rowId
+        modelId = [string](Get-RangeValue $npcValues $rowOffset 3)
+      })
+    }
+  }
+
+  $targetLastRow = 2
+  $targetRowCount = 0
+  $targetValues = $null
+  $targetIdsByTransform = @{}
+  if ($null -ne $targetSheet) {
+    $targetLastRow = [int](Invoke-ExcelAction {
+      return $targetSheet.UsedRange.Rows.Count
+    } "读取目标物表行数")
+    $targetRowCount = [Math]::Max(0, $targetLastRow - 2)
+    $targetValues =
+      Get-RangeValues $targetSheet 3 $targetLastRow 2 13 "批量读取目标物表"
+    for ($rowOffset = 0; $rowOffset -lt $targetRowCount; $rowOffset++) {
+      $rowId = [string](Get-RangeValue $targetValues $rowOffset 0)
+      $mapId = [string](Get-RangeValue $targetValues $rowOffset 9)
+      $position = [string](Get-RangeValue $targetValues $rowOffset 10)
+      $rotation = [string](Get-RangeValue $targetValues $rowOffset 11)
+      if (-not [string]::IsNullOrWhiteSpace($rowId)) {
+        Add-IndexEntry $targetIdsByTransform (
+          Get-TargetTransformKey $mapId $position $rotation
+        ) $rowId
+      }
+    }
+  }
 
   # Validate every CSV-derived foreign key before inserting into any workbook.
   foreach ($item in $request.items) {
@@ -407,22 +601,12 @@ try {
     if ($scope -eq "all") {
       $configuredPath = Get-ConfiguredPath $item.classPath
       if ($null -ne $item.existingModelId) {
-        $matchingModelRows = [Collections.ArrayList]::new()
-        for ($row = 3; $row -le $modelSheet.UsedRange.Rows.Count; $row++) {
-          if (
-            [string]$modelSheet.Cells.Item($row, 2).Value2 -eq
-            [string]$item.existingModelId
-          ) {
-            [void]$matchingModelRows.Add($row)
-          }
-        }
-        if ($matchingModelRows.Count -ne 1) {
+        $modelEntries =
+          @($modelEntriesById[[string]$item.existingModelId])
+        if ($modelEntries.Count -ne 1) {
           throw "模型 ID $($item.existingModelId) 在模型资源表中不存在或不唯一"
         }
-        $existingPath = [string]$modelSheet.Cells.Item(
-          [int]$matchingModelRows[0],
-          3
-        ).Value2
+        $existingPath = [string]$modelEntries[0].path
         if (-not [string]::Equals(
           $existingPath.Replace("\", "/"),
           $configuredPath,
@@ -435,22 +619,11 @@ try {
         if ($null -eq $item.existingModelId) {
           throw "NPC ID $($item.existingNpcId) 缺少可验证的模型 ID"
         }
-        $matchingNpcRows = [Collections.ArrayList]::new()
-        for ($row = 3; $row -le $npcSheet.UsedRange.Rows.Count; $row++) {
-          if (
-            [string]$npcSheet.Cells.Item($row, 2).Value2 -eq
-            [string]$item.existingNpcId
-          ) {
-            [void]$matchingNpcRows.Add($row)
-          }
-        }
-        if ($matchingNpcRows.Count -ne 1) {
+        $npcEntries = @($npcEntriesById[[string]$item.existingNpcId])
+        if ($npcEntries.Count -ne 1) {
           throw "NPC ID $($item.existingNpcId) 在 NPC 表中不存在或不唯一"
         }
-        $npcModelId = [string]$npcSheet.Cells.Item(
-          [int]$matchingNpcRows[0],
-          5
-        ).Value2
+        $npcModelId = [string]$npcEntries[0].modelId
         if ($npcModelId -ne [string]$item.existingModelId) {
           throw "NPC ID $($item.existingNpcId) 引用的模型与 Actor $($item.label) 不一致"
         }
@@ -468,19 +641,9 @@ try {
     foreach ($item in $pendingItems) {
       $position = Format-Vector $item.transform.location
       $rotation = Format-Rotator $item.transform.rotation
-      $existingTargets = [Collections.ArrayList]::new()
-      for ($row = 3; $row -le $targetSheet.UsedRange.Rows.Count; $row++) {
-        if (
-          [string]$targetSheet.Cells.Item($row, 11).Value2 -eq
-            [string]$item.mapId -and
-          [string]$targetSheet.Cells.Item($row, 12).Value2 -eq $position -and
-          [string]$targetSheet.Cells.Item($row, 13).Value2 -eq $rotation
-        ) {
-          [void]$existingTargets.Add(
-            [string]$targetSheet.Cells.Item($row, 2).Value2
-          )
-        }
-      }
+      $targetKey =
+        Get-TargetTransformKey ([string]$item.mapId) $position $rotation
+      $existingTargets = @($targetIdsByTransform[$targetKey])
       if ($existingTargets.Count -gt 1) {
         throw "Actor $($item.label) 在 MapID $($item.mapId) 中匹配到多个目标物"
       }
@@ -502,11 +665,17 @@ try {
     }
   ).Count -gt 0 -and $scope -ne "npc_only"
   $nextModelId =
-    if ($needsNewModel) { Get-NextId $modelSheet 2 200000 299999 } else { $null }
+    if ($needsNewModel) {
+      Get-NextId $modelValues $modelRowCount 0 200000 299999
+    } else { $null }
   $nextNpcId =
-    if ($needsNewNpc) { Get-NextId $npcSheet 2 1 2147483647 } else { $null }
+    if ($needsNewNpc) {
+      Get-NextId $npcValues $npcRowCount 0 1 2147483647
+    } else { $null }
   $nextTargetId =
-    if ($needsNewTarget) { Get-NextId $targetSheet 2 1 2147483647 } else { $null }
+    if ($needsNewTarget) {
+      Get-NextId $targetValues $targetRowCount 0 1 2147483647
+    } else { $null }
   $newModelUpperBound = @(
     $pendingItems | Where-Object { $null -eq $_.existingModelId }
   ).Count
@@ -547,22 +716,12 @@ try {
     }
     $configuredPath = Get-ConfiguredPath $item.classPath
     if ($null -ne $item.existingModelId) {
-      $matchingModelRows = [Collections.ArrayList]::new()
-      for ($row = 3; $row -le $modelSheet.UsedRange.Rows.Count; $row++) {
-        if (
-          [string]$modelSheet.Cells.Item($row, 2).Value2 -eq
-          [string]$item.existingModelId
-        ) {
-          [void]$matchingModelRows.Add($row)
-        }
-      }
-      if ($matchingModelRows.Count -ne 1) {
+      $modelEntries =
+        @($modelEntriesById[[string]$item.existingModelId])
+      if ($modelEntries.Count -ne 1) {
         throw "模型 ID $($item.existingModelId) 在模型资源表中不存在或不唯一"
       }
-      $existingPath = [string]$modelSheet.Cells.Item(
-        [int]$matchingModelRows[0],
-        3
-      ).Value2
+      $existingPath = [string]$modelEntries[0].path
       if (-not [string]::Equals(
         $existingPath.Replace("\", "/"),
         $configuredPath,
@@ -581,44 +740,41 @@ try {
     if ($null -eq $modelWorkbook) {
       throw "模型资源表未打开"
     }
-    $existingId = $null
-    for ($row = 3; $row -le $modelSheet.UsedRange.Rows.Count; $row++) {
-      $existingPath = [string]$modelSheet.Cells.Item($row, 3).Value2
-      if ([string]::Equals(
-        $existingPath.Replace("\", "/"),
-        $configuredPath,
-        [StringComparison]::OrdinalIgnoreCase
-      )) {
-        $existingId = [int]$modelSheet.Cells.Item($row, 2).Value2
+    $insertRow = $modelLastRow + 1
+    foreach ($modelRow in $modelRows) {
+      $rowId = 0
+      if (
+        [int]::TryParse([string]$modelRow.id, [ref]$rowId) -and
+        $rowId -gt $nextModelId
+      ) {
+        $insertRow = [int]$modelRow.row
         break
       }
     }
-    if ($null -eq $existingId) {
-      $insertRow = $modelSheet.UsedRange.Rows.Count + 1
-      for ($row = 3; $row -le $modelSheet.UsedRange.Rows.Count; $row++) {
-        $rowId = 0
-        if (
-          [int]::TryParse(
-            [string]$modelSheet.Cells.Item($row, 2).Value2,
-            [ref]$rowId
-          ) -and $rowId -gt $nextModelId
-        ) {
-          $insertRow = $row
-          break
-        }
+    Add-BlankRow $modelSheet $insertRow 4
+    foreach ($modelRow in $modelRows) {
+      if ([int]$modelRow.row -ge $insertRow) {
+        $modelRow.row = [int]$modelRow.row + 1
       }
-      Add-BlankRow $modelSheet $insertRow 4
-      Set-NewCell $modelSheet $insertRow 1 0
-      Set-NewCell $modelSheet $insertRow 2 $nextModelId
-      Set-NewCell $modelSheet $insertRow 3 $configuredPath
-      $existingId = $nextModelId
-      [void]$createdModels.Add(
-        [PSCustomObject]@{ actorRef = $item.actorRef; id = $existingId }
-      )
-      $nextModelId++
-      $lastSheet = $modelSheet
-      $lastRow = $insertRow
     }
+    Set-NewCell $modelSheet $insertRow 1 0
+    Set-NewCell $modelSheet $insertRow 2 $nextModelId
+    Set-NewCell $modelSheet $insertRow 3 $configuredPath
+    $existingId = $nextModelId
+    $newModelEntry = [PSCustomObject]@{
+      row = $insertRow
+      id = [string]$existingId
+      path = $configuredPath
+    }
+    [void]$modelRows.Add($newModelEntry)
+    Add-IndexEntry $modelEntriesById ([string]$existingId) $newModelEntry
+    $modelLastRow++
+    [void]$createdModels.Add(
+      [PSCustomObject]@{ actorRef = $item.actorRef; id = $existingId }
+    )
+    $nextModelId++
+    $lastSheet = $modelSheet
+    $lastRow = $insertRow
     $modelByPath[$pathKey] = $existingId
     $modelByActor[$item.actorRef] = $existingId
   }
@@ -637,7 +793,8 @@ try {
     if ($null -eq $npcWorkbook) {
       throw "NPC 表未打开"
     }
-    $row = $npcSheet.UsedRange.Rows.Count + 1
+    $npcLastRow++
+    $row = $npcLastRow
     Add-BlankRow $npcSheet $row 35
     Set-NewCell $npcSheet $row 1 0
     Set-NewCell $npcSheet $row 2 $nextNpcId
@@ -693,7 +850,8 @@ try {
         )
         continue
       }
-      $row = $targetSheet.UsedRange.Rows.Count + 1
+      $targetLastRow++
+      $row = $targetLastRow
       Add-BlankRow $targetSheet $row 33
       Set-NewCell $targetSheet $row 1 0
       Set-NewCell $targetSheet $row 2 $nextTargetId
@@ -717,11 +875,17 @@ try {
     }
   }
 
-  $excel.AutomationSecurity = $previousSecurity
+  [void](Invoke-ExcelAction {
+    $excel.AutomationSecurity = $previousSecurity
+  } "恢复 Excel 安全设置")
   if ($null -ne $lastSheet) {
-    $lastSheet.Parent.Activate() | Out-Null
-    $lastSheet.Activate() | Out-Null
-    $excel.Goto($lastSheet.Cells.Item($lastRow, 2), $true) | Out-Null
+    try {
+      $lastSheet.Parent.Activate() | Out-Null
+      $lastSheet.Activate() | Out-Null
+      $excel.Goto($lastSheet.Cells.Item($lastRow, 2), $true) | Out-Null
+    } catch {
+      # Selection is best-effort; the registration values have already been written.
+    }
   }
   [PSCustomObject]@{
     ok = $true
@@ -736,8 +900,8 @@ try {
     if ($null -ne $previousSecurity) {
       try { $excel.AutomationSecurity = $previousSecurity } catch {}
     }
-    $excel.Visible = $true
-    $excel.DisplayAlerts = $true
+    try { $excel.Visible = $true } catch {}
+    try { $excel.DisplayAlerts = $true } catch {}
   }
   [PSCustomObject]@{
     ok = $false
@@ -747,7 +911,7 @@ try {
 }
 `;
 
-const EXCEL_TARGET_UPDATE_SCRIPT = String.raw`
+export const EXCEL_TARGET_UPDATE_SCRIPT = String.raw`
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
@@ -762,15 +926,26 @@ function Invoke-ExcelAction(
   [string]$description
 ) {
   $lastError = $null
-  for ($attempt = 1; $attempt -le 12; $attempt++) {
+  for ($attempt = 1; $attempt -le 20; $attempt++) {
     try {
       return & $action
     } catch [Runtime.InteropServices.COMException] {
       $lastError = $_.Exception
-      Start-Sleep -Milliseconds 250
+      Start-Sleep -Milliseconds 500
     }
   }
   throw "$description 失败：Excel 正忙或正处于单元格编辑状态，请退出编辑后重试。$($lastError.Message)"
+}
+
+function Get-ExcelApplication {
+  try {
+    return [Runtime.InteropServices.Marshal]::GetActiveObject("Excel.Application")
+  } catch [Runtime.InteropServices.COMException] {
+    if ($_.Exception.HResult -ne -2147221021) {
+      throw
+    }
+    return New-Object -ComObject Excel.Application
+  }
 }
 
 function Find-OpenWorkbook([object]$excel, [string]$path) {
@@ -786,6 +961,50 @@ function Find-OpenWorkbook([object]$excel, [string]$path) {
       }
       return $book
     }
+  }
+  return $null
+}
+
+function Get-RangeValues(
+  [object]$sheet,
+  [int]$firstRow,
+  [int]$lastRow,
+  [int]$firstColumn,
+  [int]$lastColumn,
+  [string]$description
+) {
+  if ($lastRow -lt $firstRow) {
+    return $null
+  }
+  $values = Invoke-ExcelAction {
+    $rangeValues = $sheet.Range(
+      $sheet.Cells.Item($firstRow, $firstColumn),
+      $sheet.Cells.Item($lastRow, $lastColumn)
+    ).Value2
+    Write-Output -NoEnumerate $rangeValues
+  } $description
+  Write-Output -NoEnumerate $values
+}
+
+function Get-RangeValue(
+  $values,
+  [int]$rowOffset,
+  [int]$columnOffset
+) {
+  if ($null -eq $values) {
+    return $null
+  }
+  if ($values -is [Array]) {
+    if ($values.Rank -eq 2) {
+      return $values.GetValue(
+        $values.GetLowerBound(0) + $rowOffset,
+        $values.GetLowerBound(1) + $columnOffset
+      )
+    }
+    return $values.GetValue($values.GetLowerBound(0) + $rowOffset)
+  }
+  if ($rowOffset -eq 0 -and $columnOffset -eq 0) {
+    return $values
   }
   return $null
 }
@@ -851,11 +1070,9 @@ try {
   if (-not (Test-Path -LiteralPath $targetPath)) {
     throw "找不到 Excel 源表：$targetPath"
   }
-  try {
-    $excel = [Runtime.InteropServices.Marshal]::GetActiveObject("Excel.Application")
-  } catch {
-    $excel = New-Object -ComObject Excel.Application
-  }
+  $excel = Invoke-ExcelAction {
+    return Get-ExcelApplication
+  } "连接 Excel"
   [void](Invoke-ExcelAction { $excel.Visible = $true } "显示 Excel")
   [void](Invoke-ExcelAction { $excel.DisplayAlerts = $true } "恢复 Excel 提示")
   $targetWorkbook = Invoke-ExcelAction {
@@ -867,10 +1084,11 @@ try {
     } "读取 Excel 安全设置"
     [void](Invoke-ExcelAction {
       $excel.AutomationSecurity = 3
+      $excel.DisplayAlerts = $false
     } "临时禁用工作簿宏")
     try {
       $targetWorkbook = Invoke-ExcelAction {
-        return $excel.Workbooks.Open($targetPath)
+        return $excel.Workbooks.Open($targetPath, 0, $false)
       } "打开目标物表"
       if ($targetWorkbook.ReadOnly) {
         throw "工作簿无法写入：$targetPath"
@@ -878,6 +1096,7 @@ try {
     } finally {
       [void](Invoke-ExcelAction {
         $excel.AutomationSecurity = $previousSecurity
+        $excel.DisplayAlerts = $true
       } "恢复 Excel 安全设置")
     }
   }
@@ -887,15 +1106,15 @@ try {
   $lastTargetRow = Invoke-ExcelAction {
     return $targetSheet.UsedRange.Rows.Count
   } "读取目标物表行数"
+  $targetValues =
+    Get-RangeValues $targetSheet 3 $lastTargetRow 2 13 "批量读取目标物表"
 
   foreach ($item in $request.items) {
     $matchingRows = [Collections.ArrayList]::new()
-    for ($row = 3; $row -le $lastTargetRow; $row++) {
-      $rowId = [string](Invoke-ExcelAction {
-        return $targetSheet.Cells.Item($row, 2).Value2
-      } "读取目标物 ID")
+    for ($rowOffset = 0; $rowOffset -le $lastTargetRow - 3; $rowOffset++) {
+      $rowId = [string](Get-RangeValue $targetValues $rowOffset 0)
       if ($rowId -eq [string]$item.targetId) {
-        [void]$matchingRows.Add($row)
+        [void]$matchingRows.Add($rowOffset + 3)
       }
     }
     if ($matchingRows.Count -eq 0) {
@@ -906,19 +1125,17 @@ try {
     }
 
     $targetRow = [int]$matchingRows[0]
-    $workbookMapId = [string](Invoke-ExcelAction {
-      return $targetSheet.Cells.Item($targetRow, 11).Value2
-    } "读取目标物 $($item.targetId) 的 MapID")
+    $targetRowOffset = $targetRow - 3
+    $workbookMapId =
+      [string](Get-RangeValue $targetValues $targetRowOffset 9)
     if ($workbookMapId -ne [string]$item.mapId) {
       throw "目标物 $($item.targetId) 的 MapID 已变化：当前 $workbookMapId，预期 $($item.mapId)"
     }
 
-    $currentPosition = [string](Invoke-ExcelAction {
-      return $targetSheet.Cells.Item($targetRow, 12).Value2
-    } "读取目标物 $($item.targetId) 的位置")
-    $currentRotation = [string](Invoke-ExcelAction {
-      return $targetSheet.Cells.Item($targetRow, 13).Value2
-    } "读取目标物 $($item.targetId) 的旋转")
+    $currentPosition =
+      [string](Get-RangeValue $targetValues $targetRowOffset 10)
+    $currentRotation =
+      [string](Get-RangeValue $targetValues $targetRowOffset 11)
     $positionAlreadyUpdated =
       Test-VectorEqual $currentPosition $item.transform.location
     $rotationAlreadyUpdated =
@@ -1117,8 +1334,12 @@ async function runExcelOperation<
       };
       const timeout = setTimeout(() => {
         child.kill();
-        rejectOnce(new Error(`${fallbackError}超时`));
-      }, 60_000);
+        rejectOnce(
+          new Error(
+            `${fallbackError}超过 ${EXCEL_OPERATION_TIMEOUT_MS / 1_000} 秒；请检查 Excel 是否停留在单元格编辑、弹窗或受保护视图`,
+          ),
+        );
+      }, EXCEL_OPERATION_TIMEOUT_MS);
       child.stdout.on("data", (chunk) =>
         stdout.push(Buffer.from(chunk)),
       );

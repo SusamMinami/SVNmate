@@ -73,6 +73,7 @@ const REQUEST_TIMEOUT_MS = 8_000;
 const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 const PREVIEW_MARKER_CLASS = "/Script/Engine.TargetPoint";
 const PREVIEW_ACTOR_PREFIX = "ShotSandboxMissionTargetPreview";
+const PREVIEW_DELETE_RETRY_DELAYS_MS = [50, 100, 200, 400, 800, 1_200];
 const BLUEPRINT_SEARCH_PATH = "/Game/Seria/Task/Mod";
 const POSITION_MODE_BASE_CLASS =
   "/Game/Seria/Task/Mod/PositionMode/PositionModeBase.PositionModeBase_C";
@@ -467,12 +468,14 @@ const MissionTargetBlueprintSyncRequestSchema = z.object({
 
 const BackgroundPropInspectRequestSchema = z.object({
   blueprintName: z.string().trim().min(1).max(512),
+  actorRefs: z.array(z.string().min(1)).min(1).max(200).optional(),
 });
 
 const BackgroundPropApplyRequestSchema =
-  BackgroundPropInspectRequestSchema.extend({
+  BackgroundPropInspectRequestSchema.omit({ actorRefs: true }).extend({
     reviewToken: z.string().regex(/^[a-f0-9]{64}$/),
     selectedActorRefs: z.array(z.string().min(1)).min(1).max(200),
+    reviewedActorRefs: z.array(z.string().min(1)).min(1).max(200).optional(),
   });
 
 const StoryboardVec3Schema = z.tuple([
@@ -1250,6 +1253,72 @@ function clonedValue<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
+function formatUnrealMismatchValue(value: unknown): string {
+  const serialized = JSON.stringify(value);
+  return serialized === undefined ? String(value) : serialized;
+}
+
+function unrealValueMismatch(
+  actual: unknown,
+  expected: unknown,
+  path: string,
+): string | null {
+  if (typeof actual === "number" && typeof expected === "number") {
+    const tolerance = 0.0001 + Math.abs(expected) * 0.000001;
+    return Number.isFinite(actual) &&
+      Number.isFinite(expected) &&
+      Math.abs(actual - expected) <= tolerance
+      ? null
+      : `${path} 期望 ${expected}，回读 ${actual}`;
+  }
+  if (Array.isArray(expected)) {
+    if (!Array.isArray(actual)) {
+      return `${path} 期望数组，回读 ${formatUnrealMismatchValue(actual)}`;
+    }
+    if (actual.length !== expected.length) {
+      return `${path} 期望 ${expected.length} 项，回读 ${actual.length} 项`;
+    }
+    for (let index = 0; index < expected.length; index += 1) {
+      const mismatch = unrealValueMismatch(
+        actual[index],
+        expected[index],
+        `${path}[${index}]`,
+      );
+      if (mismatch) {
+        return mismatch;
+      }
+    }
+    return null;
+  }
+  if (expected !== null && typeof expected === "object") {
+    if (
+      actual === null ||
+      typeof actual !== "object" ||
+      Array.isArray(actual)
+    ) {
+      return `${path} 期望对象，回读 ${formatUnrealMismatchValue(actual)}`;
+    }
+    const actualRecord = actual as Record<string, unknown>;
+    for (const [key, expectedValue] of Object.entries(expected)) {
+      if (!(key in actualRecord)) {
+        return `${path}.${key} 未在回读结果中出现`;
+      }
+      const mismatch = unrealValueMismatch(
+        actualRecord[key],
+        expectedValue,
+        `${path}.${key}`,
+      );
+      if (mismatch) {
+        return mismatch;
+      }
+    }
+    return null;
+  }
+  return Object.is(actual, expected)
+    ? null
+    : `${path} 期望 ${formatUnrealMismatchValue(expected)}，回读 ${formatUnrealMismatchValue(actual)}`;
+}
+
 function stagePositionToUnreal(
   position: StoryboardExportRequest["shots"][number]["cameraPosition"],
   layout: FormationExportLayout,
@@ -1387,7 +1456,7 @@ function validateStoryboardCoverage(request: StoryboardExportRequest): void {
       (dialogueId, index) => dialogueId !== request.dialogueIds[index],
     )
   ) {
-    throw new Error("分镜必须按原顺序覆盖当前对话的全部台词节点");
+    throw new Error("分镜必须按原顺序覆盖本次导出的全部台词节点");
   }
   for (const [index, shot] of request.shots.entries()) {
     if (shot.dialogueId !== shot.dialogueIds[0]) {
@@ -1635,19 +1704,18 @@ async function readFormationExportLayout(
   };
 }
 
-function storyboardExportBlockedReasons(
-  request: StoryboardExportRequest,
+function storyboardShotBlockedReasons(
+  shot: StoryboardExportRequest["shots"][number],
+  index: number,
 ): string[] {
-  return request.shots.flatMap((shot, index) => {
-    const changesFocalLength =
-      Math.abs(shot.endFocalLength - shot.focalLength) > 0.001 ||
-      shot.cameraMovement.includes("zoom");
-    return changesFocalLength
-      ? [
-          `镜头 ${index + 1} 使用焦距连续变化，当前 UE MoveCameras 映射尚不能无损表达`,
-        ]
-      : [];
-  });
+  const changesFocalLength =
+    Math.abs(shot.endFocalLength - shot.focalLength) > 0.001 ||
+    shot.cameraMovement.includes("zoom");
+  return changesFocalLength
+    ? [
+        `镜头 ${index + 1} 使用焦距连续变化，当前 UE MoveCameras 映射尚不能无损表达`,
+      ]
+    : [];
 }
 
 function exportAction(
@@ -1712,20 +1780,26 @@ async function prepareStoryboardExport(
     request.dialogueIds,
     exportedText,
   );
-  const shotStartByDialogueId = new Map(
-    request.shots.map((shot, index) => [
-      shot.dialogueId,
-      { shot, shotIndex: index },
-    ]),
+  const shotByDialogueId = new Map(
+    request.shots.flatMap((shot, shotIndex) =>
+      shot.dialogueIds.map((dialogueId) => [
+        dialogueId,
+        { shot, shotIndex },
+      ] as const),
+    ),
   );
   const changes = dialogueNodes.map((node) => {
-    const shotStart = shotStartByDialogueId.get(node.dialogueId);
-    const role: StoryboardExportNodePreview["role"] = shotStart
+    const shotEntry = shotByDialogueId.get(node.dialogueId);
+    if (!shotEntry) {
+      throw new Error(`台词节点 ${node.dialogueId} 没有所属镜头`);
+    }
+    const isShotStart = shotEntry.shot.dialogueId === node.dialogueId;
+    const role: StoryboardExportNodePreview["role"] = isShotStart
       ? "shot_start"
       : "continuation";
-    const desiredCameraPosition = shotStart ? layout.cameraName : "";
-    const desiredMoveCameras = shotStart
-      ? [buildStoryboardCameraMove(shotStart.shot, layout)]
+    const desiredCameraPosition = isShotStart ? layout.cameraName : "";
+    const desiredMoveCameras = isShotStart
+      ? [buildStoryboardCameraMove(shotEntry.shot, layout)]
       : [];
     const desiredCommonProperties = clonedValue(node.commonProperties);
     desiredCommonProperties[node.cameraPropertyIndex].CurrentString =
@@ -1733,13 +1807,16 @@ async function prepareStoryboardExport(
     const writeCommonProperties =
       node.existingCameraPosition !== desiredCameraPosition;
     const writeMoveCameras =
-      JSON.stringify(node.existingMoveCameras) !==
-      JSON.stringify(desiredMoveCameras);
+      unrealValueMismatch(
+        node.existingMoveCameras,
+        desiredMoveCameras,
+        "MoveCameras",
+      ) !== null;
     const unchanged = !writeCommonProperties && !writeMoveCameras;
     return {
       preview: {
         dialogueId: node.dialogueId,
-        shotIndex: shotStart ? shotStart.shotIndex : null,
+        shotIndex: shotEntry.shotIndex,
         role,
         action: exportAction(
           role,
@@ -1770,8 +1847,13 @@ async function prepareStoryboardExport(
   );
   const dialoguePackagePath = dialogueAssetPath.split(".")[0];
   const formationPackagePath = layout.assetPath.split(".")[0];
-  const blockedReasons = [
-    ...storyboardExportBlockedReasons(request),
+  const shotPreviews = request.shots.map((shot, shotIndex) => ({
+    shotIndex,
+    dialogueIds: [...shot.dialogueIds],
+    projectionValid: shot.projectionValid,
+    blockedReasons: storyboardShotBlockedReasons(shot, shotIndex),
+  }));
+  const globalBlockedReasons = [
     ...(dirtyPackages.has(dialoguePackagePath.toLowerCase())
       ? [
           `对话资产 ${dialoguePackagePath} 存在未保存修改，请先在 UE 中保存或撤销`,
@@ -1782,6 +1864,10 @@ async function prepareStoryboardExport(
           `Formation BP ${formationPackagePath} 存在未保存修改，请先在 UE 中保存或撤销`,
         ]
       : []),
+  ];
+  const blockedReasons = [
+    ...globalBlockedReasons,
+    ...shotPreviews.flatMap((shot) => shot.blockedReasons),
   ];
   const invalidShotCount = request.shots.filter(
     (shot) => !shot.projectionValid,
@@ -1828,8 +1914,10 @@ async function prepareStoryboardExport(
         (change) => change.preview.action === "clear",
       ).length,
       invalidShotCount,
+      globalBlockedReasons,
       blockedReasons,
       warnings,
+      shots: shotPreviews,
       nodes: changes.map((change) => change.preview),
     },
     dialogueAsset: String(dialogueAsset),
@@ -1928,13 +2016,22 @@ export async function exportDialogueStoryboard(
           ),
           "MoveCameras",
         );
-        if (
-          cameraPosition !== change.preview.desiredCameraPosition ||
-          JSON.stringify(moveCameras) !==
-            JSON.stringify(change.desiredMoveCameras)
-        ) {
+        const moveCamerasMismatch = unrealValueMismatch(
+          moveCameras,
+          change.desiredMoveCameras,
+          "MoveCameras",
+        );
+        const mismatches = [
+          ...(cameraPosition !== change.preview.desiredCameraPosition
+            ? [
+                `CameraPosition 期望 ${formatUnrealMismatchValue(change.preview.desiredCameraPosition)}，回读 ${formatUnrealMismatchValue(cameraPosition)}`,
+              ]
+            : []),
+          ...(moveCamerasMismatch ? [moveCamerasMismatch] : []),
+        ];
+        if (mismatches.length > 0) {
           throw new Error(
-            `台词节点 ${change.preview.dialogueId} 写入后的回读结果不一致`,
+            `台词节点 ${change.preview.dialogueId} 写入后的回读结果不一致：${mismatches.join("；")}`,
           );
         }
       }
@@ -5144,6 +5241,7 @@ function backgroundPropReviewToken(
 async function prepareBackgroundPropImport(
   connection: UnrealInvoker,
   blueprintName: string,
+  actorRefs?: string[],
 ): Promise<PreparedBackgroundPropImport> {
   const resolved = await resolveExistingBlueprint(
     connection,
@@ -5180,11 +5278,30 @@ async function prepareBackgroundPropImport(
     startNodeData,
   );
   const mapAssetPath = await currentMapName(connection);
-  const actors = await queryLevelActors(
+  const selectedActors = await queryLevelActors(
     connection,
     "unreal.EditorLevelLibrary.get_selected_level_actors()",
     "无法读取 UE 编辑器当前选择",
   );
+  let actors = selectedActors;
+  if (actorRefs) {
+    const requestedActorRefs = new Set(actorRefs);
+    if (requestedActorRefs.size !== actorRefs.length) {
+      throw new Error("背景资产审核范围中存在重复 Actor");
+    }
+    const selectedActorsByRef = new Map(
+      selectedActors.map((actor) => [actor.actorRef, actor]),
+    );
+    const missingActorRefs = actorRefs.filter(
+      (actorRef) => !selectedActorsByRef.has(actorRef),
+    );
+    if (missingActorRefs.length > 0) {
+      throw new Error("UE 当前选择已变化，请重新读取");
+    }
+    actors = actorRefs.map(
+      (actorRef) => selectedActorsByRef.get(actorRef)!,
+    );
+  }
   const blockedReasons: string[] = [];
   if (
     normalizeObjectPath(formationValue) !==
@@ -5341,6 +5458,7 @@ export async function inspectBackgroundPropImport(
       await prepareBackgroundPropImport(
         connection,
         request.blueprintName,
+        request.actorRefs,
       )
     ).preview;
   } finally {
@@ -5356,6 +5474,12 @@ export async function applyBackgroundPropImport(
   if (new Set(request.selectedActorRefs).size !== request.selectedActorRefs.length) {
     throw new Error("背景资产选择中存在重复 Actor");
   }
+  if (
+    request.reviewedActorRefs &&
+    new Set(request.reviewedActorRefs).size !== request.reviewedActorRefs.length
+  ) {
+    throw new Error("背景资产审核范围中存在重复 Actor");
+  }
   const connection = connectionFactory();
   await connectUnreal(connection);
   let prepared: PreparedBackgroundPropImport | null = null;
@@ -5365,6 +5489,7 @@ export async function applyBackgroundPropImport(
     prepared = await prepareBackgroundPropImport(
       connection,
       request.blueprintName,
+      request.reviewedActorRefs,
     );
     if (prepared.preview.reviewToken !== request.reviewToken) {
       throw new Error("UE 选择、Actor Transform 或 BP 内容已变化，请重新检查");
@@ -5711,6 +5836,24 @@ async function findMissionPreviewActors(
   return Array.from(new Set(parsed));
 }
 
+async function deleteMissionPreviewActorsAndWait(
+  connection: UnrealInvoker,
+  actors: string[],
+): Promise<void> {
+  await deletePreviewActors(connection, actors);
+  let remaining = actors;
+  for (const delayMs of PREVIEW_DELETE_RETRY_DELAYS_MS) {
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, delayMs));
+    remaining = await findMissionPreviewActors(connection);
+    if (remaining.length === 0) {
+      return;
+    }
+  }
+  throw new Error(
+    `仍有 ${remaining.length} 个目标物预览对象未能删除；UE 可能仍在处理销毁，或对象已被关卡锁定`,
+  );
+}
+
 export async function clearMissionTargetPreview(
   connectionFactory: () => UnrealInvoker = () => new UnrealMcpConnection(),
 ): Promise<{ clearedCount: number }> {
@@ -5737,14 +5880,10 @@ export async function clearMissionTargetPreview(
       activeMissionPreviewMap = "";
       return { clearedCount: 0 };
     }
-    await deletePreviewActors(connection, actors);
     if (discoveredFromLevel) {
-      const remaining = await findMissionPreviewActors(connection);
-      if (remaining.length > 0) {
-        throw new Error(
-          `仍有 ${remaining.length} 个目标物预览对象未能删除`,
-        );
-      }
+      await deleteMissionPreviewActorsAndWait(connection, actors);
+    } else {
+      await deletePreviewActors(connection, actors);
     }
     activeMissionPreviewActors = [];
     activeMissionPreviewMap = "";
@@ -5837,7 +5976,10 @@ export async function loadMissionTargetPreview(
 
     const existingPreviewActors = await findMissionPreviewActors(connection);
     if (existingPreviewActors.length > 0) {
-      await deletePreviewActors(connection, existingPreviewActors);
+      await deleteMissionPreviewActorsAndWait(
+        connection,
+        existingPreviewActors,
+      );
       activeMissionPreviewActors = [];
       activeMissionPreviewMap = "";
     }

@@ -154,6 +154,7 @@ const WORKSPACE_ORDER: Record<WorkspaceView, number> = {
   npc: 1,
   targets: 2,
 };
+const WORKSPACE_TRANSITION_MS = 720;
 
 interface CachedStoryboard {
   sequence: DialogueSequence;
@@ -916,6 +917,11 @@ export default function App() {
     useState<DialogueStoryboardExportPreview | null>(null);
   const [storyboardExportRequest, setStoryboardExportRequest] =
     useState<StoryboardExportRequest | null>(null);
+  const [storyboardExportMode, setStoryboardExportMode] = useState<
+    "current" | "all"
+  >("current");
+  const [storyboardExportShotNumber, setStoryboardExportShotNumber] =
+    useState(1);
   const [storyboardExportBusy, setStoryboardExportBusy] = useState(false);
   const [storyboardExportError, setStoryboardExportError] = useState("");
   const [storyboardExportResult, setStoryboardExportResult] = useState("");
@@ -1108,7 +1114,7 @@ export default function App() {
     workspaceTransitionTimerRef.current = window.setTimeout(() => {
       setOutgoingWorkspace(null);
       workspaceTransitionTimerRef.current = null;
-    }, 560);
+    }, WORKSPACE_TRANSITION_MS);
   }
 
   useEffect(
@@ -1986,19 +1992,21 @@ export default function App() {
     }
   }
 
-  function currentStoryboardExportRequest(): StoryboardExportRequest {
+  function currentStoryboardExportRequest(
+    selectedShots: ShotPlan[] = shots,
+  ): StoryboardExportRequest {
     if (!canExportStoryboard) {
       throw new Error("当前方案未绑定完整的 UE Blueprint 站位");
     }
     return {
       dialogueId: sequence.prefix,
       startId: sequence.startId,
-      dialogueIds: sequence.rows.map((row) => row.id),
+      dialogueIds: selectedShots.flatMap((shot) => shot.dialogueIds),
       participantModelIndexes: sequence.participants.map(
         (participant) => participant.modelIndex!,
       ),
       usesBlueprintFormation: true,
-      shots: shots.map((shot) => ({
+      shots: selectedShots.map((shot) => ({
         dialogueId: shot.dialogueId,
         dialogueIds: [...shot.dialogueIds],
         cameraPosition: shot.cameraPosition,
@@ -2020,8 +2028,16 @@ export default function App() {
     setStoryboardExportError("");
     setStoryboardExportResult("");
     try {
-      const request = currentStoryboardExportRequest();
+      if (!activeShot) {
+        throw new Error("当前没有可导出的镜头");
+      }
+      const request = currentStoryboardExportRequest([activeShot]);
       const preview = await inspectDialogueStoryboardExport(request);
+      const resolvedActiveIndex = shots.indexOf(activeShot);
+      setStoryboardExportMode("current");
+      setStoryboardExportShotNumber(
+        (resolvedActiveIndex >= 0 ? resolvedActiveIndex : 0) + 1,
+      );
       setStoryboardExportRequest(request);
       setStoryboardExportPreview(preview);
     } catch (exportError) {
@@ -2035,16 +2051,54 @@ export default function App() {
     }
   }
 
-  async function confirmStoryboardExport() {
+  async function previewAllStoryboardExport() {
+    setStoryboardExportBusy(true);
+    setStoryboardExportError("");
+    setStoryboardExportResult("");
+    try {
+      const request = currentStoryboardExportRequest();
+      const preview = await inspectDialogueStoryboardExport(request);
+      setStoryboardExportMode("all");
+      setStoryboardExportRequest(request);
+      setStoryboardExportPreview(preview);
+    } catch (exportError) {
+      setStoryboardExportError(
+        exportError instanceof Error
+          ? exportError.message
+          : "无法检查全部 UE 分镜写入",
+      );
+    } finally {
+      setStoryboardExportBusy(false);
+    }
+  }
+
+  async function confirmStoryboardExport(selectedShotIndexes: number[]) {
     if (!storyboardExportPreview || !storyboardExportRequest) {
       return;
     }
     setStoryboardExportBusy(true);
     setStoryboardExportError("");
     try {
+      const selectedIndexes = new Set(selectedShotIndexes);
+      const selectedShots = storyboardExportRequest.shots.filter(
+        (_, index) => selectedIndexes.has(index),
+      );
+      if (selectedShots.length === 0) {
+        throw new Error("请至少选择一个要导出的镜头");
+      }
+      const selectedRequest: StoryboardExportRequest = {
+        ...storyboardExportRequest,
+        dialogueIds: selectedShots.flatMap((shot) => shot.dialogueIds),
+        shots: selectedShots,
+      };
+      const exportsAllShots =
+        selectedShots.length === storyboardExportRequest.shots.length;
+      const selectedPreview = exportsAllShots
+        ? storyboardExportPreview
+        : await inspectDialogueStoryboardExport(selectedRequest);
       const result = await exportDialogueStoryboard(
-        storyboardExportRequest,
-        storyboardExportPreview.reviewToken,
+        selectedRequest,
+        selectedPreview.reviewToken,
       );
       setStoryboardExportResult(
         result.status === "unchanged"
@@ -2916,16 +2970,22 @@ export default function App() {
       {storyboardExportPreview && storyboardExportRequest && (
         <StoryboardExportModal
           preview={storyboardExportPreview}
+          mode={storyboardExportMode}
+          currentShotNumber={storyboardExportShotNumber}
           busy={storyboardExportBusy}
           error={storyboardExportError}
           result={storyboardExportResult}
           onClose={() => {
             setStoryboardExportPreview(null);
             setStoryboardExportRequest(null);
+            setStoryboardExportMode("current");
             setStoryboardExportError("");
             setStoryboardExportResult("");
           }}
-          onConfirm={() => void confirmStoryboardExport()}
+          onShowAll={() => void previewAllStoryboardExport()}
+          onConfirm={(selectedShotIndexes) =>
+            void confirmStoryboardExport(selectedShotIndexes)
+          }
         />
       )}
 
