@@ -2,7 +2,9 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import type { MissionTargetPreviewPlan } from "../src/types";
 import {
+  appendMissionTargetBlueprint,
   configureConfigCsvDirectory,
   applyBackgroundPropImport,
   inspectBackgroundPropImport,
@@ -44,6 +46,7 @@ class BlueprintSyncConnection implements UnrealInvoker {
   }> = [];
   componentLocation = { X: 0, Y: 0, Z: 100 };
   componentRotation = { Pitch: 0, Yaw: 0, Roll: 0 };
+  dialogueModels = ["player", "Guard"];
   formationClassPath = this.blueprintClassPath;
   commonProperties: Array<Record<string, unknown>> = [
     { Alias: "Virtual", CurrentBool: false },
@@ -177,7 +180,7 @@ class BlueprintSyncConnection implements UnrealInvoker {
       }
       if (object.endsWith("SeriaDialogGraphNodeData_0")) {
         if (property === "DialogModels") {
-          return ["player", "Guard"];
+          return [...this.dialogueModels];
         }
         if (property === "Formation") {
           return this.formationClassPath;
@@ -210,6 +213,7 @@ class BlueprintSyncConnection implements UnrealInvoker {
     }
     if (action === "reflect.write_object_property") {
       if (args.PropertyName === "DialogModels") {
+        this.dialogueModels = [...(args.Value as string[])];
         return true;
       }
       if (args.PropertyName === "Formation") {
@@ -359,6 +363,128 @@ class BackgroundPropConnection extends BlueprintSyncConnection {
   }
 }
 
+class AppendBlueprintConnection extends BlueprintSyncConnection {
+  appendedComponents = new Map<
+    string,
+    {
+      componentClass: string;
+      childActorClass: string;
+      location: { X: number; Y: number; Z: number };
+      rotation: { Pitch: number; Yaw: number; Roll: number };
+      scale: { X: number; Y: number; Z: number };
+    }
+  >();
+
+  override async invoke(
+    action: string,
+    args: Record<string, unknown>,
+  ): Promise<unknown> {
+    const object = String(args.ThisPtr ?? "");
+    const property = String(args.PropertyName ?? "");
+    if (
+      action === "reflect.read_object_property" &&
+      object === `${this.blueprintClassPath}:SimpleConstructionScript_0` &&
+      property === "AllNodes"
+    ) {
+      this.calls.push({ action, args });
+      return [
+        "SCS_Node_0",
+        "SCS_Node_1",
+        ...Array.from(this.appendedComponents.keys()).map(
+          (name) => `SCS_Node_Append_${name}`,
+        ),
+      ];
+    }
+    if (
+      action === "reflect.read_object_property" &&
+      object.startsWith("SCS_Node_Append_")
+    ) {
+      this.calls.push({ action, args });
+      const name = object.slice("SCS_Node_Append_".length);
+      const component = this.appendedComponents.get(name)!;
+      if (property === "InternalVariableName") {
+        return name;
+      }
+      if (property === "ComponentClass") {
+        return component.componentClass;
+      }
+      if (property === "ComponentTemplate") {
+        return `Template_Append_${name}`;
+      }
+    }
+    if (
+      action === "reflect.read_object_property" &&
+      object.startsWith("Template_Append_")
+    ) {
+      this.calls.push({ action, args });
+      const name = object.slice("Template_Append_".length);
+      const component = this.appendedComponents.get(name)!;
+      if (property === "ChildActorClass") {
+        return component.childActorClass;
+      }
+      if (property === "RelativeLocation") {
+        return component.location;
+      }
+      if (property === "RelativeRotation") {
+        return component.rotation;
+      }
+      if (property === "RelativeScale3D") {
+        return component.scale;
+      }
+    }
+    if (action === "script.eval_python_expression") {
+      const expression = String(args.Expression);
+      if (expression.includes("get_data_table_row_names")) {
+        this.calls.push({ action, args });
+        return {
+          bSuccess: true,
+          Result: `'${JSON.stringify({
+            names: ["Guard", "Added"],
+            paths: [
+              "/Game/Test/BP_Guard.BP_Guard_C",
+              "/Game/Test/BP_Added.BP_Added_C",
+            ],
+          })}'`,
+        };
+      }
+    }
+    if (action === "bp.add_component") {
+      this.calls.push({ action, args });
+      this.appendedComponents.set(String(args.ComponentName), {
+        componentClass: String(args.ComponentClass),
+        childActorClass: "",
+        location: { X: 0, Y: 0, Z: 0 },
+        rotation: { Pitch: 0, Yaw: 0, Roll: 0 },
+        scale: { X: 1, Y: 1, Z: 1 },
+      });
+      return true;
+    }
+    if (
+      action === "bp.set_component_property" &&
+      this.appendedComponents.has(String(args.ComponentName))
+    ) {
+      this.calls.push({ action, args });
+      const component = this.appendedComponents.get(
+        String(args.ComponentName),
+      )!;
+      if (property === "ChildActorClass") {
+        component.childActorClass = String(args.Value);
+      }
+      if (property === "RelativeLocation") {
+        component.location = parseVector(String(args.Value));
+      }
+      if (property === "RelativeRotation") {
+        component.rotation = parseRotator(String(args.Value));
+      }
+      if (property === "RelativeScale3D") {
+        component.scale = parseVector(String(args.Value));
+      }
+      return true;
+    }
+    return super.invoke(action, args);
+  }
+}
+
 class AlternateSpatialShapeConnection extends BlueprintSyncConnection {
   override async invoke(
     action: string,
@@ -380,6 +506,39 @@ class AlternateSpatialShapeConnection extends BlueprintSyncConnection {
       return {
         AssetPathName: value.split(".")[0],
       };
+    }
+    return super.invoke(action, args);
+  }
+}
+
+class VirtualGatedBlueprintSyncConnection extends BlueprintSyncConnection {
+  override async invoke(
+    action: string,
+    args: Record<string, unknown>,
+  ): Promise<unknown> {
+    if (
+      action === "reflect.write_object_property" &&
+      args.PropertyName === "CommonDialogGraphProperties"
+    ) {
+      const virtualWasEnabled = this.commonProperties.some(
+        (property) =>
+          property.Alias === "Virtual" &&
+          property.CurrentBool === true,
+      );
+      if (!virtualWasEnabled) {
+        const gatedValue = structuredClone(
+          args.Value as Array<Record<string, unknown>>,
+        );
+        for (const property of gatedValue) {
+          if (property.Alias === "PlayerInitPosition") {
+            delete property.CurrentVector;
+          }
+          if (property.Alias === "PlayerForward") {
+            delete property.CurrentRotator;
+          }
+        }
+        return super.invoke(action, { ...args, Value: gatedValue });
+      }
     }
     return super.invoke(action, args);
   }
@@ -448,6 +607,56 @@ async function writeConfigFixture() {
   configureConfigCsvDirectory(temporaryRoot);
 }
 
+function appendPlan(): MissionTargetPreviewPlan {
+  return {
+    taskId: "900001",
+    taskName: "追加任务",
+    taskSource: "任务表",
+    mapId: "1204",
+    mapName: "测试地图",
+    mapAssetPath: "/Game/Test/Maps/TestMap",
+    warnings: [],
+    targets: [
+      {
+        targetId: "500001",
+        type: 1,
+        description: "已有守卫",
+        npcId: 700001,
+        npcName: "守卫",
+        modelId: 200777,
+        modelClassPath: "/Game/Test/BP_Guard.BP_Guard_C",
+        itemId: 0,
+        blueprintModelId: null,
+        mapId: "1204",
+        previewKind: "asset",
+        transform: {
+          location: { x: 100, y: 200, z: 300 },
+          rotation: { pitch: 0, yaw: 0, roll: 0 },
+          scale: { x: 1, y: 1, z: 1 },
+        },
+      },
+      {
+        targetId: "500002",
+        type: 1,
+        description: "新增 NPC",
+        npcId: 700002,
+        npcName: "新增 NPC",
+        modelId: 200778,
+        modelClassPath: "/Game/Test/BP_Added.BP_Added_C",
+        itemId: 0,
+        blueprintModelId: null,
+        mapId: "1204",
+        previewKind: "asset",
+        transform: {
+          location: { x: 140, y: 260, z: 360 },
+          rotation: { pitch: 0, yaw: 45, roll: 0 },
+          scale: { x: 1.2, y: 1.2, z: 1.2 },
+        },
+      },
+    ],
+  };
+}
+
 afterEach(async () => {
   configureConfigCsvDirectory(DEFAULT_CSV_DIRECTORY);
   if (temporaryRoot) {
@@ -457,6 +666,97 @@ afterEach(async () => {
 });
 
 describe("mission target Blueprint synchronization", () => {
+  it("lists append candidates after existing BP slots", async () => {
+    const connection = new AppendBlueprintConnection();
+
+    const inspection = await inspectMissionTargetBlueprint(
+      {
+        blueprintName: "BP_735200",
+        plan: appendPlan(),
+      },
+      () => connection,
+    );
+
+    expect(inspection.slots).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ modelIndex: 0 }),
+        expect.objectContaining({
+          modelIndex: 1,
+          targetId: "500001",
+        }),
+      ]),
+    );
+    expect(inspection.appendSlots).toEqual([
+      expect.objectContaining({
+        modelIndex: 2,
+        targetId: "500002",
+        suggestedModelName: "Added",
+      }),
+    ]);
+  });
+
+  it("appends selected targets after existing slots and registers all models", async () => {
+    const connection = new AppendBlueprintConnection();
+
+    const result = await appendMissionTargetBlueprint(
+      {
+        blueprintName: "BP_735200",
+        plan: appendPlan(),
+        selectedTargetIds: ["500002"],
+      },
+      () => connection,
+    );
+
+    expect(result).toMatchObject({
+      status: "appended",
+      addedTargetIds: ["500002"],
+      addedModelIndexes: [2],
+      componentNames: ["2"],
+      dialogueRegistration: {
+        dialogueModels: ["player", "Guard", "Added"],
+        registeredCount: 2,
+        emptyCount: 0,
+      },
+    });
+    expect(connection.appendedComponents.get("2")).toEqual({
+      componentClass: "/Script/Engine.ChildActorComponent",
+      childActorClass: "/Game/Test/BP_Added.BP_Added_C",
+      location: { X: 40, Y: 60, Z: 160 },
+      rotation: { Pitch: 0, Yaw: 45, Roll: 0 },
+      scale: { X: 1.2, Y: 1.2, Z: 1.2 },
+    });
+    expect(connection.dialogueModels).toEqual([
+      "player",
+      "Guard",
+      "Added",
+    ]);
+    expect(
+      connection.calls.some(
+        (call) =>
+          call.action === "bp.set_component_property" &&
+          call.args.ComponentName === "1",
+      ),
+    ).toBe(false);
+  });
+
+  it("rejects appending a target already mapped to the BP", async () => {
+    const connection = new AppendBlueprintConnection();
+
+    await expect(
+      appendMissionTargetBlueprint(
+        {
+          blueprintName: "BP_735200",
+          plan: appendPlan(),
+          selectedTargetIds: ["500001"],
+        },
+        () => connection,
+      ),
+    ).rejects.toThrow("所选目标物已存在于 BP：500001");
+    expect(
+      connection.calls.some((call) => call.action === "bp.add_component"),
+    ).toBe(false);
+  });
+
   it("refreshes the task plan, detects both directions and updates BP metadata", async () => {
     await writeConfigFixture();
     const connection = new BlueprintSyncConnection();
@@ -651,6 +951,71 @@ describe("mission target Blueprint synchronization", () => {
       );
     },
   );
+
+  it("enables Virtual before writing the BP actor transform", async () => {
+    await writeConfigFixture();
+    const connection = new VirtualGatedBlueprintSyncConnection();
+    connection.commonProperties = [
+      { Alias: "Virtual", CurrentBool: false },
+      { Alias: "PlayerInitPosition" },
+      { Alias: "PlayerForward" },
+    ];
+    connection.selectedPlacementActors = [
+      {
+        actor_ref: "PersistentLevel.BP_735200_C_0",
+        label: "BP_735200",
+        class_path: connection.blueprintClassPath,
+        location: [700, 800, 900],
+        rotation: [0, 35, 0],
+        scale: [1, 1, 1],
+      },
+    ];
+
+    const result = await registerBlueprintDialogueModels(
+      {
+        blueprintName: "BP_735200",
+        selectedModelIndexes: [1],
+      },
+      () => connection,
+    );
+
+    expect(result).toMatchObject({
+      spatialStatus: "configured",
+      spatialSource: "selected_actor",
+    });
+    expect(connection.commonProperties).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          Alias: "Virtual",
+          CurrentBool: true,
+        }),
+        expect.objectContaining({
+          Alias: "PlayerInitPosition",
+          CurrentVector: { X: 700, Y: 800, Z: 900 },
+        }),
+        expect.objectContaining({
+          Alias: "PlayerForward",
+          CurrentRotator: { Pitch: 0, Yaw: 35, Roll: 0 },
+        }),
+      ]),
+    );
+    const commonWrites = connection.calls.filter(
+      (call) =>
+        call.action === "reflect.write_object_property" &&
+        call.args.PropertyName === "CommonDialogGraphProperties",
+    );
+    expect(commonWrites).toHaveLength(2);
+    expect(
+      (commonWrites[0].args.Value as Array<Record<string, unknown>>).find(
+        (property) => property.Alias === "PlayerInitPosition",
+      ),
+    ).not.toHaveProperty("CurrentVector");
+    expect(
+      (commonWrites[1].args.Value as Array<Record<string, unknown>>).find(
+        (property) => property.Alias === "PlayerInitPosition",
+      ),
+    ).toHaveProperty("CurrentVector", { X: 700, Y: 800, Z: 900 });
+  });
 
   it("blocks automatic registration when the map contains multiple BP instances", async () => {
     await writeConfigFixture();

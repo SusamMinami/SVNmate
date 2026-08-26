@@ -140,6 +140,10 @@ Node/Electron 主进程默认通过 `127.0.0.1:12031` 连接项目现有的
 与数字角色槽的双向 Transform 同步，以及把 UE 当前选择写入非数字背景组件。
 背景组件不进入 DialogModels；Blueprint Actor、Skeletal Mesh 和 Static Mesh
 分别写为 ChildActor、SkeletalMesh 和 StaticMesh 组件，并保留缩放。
+任务目标物与已有数字槽位 BP 同时加载时，原槽位固定保留；只有未映射且经用户
+勾选的实际模型目标物会从当前最大槽位号后连续追加，随后所有数字槽位共同注册
+到 DialogModels。对话缺失空间配置时，写入流程会先启用并回读 Virtual，再写入
+主角初始坐标、朝向和预览地图。
 分镜导出同样先回读并展示逐节点差异，确认后只更新 `CameraPosition` 与
 `MoveCameras`。
 

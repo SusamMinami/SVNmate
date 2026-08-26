@@ -30,6 +30,7 @@ import type {
   MissionTargetUpdateItem,
 } from "../types";
 import {
+  appendMissionTargetBlueprint,
   applyBackgroundPropImport,
   clearMissionTargetPreview,
   checkMissionTargetBlueprint,
@@ -85,8 +86,12 @@ function loadSummary(
 function dialogueModelLabel(
   slot: DialogueModelRegistrationSlot | undefined,
   selected: boolean,
+  omitUnselected = false,
 ): { name: string; status: string; tone: string } {
   if (!selected) {
+    if (omitUnselected) {
+      return { name: "-", status: "不导入", tone: "empty" };
+    }
     return { name: "None", status: "保持为空", tone: "empty" };
   }
   if (!slot) {
@@ -152,9 +157,6 @@ export function MissionTargetModal({
   );
   const [blueprintInspection, setBlueprintInspection] =
     useState<MissionTargetBlueprintInspection | null>(null);
-  const [selectedModelIndexes, setSelectedModelIndexes] = useState<
-    Set<number>
-  >(new Set());
   const [editRequest, setEditRequest] =
     useState<MissionTargetEditRequest | null>(null);
   const [targetOverrides, setTargetOverrides] = useState<
@@ -173,8 +175,32 @@ export function MissionTargetModal({
   const selectedCount =
     plan?.targets.filter((target) => selectedTargetIds.has(target.targetId))
       .length ?? 0;
+  const isDialogueRegistration =
+    blueprintInspection?.blueprintState === "populated";
+  const existingTargetIds = new Set(
+    blueprintInspection?.sync?.mappings.map((mapping) => mapping.targetId) ??
+      [],
+  );
+  const targetRows =
+    plan?.targets.filter(
+      (target) =>
+        !(
+          blueprintInspection?.blueprintState === "populated" &&
+          existingTargetIds.has(target.targetId)
+        ),
+    ) ?? [];
+  const selectableTargetRows = isDialogueRegistration
+    ? targetRows.filter(
+        (target) =>
+          target.previewKind === "asset" && Boolean(target.modelClassPath),
+      )
+    : targetRows;
+  const selectedTargetRowCount = selectableTargetRows.filter((target) =>
+    selectedTargetIds.has(target.targetId),
+  ).length;
   const allSelected =
-    Boolean(plan?.targets.length) && selectedCount === plan?.targets.length;
+    selectableTargetRows.length > 0 &&
+    selectedTargetRowCount === selectableTargetRows.length;
   const selectedAssetTargets =
     plan?.targets.filter(
       (target) =>
@@ -182,27 +208,23 @@ export function MissionTargetModal({
         target.previewKind === "asset" &&
         Boolean(target.modelClassPath),
     ) ?? [];
+  const selectedAppendTargets =
+    blueprintInspection?.blueprintState === "populated"
+      ? selectedAssetTargets.filter(
+          (target) => !existingTargetIds.has(target.targetId),
+        )
+      : [];
   const blueprintRegistrationSlots = blueprintInspection?.slots ?? [];
   const blueprintModelSlots = blueprintRegistrationSlots.filter(
     (slot) => slot.modelIndex > 0,
   );
-  const selectedModelCount = blueprintModelSlots.filter((slot) =>
-    selectedModelIndexes.has(slot.modelIndex),
-  ).length;
-  const allBlueprintModelsSelected =
-    blueprintModelSlots.length > 0 &&
-    selectedModelCount === blueprintModelSlots.length;
-  const isDialogueRegistration =
-    blueprintInspection?.blueprintState === "populated";
+  const maximumBlueprintModelIndex = Math.max(
+    0,
+    ...blueprintRegistrationSlots.map((slot) => slot.modelIndex),
+  );
   const blueprintSync = blueprintInspection?.sync;
   const isBlueprintSync =
     isDialogueRegistration && Boolean(blueprintSync);
-  const blueprintChangeCount =
-    blueprintSync?.mappings.filter(
-      (mapping) =>
-        mapping.positionDelta > 0.001 ||
-        mapping.rotationDelta > 0.001,
-    ).length ?? 0;
   const selectedSyncMappings =
     blueprintSync?.mappings.filter((mapping) =>
       selectedTargetIds.has(mapping.targetId),
@@ -211,18 +233,6 @@ export function MissionTargetModal({
     isBlueprintSync && Boolean(blueprintSync?.canUpdateBlueprint);
   const canUpdateTargets =
     isBlueprintSync && Boolean(blueprintSync?.canUpdateTargets);
-  const needsDialogueRegistration =
-    isDialogueRegistration &&
-    (!isBlueprintSync ||
-      blueprintSync?.blockedReasons.some(
-        (reason) =>
-          reason.includes("Formation") ||
-          reason.includes("DialogModels"),
-      ));
-  const syncBlocked =
-    isBlueprintSync &&
-    !canUpdateBlueprint &&
-    !needsDialogueRegistration;
   const targetOverrideItems = Array.from(
     targetOverrides,
     ([targetId, transform]) => ({ targetId, transform }),
@@ -248,18 +258,8 @@ export function MissionTargetModal({
   function applyBlueprintInspection(
     inspection: MissionTargetBlueprintInspection,
     updateStatus = true,
-    resetModelSelection = true,
   ) {
     setBlueprintInspection(inspection);
-    if (resetModelSelection) {
-      setSelectedModelIndexes(
-        new Set(
-          inspection.slots
-            .filter((slot) => slot.modelIndex > 0)
-            .map((slot) => slot.modelIndex),
-        ),
-      );
-    }
     if (inspection.refreshedPlan) {
       setPlan(inspection.refreshedPlan);
       const refreshedIds = new Set(
@@ -275,6 +275,13 @@ export function MissionTargetModal({
               ),
             )
           : refreshedIds,
+      );
+    }
+    if (inspection.blueprintState === "populated") {
+      setSelectedTargetIds(
+        new Set(
+          inspection.sync?.mappings.map((mapping) => mapping.targetId) ?? [],
+        ),
       );
     }
     if (updateStatus) {
@@ -293,7 +300,6 @@ export function MissionTargetModal({
         new Set(nextPlan.targets.map((target) => target.targetId)),
       );
       setBlueprintInspection(null);
-      setSelectedModelIndexes(new Set());
       if (blueprintName.trim()) {
         setBusy(true);
         const inspection = await inspectMissionTargetBlueprint(
@@ -308,7 +314,6 @@ export function MissionTargetModal({
       setPlan(null);
       setSelectedTargetIds(new Set());
       setBlueprintInspection(null);
-      setSelectedModelIndexes(new Set());
       setError(
         resolutionError instanceof Error
           ? resolutionError.message
@@ -379,7 +384,7 @@ export function MissionTargetModal({
         plan?.taskId,
         targetOverrideItems,
       );
-      applyBlueprintInspection(inspection, false, false);
+      applyBlueprintInspection(inspection, false);
       const preview = await inspectBackgroundPropImport(
         blueprintName.trim(),
       );
@@ -638,7 +643,6 @@ export function MissionTargetModal({
       applyBlueprintInspection(inspection);
     } catch (inspectionError) {
       setBlueprintInspection(null);
-      setSelectedModelIndexes(new Set());
       setError(
         inspectionError instanceof Error
           ? inspectionError.message
@@ -658,28 +662,9 @@ export function MissionTargetModal({
     ) {
       return;
     }
-    const selectedPlan = {
-      ...plan,
-      targets: selectedAssetTargets,
-    };
-    const clearingRegistered = blueprintInspection.slots.filter(
-      (slot) =>
-        slot.modelIndex > 0 &&
-        slot.status === "registered" &&
-        slot.targetId &&
-        !selectedTargetIds.has(slot.targetId),
+    const selectedAssetTargetIds = selectedAssetTargets.map(
+      (target) => target.targetId,
     );
-    if (
-      clearingRegistered.length > 0 &&
-      !window.confirm(
-        `未勾选的已注册槽位 ${clearingRegistered
-          .map((slot) => slot.modelIndex)
-          .join("、")} 将改为 None，是否继续创建 BP？`,
-      )
-    ) {
-      setStatus("已取消创建 BP");
-      return;
-    }
     setBusy(true);
     setError("");
     setStatus("");
@@ -687,7 +672,7 @@ export function MissionTargetModal({
       const compatibility = await checkMissionTargetBlueprint(
         blueprintName.trim(),
         plan,
-        selectedPlan.targets.map((target) => target.targetId),
+        selectedAssetTargetIds,
       );
       if (
         compatibility.status !== "matched" &&
@@ -701,7 +686,7 @@ export function MissionTargetModal({
       const result = await createMissionTargetBlueprint(
         blueprintName.trim(),
         plan,
-        selectedPlan.targets.map((target) => target.targetId),
+        selectedAssetTargetIds,
         true,
       );
       const registration = result.dialogueRegistration;
@@ -715,7 +700,11 @@ export function MissionTargetModal({
         `已创建 ${result.blueprintAssetPath}：0 号玩家、${result.targetCount} 个目标物和 c1 摄像机；对话模型 ${
           registration?.characterCount ??
           (registration?.registeredCount ?? 0) + 1
-        } 个角色（含 0 号玩家），None ${registration?.emptyCount ?? 0} 个${spatialMessage}`,
+        } 个角色（含 0 号玩家）${
+          registration?.emptyCount
+            ? `，${registration.emptyCount} 个所选模型未登记`
+            : ""
+        }${spatialMessage}`,
       );
       try {
         const inspection = await inspectMissionTargetBlueprint(
@@ -739,27 +728,69 @@ export function MissionTargetModal({
     }
   }
 
+  async function appendBlueprintTargets() {
+    if (
+      !plan ||
+      !blueprintName.trim() ||
+      blueprintInspection?.blueprintState !== "populated" ||
+      selectedAppendTargets.length === 0
+    ) {
+      return;
+    }
+    const additions = selectedAppendTargets.map((target) => {
+      const slot = blueprintInspection.appendSlots?.find(
+        (candidate) => candidate.targetId === target.targetId,
+      );
+      return `${slot?.modelIndex ?? "?"} = ${target.npcName || target.description || target.targetId}`;
+    });
+    if (
+      !window.confirm(
+        `将保留 BP 中现有 ${blueprintRegistrationSlots.length} 个数字槽位，并按顺序追加：\n${additions.join("\n")}` +
+          "\n\n新增组件会写入 BP，并将全部 BP 数字槽位注册到对应 DialogModels。BP 与对话资产将保存，是否继续？",
+      )
+    ) {
+      setStatus("已取消追加目标物");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setStatus("");
+    try {
+      const result = await appendMissionTargetBlueprint(
+        blueprintName.trim(),
+        plan,
+        selectedAppendTargets.map((target) => target.targetId),
+      );
+      const registration = result.dialogueRegistration;
+      const unresolved = registration.unresolvedIndexes.length
+        ? `；槽位 ${registration.unresolvedIndexes.join("、")} 未在 DialogNPCTable 登记，保持 None`
+        : "";
+      setStatus(
+        `已追加 BP 槽位 ${result.addedModelIndexes.join("、")}，并注册 ${registration.characterCount} 个对话角色${unresolved}`,
+      );
+      const inspection = await inspectMissionTargetBlueprint(
+        blueprintName.trim(),
+        plan,
+        plan.taskId,
+        targetOverrideItems,
+      );
+      applyBlueprintInspection(inspection, false);
+    } catch (appendError) {
+      setError(
+        appendError instanceof Error
+          ? appendError.message
+          : "追加目标物到 BP 失败",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function registerDialogue() {
     if (
       !blueprintName.trim() ||
       blueprintInspection?.blueprintState !== "populated"
     ) {
-      return;
-    }
-    const clearingRegistered = blueprintModelSlots.filter(
-      (slot) =>
-        slot.status === "registered" &&
-        !selectedModelIndexes.has(slot.modelIndex),
-    );
-    if (
-      clearingRegistered.length > 0 &&
-      !window.confirm(
-        `未勾选的已注册槽位 ${clearingRegistered
-          .map((slot) => slot.modelIndex)
-          .join("、")} 将改为 None，是否继续？`,
-      )
-    ) {
-      setStatus("已取消注册到对话");
       return;
     }
     setBusy(true);
@@ -768,9 +799,7 @@ export function MissionTargetModal({
     try {
       const result = await registerBlueprintDialogueModels(
         blueprintName.trim(),
-        Array.from(selectedModelIndexes).sort(
-          (left, right) => left - right,
-        ),
+        blueprintModelSlots.map((slot) => slot.modelIndex),
         plan?.taskId,
         targetOverrideItems,
       );
@@ -967,43 +996,33 @@ export function MissionTargetModal({
     if (!plan) {
       return;
     }
+    const lockedTargetIds =
+      blueprintInspection?.blueprintState === "populated"
+        ? Array.from(existingTargetIds)
+        : [];
     setSelectedTargetIds(
-      allSelected
-        ? new Set()
-        : new Set(plan.targets.map((target) => target.targetId)),
+      new Set(
+        allSelected
+          ? lockedTargetIds
+          : [
+              ...lockedTargetIds,
+              ...selectableTargetRows.map((target) => target.targetId),
+            ],
+      ),
     );
     setStatus("");
   }
 
   function toggleTarget(targetId: string) {
+    if (existingTargetIds.has(targetId)) {
+      return;
+    }
     setSelectedTargetIds((current) => {
       const next = new Set(current);
       if (next.has(targetId)) {
         next.delete(targetId);
       } else {
         next.add(targetId);
-      }
-      return next;
-    });
-    setStatus("");
-  }
-
-  function toggleAllBlueprintModels() {
-    setSelectedModelIndexes(
-      allBlueprintModelsSelected
-        ? new Set()
-        : new Set(blueprintModelSlots.map((slot) => slot.modelIndex)),
-    );
-    setStatus("");
-  }
-
-  function toggleBlueprintModel(modelIndex: number) {
-    setSelectedModelIndexes((current) => {
-      const next = new Set(current);
-      if (next.has(modelIndex)) {
-        next.delete(modelIndex);
-      } else {
-        next.add(modelIndex);
       }
       return next;
     });
@@ -1162,7 +1181,6 @@ export function MissionTargetModal({
                 setSelectedTargetIds(new Set());
                 setTargetOverrides(new Map());
                 setBlueprintInspection(null);
-                setSelectedModelIndexes(new Set());
                 setError("");
                 setStatus("");
               }}
@@ -1188,7 +1206,6 @@ export function MissionTargetModal({
               onChange={(event) => {
                 setBlueprintName(event.target.value);
                 setBlueprintInspection(null);
-                setSelectedModelIndexes(new Set());
                 setError("");
                 setStatus("");
               }}
@@ -1226,9 +1243,7 @@ export function MissionTargetModal({
         )}
 
         <div className="mission-target-body">
-          {isDialogueRegistration &&
-          (!isBlueprintSync || needsDialogueRegistration) &&
-          blueprintInspection ? (
+          {isDialogueRegistration && blueprintInspection && (
             <>
               <section className="mission-target-summary mission-target-summary--blueprint">
                 <dl>
@@ -1242,7 +1257,7 @@ export function MissionTargetModal({
                   </div>
                   <div>
                     <dt>注册策略</dt>
-                    <dd>BP 数字槽位</dd>
+                    <dd>保留现有并按序追加</dd>
                   </div>
                   <div>
                     <dt>角色位 / 已注册</dt>
@@ -1260,6 +1275,10 @@ export function MissionTargetModal({
                   {blueprintInspection.dialogueAssetPath}
                 </code>
               </section>
+              <div className="mission-target-section-label">
+                <strong>BP 已有内容</strong>
+                <span>固定保留 · 不重新编号</span>
+              </div>
               <div className="mission-target-table-wrap">
                 <table className="mission-target-table mission-target-dialogue-table">
                   <thead>
@@ -1267,16 +1286,10 @@ export function MissionTargetModal({
                       <th className="mission-target-select">
                         <input
                           type="checkbox"
-                          checked={allBlueprintModelsSelected}
-                          ref={(element) => {
-                            if (element) {
-                              element.indeterminate =
-                                selectedModelCount > 0 &&
-                                !allBlueprintModelsSelected;
-                            }
-                          }}
-                          onChange={toggleAllBlueprintModels}
-                          aria-label="选择全部 BP 模型"
+                          checked
+                          disabled
+                          readOnly
+                          aria-label="已有 BP 模型固定保留"
                         />
                       </th>
                       <th>槽位</th>
@@ -1287,26 +1300,19 @@ export function MissionTargetModal({
                   </thead>
                   <tbody>
                     {blueprintRegistrationSlots.map((slot) => {
-                      const playerSlot = slot.modelIndex === 0;
-                      const selected =
-                        playerSlot ||
-                        selectedModelIndexes.has(slot.modelIndex);
-                      const label = dialogueModelLabel(slot, selected);
+                      const label = dialogueModelLabel(slot, true);
                       return (
-                        <tr key={slot.modelIndex}>
+                        <tr
+                          className="mission-target-row--existing"
+                          key={slot.modelIndex}
+                        >
                           <td className="mission-target-select">
                             <input
                               type="checkbox"
-                              checked={selected}
-                              disabled={playerSlot || busy}
-                              onChange={() =>
-                                toggleBlueprintModel(slot.modelIndex)
-                              }
-                              aria-label={
-                                playerSlot
-                                  ? "0 号玩家固定注册"
-                                  : `选择 BP 模型槽位 ${slot.modelIndex}`
-                              }
+                              checked
+                              disabled
+                              readOnly
+                              aria-label={`BP 已有槽位 ${slot.modelIndex} 固定保留`}
                             />
                           </td>
                           <td>
@@ -1321,11 +1327,10 @@ export function MissionTargetModal({
                             <code>{label.name}</code>
                           </td>
                           <td>
-                            <span
-                              className={`dialogue-model-status dialogue-model-status--${label.tone}`}
-                            >
-                              {label.status}
+                            <span className="dialogue-model-status dialogue-model-status--registered">
+                              BP 已有
                             </span>
+                            <small>{label.status}</small>
                           </td>
                         </tr>
                       );
@@ -1334,7 +1339,8 @@ export function MissionTargetModal({
                 </table>
               </div>
             </>
-          ) : plan ? (
+          )}
+          {plan ? (
             <>
               <section className="mission-target-summary">
                 <dl>
@@ -1402,117 +1408,196 @@ export function MissionTargetModal({
                   </section>
                 )}
 
-              <div className="mission-target-table-wrap">
-                <table className="mission-target-table">
-                  <thead>
-                    <tr>
-                      <th className="mission-target-select">
-                        <input
-                          type="checkbox"
-                          checked={allSelected}
-                          ref={(element) => {
-                            if (element) {
-                              element.indeterminate =
-                                selectedCount > 0 && !allSelected;
-                            }
-                          }}
-                          onChange={toggleAllTargets}
-                          aria-label="选择全部目标物"
-                        />
-                      </th>
-                      <th>目标物</th>
-                      <th>类型</th>
-                      <th>NPC</th>
-                      <th>模型资源</th>
-                      <th>位置</th>
-                      <th>旋转</th>
-                      <th>预览</th>
-                      <th>对话模型</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {plan.targets.map((target) => {
-                      const slot = blueprintInspection?.slots.find(
-                        (item) => item.targetId === target.targetId,
-                      );
-                      const selected = selectedTargetIds.has(target.targetId);
-                      const label = dialogueModelLabel(slot, selected);
-                        return (
-                          <tr key={target.targetId}>
-                            <td className="mission-target-select">
-                              <input
-                                type="checkbox"
-                                checked={selected}
-                                onChange={() => toggleTarget(target.targetId)}
-                                aria-label={`选择目标物 ${target.targetId}`}
-                              />
-                            </td>
-                            <td>
-                              <strong>{target.targetId}</strong>
-                              <small>{target.description || "未填写描述"}</small>
-                            </td>
-                            <td>{typeLabel(target.type)}</td>
-                            <td>
-                              {target.npcId && target.npcId > 0
-                                ? `${target.npcName || "未知 NPC"} · ${target.npcId}`
-                                : "N/A"}
-                            </td>
-                            <td title={target.modelClassPath}>
-                              {target.modelId
-                                ? `${target.modelId} · ${target.modelClassPath.split("/").at(-1)}`
-                                : "N/A"}
-                            </td>
-                            <td>
-                              <code>
-                                {[
-                                  target.transform.location.x,
-                                  target.transform.location.y,
-                                  target.transform.location.z,
-                                ]
-                                  .map((value) => value.toFixed(0))
-                                  .join(", ")}
-                              </code>
-                            </td>
-                            <td>
-                              <code>
-                                {[
-                                  target.transform.rotation.pitch,
-                                  target.transform.rotation.yaw,
-                                  target.transform.rotation.roll,
-                                ]
-                                  .map((value) => `${value.toFixed(0)}°`)
-                                  .join(", ")}
-                              </code>
-                            </td>
-                            <td>
-                              <span
-                                className={`preview-kind preview-kind--${target.previewKind}`}
-                              >
-                                {target.previewKind === "asset"
-                                  ? "实际资产"
-                                  : "定位标记"}
-                              </span>
-                            </td>
-                            <td>
-                              <span
-                                className={`dialogue-model-status dialogue-model-status--${label.tone}`}
-                              >
-                                {label.status}
-                              </span>
-                              <code title={label.name}>
-                                {slot
-                                  ? `BP ${slot.modelIndex} · ${label.name}`
-                                  : label.name}
-                              </code>
-                            </td>
-                          </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+              {isDialogueRegistration && (
+                <div className="mission-target-section-label">
+                  <strong>可追加目标物</strong>
+                  <span>按任务顺序追加到现有槽位之后</span>
+                </div>
+              )}
+              {targetRows.length > 0 ? (
+                <div className="mission-target-table-wrap">
+                  <table className="mission-target-table">
+                     <thead>
+                       <tr>
+                         <th className="mission-target-select">
+                           <input
+                             type="checkbox"
+                             checked={allSelected}
+                             ref={(element) => {
+                               if (element) {
+                                 element.indeterminate =
+                                   selectedTargetRowCount > 0 && !allSelected;
+                               }
+                             }}
+                             onChange={toggleAllTargets}
+                             disabled={
+                               busy || selectableTargetRows.length === 0
+                             }
+                             aria-label={
+                               isDialogueRegistration
+                                 ? "选择全部可追加目标物"
+                                 : "选择全部目标物"
+                             }
+                           />
+                         </th>
+                         <th>目标物</th>
+                         <th>类型</th>
+                         <th>NPC</th>
+                         <th>模型资源</th>
+                         <th>位置</th>
+                         <th>旋转</th>
+                         <th>预览</th>
+                         <th>对话模型</th>
+                       </tr>
+                     </thead>
+                     <tbody>
+                       {targetRows.map((target) => {
+                         const appendSlot =
+                           blueprintInspection?.appendSlots?.find(
+                             (item) => item.targetId === target.targetId,
+                           );
+                         const slot = isDialogueRegistration
+                           ? appendSlot
+                           : blueprintInspection?.slots.find(
+                               (item) => item.targetId === target.targetId,
+                             );
+                         const selected =
+                           selectedTargetIds.has(target.targetId);
+                         const appendable =
+                           target.previewKind === "asset" &&
+                           Boolean(target.modelClassPath);
+                         const selectedBlueprintIndex = isDialogueRegistration
+                           ? selected
+                             ? maximumBlueprintModelIndex +
+                               selectedAppendTargets.findIndex(
+                                 (item) =>
+                                   item.targetId === target.targetId,
+                               ) +
+                               1
+                             : undefined
+                           : selectedAssetTargets.findIndex(
+                                 (item) =>
+                                   item.targetId === target.targetId,
+                               ) + 1;
+                         const label = isDialogueRegistration
+                           ? !appendable
+                             ? {
+                                 name: "-",
+                                 status: "不可追加",
+                                 tone: "warning",
+                               }
+                             : !selected
+                               ? {
+                                   name: "-",
+                                   status: "不添加",
+                                   tone: "empty",
+                                 }
+                               : appendSlot?.status === "unmapped"
+                                 ? {
+                                     name: "None",
+                                     status: "未登记",
+                                     tone: "warning",
+                                   }
+                                 : {
+                                     name:
+                                       appendSlot?.suggestedModelName ?? "-",
+                                     status: "待追加",
+                                     tone: "pending",
+                                   }
+                           : dialogueModelLabel(slot, selected, true);
+                         return (
+                           <tr key={target.targetId}>
+                             <td className="mission-target-select">
+                               <input
+                                 type="checkbox"
+                                 checked={selected}
+                                 disabled={
+                                   busy ||
+                                   (isDialogueRegistration && !appendable)
+                                 }
+                                 onChange={() =>
+                                   toggleTarget(target.targetId)
+                                 }
+                                 aria-label={`选择目标物 ${target.targetId}`}
+                               />
+                             </td>
+                             <td>
+                               <strong>{target.targetId}</strong>
+                               <small>
+                                 {target.description || "未填写描述"}
+                               </small>
+                             </td>
+                             <td>{typeLabel(target.type)}</td>
+                             <td>
+                               {target.npcId && target.npcId > 0
+                                 ? `${target.npcName || "未知 NPC"} · ${target.npcId}`
+                                 : "N/A"}
+                             </td>
+                             <td title={target.modelClassPath}>
+                               {target.modelId
+                                 ? `${target.modelId} · ${target.modelClassPath.split("/").at(-1)}`
+                                 : "N/A"}
+                             </td>
+                             <td>
+                               <code>
+                                 {[
+                                   target.transform.location.x,
+                                   target.transform.location.y,
+                                   target.transform.location.z,
+                                 ]
+                                   .map((value) => value.toFixed(0))
+                                   .join(", ")}
+                               </code>
+                             </td>
+                             <td>
+                               <code>
+                                 {[
+                                   target.transform.rotation.pitch,
+                                   target.transform.rotation.yaw,
+                                   target.transform.rotation.roll,
+                                 ]
+                                   .map((value) => `${value.toFixed(0)}°`)
+                                   .join(", ")}
+                               </code>
+                             </td>
+                             <td>
+                               <span
+                                 className={`preview-kind preview-kind--${target.previewKind}`}
+                               >
+                                 {target.previewKind === "asset"
+                                   ? "实际资产"
+                                   : "定位标记"}
+                               </span>
+                             </td>
+                             <td>
+                               <span
+                                 className={`dialogue-model-status dialogue-model-status--${label.tone}`}
+                               >
+                                 {label.status}
+                               </span>
+                               <code title={label.name}>
+                                 {selected &&
+                                 selectedBlueprintIndex &&
+                                 selectedBlueprintIndex > 0
+                                   ? `BP ${selectedBlueprintIndex} · ${label.name}`
+                                   : label.name}
+                               </code>
+                             </td>
+                           </tr>
+                         );
+                       })}
+                     </tbody>
+                  </table>
+                </div>
+              ) : isDialogueRegistration ? (
+                <div className="mission-target-empty mission-target-empty--compact">
+                  <CheckCircle2 size={24} />
+                  <strong>任务目标物已全部存在于 BP</strong>
+                  <small>可直接执行按 BP 注册到对话</small>
+                </div>
+              ) : null}
             </>
-          ) : (
+          ) : !isDialogueRegistration ? (
             <div className="mission-target-empty">
               <Boxes size={28} />
               <strong>尚未解析任务节点</strong>
@@ -1522,16 +1607,17 @@ export function MissionTargetModal({
                   : `当前数据源包含 ${database.missionRows.length.toLocaleString()} 个任务节点`}
               </small>
             </div>
-          )}
+          ) : null}
         </div>
 
         <footer>
           <span>
-            {isDialogueRegistration &&
-            (!isBlueprintSync || needsDialogueRegistration)
-              ? `按 BP 槽位注册：已选择 ${selectedModelCount + 1} / ${blueprintRegistrationSlots.length} 个角色位，0 号玩家固定`
-              : isBlueprintSync
-              ? `已选择 ${selectedSyncMappings.length} / ${blueprintSync?.mappings.length ?? 0} 个已映射目标物，${blueprintChangeCount} 项位置不同`
+            {isDialogueRegistration
+              ? `BP 已有 ${blueprintRegistrationSlots.length} 个固定角色位${
+                  plan
+                    ? `；待追加 ${selectedAppendTargets.length} / ${selectableTargetRows.length} 个目标物`
+                    : ""
+                }`
               : plan
               ? `已选择 ${selectedCount} / ${plan.targets.length} 个目标物，MapID ${plan.mapId}`
               : "检查 BP 不会修改对话或 UE 资产"}
@@ -1547,9 +1633,7 @@ export function MissionTargetModal({
               清除预览
             </button>
             <button
-              className={`button ${
-                isBlueprintSync ? "button--primary" : ""
-              }`}
+              className="button"
               type="button"
               onClick={() =>
                 void (isBlueprintSync
@@ -1580,6 +1664,22 @@ export function MissionTargetModal({
               )}
               {isBlueprintSync ? "BP → 目标物" : "修改位置"}
             </button>
+            {isDialogueRegistration && canUpdateBlueprint && (
+              <button
+                className="button"
+                type="button"
+                onClick={() => void updateBlueprintPositions()}
+                disabled={
+                  busy ||
+                  !plan ||
+                  selectedSyncMappings.length === 0
+                }
+                title="从最新目标物配置更新 BP 模型位置和对话空间配置"
+              >
+                <ArrowRightLeft size={15} />
+                目标物 → BP
+              </button>
+            )}
             <button
               className="button"
               type="button"
@@ -1597,50 +1697,44 @@ export function MissionTargetModal({
               className="button button--primary"
               type="button"
               onClick={() =>
-                void (canUpdateBlueprint
-                  ? updateBlueprintPositions()
-                  : needsDialogueRegistration
-                    ? registerDialogue()
-                    : createBlueprint())
+                void (isDialogueRegistration
+                  ? selectedAppendTargets.length > 0
+                    ? appendBlueprintTargets()
+                    : registerDialogue()
+                  : createBlueprint())
               }
               disabled={
                 busy ||
                 !blueprintName.trim() ||
                 !blueprintInspection ||
-                (canUpdateBlueprint
-                  ? !plan || selectedSyncMappings.length === 0
-                  : needsDialogueRegistration
+                (isDialogueRegistration
                   ? blueprintRegistrationSlots.length === 0
-                  : syncBlocked ||
-                    !plan ||
+                  : !plan ||
                     blueprintInspection.blueprintState !== "empty" ||
                     selectedAssetTargets.length === 0)
               }
               title={
-                canUpdateBlueprint
-                  ? "从最新目标物配置更新 BP 模型位置和对话空间配置"
-                  : needsDialogueRegistration
-                  ? "直接读取 BP 全部数字槽位，0 号固定为玩家并按原序写入 DialogModels"
-                  : syncBlocked
-                    ? blueprintSync?.blockedReasons.join("；")
+                isDialogueRegistration
+                  ? selectedAppendTargets.length > 0
+                    ? "保留现有 BP 槽位，按顺序追加所选目标物并注册全部 DialogModels"
+                    : "读取 BP 全部数字槽位并按原序写入 DialogModels"
                   : "向空 PositionMode BP 写入所选资产并注册 DialogModels"
               }
             >
               {busy ? (
                 <LoaderCircle className="spin" size={16} />
-              ) : canUpdateBlueprint || needsDialogueRegistration ? (
-                <Link2 size={16} />
-              ) : (
+              ) : selectedAppendTargets.length > 0 ||
+                !isDialogueRegistration ? (
                 <PackagePlus size={16} />
+              ) : (
+                <Link2 size={16} />
               )}
               {busy
                 ? "正在处理..."
-                : canUpdateBlueprint
-                  ? "修改 BP 位置"
-                  : needsDialogueRegistration
-                  ? "按 BP 注册到对话"
-                  : syncBlocked
-                    ? "无法修改 BP"
+                : isDialogueRegistration
+                  ? selectedAppendTargets.length > 0
+                    ? "添加到 BP 并注册"
+                    : "按 BP 注册到对话"
                   : "创建 BP"}
             </button>
           </div>

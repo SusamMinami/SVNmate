@@ -235,6 +235,16 @@ export interface MissionTargetBlueprintCreateResult {
   dialogueRegistration?: DialogueModelRegistrationResult;
 }
 
+export interface MissionTargetBlueprintAppendResult {
+  status: "appended";
+  taskId: string;
+  blueprintAssetPath: string;
+  addedTargetIds: string[];
+  addedModelIndexes: number[];
+  componentNames: string[];
+  dialogueRegistration: DialogueModelRegistrationResult;
+}
+
 export interface MissionTargetBlueprintCompatibility {
   status: "matched" | "mismatch" | "unavailable";
   blueprintAssetPath: string;
@@ -291,6 +301,7 @@ export interface MissionTargetBlueprintInspection {
   dialogueAssetPath: string | null;
   formationClassPath: string | null;
   slots: DialogueModelRegistrationSlot[];
+  appendSlots?: DialogueModelRegistrationSlot[];
   message: string;
   refreshedPlan?: MissionTargetPreviewPlan;
   sync?: MissionTargetBlueprintSyncState;

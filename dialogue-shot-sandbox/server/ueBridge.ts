@@ -22,6 +22,7 @@ import type {
   DialogueModelRegistrationSlot,
   MissionTargetBlueprintSyncState,
   MissionTargetBlueprintToTargetsResult,
+  MissionTargetBlueprintAppendResult,
   MissionTargetBlueprintCreateResult,
   MissionTargetBlueprintCompatibility,
   MissionTargetBlueprintInspection,
@@ -411,6 +412,15 @@ const MissionTargetBlueprintCreateRequestSchema = z.object({
   registerDialogue: z.boolean().optional(),
 });
 
+const MissionTargetBlueprintAppendRequestSchema = z.object({
+  blueprintName: z.string().trim().min(1).max(512),
+  plan: MissionTargetPreviewPlanSchema,
+  selectedTargetIds: z
+    .array(z.string().regex(/^\d+$/))
+    .min(1)
+    .max(200),
+});
+
 const MissionTargetTransformOverrideSchema = z.object({
   targetId: z.string().regex(/^\d+$/),
   transform: z.object({
@@ -736,17 +746,9 @@ function rounded(value: number): number {
 
 export function buildMissionTargetBlueprintComponents(
   targets: MissionTargetPreviewTarget[],
-  modelIndexes = targets.map((_, index) => index + 1),
 ): MissionTargetBlueprintComponentPlan[] {
   if (targets.length === 0) {
     throw new Error("至少选择一个具有模型资源的目标物");
-  }
-  if (
-    modelIndexes.length !== targets.length ||
-    new Set(modelIndexes).size !== modelIndexes.length ||
-    modelIndexes.some((index) => !Number.isInteger(index) || index <= 0)
-  ) {
-    throw new Error("目标物 BP 槽位序号无效");
   }
   const anchor = targets[0].transform.location;
   const playerTransform: UnrealTransform = {
@@ -765,7 +767,7 @@ export function buildMissionTargetBlueprintComponents(
   ];
   targets.forEach((target, index) => {
     components.push({
-      componentName: String(modelIndexes[index]),
+      componentName: String(index + 1),
       componentClass: CHILD_ACTOR_COMPONENT_CLASS,
       childActorClass: target.modelClassPath,
       targetId: target.targetId,
@@ -1112,27 +1114,14 @@ function modelToken(value: string): string {
 export function compareDialogueModelOrder(
   dialogueModels: string[],
   selectedClassPaths: string[],
-  selectedModelIndexes?: ReadonlySet<number>,
 ): { matched: boolean; message: string; selectedModels: string[] } {
-  const preserveSlots = selectedModelIndexes !== undefined;
-  const expected = preserveSlots
-    ? dialogueModels.slice(1).map((model) => {
-        const normalized = model.trim().toLowerCase();
-        return ["", "none", "null"].includes(normalized)
-          ? "none"
-          : modelToken(model);
-      })
-    : dialogueModels
-        .filter(
-          (model) =>
-            !["", "none", "player"].includes(model.trim().toLowerCase()),
-        )
-        .map(modelToken);
-  const selectedModels = selectedClassPaths.map((model, index) =>
-    !preserveSlots || selectedModelIndexes.has(index + 1)
-      ? modelToken(model)
-      : "none",
-  );
+  const expected = dialogueModels
+    .filter(
+      (model) =>
+        !["", "none", "player"].includes(model.trim().toLowerCase()),
+    )
+    .map(modelToken);
+  const selectedModels = selectedClassPaths.map(modelToken);
   const matched =
     expected.length === selectedModels.length &&
     expected.every((model, index) => model === selectedModels[index]);
@@ -2769,6 +2758,37 @@ function mapObjectPath(value: string): string {
   return `${packagePath}.${assetName}`;
 }
 
+function desiredDialogueVirtualProperties(
+  context: DialogueSpatialContext,
+): {
+  commonProperties: ReflectedProperty[];
+  specialProperties: ReflectedProperty[];
+} {
+  const commonProperties = clonedValue(context.commonProperties);
+  const specialProperties = clonedValue(context.specialProperties);
+  const virtualIndex = reflectedPropertyIndex(commonProperties, "Virtual");
+  if (virtualIndex < 0) {
+    throw new Error("对话开始节点缺少虚拟场景属性");
+  }
+  setReflectedPropertyValue(
+    commonProperties[virtualIndex],
+    "CurrentBool",
+    true,
+  );
+  const specialVirtualIndex = reflectedPropertyIndex(
+    specialProperties,
+    "Virtual",
+  );
+  if (specialVirtualIndex >= 0) {
+    setReflectedPropertyValue(
+      specialProperties[specialVirtualIndex],
+      "CurrentBool",
+      true,
+    );
+  }
+  return { commonProperties, specialProperties };
+}
+
 function desiredDialogueSpatialProperties(
   context: DialogueSpatialContext,
   root: MissionTargetBlueprintRoot["transform"],
@@ -2777,9 +2797,8 @@ function desiredDialogueSpatialProperties(
   commonProperties: ReflectedProperty[];
   specialProperties: ReflectedProperty[];
 } {
-  const commonProperties = clonedValue(context.commonProperties);
-  const specialProperties = clonedValue(context.specialProperties);
-  const virtualIndex = reflectedPropertyIndex(commonProperties, "Virtual");
+  const { commonProperties, specialProperties } =
+    desiredDialogueVirtualProperties(context);
   const positionIndex = reflectedPropertyIndex(
     commonProperties,
     "PlayerInitPosition",
@@ -2788,14 +2807,9 @@ function desiredDialogueSpatialProperties(
     commonProperties,
     "PlayerForward",
   );
-  if (virtualIndex < 0 || positionIndex < 0 || rotationIndex < 0) {
+  if (positionIndex < 0 || rotationIndex < 0) {
     throw new Error("对话开始节点缺少虚拟场景或主角初始坐标属性");
   }
-  setReflectedPropertyValue(
-    commonProperties[virtualIndex],
-    "CurrentBool",
-    true,
-  );
   if (!fillMissingOnly || !context.root.explicit) {
     setReflectedPropertyValue(
       commonProperties[positionIndex],
@@ -2816,17 +2830,6 @@ function desiredDialogueSpatialProperties(
         Yaw: root.rotation.yaw,
         Roll: root.rotation.roll,
       },
-    );
-  }
-  const specialVirtualIndex = reflectedPropertyIndex(
-    specialProperties,
-    "Virtual",
-  );
-  if (specialVirtualIndex >= 0) {
-    setReflectedPropertyValue(
-      specialProperties[specialVirtualIndex],
-      "CurrentBool",
-      true,
     );
   }
   return { commonProperties, specialProperties };
@@ -2929,12 +2932,49 @@ async function writeDialogueRegistration(
         });
       }
       if (spatialContext && desiredSpatial) {
+        const needsVirtualActivation =
+          !spatialContext.virtualEnabled ||
+          !spatialContext.specialVirtualEnabled;
+        if (needsVirtualActivation) {
+          const virtualProperties =
+            desiredDialogueVirtualProperties(spatialContext);
+          if (!spatialContext.virtualEnabled) {
+            await connection.invoke("reflect.write_object_property", {
+              ThisPtr: context.startNodeData,
+              PropertyName: "CommonDialogGraphProperties",
+              Value: virtualProperties.commonProperties,
+            });
+          }
+          if (
+            !spatialContext.specialVirtualEnabled &&
+            virtualProperties.specialProperties.length > 0
+          ) {
+            await connection.invoke("reflect.write_object_property", {
+              ThisPtr: context.startNodeData,
+              PropertyName: "SpecialDialogGraphProperties",
+              Value: virtualProperties.specialProperties,
+            });
+          }
+          const enabledSpatial = await readDialogueSpatialContext(
+            connection,
+            context.startNodeData,
+          );
+          if (
+            !enabledSpatial.virtualEnabled ||
+            !enabledSpatial.specialVirtualEnabled
+          ) {
+            throw new Error("虚拟场景启用后的回读结果不一致");
+          }
+        }
         await connection.invoke("reflect.write_object_property", {
           ThisPtr: context.startNodeData,
           PropertyName: "CommonDialogGraphProperties",
           Value: desiredSpatial.commonProperties,
         });
-        if (desiredSpatial.specialProperties.length > 0) {
+        if (
+          !needsVirtualActivation &&
+          desiredSpatial.specialProperties.length > 0
+        ) {
           await connection.invoke("reflect.write_object_property", {
             ThisPtr: context.startNodeData,
             PropertyName: "SpecialDialogGraphProperties",
@@ -3252,6 +3292,7 @@ export async function inspectMissionTargetBlueprint(
       normalizeObjectPath(dialogue.formationClassPath) ===
         normalizeObjectPath(blueprint.blueprintClassPath);
     let sync: MissionTargetBlueprintSyncState | undefined;
+    let appendSlots: DialogueModelRegistrationSlot[] | undefined;
     if (blueprintState === "populated" && refreshedPlan) {
       const spatial = await readDialogueSpatialContext(
         connection,
@@ -3298,6 +3339,32 @@ export async function inspectMissionTargetBlueprint(
             (mapping) => mapping.modelIndex === slot.modelIndex,
           )?.targetId ?? null;
       }
+      const mappedTargetIds = new Set(
+        sync.mappings.map((mapping) => mapping.targetId),
+      );
+      const nextModelIndex =
+        Math.max(
+          0,
+          ...numericComponents.map((component) =>
+            Number(component.variableName),
+          ),
+        ) + 1;
+      appendSlots = buildDialogueModelRegistrationSlots(
+        refreshedPlan.targets
+          .filter(
+            (target) =>
+              !mappedTargetIds.has(target.targetId) &&
+              target.previewKind === "asset" &&
+              Boolean(target.modelClassPath),
+          )
+          .map((target, index) => ({
+            modelIndex: nextModelIndex + index,
+            targetId: target.targetId,
+            modelClassPath: target.modelClassPath,
+          })),
+        dialogue.existingModels,
+        dialogue.registry,
+      );
     }
     return {
       blueprintState,
@@ -3308,6 +3375,7 @@ export async function inspectMissionTargetBlueprint(
       dialogueAssetPath: dialogue.dialogueAssetPath,
       formationClassPath: dialogue.formationClassPath,
       slots: dialogue.slots,
+      appendSlots,
       message: `${
         blueprintState === "empty"
           ? "BP 尚未创建站位组件"
@@ -4002,17 +4070,32 @@ export async function inspectMissionTargetBlueprintCompatibility(
       throw new Error(`BP 文件不存在：${request.blueprintName}`);
     }
     const dialogueId = dialogueIdFromBlueprintPath(resolved.assetPath);
-    const selectedClassPaths = request.plan.targets.map(
-      (target) => target.modelClassPath,
-    );
     const selectedTargetIds = new Set(
       request.selectedTargetIds ??
         request.plan.targets.map((target) => target.targetId),
     );
-    const selectedModelIndexes = new Set(
-      request.plan.targets.flatMap((target, index) =>
-        selectedTargetIds.has(target.targetId) ? [index + 1] : [],
-      ),
+    const unknownTargetIds = Array.from(selectedTargetIds).filter(
+      (targetId) =>
+        !request.plan.targets.some((target) => target.targetId === targetId),
+    );
+    if (unknownTargetIds.length > 0) {
+      throw new Error(
+        `所选目标物不属于当前任务：${unknownTargetIds.join("、")}`,
+      );
+    }
+    const selectedTargets = request.plan.targets.filter((target) =>
+      selectedTargetIds.has(target.targetId),
+    );
+    if (
+      selectedTargets.some(
+        (target) =>
+          target.previewKind !== "asset" || !target.modelClassPath.trim(),
+      )
+    ) {
+      throw new Error("所选目标物中存在没有模型资源的对象，无法创建 BP 组件");
+    }
+    const selectedClassPaths = selectedTargets.map(
+      (target) => target.modelClassPath,
     );
     const emptyResult = {
       blueprintAssetPath: resolved.assetPath,
@@ -4054,7 +4137,6 @@ export async function inspectMissionTargetBlueprintCompatibility(
     const comparison = compareDialogueModelOrder(
       exported.dialogueModels,
       selectedClassPaths,
-      selectedModelIndexes,
     );
     const expectedFormation = blueprintClassPath(resolved.assetPath);
     const formationMatched =
@@ -4250,20 +4332,22 @@ export async function populateMissionTargetBlueprint(
   if (unknownTargetIds.length > 0) {
     throw new Error(`所选目标物不属于当前任务：${unknownTargetIds.join("、")}`);
   }
-  const selectedEntries = request.plan.targets
-    .map((target, index) => ({ target, modelIndex: index + 1 }))
-    .filter(({ target }) => selectedTargetIds.has(target.targetId));
-  const assetEntries = selectedEntries.filter(
-    ({ target }) =>
-      target.previewKind === "asset" && Boolean(target.modelClassPath),
+  const selectedTargets = request.plan.targets.filter((target) =>
+    selectedTargetIds.has(target.targetId),
   );
-  if (assetEntries.length !== selectedEntries.length) {
+  if (
+    selectedTargets.some(
+      (target) =>
+        target.previewKind !== "asset" || !target.modelClassPath.trim(),
+    )
+  ) {
     throw new Error("所选目标物中存在没有模型资源的对象，无法创建 BP 组件");
   }
-  const components = buildMissionTargetBlueprintComponents(
-    assetEntries.map(({ target }) => target),
-    assetEntries.map(({ modelIndex }) => modelIndex),
-  );
+  const selectedEntries = selectedTargets.map((target, index) => ({
+    target,
+    modelIndex: index + 1,
+  }));
+  const components = buildMissionTargetBlueprintComponents(selectedTargets);
   const connection = connectionFactory();
   await connectUnreal(connection);
   let mutationStarted = false;
@@ -4297,8 +4381,8 @@ export async function populateMissionTargetBlueprint(
               targetId: null,
               modelClassPath: PLAYER_CLASS,
             },
-            ...request.plan.targets.map((target, index) => ({
-              modelIndex: index + 1,
+            ...selectedEntries.map(({ target, modelIndex }) => ({
+              modelIndex,
               targetId: target.targetId,
               modelClassPath: target.modelClassPath,
             })),
@@ -4407,11 +4491,11 @@ export async function populateMissionTargetBlueprint(
           connection,
           resolved.assetPath,
           dialogueContext,
-          new Set(assetEntries.map(({ modelIndex }) => modelIndex)),
+          new Set(selectedEntries.map(({ modelIndex }) => modelIndex)),
           {
             mapAssetPath: request.plan.mapAssetPath,
             rootTransform: missionTargetBlueprintRootForCreation(
-              assetEntries[0].target,
+              selectedEntries[0].target,
             ),
           },
         )
@@ -4420,7 +4504,7 @@ export async function populateMissionTargetBlueprint(
       status: "created",
       taskId: request.plan.taskId,
       blueprintAssetPath: resolved.assetPath,
-      targetCount: assetEntries.length,
+      targetCount: selectedEntries.length,
       componentNames: components.map(
         (component) => component.componentName,
       ),
@@ -4435,6 +4519,336 @@ export async function populateMissionTargetBlueprint(
         : mutationStarted
         ? `${message}；BP 可能已在 UE 编辑器中留下未保存修改，请检查后撤销`
         : message,
+    );
+  } finally {
+    connection.close();
+  }
+}
+
+export async function appendMissionTargetBlueprint(
+  rawRequest: unknown,
+  connectionFactory: () => UnrealInvoker = () => new UnrealMcpConnection(),
+): Promise<MissionTargetBlueprintAppendResult> {
+  const request = MissionTargetBlueprintAppendRequestSchema.parse(
+    rawRequest,
+  ) as {
+    blueprintName: string;
+    plan: MissionTargetPreviewPlan;
+    selectedTargetIds: string[];
+  };
+  const selectedTargetIds = new Set(request.selectedTargetIds);
+  if (selectedTargetIds.size !== request.selectedTargetIds.length) {
+    throw new Error("追加目标物中存在重复 ID");
+  }
+  const unknownTargetIds = Array.from(selectedTargetIds).filter(
+    (targetId) =>
+      !request.plan.targets.some((target) => target.targetId === targetId),
+  );
+  if (unknownTargetIds.length > 0) {
+    throw new Error(
+      `所选目标物不属于当前任务：${unknownTargetIds.join("、")}`,
+    );
+  }
+  const selectedTargets = request.plan.targets.filter((target) =>
+    selectedTargetIds.has(target.targetId),
+  );
+  if (
+    selectedTargets.some(
+      (target) =>
+        target.previewKind !== "asset" || !target.modelClassPath.trim(),
+    )
+  ) {
+    throw new Error("所选目标物中存在没有模型资源的对象，无法追加到 BP");
+  }
+
+  const connection = connectionFactory();
+  await connectUnreal(connection);
+  let mutationStarted = false;
+  let blueprintSaved = false;
+  try {
+    const resolved = await resolveExistingBlueprint(
+      connection,
+      request.blueprintName,
+    );
+    if (!resolved) {
+      throw new Error(`BP 文件不存在：${request.blueprintName}`);
+    }
+    const blueprint = await readValidatedBlueprint(connection, resolved);
+    const numericComponents = blueprint.components
+      .filter((component) => /^\d+$/.test(component.variableName))
+      .sort(
+        (left, right) =>
+          Number(left.variableName) - Number(right.variableName),
+      );
+    const playerSlot = numericComponents.find(
+      (component) => component.variableName === "0",
+    );
+    if (
+      !playerSlot ||
+      normalizeObjectPath(playerSlot.childActorClass) !==
+        normalizeObjectPath(PLAYER_CLASS)
+    ) {
+      throw new Error("BP 的 0 号位不是玩家 BP_Eric");
+    }
+    if (
+      numericComponents.some((component) => !component.childActorClass)
+    ) {
+      throw new Error("BP 数字槽位中存在非 ChildActorComponent 或空模型");
+    }
+    const existingSourceSlots: DialogueModelSourceSlot[] =
+      numericComponents.map((component) => ({
+        modelIndex: Number(component.variableName),
+        targetId: null,
+        modelClassPath: component.childActorClass,
+      }));
+    const dialogueContext = await readDialogueRegistrationContext(
+      connection,
+      resolved.assetPath,
+      existingSourceSlots,
+    );
+    const dialogueSpatial = await readDialogueSpatialContext(
+      connection,
+      dialogueContext.startNodeData,
+    );
+    if (
+      hasUnrealObjectReference(dialogueSpatial.previewLevel) &&
+      !sameLevelPath(
+        dialogueSpatial.previewLevel,
+        request.plan.mapAssetPath,
+      )
+    ) {
+      throw new Error(
+        `对话 Preview Level 为 ${dialogueSpatial.previewLevel}，但任务目标地图为 ${request.plan.mapAssetPath}，已停止追加`,
+      );
+    }
+
+    let rootTransform = dialogueSpatial.root.transform;
+    let spatialSource:
+      | "selected_actor"
+      | "level_scan"
+      | "task_targets"
+      | undefined;
+    if (
+      !dialogueSpatial.root.explicit ||
+      !dialogueSpatial.forwardExplicit
+    ) {
+      const placement = await findBlueprintActorPlacement(
+        connection,
+        blueprint.blueprintClassPath,
+      );
+      if (placement) {
+        if (!sameLevelPath(placement.mapAssetPath, request.plan.mapAssetPath)) {
+          throw new Error(
+            `BP Actor 位于 ${placement.mapAssetPath}，但任务目标地图为 ${request.plan.mapAssetPath}，已停止追加`,
+          );
+        }
+        rootTransform = {
+          location: dialogueSpatial.root.explicit
+            ? dialogueSpatial.root.transform.location
+            : placement.actor.transform.location,
+          rotation: dialogueSpatial.forwardExplicit
+            ? dialogueSpatial.root.transform.rotation
+            : placement.actor.transform.rotation,
+        };
+        spatialSource = placement.source;
+      } else {
+        const inferredSync = buildMissionTargetBlueprintSync(
+          request.plan.targets,
+          numericComponents.map((component) => ({
+            modelIndex: Number(component.variableName),
+            modelClassPath: component.childActorClass,
+            transform: component.transform,
+          })),
+          dialogueSpatial.root,
+          configCsvDirectory,
+        );
+        if (!inferredSync.canUpdateBlueprint) {
+          throw new Error(
+            "无法确定 BP 世界坐标：请把该 BP 放入任务地图，或确保已有模型可与任务目标物匹配",
+          );
+        }
+        rootTransform = inferredSync.rootTransform;
+        spatialSource = "task_targets";
+      }
+    }
+    if (
+      Math.abs(rootTransform.rotation.pitch) > 0.000_001 ||
+      Math.abs(rootTransform.rotation.roll) > 0.000_001
+    ) {
+      throw new Error(
+        "BP 根旋转包含 Pitch 或 Roll，暂不支持追加目标物坐标换算",
+      );
+    }
+
+    const existingSync = buildMissionTargetBlueprintSync(
+      request.plan.targets,
+      numericComponents.map((component) => ({
+        modelIndex: Number(component.variableName),
+        modelClassPath: component.childActorClass,
+        transform: component.transform,
+      })),
+      { explicit: true, transform: rootTransform },
+      configCsvDirectory,
+    );
+    const mappedTargetIds = new Set(
+      existingSync.mappings.map((mapping) => mapping.targetId),
+    );
+    const duplicateTargetIds = selectedTargets
+      .map((target) => target.targetId)
+      .filter((targetId) => mappedTargetIds.has(targetId));
+    if (duplicateTargetIds.length > 0) {
+      throw new Error(
+        `所选目标物已存在于 BP：${duplicateTargetIds.join("、")}`,
+      );
+    }
+
+    const nextModelIndex =
+      Math.max(
+        0,
+        ...numericComponents.map((component) =>
+          Number(component.variableName),
+        ),
+      ) + 1;
+    const selectedEntries = selectedTargets.map((target, index) => ({
+      target,
+      modelIndex: nextModelIndex + index,
+    }));
+    const components: MissionTargetBlueprintComponentPlan[] =
+      selectedEntries.map(({ target, modelIndex }) => ({
+        componentName: String(modelIndex),
+        componentClass: CHILD_ACTOR_COMPONENT_CLASS,
+        childActorClass: target.modelClassPath,
+        targetId: target.targetId,
+        transform: blueprintTransformFromWorld(
+          target.transform,
+          rootTransform,
+          target.transform.scale,
+        ),
+      }));
+    const sourceSlots = [
+      ...existingSourceSlots,
+      ...selectedEntries.map(({ target, modelIndex }) => ({
+        modelIndex,
+        targetId: target.targetId,
+        modelClassPath: target.modelClassPath,
+      })),
+    ];
+    const registrationContext: DialogueRegistrationContext = {
+      ...dialogueContext,
+      slots: buildDialogueModelRegistrationSlots(
+        sourceSlots,
+        dialogueContext.existingModels,
+        dialogueContext.registry,
+      ),
+    };
+
+    const dirtyPackages = new Set(
+      (await dirtyContentPackages(connection)).map((path) =>
+        path.toLowerCase(),
+      ),
+    );
+    const blueprintPackagePath = resolved.assetPath.split(".")[0];
+    const dialoguePackagePath =
+      dialogueContext.dialogueAssetPath.split(".")[0];
+    if (dirtyPackages.has(blueprintPackagePath.toLowerCase())) {
+      throw new Error(
+        `Formation BP ${blueprintPackagePath} 存在未保存修改，请先在 UE 中保存或撤销`,
+      );
+    }
+    if (dirtyPackages.has(dialoguePackagePath.toLowerCase())) {
+      throw new Error(
+        `对话资产 ${dialoguePackagePath} 存在未保存修改，请先在 UE 中保存或撤销`,
+      );
+    }
+    for (const target of selectedTargets) {
+      const asset = await connection.invoke("asset.get_asset_by_path", {
+        AssetPath: blueprintAssetPath(target.modelClassPath),
+      });
+      if (!hasUnrealObjectReference(asset)) {
+        throw new Error(`模型资产不存在：${target.modelClassPath}`);
+      }
+    }
+
+    mutationStarted = true;
+    for (const component of components) {
+      await addBlueprintComponent(
+        connection,
+        resolved.blueprint,
+        component,
+      );
+    }
+    const compileResult = await connection.invoke("bp.compile_blueprint", {
+      Bp: resolved.blueprint,
+    });
+    const compileError = compileFailure(compileResult);
+    if (compileError) {
+      throw new Error(compileError);
+    }
+    const actualComponents = await readBlueprintComponents(
+      connection,
+      blueprint.blueprintClassPath,
+    );
+    for (const expected of components) {
+      const actual = actualComponents.find(
+        (component) => component.variableName === expected.componentName,
+      );
+      if (
+        !actual ||
+        normalizeObjectPath(actual.componentClass) !==
+          normalizeObjectPath(expected.componentClass) ||
+        normalizeObjectPath(actual.childActorClass) !==
+          normalizeObjectPath(expected.childActorClass) ||
+        blueprintTransformsDiffer(actual.transform, expected.transform)
+      ) {
+        throw new Error(
+          `BP 追加组件 ${expected.componentName} 的回读结果不一致`,
+        );
+      }
+    }
+    const saveResult = await connection.invoke(
+      "bp.save_asset_and_capture_log",
+      { AssetPath: resolved.assetPath },
+    );
+    const saveError = saveFailure(saveResult);
+    if (saveError) {
+      throw new Error(saveError);
+    }
+    blueprintSaved = true;
+
+    const dialogueRegistration = await writeDialogueRegistration(
+      connection,
+      resolved.assetPath,
+      registrationContext,
+      new Set(
+        sourceSlots
+          .map((slot) => slot.modelIndex)
+          .filter((modelIndex) => modelIndex > 0),
+      ),
+      {
+        mapAssetPath: request.plan.mapAssetPath,
+        rootTransform,
+        fillMissingOnly: true,
+        source: spatialSource,
+      },
+    );
+    return {
+      status: "appended",
+      taskId: request.plan.taskId,
+      blueprintAssetPath: resolved.assetPath,
+      addedTargetIds: selectedTargets.map((target) => target.targetId),
+      addedModelIndexes: selectedEntries.map(({ modelIndex }) => modelIndex),
+      componentNames: components.map((component) => component.componentName),
+      dialogueRegistration,
+    };
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "追加 BP 目标物失败";
+    throw new Error(
+      blueprintSaved
+        ? `${message}；BP 已保存，但对话模型注册未完成`
+        : mutationStarted
+          ? `${message}；BP 可能已在 UE 编辑器中留下未保存修改，请检查后撤销`
+          : message,
     );
   } finally {
     connection.close();
@@ -5602,6 +6016,13 @@ export async function routeUeRequest(
       sendJson(response, 200, {
         ok: true,
         data: await populateMissionTargetBlueprint(body),
+      });
+      return true;
+    }
+    if (url.pathname === "/api/ue/mission-targets/append-blueprint") {
+      sendJson(response, 200, {
+        ok: true,
+        data: await appendMissionTargetBlueprint(body),
       });
       return true;
     }

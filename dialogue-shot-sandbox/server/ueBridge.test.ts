@@ -229,6 +229,119 @@ class FakeBlueprintPopulateConnection implements UnrealInvoker {
   }
 }
 
+class FakeBlueprintPopulateWithDialogueConnection extends FakeBlueprintPopulateConnection {
+  readonly dialogueAssetPath =
+    "/Game/Seria/Task/dialoggraph/Test/735200.735200";
+  dialogueModels = ["player", "Guard", "Unused", "Selected"];
+  formationClassPath = "None";
+  commonProperties = [
+    { Alias: "Virtual", CurrentBool: true },
+    {
+      Alias: "PlayerInitPosition",
+      CurrentVector: { X: 10, Y: 20, Z: -70 },
+    },
+    {
+      Alias: "PlayerForward",
+      CurrentRotator: { Pitch: 0, Yaw: 0, Roll: 0 },
+    },
+  ];
+  specialProperties = [{ Alias: "Virtual", CurrentBool: true }];
+  previewLevel =
+    "/Game/Seria/Maps/08_01_UrbanArea/08_01_UrbanArea.08_01_UrbanArea";
+
+  override async invoke(
+    action: string,
+    args: Record<string, unknown>,
+  ): Promise<unknown> {
+    if (action === "asset.asset_search" && args.Query === "735200") {
+      this.calls.push({ action, args });
+      return [`735200 [${this.dialogueAssetPath}]`];
+    }
+    if (action === "script.eval_python_expression") {
+      this.calls.push({ action, args });
+      const expression = String(args.Expression);
+      if (expression.includes("get_data_table_row_names")) {
+        return {
+          bSuccess: true,
+          Result: `'${JSON.stringify({
+            names: ["Guard", "Unused", "Selected"],
+            paths: [
+              "/Game/Seria/NPC/Guard/BP_Guard.BP_Guard_C",
+              "/Game/Seria/NPC/Unused/BP_Unused.BP_Unused_C",
+              "/Game/Seria/NPC/Selected/BP_Selected.BP_Selected_C",
+            ],
+          })}'`,
+        };
+      }
+      return { bSuccess: true, Result: "'[]'" };
+    }
+    if (action === "reflect.read_object_property") {
+      const object = String(args.ThisPtr);
+      const propertyName = String(args.PropertyName);
+      if (object.endsWith(":Dialog Graph") && propertyName === "Nodes") {
+        this.calls.push({ action, args });
+        return ["SeriaEdDialogGraphNode_0"];
+      }
+      if (
+        object.endsWith("SeriaEdDialogGraphNode_0") &&
+        propertyName === "DialogGraphNodeData"
+      ) {
+        this.calls.push({ action, args });
+        return "SeriaDialogGraphNodeData_0";
+      }
+      if (object.endsWith("SeriaDialogGraphNodeData_0")) {
+        this.calls.push({ action, args });
+        if (propertyName === "SeriaDialogGraphNodeType") {
+          return "EStart";
+        }
+        if (propertyName === "DialogModels") {
+          return [...this.dialogueModels];
+        }
+        if (propertyName === "Formation") {
+          return this.formationClassPath;
+        }
+        if (propertyName === "CommonDialogGraphProperties") {
+          return structuredClone(this.commonProperties);
+        }
+        if (propertyName === "SpecialDialogGraphProperties") {
+          return structuredClone(this.specialProperties);
+        }
+        if (propertyName === "PreviewLevel") {
+          return this.previewLevel;
+        }
+      }
+    }
+    if (action === "reflect.write_object_property") {
+      this.calls.push({ action, args });
+      if (args.PropertyName === "DialogModels") {
+        this.dialogueModels = [...(args.Value as string[])];
+      }
+      if (args.PropertyName === "Formation") {
+        this.formationClassPath = String(args.Value);
+      }
+      if (args.PropertyName === "CommonDialogGraphProperties") {
+        this.commonProperties = structuredClone(
+          args.Value as typeof this.commonProperties,
+        );
+      }
+      if (args.PropertyName === "SpecialDialogGraphProperties") {
+        this.specialProperties = structuredClone(
+          args.Value as typeof this.specialProperties,
+        );
+      }
+      if (args.PropertyName === "PreviewLevel") {
+        this.previewLevel = String(args.Value);
+      }
+      return true;
+    }
+    if (action === "asset.save_asset") {
+      this.calls.push({ action, args });
+      return true;
+    }
+    return super.invoke(action, args);
+  }
+}
+
 class FakeDialogueRegistrationConnection implements UnrealInvoker {
   readonly calls: Array<{
     action: string;
@@ -715,19 +828,16 @@ describe("mission target Blueprint creation", () => {
 
     expect(
       compareDialogueModelOrder(
-        ["player", "N111_Aldridge_Sit", "None", "N91_Dolores_sitting"],
+        ["player", "N111_Aldridge_Sit", "N91_Dolores_sitting"],
         [
           "/Game/N111/BP_N111_Aldridge_Sit.BP_N111_Aldridge_Sit_C",
-          "/Game/N000/BP_Unused.BP_Unused_C",
           "/Game/N91/BP_N91_Dolores_sitting.BP_N91_Dolores_sitting_C",
         ],
-        new Set([1, 3]),
       ),
     ).toMatchObject({
       matched: true,
       selectedModels: [
         "n111_aldridge_sit",
-        "none",
         "n91_dolores_sitting",
       ],
     });
@@ -782,22 +892,22 @@ describe("mission target Blueprint creation", () => {
     });
   });
 
-  it("keeps original model indexes when only some target rows are selected", () => {
+  it("compacts model indexes when only some target rows are selected", () => {
     const plan = previewPlan();
     const secondTarget = {
       ...plan.targets[0],
       targetId: "500004",
     };
 
-    const components = buildMissionTargetBlueprintComponents(
-      [plan.targets[0], secondTarget],
-      [1, 3],
-    );
+    const components = buildMissionTargetBlueprintComponents([
+      plan.targets[0],
+      secondTarget,
+    ]);
 
     expect(components.map((component) => component.componentName)).toEqual([
       "0",
       "1",
-      "3",
+      "2",
       "c1",
     ]);
   });
@@ -837,6 +947,96 @@ describe("mission target Blueprint creation", () => {
       )?.args.AssetPath,
     ).toBe(connection.assetPath);
     expect(connection.closed).toBe(true);
+  });
+
+  it("writes only selected targets and assigns contiguous BP slots", async () => {
+    const plan = previewPlan();
+    const unselectedTarget = {
+      ...plan.targets[0],
+      targetId: "500004",
+      modelClassPath:
+        "/Game/Seria/NPC/Unused/BP_Unused.BP_Unused_C",
+    };
+    const selectedTarget = {
+      ...plan.targets[0],
+      targetId: "500005",
+      modelClassPath:
+        "/Game/Seria/NPC/Selected/BP_Selected.BP_Selected_C",
+    };
+    plan.targets = [plan.targets[0], unselectedTarget, selectedTarget];
+    const connection = new FakeBlueprintPopulateConnection();
+
+    const result = await populateMissionTargetBlueprint(
+      {
+        blueprintName: "BP_Test",
+        plan,
+        selectedTargetIds: ["500001", "500005"],
+      },
+      () => connection,
+    );
+
+    expect(result).toMatchObject({
+      targetCount: 2,
+      componentNames: ["0", "1", "2", "c1"],
+    });
+    expect(connection.components.get("1")?.childActorClass).toBe(
+      plan.targets[0].modelClassPath,
+    );
+    expect(connection.components.get("2")?.childActorClass).toBe(
+      selectedTarget.modelClassPath,
+    );
+    expect(
+      Array.from(connection.components.values()).some(
+        (component) =>
+          component.childActorClass === unselectedTarget.modelClassPath,
+      ),
+    ).toBe(false);
+  });
+
+  it("omits unselected targets from both the BP and DialogModels", async () => {
+    const plan = previewPlan();
+    const unselectedTarget = {
+      ...plan.targets[0],
+      targetId: "500004",
+      modelClassPath:
+        "/Game/Seria/NPC/Unused/BP_Unused.BP_Unused_C",
+    };
+    const selectedTarget = {
+      ...plan.targets[0],
+      targetId: "500005",
+      modelClassPath:
+        "/Game/Seria/NPC/Selected/BP_Selected.BP_Selected_C",
+    };
+    plan.targets = [plan.targets[0], unselectedTarget, selectedTarget];
+    const connection = new FakeBlueprintPopulateWithDialogueConnection();
+
+    const result = await populateMissionTargetBlueprint(
+      {
+        blueprintName:
+          "/Game/Seria/Task/Mod/MainQuest/Test/BP_735200.BP_735200",
+        plan,
+        selectedTargetIds: ["500001", "500005"],
+        registerDialogue: true,
+      },
+      () => connection,
+    );
+
+    expect(result).toMatchObject({
+      targetCount: 2,
+      componentNames: ["0", "1", "2", "c1"],
+      dialogueRegistration: {
+        dialogueModels: ["player", "Guard", "Selected"],
+        registeredCount: 2,
+        emptyCount: 0,
+      },
+    });
+    expect(connection.dialogueModels).toEqual([
+      "player",
+      "Guard",
+      "Selected",
+    ]);
+    expect(connection.dialogueModels).not.toContain("None");
+    expect(connection.dialogueModels).not.toContain("Unused");
   });
 
   it("rejects a missing or already populated Blueprint before writing", async () => {

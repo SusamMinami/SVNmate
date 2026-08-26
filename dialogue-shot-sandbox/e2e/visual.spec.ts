@@ -2707,7 +2707,7 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
   ).toBeVisible();
 });
 
-test("registers every numeric slot from an existing positioned Blueprint", async ({
+test("locks and registers every existing numeric Blueprint slot", async ({
   page,
 }, testInfo) => {
   let registrationRequest: Record<string, unknown> | null = null;
@@ -2793,9 +2793,10 @@ test("registers every numeric slot from an existing positioned Blueprint", async
             dialogueId: "735200",
             dialogueAssetPath:
               "/Game/Seria/Task/dialoggraph/Test/735200.735200",
-            dialogueModels: ["player", "One", "None", "None"],
-            registeredCount: 1,
-            emptyCount: 2,
+            dialogueModels: ["player", "One", "Two", "None"],
+            registeredCount: 2,
+            characterCount: 3,
+            emptyCount: 1,
             unresolvedIndexes: [3],
             spatialStatus: "unchanged",
             spatialMapAssetPath: "/Game/Test/Maps/TestMap.TestMap",
@@ -2817,21 +2818,16 @@ test("registers every numeric slot from an existing positioned Blueprint", async
     .click();
 
   await expect(
-    workspace.getByText("BP 数字槽位", { exact: true }),
+    workspace.getByText("BP 已有内容", { exact: true }),
   ).toBeVisible();
   await expect(
     workspace.locator(".mission-target-dialogue-table tbody tr"),
   ).toHaveCount(4);
-  await expect(workspace.getByLabel("0 号玩家固定注册")).toBeChecked();
-  await expect(workspace.getByLabel("0 号玩家固定注册")).toBeDisabled();
-  await expect(
-    workspace.getByText(/已选择 4 \/ 4 个角色位/),
-  ).toBeVisible();
-
-  await workspace.getByLabel("选择 BP 模型槽位 2").uncheck();
-  await expect(
-    workspace.getByText(/已选择 3 \/ 4 个角色位/),
-  ).toBeVisible();
+  await expect(workspace.getByLabel("BP 已有槽位 0 固定保留")).toBeChecked();
+  await expect(workspace.getByLabel("BP 已有槽位 0 固定保留")).toBeDisabled();
+  await expect(workspace.getByLabel("BP 已有槽位 2 固定保留")).toBeChecked();
+  await expect(workspace.getByLabel("BP 已有槽位 2 固定保留")).toBeDisabled();
+  await expect(workspace.getByText(/BP 已有 4 个固定角色位/)).toBeVisible();
   await workspace.screenshot({
     path: testInfo.outputPath("existing-blueprint-slot-registration.png"),
   });
@@ -2841,11 +2837,11 @@ test("registers every numeric slot from an existing positioned Blueprint", async
 
   expect(registrationRequest).toEqual({
     blueprintName: "7352",
-    selectedModelIndexes: [1, 3],
+    selectedModelIndexes: [1, 2, 3],
     targetOverrides: [],
   });
   await expect(
-    workspace.getByText(/角色 2 个（含 0 号玩家）/),
+    workspace.getByText(/角色 3 个（含 0 号玩家）/),
   ).toBeVisible();
 });
 
@@ -2854,6 +2850,7 @@ test("offers bidirectional position sync for a registered Blueprint", async ({
 }, testInfo) => {
   let updateBlueprintRequest: Record<string, unknown> | null = null;
   let updateTargetsRequest: Record<string, unknown> | null = null;
+  let appendBlueprintRequest: Record<string, unknown> | null = null;
   let backgroundApplyRequest: Record<string, unknown> | null = null;
   let backgroundDialogueRequest: Record<string, unknown> | null = null;
   let backgroundInspectCount = 0;
@@ -2916,6 +2913,20 @@ test("offers bidirectional position sync for a registered Blueprint", async ({
                 status: "registered",
               },
             ],
+            appendSlots: [
+              {
+                modelIndex: 2,
+                targetId: "500002",
+                modelClassPath:
+                  "/Game/Seria/NPC/Added/BP_Added.BP_Added_C",
+                existingModelName: "None",
+                existingModelClassPath: null,
+                registrationMatchesModel: false,
+                suggestedModelName: "Added",
+                candidateModelNames: ["Added"],
+                status: "available",
+              },
+            ],
             message:
               "BP 已有 1 个模型槽；对话已注册 1 个模型；匹配 1 个任务目标物",
             sync: {
@@ -2953,7 +2964,7 @@ test("offers bidirectional position sync for a registered Blueprint", async ({
                   rotationDelta: 90,
                 },
               ],
-              unmatchedTargetIds: [],
+              unmatchedTargetIds: ["500002"],
               unmatchedModelIndexes: [],
               canUpdateBlueprint: true,
               canUpdateTargets: true,
@@ -2983,6 +2994,42 @@ test("offers bidirectional position sync for a registered Blueprint", async ({
             updatedModelIndexes: [1],
             blueprintSaved: true,
             dialogueSaved: true,
+          },
+        }),
+      });
+    },
+  );
+  await page.route(
+    "**/api/ue/mission-targets/append-blueprint",
+    async (route) => {
+      appendBlueprintRequest = route.request().postDataJSON();
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          data: {
+            status: "appended",
+            taskId: "900001",
+            blueprintAssetPath:
+              "/Game/Seria/Task/Mod/Test/BP_735000.BP_735000",
+            addedTargetIds: ["500002"],
+            addedModelIndexes: [2],
+            componentNames: ["2"],
+            dialogueRegistration: {
+              status: "registered",
+              blueprintAssetPath:
+                "/Game/Seria/Task/Mod/Test/BP_735000.BP_735000",
+              dialogueId: "735000",
+              dialogueAssetPath:
+                "/Game/Seria/Task/dialoggraph/Test/735000.735000",
+              dialogueModels: ["player", "Guard", "Added"],
+              registeredCount: 2,
+              characterCount: 3,
+              emptyCount: 0,
+              unresolvedIndexes: [],
+              spatialStatus: "unchanged",
+            },
           },
         }),
       });
@@ -3156,6 +3203,7 @@ test("offers bidirectional position sync for a registered Blueprint", async ({
           "##id,名称,介绍,资源",
           "1,玩家,玩家,",
           "700001,守卫,测试,200777",
+          "700002,新增角色,测试,200778",
         ].join("\n"),
       },
       {
@@ -3164,6 +3212,7 @@ test("offers bidirectional position sync for a registered Blueprint", async ({
           "##&Model.id,,Model.path",
           "##id,配置路径,生成路径",
           "200777,/Game/Test/BP_Guard,/Game/Seria/NPC/Guard/BP_Guard.BP_Guard_C",
+          "200778,/Game/Test/BP_Added,/Game/Seria/NPC/Added/BP_Added.BP_Added_C",
         ].join("\n"),
       },
       {
@@ -3171,7 +3220,7 @@ test("offers bidirectional position sync for a registered Blueprint", async ({
         content: [
           "##&字段标记,Mission.id,Mission.Name,Mission.ShowNPC",
           "##任务类型,任务ID,任务名称,显示目标物",
-          ",900001,同步任务,500001",
+          ',900001,同步任务,"500001,500002"',
         ].join("\n"),
       },
       {
@@ -3180,6 +3229,7 @@ test("offers bidirectional position sync for a registered Blueprint", async ({
           "##&MissionPosition.ID,,,MissionPosition.type,MissionPosition.NPCID,MissionPosition.ItemID,MissionPosition.BluePrint,MissionPosition.MapID,MissionPosition.Position,MissionPosition.Rotation",
           "##ID,类型,描述,坐标类型,NPCID,物品ID,蓝图路径,地图ID,座标,旋转",
           '500001,剧情 NPC,守卫,1,700001,0,,1204,"(X=110,Y=220,Z=330)","(Pitch=0,Yaw=90,Roll=0)"',
+          '500002,剧情 NPC,新增角色,1,700002,0,,1204,"(X=150,Y=260,Z=350)","(Pitch=0,Yaw=45,Roll=0)"',
         ].join("\n"),
       },
       {
@@ -3213,16 +3263,43 @@ test("offers bidirectional position sync for a registered Blueprint", async ({
   await dialog.getByRole("button", { name: "解析任务目标物" }).click();
 
   await expect(
-    dialog.getByRole("button", { name: "修改 BP 位置" }),
+    dialog.getByRole("button", { name: "目标物 → BP" }),
   ).toBeEnabled();
   const reverseButton = dialog.getByRole("button", {
     name: "BP → 目标物",
   });
   await expect(reverseButton).toBeEnabled();
-  await expect(reverseButton).toHaveClass(/button--primary/);
   await expect(
-    dialog.getByText(/已选择 1 \/ 1 个已映射目标物/),
+    dialog.getByText(/BP 已有 2 个固定角色位；待追加 0 \/ 1 个目标物/),
   ).toBeVisible();
+  await expect(dialog.getByText("BP 已有内容", { exact: true })).toBeVisible();
+  const existingRows = dialog.locator(
+    ".mission-target-dialogue-table tbody .mission-target-row--existing",
+  );
+  await expect(existingRows).toHaveCount(2);
+  await expect(dialog.getByLabel("BP 已有槽位 1 固定保留")).toBeDisabled();
+  await expect(dialog.getByLabel("选择目标物 500002")).not.toBeChecked();
+  await expect(
+    dialog.getByRole("button", { name: "按 BP 注册到对话" }),
+  ).toBeEnabled();
+
+  await dialog.getByLabel("选择目标物 500002").check();
+  await expect(
+    dialog.getByRole("button", { name: "添加到 BP 并注册" }),
+  ).toBeEnabled();
+  await expect(dialog.getByText("BP 2 · Added")).toBeVisible();
+  page.once("dialog", async (confirmation) => {
+    expect(confirmation.message()).toContain("2 = 新增角色");
+    await confirmation.accept();
+  });
+  await dialog
+    .getByRole("button", { name: "添加到 BP 并注册" })
+    .click();
+  expect(appendBlueprintRequest).toMatchObject({
+    blueprintName: "BP_735000",
+    selectedTargetIds: ["500002"],
+  });
+  await expect(dialog.getByText(/已追加 BP 槽位 2/)).toBeVisible();
 
   await dialog.getByRole("button", { name: "读取 UE 选择" }).click();
   const backgroundDialog = dialog.getByRole("dialog", {
@@ -3282,7 +3359,7 @@ test("offers bidirectional position sync for a registered Blueprint", async ({
     expect(confirmation.message()).toContain("最新配置");
     await confirmation.accept();
   });
-  await dialog.getByRole("button", { name: "修改 BP 位置" }).click();
+  await dialog.getByRole("button", { name: "目标物 → BP" }).click();
   await expect(dialog.getByText(/已更新 BP 槽位 1/)).toBeVisible();
   expect(updateBlueprintRequest).toEqual({
     blueprintName: "BP_735000",

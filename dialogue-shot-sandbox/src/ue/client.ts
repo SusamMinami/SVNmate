@@ -10,6 +10,7 @@ import type {
   DialogueStoryboardExportResult,
   DialogueModelRegistrationResult,
   MissionTargetBlueprintToTargetsResult,
+  MissionTargetBlueprintAppendResult,
   MissionTargetBlueprintCreateResult,
   MissionTargetBlueprintCompatibility,
   MissionTargetBlueprintInspection,
@@ -173,6 +174,22 @@ export function createMissionTargetBlueprint(
       plan,
       selectedTargetIds,
       registerDialogue,
+    },
+    false,
+  );
+}
+
+export function appendMissionTargetBlueprint(
+  blueprintName: string,
+  plan: MissionTargetPreviewPlan,
+  selectedTargetIds: string[],
+): Promise<MissionTargetBlueprintAppendResult> {
+  return postUe(
+    "/api/ue/mission-targets/append-blueprint",
+    {
+      blueprintName,
+      plan,
+      selectedTargetIds,
     },
     false,
   );
