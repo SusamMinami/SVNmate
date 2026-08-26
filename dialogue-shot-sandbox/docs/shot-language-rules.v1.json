@@ -1,7 +1,7 @@
 {
   "schema_version": "shot-rules.v1",
-  "version": "1.5.0",
-  "updated_at": "2026-08-23",
+  "version": "1.6.0",
+  "updated_at": "2026-08-26",
   "shot_size_order": ["EWS", "WS", "FS", "MFS", "MS", "MCU", "CU", "ECU"],
   "lark_fields": [
     { "type": "text", "name": "规则ID" },
@@ -13,6 +13,7 @@
       "options": [
         { "name": "构图" },
         { "name": "角色朝向" },
+        { "name": "演员动作" },
         { "name": "连续性" },
         { "name": "景别转换" },
         { "name": "正反打" },
@@ -180,6 +181,34 @@
       "weight": 65,
       "enabled": true,
       "source": "Adobe Camera Shots and Angles",
+      "version": "1.0.0"
+    },
+    {
+      "id": "ANG-006",
+      "name": "Formation BP 朝向为镜头计算基线",
+      "category": "角色朝向",
+      "enforcement": "硬约束",
+      "applies_when": "使用 Formation BP 站位",
+      "requirement": "角色初始朝向必须来自对应数字槽的 RelativeRotation.Yaw，不能因 look_target 直接假设角色已经转向。",
+      "machine_check": "initialFacing === transformYawToStageFacing(bpSlot.RelativeRotation.Yaw)",
+      "exception": "仅当当前镜头明确规划了可执行转身动作时，使用动作完成后的累计朝向。",
+      "weight": 100,
+      "enabled": true,
+      "source": "项目 BP_736300 实机验证；项目质量约束",
+      "version": "1.0.0"
+    },
+    {
+      "id": "ACT-001",
+      "name": "角色转身使用可执行离散动作",
+      "category": "演员动作",
+      "enforcement": "硬约束",
+      "applies_when": "现有朝向无法支持当前交流视线或正面构图",
+      "requirement": "只规划左右 45°、90°、180° 转身，选择最接近目标方向的最小必要动作，并让后续镜头继承结果。",
+      "machine_check": "turnAngle in [-180,-90,-45,45,90,180] && nextFacing === applyTurn(previousFacing,turnAngle)",
+      "exception": "NPC.ifturn=false 时不得转身，应改用当前朝向可执行的机位和构图。",
+      "weight": 100,
+      "enabled": true,
+      "source": "项目 CharacterBehaviours 与 AM_Turn 动作实机验证",
       "version": "1.0.0"
     },
     {

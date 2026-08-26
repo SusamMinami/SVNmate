@@ -7,6 +7,17 @@ import {
   type ParticipantSlot,
   type Vec3,
 } from "../types";
+import {
+  MAX_SOUND_EFFECT_CATALOG_ENTRIES,
+  SOUND_EFFECT_CATEGORIES,
+  soundEffectCatalogForDirector,
+  type SoundEffectCategory,
+  type SoundEffectCatalogEntry,
+} from "../data/soundEffectCatalog";
+import {
+  participantFacingYawDegrees,
+  SUPPORTED_ACTOR_TURN_DEGREES,
+} from "./actorActionPlanner";
 
 export const DIRECTOR_TEMPLATES = [
   "master_two_shot",
@@ -287,6 +298,13 @@ export const DirectorRevisionReflectionSchema = z.object({
   avoid_when: z.string().min(2).max(500),
 });
 
+export const DirectorSoundEffectCueSchema = z.object({
+  dialogue_id: z.string().min(1),
+  asset_name: z.string().min(1).max(160),
+  category: z.enum(SOUND_EFFECT_CATEGORIES),
+  reason: z.string().min(2).max(240),
+});
+
 export const MiraReadyResponseSchema = z.object({
   schema_version: z.literal("shot-plan.v5"),
   request_id: z.string().min(1),
@@ -298,6 +316,7 @@ export const MiraReadyResponseSchema = z.object({
   }),
   blocking: DirectorBlockingSchema,
   shots: z.array(DirectorDecisionSchema).min(1),
+  sound_effects: z.array(DirectorSoundEffectCueSchema).max(16),
   revision_reflections: z
     .array(DirectorRevisionReflectionSchema)
     .max(24)
@@ -336,6 +355,8 @@ export const DirectorInputSchema = z.object({
         initial_facing_target: z
           .tuple([z.number(), z.number(), z.number()])
           .optional(),
+        initial_yaw_degrees: z.number().min(-180).max(180).optional(),
+        can_turn: z.boolean().optional(),
         position_source: z.enum(["generated", "blueprint"]).optional(),
         first_dialogue_id: z.string().min(1),
         last_dialogue_id: z.string().min(1),
@@ -354,6 +375,16 @@ export const DirectorInputSchema = z.object({
         content: z.string().min(1),
       }),
     )
+    .min(1),
+  sound_effect_catalog: z
+    .array(
+      z.object({
+        category: z.enum(SOUND_EFFECT_CATEGORIES),
+        asset_name: z.string().min(1),
+        description: z.string().min(1),
+      }),
+    )
+    .max(MAX_SOUND_EFFECT_CATALOG_ENTRIES)
     .min(1),
   adjacent_context: z.object({
     previous: z
@@ -406,6 +437,11 @@ export const DirectorInputSchema = z.object({
     supported_depth_of_field: z
       .array(z.enum(DEPTH_OF_FIELD_MODES))
       .min(1),
+    supported_actor_turn_degrees: z
+      .array(z.number().refine((value) =>
+        (SUPPORTED_ACTOR_TURN_DEGREES as readonly number[]).includes(value),
+      ))
+      .optional(),
     max_characters: z
       .number()
       .int()
@@ -419,6 +455,9 @@ export type DirectorDecision = z.infer<typeof DirectorDecisionSchema>;
 export type DirectorBlocking = z.infer<typeof DirectorBlockingSchema>;
 export type DirectorRevisionReflection = z.infer<
   typeof DirectorRevisionReflectionSchema
+>;
+export type DirectorSoundEffectCue = z.infer<
+  typeof DirectorSoundEffectCueSchema
 >;
 export type MiraDirectorResponse = z.infer<typeof MiraDirectorResponseSchema>;
 export type DirectorMode = "rule" | "trae" | "mira";
@@ -439,6 +478,8 @@ export interface DirectorInput {
     background: string;
     initial_position?: Vec3;
     initial_facing_target?: Vec3;
+    initial_yaw_degrees?: number;
+    can_turn?: boolean;
     position_source?: "generated" | "blueprint";
     first_dialogue_id: string;
     last_dialogue_id: string;
@@ -450,6 +491,11 @@ export interface DirectorInput {
     speaker: ParticipantSlot;
     speaker_name: string;
     content: string;
+  }>;
+  sound_effect_catalog: Array<{
+    category: SoundEffectCategory;
+    asset_name: string;
+    description: string;
   }>;
   adjacent_context: {
     previous: {
@@ -496,6 +542,7 @@ export interface DirectorInput {
     supported_depth_of_field: ReadonlyArray<
       (typeof DEPTH_OF_FIELD_MODES)[number]
     >;
+    supported_actor_turn_degrees?: ReadonlyArray<number>;
     max_characters: number;
     output_language: "zh-CN";
   };
@@ -505,6 +552,14 @@ export interface DirectorSceneAnalysis {
   dramaticGoal: string;
   emotionalProgression: string;
   visualStrategy: string;
+}
+
+export interface DirectorSoundEffectRecommendation {
+  dialogueId: string;
+  assetName: string;
+  category: SoundEffectCategory;
+  reason: string;
+  description: string;
 }
 
 export type ReadyDirectorResponse = Extract<
@@ -522,6 +577,7 @@ export interface DirectorProviderResult {
   decisions: DirectorDecision[];
   analysis?: DirectorSceneAnalysis;
   blocking: DirectorBlocking;
+  soundEffects: DirectorSoundEffectRecommendation[];
   rawPlan?: ReadyDirectorResponse;
   sharedSource?: "generated" | "local-cache" | "shared-library";
   sharedConflict?: SharedStoryboardConflict;
@@ -529,7 +585,10 @@ export interface DirectorProviderResult {
 
 export interface ShotDirectorProvider {
   readonly id: DirectorMode;
-  design(input: DirectorInput): Promise<DirectorProviderResult>;
+  design(
+    input: DirectorInput,
+    options?: { forceRegenerate?: boolean },
+  ): Promise<DirectorProviderResult>;
 }
 
 export function createDirectorInput(
@@ -538,6 +597,7 @@ export function createDirectorInput(
   options: {
     preserveInputFormation?: boolean;
     collectRevisionCases?: boolean;
+    soundEffectCatalog?: readonly SoundEffectCatalogEntry[];
   } = {},
 ): DirectorInput {
   const participantById = new Map<number, DialogueParticipant>();
@@ -565,6 +625,8 @@ export function createDirectorInput(
         participant.introduction || participant.note || "暂无补充角色背景",
       initial_position: participant.position,
       initial_facing_target: participant.facingTarget,
+      initial_yaw_degrees: participantFacingYawDegrees(participant),
+      can_turn: participant.canTurn !== false,
       position_source: participant.positionSource,
       first_dialogue_id: participant.firstDialogueId,
       last_dialogue_id: participant.lastDialogueId,
@@ -589,6 +651,9 @@ export function createDirectorInput(
         },
       ];
     }),
+    sound_effect_catalog: options.soundEffectCatalog
+      ? soundEffectCatalogForDirector(options.soundEffectCatalog)
+      : soundEffectCatalogForDirector(),
     adjacent_context: {
       previous: sequence.adjacentContext.previous
         ? {
@@ -640,6 +705,7 @@ export function createDirectorInput(
       supported_camera_movements: CAMERA_MOVEMENTS,
       supported_lens_intents: LENS_INTENTS,
       supported_depth_of_field: DEPTH_OF_FIELD_MODES,
+      supported_actor_turn_degrees: SUPPORTED_ACTOR_TURN_DEGREES,
       max_characters: sequence.participants.length,
       output_language: "zh-CN",
     },

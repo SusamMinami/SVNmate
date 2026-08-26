@@ -54,8 +54,10 @@ export function SharedPlanCompareModal({
   const shot = option.result.shots[shotIndex] ?? option.result.shots[0];
 
   useEffect(() => {
-    setShotIndex(0);
-  }, [selected]);
+    setShotIndex((current) =>
+      Math.min(current, Math.max(0, option.result.shots.length - 1)),
+    );
+  }, [option.result.shots.length]);
 
   return (
     <div className="modal-backdrop shared-compare-backdrop" role="presentation">

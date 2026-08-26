@@ -31,6 +31,14 @@ function commonProperties(
       CurrentUint32: 0,
       CurrentString: content,
     },
+    {
+      Alias: "DelayTime",
+      CurrentFloat: 0,
+    },
+    {
+      Alias: "SoundEffect",
+      CurrentPath: "",
+    },
   ];
 }
 
@@ -74,6 +82,10 @@ class FakeStoryboardExportConnection implements UnrealInvoker {
   dirtyPackages: string[] = [];
   normalizeMoveReadback = false;
   forcePushBlendOutTime: number | null = null;
+  forceDelayTimeAfterWrite: number | null = null;
+  failRollbackWrites = false;
+  commonWriteCount = 0;
+  saveAttempted = false;
   connected = false;
   closed = false;
 
@@ -87,6 +99,12 @@ class FakeStoryboardExportConnection implements UnrealInvoker {
   ): Promise<unknown> {
     this.calls.push({ action, args });
     if (action === "asset.asset_search") {
+      if (String(args.Query).startsWith("A_SFX_")) {
+        const assetName = String(args.Query);
+        return [
+          `${assetName} (AkAudioEvent) [/Game/Seria/WwiseSoundData/Events/${assetName}.${assetName}]`,
+        ];
+      }
       return [
         `735200 (SeriaDialogGraph) [${this.dialogueAssetPath}]`,
       ];
@@ -110,11 +128,16 @@ class FakeStoryboardExportConnection implements UnrealInvoker {
       };
     }
     if (action === "asset.save_asset") {
+      this.saveAttempted = true;
       return this.saveResult;
     }
     if (action === "reflect.write_object_property") {
+      if (this.saveAttempted && this.failRollbackWrites) {
+        throw new Error("模拟恢复写入失败");
+      }
       const dataName = String(args.ThisPtr).split(".").at(-1)!;
       if (args.PropertyName === "CommonDialogGraphProperties") {
+        this.commonWriteCount += 1;
         this.commonByData.set(
           dataName,
           structuredClone(
@@ -164,7 +187,16 @@ class FakeStoryboardExportConnection implements UnrealInvoker {
         return "EAction";
       }
       if (property === "CommonDialogGraphProperties") {
-        return structuredClone(this.commonByData.get(dataName));
+        const common = structuredClone(this.commonByData.get(dataName));
+        if (this.commonWriteCount > 0 && this.forceDelayTimeAfterWrite !== null) {
+          const delayTime = common?.find(
+            (entry) => entry.Alias === "DelayTime",
+          );
+          if (delayTime) {
+            delayTime.CurrentFloat = this.forceDelayTimeAfterWrite;
+          }
+        }
+        return common;
       }
       if (property === "MoveCameras") {
         const moves = structuredClone(this.movesByData.get(dataName));
@@ -363,6 +395,32 @@ describe("dialogue storyboard export", () => {
     );
   });
 
+  it("reports planned actor turns without writing character actions", async () => {
+    const connection = new FakeStoryboardExportConnection();
+    const request = exportRequest();
+    request.shots[0].actorActions = [
+      {
+        modelIndex: 0,
+        montageName: "AM_TurnRight90",
+        angleDegrees: 90,
+      },
+    ];
+
+    const preview = await inspectDialogueStoryboardExport(
+      request,
+      () => connection,
+    );
+
+    expect(preview.shots[0].actorActionCount).toBe(1);
+    expect(
+      connection.calls.some(
+        (call) =>
+          call.action === "reflect.write_object_property" &&
+          call.args.PropertyName === "CharacterBehaviours",
+      ),
+    ).toBe(false);
+  });
+
   it("accepts UE float32 normalization and additional default fields", async () => {
     const connection = new FakeStoryboardExportConnection();
     connection.normalizeMoveReadback = true;
@@ -401,6 +459,23 @@ describe("dialogue storyboard export", () => {
     ).rejects.toThrow(
       "MoveCameras[0].PushCameraArg.BlendOutTime 期望 1，回读 0",
     );
+  });
+
+  it("verifies preserved common properties after writing", async () => {
+    const connection = new FakeStoryboardExportConnection();
+    connection.forceDelayTimeAfterWrite = 3;
+    const request = exportRequest();
+    const preview = await inspectDialogueStoryboardExport(
+      request,
+      () => connection,
+    );
+
+    await expect(
+      exportDialogueStoryboard(
+        { ...request, reviewToken: preview.reviewToken },
+        () => connection,
+      ),
+    ).rejects.toThrow("CommonDialogGraphProperties[3].CurrentFloat");
   });
 
   it("blocks focal-length animation instead of silently losing it", async () => {
@@ -468,11 +543,117 @@ describe("dialogue storyboard export", () => {
         { ...request, reviewToken: preview.reviewToken },
         () => connection,
       ),
-    ).rejects.toThrow("已尝试恢复本轮未保存修改");
+    ).rejects.toThrow("已恢复本轮未保存修改");
     expect(connection.commonByData.get("ActionData1")?.[1].CurrentString).toBe(
       originalCamera,
     );
     expect(connection.movesByData.get("ActionData1")).toEqual([]);
+  });
+
+  it("reports when rollback cannot restore UE node values", async () => {
+    const connection = new FakeStoryboardExportConnection();
+    connection.saveResult = false;
+    connection.failRollbackWrites = true;
+    const request = exportRequest();
+    const preview = await inspectDialogueStoryboardExport(
+      request,
+      () => connection,
+    );
+
+    await expect(
+      exportDialogueStoryboard(
+        { ...request, reviewToken: preview.reviewToken },
+        () => connection,
+      ),
+    ).rejects.toThrow("恢复失败，请立即在 UE 中检查");
+  });
+});
+
+describe("storyboard sound effect export", () => {
+  it("previews and writes selected sound effects without changing DelayTime", async () => {
+    const connection = new FakeStoryboardExportConnection();
+    const request = {
+      ...exportRequest(),
+      soundEffects: [
+        {
+          dialogueId: "735201",
+          assetName: "A_SFX_Dialog_516918",
+        },
+      ],
+    };
+    const preview = await inspectDialogueStoryboardExport(
+      request,
+      () => connection,
+    );
+
+    expect(preview).toMatchObject({
+      soundEffectCount: 1,
+      changedSoundEffectCount: 1,
+      replacedSoundEffectCount: 0,
+      soundEffects: [
+        {
+          soundEffectIndex: 0,
+          dialogueId: "735201",
+          assetName: "A_SFX_Dialog_516918",
+          action: "add",
+        },
+      ],
+    });
+
+    const result = await exportDialogueStoryboard(
+      { ...request, reviewToken: preview.reviewToken },
+      () => connection,
+    );
+
+    expect(result.changedSoundEffectCount).toBe(1);
+    const written = connection.commonByData.get("ActionData1") ?? [];
+    expect(
+      written.find((property) => property.Alias === "SoundEffect")
+        ?.CurrentPath,
+    ).toBe(
+      "/Game/Seria/WwiseSoundData/Events/A_SFX_Dialog_516918.A_SFX_Dialog_516918",
+    );
+    expect(
+      written.find((property) => property.Alias === "DelayTime")
+        ?.CurrentFloat,
+    ).toBe(0);
+    expect(written[1].CurrentString).toBe("c1");
+  });
+
+  it("allows exporting only selected sound effects", async () => {
+    const connection = new FakeStoryboardExportConnection();
+    const request: StoryboardExportRequest = {
+      ...exportRequest(),
+      dialogueIds: [],
+      shots: [],
+      soundEffects: [
+        {
+          dialogueId: "735203",
+          assetName: "A_SFX_Dialog_516918",
+        },
+      ],
+    };
+    const preview = await inspectDialogueStoryboardExport(
+      request,
+      () => connection,
+    );
+    const result = await exportDialogueStoryboard(
+      { ...request, reviewToken: preview.reviewToken },
+      () => connection,
+    );
+
+    expect(preview.cameraName).toBe("");
+    expect(preview.nodes).toEqual([]);
+    expect(result).toMatchObject({
+      changedNodeCount: 0,
+      changedSoundEffectCount: 1,
+      saved: true,
+    });
+    expect(
+      connection.calls.some(
+        (call) => call.action === "bp.get_blueprint_by_path",
+      ),
+    ).toBe(false);
   });
 });
 

@@ -4,6 +4,7 @@ import type {
   ParticipantSlot,
   ShotPlan,
 } from "../types";
+import type { SoundEffectCatalogEntry } from "../data/soundEffectCatalog";
 import { resolveBlocking } from "./blockingResolver";
 import {
   createDirectorInput,
@@ -12,12 +13,14 @@ import {
   type DirectorMode,
   type ReadyDirectorResponse,
   type DirectorSceneAnalysis,
+  type DirectorSoundEffectRecommendation,
   type SharedStoryboardConflict,
 } from "./contracts";
 import { MiraDirectorProvider } from "./miraDirector";
 import { RuleDirectorProvider } from "./ruleDirector";
 import { resolveShotDecisions } from "./shotResolver";
 import { resolveRuleShotsWithRetry } from "./shotPlanner";
+import { resolveSoundEffectRecommendations } from "./soundEffectRecommender";
 import { TraeDirectorProvider } from "./traeDirector";
 
 const SHARED_PREVIEW_COLORS = [
@@ -41,6 +44,7 @@ export interface DirectorRunResult {
   appliedMode: DirectorMode;
   fallbackReason: string | null;
   analysis?: DirectorSceneAnalysis;
+  soundEffects: DirectorSoundEffectRecommendation[];
   blocking: DirectorBlocking;
   participants: DialogueParticipant[];
   input: DirectorInput;
@@ -53,6 +57,8 @@ interface DirectorRunOptions {
   preserveInputPositions?: boolean;
   fallbackPreserveInputPositions?: boolean;
   collectRevisionCases?: boolean;
+  soundEffectCatalog?: readonly SoundEffectCatalogEntry[];
+  forceRegenerate?: boolean;
 }
 
 const providers = {
@@ -69,8 +75,11 @@ async function runProvider(
   const input = createDirectorInput(sequence, undefined, {
     preserveInputFormation: options.preserveInputPositions,
     collectRevisionCases: options.collectRevisionCases,
+    soundEffectCatalog: options.soundEffectCatalog,
   });
-  const providerResult = await providers[mode].design(input);
+  const providerResult = await providers[mode].design(input, {
+    forceRegenerate: options.forceRegenerate,
+  });
   const participants = resolveBlocking(
     sequence.participants,
     providerResult.blocking,
@@ -89,6 +98,7 @@ async function runProvider(
     shots,
     appliedMode: mode,
     analysis: providerResult.analysis,
+    soundEffects: providerResult.soundEffects,
     blocking: providerResult.blocking,
     participants,
     input,
@@ -127,6 +137,7 @@ export async function designShots(
         preserveInputPositions:
           options.fallbackPreserveInputPositions ??
           options.preserveInputPositions,
+        soundEffectCatalog: options.soundEffectCatalog,
       })),
       requestedMode,
       fallbackReason,
@@ -172,6 +183,7 @@ function sequenceFromDirectorInput(input: DirectorInput): DialogueSequence {
         note: participant.background,
         introduction: participant.background,
         resourceId: null,
+        canTurn: participant.can_turn,
         instanceId: participant.instance_id ?? `shared:${participant.slot}`,
         slot: participant.slot as ParticipantSlot,
         color: SHARED_PREVIEW_COLORS[index],
@@ -253,6 +265,10 @@ export function createSharedPlanPreview(
         emotionalProgression: plan.scene_analysis.emotional_progression,
         visualStrategy: plan.scene_analysis.visual_strategy,
       },
+      soundEffects: resolveSoundEffectRecommendations(
+        input,
+        plan.sound_effects,
+      ),
       blocking: plan.blocking,
       participants,
       input,

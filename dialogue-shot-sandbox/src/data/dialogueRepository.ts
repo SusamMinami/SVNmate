@@ -45,6 +45,7 @@ function profileFor(database: DialogueDatabase, npcId: number): NpcProfile {
       note: "玩家角色",
       introduction: "由玩家控制的对话参与者",
       resourceId: null,
+      canTurn: true,
     };
   }
   return (
@@ -214,9 +215,13 @@ function buildDialogueSequence(
     throw new Error(`对话 ${prefix} 没有可用于分镜的台词`);
   }
 
-  const participantIds = Array.from(
+  const speakingParticipantIds = Array.from(
     new Set(chain.rows.map((row) => row.npcId).filter((id): id is number => id !== null)),
   );
+  const participantIds = [
+    1,
+    ...speakingParticipantIds.filter((npcId) => npcId !== 1),
+  ];
   const warnings = [...chain.warnings];
   if (chain.ignoredDialogueNodeCount > 0) {
     warnings.push(
@@ -227,19 +232,14 @@ function buildDialogueSequence(
     warnings.push(`同一前缀存在 ${starts.length} 个开始节点，当前使用 ${startId}`);
   }
   if (participantIds.length > MAX_DIALOGUE_PARTICIPANTS) {
-    warnings.push(
-      `检测到 ${participantIds.length} 位说话人，当前最多展示前 ${MAX_DIALOGUE_PARTICIPANTS} 位`,
+    throw new Error(
+      `对话 ${prefix} 包含 ${participantIds.length} 位场内角色候选（含固定玩家），超过当前支持的 ${MAX_DIALOGUE_PARTICIPANTS} 位上限`,
     );
   }
 
-  const selectedIds = participantIds.slice(0, MAX_DIALOGUE_PARTICIPANTS);
-  if (
-    requireTwoParticipants &&
-    selectedIds.length === 1 &&
-    selectedIds[0] !== 1
-  ) {
-    selectedIds.push(1);
-    warnings.push("仅检测到一位说话人，已补充玩家作为对景角色");
+  const selectedIds = participantIds;
+  if (!speakingParticipantIds.includes(1)) {
+    warnings.push("对话表没有玩家台词，已按固定 0 号角色补充玩家");
   }
   if (requireTwoParticipants && selectedIds.length < 2) {
     throw new Error(`对话 ${prefix} 至少需要两位可识别的对话参与者`);
@@ -255,7 +255,15 @@ function buildDialogueSequence(
         row.npcId === npcId ? rowIndex : lastIndex,
       -1,
     );
-    const entryIndex = firstDialogueIndex <= 1 ? 0 : firstDialogueIndex;
+    const speaksInDialogue = firstDialogueIndex >= 0;
+    const resolvedFirstDialogueIndex = speaksInDialogue
+      ? firstDialogueIndex
+      : 0;
+    const resolvedLastDialogueIndex = speaksInDialogue
+      ? lastDialogueIndex
+      : chain.rows.length - 1;
+    const entryIndex =
+      resolvedFirstDialogueIndex <= 1 ? 0 : resolvedFirstDialogueIndex;
     return {
       ...profileFor(database, npcId),
       instanceId: `npc:${npcId}`,
@@ -265,10 +273,10 @@ function buildDialogueSequence(
       facingTarget: [0, 0, -0.2],
       modelIndex: null,
       positionSource: "generated",
-      firstDialogueId: chain.rows[firstDialogueIndex].id,
-      firstDialogueIndex,
-      lastDialogueId: chain.rows[lastDialogueIndex].id,
-      lastDialogueIndex,
+      firstDialogueId: chain.rows[resolvedFirstDialogueIndex].id,
+      firstDialogueIndex: resolvedFirstDialogueIndex,
+      lastDialogueId: chain.rows[resolvedLastDialogueIndex].id,
+      lastDialogueIndex: resolvedLastDialogueIndex,
       entryDialogueId: chain.rows[entryIndex].id,
       entryIndex,
       exitDialogueId: null,

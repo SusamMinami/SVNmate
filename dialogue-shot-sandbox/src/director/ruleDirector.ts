@@ -16,6 +16,7 @@ import {
   MINIMUM_SHOT_DURATION_SECONDS,
   PREFERRED_MAXIMUM_SHOT_DURATION_SECONDS,
 } from "./shotTiming";
+import { recommendSoundEffects } from "./soundEffectRecommender";
 
 interface AttendanceContext {
   entryIndexBySlot: Map<ParticipantSlot, number>;
@@ -388,6 +389,7 @@ export class RuleDirectorProvider implements ShotDirectorProvider {
       decisions: createRuleDecisions(input, blocking),
       blocking,
       analysis: createRuleAnalysis(input),
+      soundEffects: recommendSoundEffects(input),
     };
   }
 }

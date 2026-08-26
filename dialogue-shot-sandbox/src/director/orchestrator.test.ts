@@ -60,6 +60,30 @@ describe("designShots", () => {
     expect(result.shots.length).toBeLessThan(sequence.rows.length);
   });
 
+  it("bypasses the TRAE cache when regeneration is explicitly requested", async () => {
+    let requestedUrl = "";
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      requestedUrl = String(input);
+      return new Response(
+        JSON.stringify({
+          ok: false,
+          error: {
+            code: "TRAE_COLLABORATION_ERROR",
+            message: "测试结束请求",
+          },
+        }),
+        {
+          status: 503,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+    });
+
+    await designShots(sequence, "trae", { forceRegenerate: true });
+
+    expect(requestedUrl).toBe("/api/director/trae?force=1");
+  });
+
   it("applies a schema-valid Mira plan", async () => {
     let sentInput:
       | {
@@ -107,6 +131,14 @@ describe("designShots", () => {
                 },
               ],
             },
+            sound_effects: [
+              {
+                dialogue_id: "204803",
+                asset_name: "A_SFX_Dialog_516918",
+                category: "special",
+                reason: "系统异常时使用报警提示。",
+              },
+            ],
             shots: sequence.rows.map((row, index) => ({
               dialogue_ids: [row.id],
               template:
@@ -174,6 +206,13 @@ describe("designShots", () => {
     expect(sentInput?.adjacent_context.next?.dialogue_prefix).toBe("2049");
     expect(result.shots[4].kind).toBe("low-angle");
     expect(result.analysis?.dramaticGoal).toContain("钥匙");
+    expect(result.soundEffects).toEqual([
+      expect.objectContaining({
+        dialogueId: "204803",
+        assetName: "A_SFX_Dialog_516918",
+        description: expect.stringContaining("报警"),
+      }),
+    ]);
     expect(result.participants[0].position).toEqual([-2.05, 0, -0.18]);
     expect(result.participants[0].facingTarget).toEqual([
       2.05,

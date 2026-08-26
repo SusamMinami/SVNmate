@@ -207,18 +207,18 @@ function subjectFacing(
   participants: DialogueParticipant[],
   lookTarget?: DialogueParticipant,
 ): Vec2 {
-  if (lookTarget) {
-    return normalize({
-      x: lookTarget.position[0] - subject.position[0],
-      z: lookTarget.position[2] - subject.position[2],
-    });
-  }
   const explicit = {
     x: subject.facingTarget[0] - subject.position[0],
     z: subject.facingTarget[2] - subject.position[2],
   };
   if (length(explicit) >= 0.05) {
     return normalize(explicit);
+  }
+  if (lookTarget) {
+    return normalize({
+      x: lookTarget.position[0] - subject.position[0],
+      z: lookTarget.position[2] - subject.position[2],
+    });
   }
   const nearest = participants
     .filter((participant) => participant.slot !== subject.slot)

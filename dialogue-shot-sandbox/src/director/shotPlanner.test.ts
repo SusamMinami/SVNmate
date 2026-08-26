@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { DialogueSequence, Vec3 } from "../types";
 import { demoDatabase } from "../data/demo";
 import { findDialogueSequence } from "../data/dialogueRepository";
 import {
@@ -171,8 +172,8 @@ describe("createShotPlan", () => {
     );
 
     expect(singleShots.map((shot) => shot.visualSubjectSlot)).toEqual([
-      "B",
       "A",
+      "B",
     ]);
     for (const shot of singleShots) {
       expect(shot.projection.subjectFaceAngle).toBeLessThanOrEqual(45);
@@ -187,6 +188,52 @@ describe("createShotPlan", () => {
     }
     expect(shots.at(-1)?.label).toBe("双人关系全景");
     expect(shots.at(-1)?.coverageIntent).toBe("relationship");
+  });
+
+  it("plans supported turns from BP facing and carries them into later shots", () => {
+    const positions: Vec3[] = [
+      [-1, 0, 0],
+      [1, 0, 0],
+    ];
+    const facingTargets: Vec3[] = [
+      [-1, 0, -2],
+      [1, 0, -2],
+    ];
+    const blueprintSequence: DialogueSequence = {
+      ...sequence,
+      participants: sequence.participants.map((participant, index) => ({
+        ...participant,
+        canTurn: true,
+        modelIndex: index,
+        position: positions[index],
+        facingTarget: facingTargets[index],
+        positionSource: "blueprint" as const,
+      })),
+    };
+    const preview = createShotPreview(blueprintSequence, {
+      preserveInputPositions: true,
+    });
+
+    expect(preview.shots[0].actorActions).toEqual([
+      expect.objectContaining({
+        participantSlot: "A",
+        angleDegrees: 90,
+      }),
+      expect.objectContaining({
+        participantSlot: "B",
+        angleDegrees: -90,
+      }),
+    ]);
+    expect(
+      preview.shots.flatMap((shot) =>
+        shot.actorActions.map((action) => Math.abs(action.angleDegrees)),
+      ),
+    ).toEqual(expect.arrayContaining([90]));
+    expect(
+      preview.shots
+        .filter((shot) => shot.projection.subjectFaceAngle !== null)
+        .every((shot) => (shot.projection.subjectFaceAngle ?? 180) <= 45.1),
+    ).toBe(true);
   });
 
   it("keeps adjacent 2048 camera directions at least 30 degrees apart", () => {
@@ -310,7 +357,7 @@ describe("createShotPlan", () => {
     const groupShots = groupPreview.shots;
 
     expect(groupShots[0].kind).toBe("master");
-    expect(groupShots[0].label).toBe("双人建立镜头");
+    expect(groupShots[0].label).toBe("3人群像建立镜头");
     expect(groupShots.slice(0, 3).every((shot) => shot.kind === "master"))
       .toBe(true);
     expect(groupShots.map((shot) => shot.coverageIntent)).toEqual([
@@ -319,7 +366,7 @@ describe("createShotPlan", () => {
       "reestablish_geography",
     ]);
     expect(groupPreview.sequence.participants.map((participant) => participant.entryIndex))
-      .toEqual([0, 0, 2, 3]);
+      .toEqual([0, 0, 0, 2, 3]);
     const participantCEntry = groupShots.find((shot) =>
       shot.dialogueIds.includes("309903"),
     );
@@ -361,8 +408,8 @@ describe("createShotPlan", () => {
     );
 
     expect(relationshipShots.map((shot) => shot.axis.id)).toEqual([
-      "C-D",
-      "A-D",
+      "D-E",
+      "B-E",
     ]);
     expect(
       relationshipShots.every(
@@ -460,14 +507,14 @@ describe("createShotPlan", () => {
           participant.entryIndex <= 2 &&
           (participant.exitIndex === null || participant.exitIndex >= 2),
       ).map((participant) => participant.slot),
-    ).toEqual(["A", "B", "C"]);
+    ).toEqual(["A", "B", "C", "D"]);
     expect(
       participants.filter(
         (participant) =>
           participant.entryIndex <= 3 &&
           (participant.exitIndex === null || participant.exitIndex >= 3),
       ).map((participant) => participant.slot),
-    ).toEqual(["A", "B", "D"]);
+    ).toEqual(["A", "B", "D", "E"]);
     const departureShots = resolveShotDecisions(
       stagedSequence,
       createRuleDecisions(input, blocking),
@@ -481,6 +528,7 @@ describe("createShotPlan", () => {
       "A",
       "B",
       "D",
+      "E",
     ]);
   });
 });

@@ -128,6 +128,92 @@ class FakeUnrealConnection implements UnrealInvoker {
   }
 }
 
+class FakeFormationConnection implements UnrealInvoker {
+  closed = false;
+
+  async connect(): Promise<void> {}
+
+  async invoke(
+    action: string,
+    args: Record<string, unknown>,
+  ): Promise<unknown> {
+    if (action === "bp.get_blueprint_by_path") {
+      return "Blueprint_BP_736300";
+    }
+    if (action === "asset.asset_search") {
+      return [
+        "736300 (SeriaDialogGraph) [/Game/Test/736300.736300]",
+      ];
+    }
+    if (action === "asset.get_asset_by_path") {
+      return "DialogGraph_736300";
+    }
+    if (action !== "reflect.read_object_property") {
+      return true;
+    }
+    const object = String(args.ThisPtr);
+    const property = String(args.PropertyName);
+    if (
+      object.endsWith(":SimpleConstructionScript_0") &&
+      property === "AllNodes"
+    ) {
+      return ["SCS_Node_0", "SCS_Node_1"];
+    }
+    if (object.startsWith("SCS_Node_")) {
+      const index = Number(object.at(-1));
+      if (property === "InternalVariableName") {
+        return String(index);
+      }
+      if (property === "ComponentClass") {
+        return "/Script/Engine.ChildActorComponent";
+      }
+      if (property === "ComponentTemplate") {
+        return `Template_${index}`;
+      }
+      if (property === "VariableGuid") {
+        return `guid-${index}`;
+      }
+    }
+    if (object.startsWith("Template_")) {
+      const index = Number(object.at(-1));
+      if (property === "RelativeLocation") {
+        return { X: index * 100, Y: index * 50, Z: 100 };
+      }
+      if (property === "RelativeRotation") {
+        return { Pitch: 0, Yaw: index === 0 ? 160 : 60, Roll: 0 };
+      }
+      if (property === "RelativeScale3D") {
+        return { X: 1, Y: 1, Z: 1 };
+      }
+      if (property === "ChildActorClass") {
+        return index === 0
+          ? "/Game/Seria/Characters/Eric/BP_Eric.BP_Eric_C"
+          : "/Game/Seria/NPC/N103_Ansel/BP_N103_Ansel.BP_N103_Ansel_C";
+      }
+    }
+    if (object.endsWith(":Dialog Graph") && property === "Nodes") {
+      return ["SeriaEdDialogGraphNode_0"];
+    }
+    if (
+      object === "SeriaEdDialogGraphNode_0" &&
+      property === "DialogGraphNodeData"
+    ) {
+      return "StartData";
+    }
+    if (object === "StartData" && property === "SeriaDialogGraphNodeType") {
+      return "EStart";
+    }
+    if (object === "StartData" && property === "DialogModels") {
+      return ["player", "N103_Ansel"];
+    }
+    throw new Error(`Unhandled fake call: ${action} ${object} ${property}`);
+  }
+
+  close(): void {
+    this.closed = true;
+  }
+}
+
 class FakeBlueprintPopulateConnection implements UnrealInvoker {
   readonly calls: Array<{
     action: string;
@@ -1291,6 +1377,35 @@ describe("UE editor selection", () => {
 });
 
 describe("Blueprint formation lookup", () => {
+  it("reads numeric slot rotations and dialogue model registration", async () => {
+    const connection = new FakeFormationConnection();
+
+    const result = await readBlueprintFormation(
+      {
+        dialogueId: "7363",
+        startId: "736300",
+        formationClassPath:
+          "/Game/Seria/Task/Mod/MainQuest/Cha9/BP_736300.BP_736300_C",
+      },
+      () => connection,
+    );
+
+    expect(result.snapshot).toMatchObject({
+      dialogueModels: ["player", "N103_Ansel"],
+      slots: [
+        {
+          modelIndex: 0,
+          transform: { rotation: { pitch: 0, yaw: 160, roll: 0 } },
+        },
+        {
+          modelIndex: 1,
+          transform: { rotation: { pitch: 0, yaw: 60, roll: 0 } },
+        },
+      ],
+    });
+    expect(connection.closed).toBe(true);
+  });
+
   it.each(["", "None", "null", "nullptr", "0", null, false])(
     "treats Unreal empty object value %p as a missing Blueprint",
     async (blueprintResult) => {

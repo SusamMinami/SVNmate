@@ -14,9 +14,14 @@ Blueprint 站位查询本身只读。用户确认基于 BP 站位生成的分镜
 3. 当 Formation 为空时，通过 UE Asset Registry 搜索
    `BP_<开始节点ID>`。
 4. 读取 Blueprint SCS 中数字命名的 `ChildActorComponent`。
-5. 使用开始节点的 `DialogStart.Model` 筛选有效模型槽。
+5. 读取对话资产实际保存的 `DialogModels`，与 BP 数字槽共同确定场内角色；
+   CSV `DialogStart.Model` 仅作为离线回退。
 6. 将 BP 站位与自动站位同时展示，由用户选择。
 7. 用户确认站位后，才使用所选站位计算角色关系轴和镜头。
+
+完成首次选择后，工作台保留 BP、规则导演以及随后完成的 AI 占位方案。左侧状态
+只显示 `BP_xxxx00` 等简短方案名，点击切换按钮可重新打开对比并直接载入已有
+方案，不重复读取 UE 或调用 AI。
 
 BP 查询期间会立即显示新对话的梗概、角色和完整台词，但不会先把自动站位
 规则分镜写入主画布，因此一次分析只会展示最终选定站位生成的方案。当前
@@ -41,6 +46,7 @@ Blueprint 不存在、UE 未启动、OmniMcpCore 未连接、桥接异常、查�
 
 - `DialogStart.Formation`：Blueprint Generated Class 路径。
 - `DialogStart.Model`：按模型槽位索引排列的模型名称；`None` 表示该槽未启用。
+  正式使用 BP 时以 UE 对话资产中的 `DialogModels` 回读值为准。
 
 模型数组的索引与 Blueprint SCS 中数字命名的组件一致。例如：
 
@@ -96,6 +102,11 @@ instanceId = bp:<BlueprintAssetPath>:<ModelIndex>
 这是必要约束。同一 NPC ID 或同一模型可以同时出现在多个 BP 槽位中，不能
 用 NPC ID 作为 React key、空间索引或 UE 回写目标。
 
+场内角色数量由有效数字 BP 槽决定，不由台词说话者数量决定。`0` 号槽必须
+映射为玩家；未发言 NPC 仍保留为场内角色，并参与群像覆盖、遮挡和关系轴计算。
+身份依次使用节点显式模型槽、`DialogModels` 和模型类路径映射；无法映射 NPC
+表的有效槽也保留为可见的未识别角色，不能静默删除。
+
 对话行优先通过 `AM_Talk` 推断出的模型索引绑定说话实例；没有明确槽位时，
 沿用该 NPC 最近一次已确定的说话实例，最后才回退到第一个候选实例。
 
@@ -111,7 +122,14 @@ Three.z = -UE.x / 100
 ```
 
 导入后以有效角色的中心点平移到沙盘原点，只改变预览坐标，不改变 UE 原始
-Transform。Yaw 被转换为角色朝向向量。
+Transform。Yaw 被转换为角色朝向向量，镜头求解和正面偏角验收都使用该真实
+朝向，不再默认把 `look_target` 当成角色已经面向的位置。
+
+需要改变对话视线时，演员调度只从现有
+`AM_TurnLeft/Right45/90/180` 中选择离当前目标方向最近的离散动作，并让后续
+镜头继承转身后的朝向。`NPC.ifturn=false` 时不规划转身，而是保留 BP 朝向并
+调整机位；相机导出暂不改写 `CharacterBehaviours`，弹窗会提示用户按演员动作
+清单在 UE 中配置。后续可在读取每个 NPC 的可用 Montage 后替换当前通用动作集。
 
 ## 通信
 

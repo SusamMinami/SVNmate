@@ -4,6 +4,7 @@ import {
   Layers3,
   LoaderCircle,
   Upload,
+  Volume2,
   X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -11,14 +12,17 @@ import type { DialogueStoryboardExportPreview } from "../types";
 
 interface StoryboardExportModalProps {
   preview: DialogueStoryboardExportPreview;
-  mode: "current" | "all";
+  mode: "current" | "all" | "sound";
   currentShotNumber: number;
   busy: boolean;
   error: string;
   result: string;
   onClose: () => void;
   onShowAll: () => void;
-  onConfirm: (selectedShotIndexes: number[]) => void;
+  onConfirm: (
+    selectedShotIndexes: number[],
+    selectedSoundEffectIndexes: number[],
+  ) => void;
 }
 
 const ACTION_LABELS: Record<
@@ -28,6 +32,17 @@ const ACTION_LABELS: Record<
   create: "新增",
   replace: "覆盖",
   clear: "清空旧镜头",
+  unchanged: "无需修改",
+};
+
+const SOUND_EFFECT_ACTION_LABELS: Record<
+  NonNullable<
+    DialogueStoryboardExportPreview["soundEffects"]
+  >[number]["action"],
+  string
+> = {
+  add: "新增",
+  replace: "替换",
   unchanged: "无需修改",
 };
 
@@ -46,15 +61,31 @@ export function StoryboardExportModal({
   const [selectedShotIndexes, setSelectedShotIndexes] = useState<number[]>(
     () => Array.from({ length: preview.shotCount }, (_, index) => index),
   );
+  const previewSoundEffects = preview.soundEffects ?? [];
+  const [selectedSoundEffectIndexes, setSelectedSoundEffectIndexes] =
+    useState<number[]>(() =>
+      previewSoundEffects.map((soundEffect) => soundEffect.soundEffectIndex),
+    );
   const selectedShots = new Set(selectedShotIndexes);
+  const selectedSoundEffects = new Set(selectedSoundEffectIndexes);
   const selectedNodes = preview.nodes.filter((node) =>
     selectedShots.has(node.shotIndex),
   );
   const changedNodes = selectedNodes.filter(
     (node) => node.action !== "unchanged",
   );
+  const selectedSoundEffectRows = previewSoundEffects.filter((soundEffect) =>
+    selectedSoundEffects.has(soundEffect.soundEffectIndex),
+  );
+  const changedSoundEffects = selectedSoundEffectRows.filter(
+    (soundEffect) => soundEffect.action !== "unchanged",
+  );
   const selectedBlockedReasons = [
-    ...preview.globalBlockedReasons,
+    ...preview.globalBlockedReasons.filter(
+      (reason) =>
+        selectedShotIndexes.length > 0 ||
+        !reason.startsWith("Formation BP"),
+    ),
     ...preview.shots
       .filter((shot) => selectedShots.has(shot.shotIndex))
       .flatMap((shot) => shot.blockedReasons),
@@ -63,17 +94,37 @@ export function StoryboardExportModal({
     (shot) =>
       selectedShots.has(shot.shotIndex) && !shot.projectionValid,
   ).length;
-  const selectedWarnings = selectedInvalidShotCount
-    ? [
+  const selectedActorActionCount = preview.shots
+    .filter((shot) => selectedShots.has(shot.shotIndex))
+    .reduce((total, shot) => total + (shot.actorActionCount ?? 0), 0);
+  const selectedWarnings = [
+    ...(selectedInvalidShotCount
+      ? [
         `${selectedInvalidShotCount} 个镜头的投影验收未通过，确认后仍可导出`,
       ]
-    : [];
+      : []),
+    ...(selectedActorActionCount > 0
+      ? [
+          `选中镜头包含 ${selectedActorActionCount} 个演员转身动作；当前导出只写相机，请按演员动作清单配置 UE 动作`,
+        ]
+      : []),
+  ];
   const blocked = selectedBlockedReasons.length > 0;
   const allSelected = selectedShotIndexes.length === preview.shotCount;
+  const allSoundEffectsSelected =
+    previewSoundEffects.length > 0 &&
+    selectedSoundEffectIndexes.length === previewSoundEffects.length;
+  const hasSelection =
+    selectedShotIndexes.length > 0 || selectedSoundEffectIndexes.length > 0;
 
   useEffect(() => {
     setSelectedShotIndexes(
       Array.from({ length: preview.shotCount }, (_, index) => index),
+    );
+    setSelectedSoundEffectIndexes(
+      previewSoundEffects.map(
+        (soundEffect) => soundEffect.soundEffectIndex,
+      ),
     );
     setConfirmed(false);
   }, [preview.reviewToken]);
@@ -96,6 +147,26 @@ export function StoryboardExportModal({
     setConfirmed(false);
   }
 
+  function selectAllSoundEffects(checked: boolean) {
+    setSelectedSoundEffectIndexes(
+      checked
+        ? previewSoundEffects.map(
+            (soundEffect) => soundEffect.soundEffectIndex,
+          )
+        : [],
+    );
+    setConfirmed(false);
+  }
+
+  function selectSoundEffect(soundEffectIndex: number, checked: boolean) {
+    setSelectedSoundEffectIndexes((current) =>
+      checked
+        ? [...current, soundEffectIndex].sort((left, right) => left - right)
+        : current.filter((index) => index !== soundEffectIndex),
+    );
+    setConfirmed(false);
+  }
+
   return (
     <div className="modal-backdrop storyboard-export-backdrop" role="presentation">
       <section
@@ -112,9 +183,11 @@ export function StoryboardExportModal({
             <div>
               <small>UE Dialog Graph 写入预检</small>
               <h2 id="storyboard-export-title">
-                {mode === "current"
-                  ? `导出当前镜头 ${String(currentShotNumber).padStart(2, "0")}`
-                  : "导出全部分镜"}
+                {mode === "sound"
+                  ? `写入当前分镜音效 ${String(currentShotNumber).padStart(2, "0")}`
+                  : mode === "current"
+                    ? `导出当前镜头 ${String(currentShotNumber).padStart(2, "0")}`
+                    : "导出全部分镜"}
               </h2>
             </div>
           </div>
@@ -156,7 +229,9 @@ export function StoryboardExportModal({
             <div>
               <dt>分镜</dt>
               <dd>
-                {mode === "current"
+                {mode === "sound"
+                  ? "不导出"
+                  : mode === "current"
                   ? String(currentShotNumber).padStart(2, "0")
                   : `${selectedShotIndexes.length} / ${preview.shotCount}`}
               </dd>
@@ -166,8 +241,15 @@ export function StoryboardExportModal({
               <dd>{changedNodes.length}</dd>
             </div>
             <div>
+              <dt>音效</dt>
+              <dd>
+                {selectedSoundEffectIndexes.length} /{" "}
+                {previewSoundEffects.length}
+              </dd>
+            </div>
+            <div>
               <dt>启用相机</dt>
-              <dd>{preview.cameraName}</dd>
+              <dd>{preview.cameraName || "不写相机"}</dd>
             </div>
           </dl>
           <code title={preview.dialogueAssetPath}>
@@ -208,88 +290,178 @@ export function StoryboardExportModal({
         )}
 
         <div className="storyboard-export-table-wrap">
-          <table className="storyboard-export-table">
-            <thead>
-              <tr>
-                {mode === "all" && (
-                  <th className="storyboard-export-table__select">
-                    <input
-                      type="checkbox"
-                      aria-label="选择全部镜头"
-                      title="选择全部镜头"
-                      checked={allSelected}
-                      disabled={busy || Boolean(result)}
-                      onChange={(event) =>
-                        selectAllShots(event.target.checked)
-                      }
-                    />
-                  </th>
-                )}
-                <th className="storyboard-export-table__shot">镜头</th>
-                <th className="storyboard-export-table__dialogue">台词节点</th>
-                <th className="storyboard-export-table__role">节点用途</th>
-                <th className="storyboard-export-table__camera">当前相机</th>
-                <th className="storyboard-export-table__camera">导出后</th>
-                <th className="storyboard-export-table__action">处理</th>
-              </tr>
-            </thead>
-            <tbody>
-              {preview.nodes.map((node) => (
-                <tr
-                  key={node.dialogueId}
-                  data-action={node.action}
-                  data-selected={selectedShots.has(node.shotIndex)}
-                >
+          {preview.nodes.length > 0 && (
+            <section className="storyboard-export-table-section">
+            <div className="storyboard-export-table-section__title">
+              <Layers3 size={14} />
+              <strong>镜头数据</strong>
+              <small>{selectedShotIndexes.length} 项已选</small>
+            </div>
+            <table className="storyboard-export-table">
+              <thead>
+                <tr>
                   {mode === "all" && (
-                    <td className="storyboard-export-table__select">
-                      {node.role === "shot_start" && (
+                    <th className="storyboard-export-table__select">
+                      <input
+                        type="checkbox"
+                        aria-label="选择全部镜头"
+                        title="选择全部镜头"
+                        checked={allSelected}
+                        disabled={busy || Boolean(result)}
+                        onChange={(event) =>
+                          selectAllShots(event.target.checked)
+                        }
+                      />
+                    </th>
+                  )}
+                  <th className="storyboard-export-table__shot">镜头</th>
+                  <th className="storyboard-export-table__dialogue">台词节点</th>
+                  <th className="storyboard-export-table__role">节点用途</th>
+                  <th className="storyboard-export-table__camera">当前相机</th>
+                  <th className="storyboard-export-table__camera">导出后</th>
+                  <th className="storyboard-export-table__action">处理</th>
+                </tr>
+              </thead>
+              <tbody>
+                {preview.nodes.map((node) => (
+                  <tr
+                    key={node.dialogueId}
+                    data-action={node.action}
+                    data-selected={selectedShots.has(node.shotIndex)}
+                  >
+                    {mode === "all" && (
+                      <td className="storyboard-export-table__select">
+                        {node.role === "shot_start" && (
+                          <input
+                            type="checkbox"
+                            aria-label={`选择镜头 ${String(node.shotIndex + 1).padStart(2, "0")}`}
+                            checked={selectedShots.has(node.shotIndex)}
+                            disabled={busy || Boolean(result)}
+                            onChange={(event) =>
+                              selectShot(
+                                node.shotIndex,
+                                event.target.checked,
+                              )
+                            }
+                          />
+                        )}
+                      </td>
+                    )}
+                    <td>
+                      {node.role === "shot_start"
+                        ? String(
+                            mode === "current"
+                              ? currentShotNumber
+                              : node.shotIndex + 1,
+                          ).padStart(2, "0")
+                        : "↳"}
+                    </td>
+                    <td>
+                      <code>{node.dialogueId}</code>
+                    </td>
+                    <td>
+                      {node.role === "shot_start" ? "镜头起点" : "镜头延续"}
+                    </td>
+                    <td>
+                      <code>{node.existingCameraPosition || "空"}</code>
+                      <small>{node.existingMovementCount} 段运镜</small>
+                    </td>
+                    <td>
+                      <code>{node.desiredCameraPosition || "空"}</code>
+                      <small>{node.desiredMovementCount} 段运镜</small>
+                    </td>
+                    <td>
+                      <span className={`export-action export-action--${node.action}`}>
+                        {ACTION_LABELS[node.action]}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            </section>
+          )}
+
+          {previewSoundEffects.length > 0 && (
+            <section className="storyboard-export-table-section">
+              <div className="storyboard-export-table-section__title">
+                <Volume2 size={14} />
+                <strong>音效建议</strong>
+                <small>{selectedSoundEffectIndexes.length} 项已选</small>
+              </div>
+              <table className="storyboard-export-table storyboard-export-sound-table">
+                <thead>
+                  <tr>
+                    <th className="storyboard-export-table__select">
+                      <input
+                        type="checkbox"
+                        aria-label="选择全部音效"
+                        title="选择全部音效"
+                        checked={allSoundEffectsSelected}
+                        disabled={busy || Boolean(result)}
+                        onChange={(event) =>
+                          selectAllSoundEffects(event.target.checked)
+                        }
+                      />
+                    </th>
+                    <th className="storyboard-export-table__dialogue">台词节点</th>
+                    <th>推荐资产</th>
+                    <th>当前音效</th>
+                    <th className="storyboard-export-table__action">处理</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {previewSoundEffects.map((soundEffect) => (
+                    <tr
+                      key={`${soundEffect.dialogueId}-${soundEffect.assetName}`}
+                      data-action={soundEffect.action}
+                      data-selected={selectedSoundEffects.has(
+                        soundEffect.soundEffectIndex,
+                      )}
+                    >
+                      <td className="storyboard-export-table__select">
                         <input
                           type="checkbox"
-                          aria-label={`选择镜头 ${String(node.shotIndex + 1).padStart(2, "0")}`}
-                          checked={selectedShots.has(node.shotIndex)}
+                          aria-label={`选择音效 ${soundEffect.assetName}`}
+                          checked={selectedSoundEffects.has(
+                            soundEffect.soundEffectIndex,
+                          )}
                           disabled={busy || Boolean(result)}
                           onChange={(event) =>
-                            selectShot(
-                              node.shotIndex,
+                            selectSoundEffect(
+                              soundEffect.soundEffectIndex,
                               event.target.checked,
                             )
                           }
                         />
-                      )}
-                    </td>
-                  )}
-                  <td>
-                    {node.role === "shot_start"
-                      ? String(
-                          mode === "current"
-                            ? currentShotNumber
-                            : node.shotIndex + 1,
-                        ).padStart(2, "0")
-                      : "↳"}
-                  </td>
-                  <td>
-                    <code>{node.dialogueId}</code>
-                  </td>
-                  <td>
-                    {node.role === "shot_start" ? "镜头起点" : "镜头延续"}
-                  </td>
-                  <td>
-                    <code>{node.existingCameraPosition || "空"}</code>
-                    <small>{node.existingMovementCount} 段运镜</small>
-                  </td>
-                  <td>
-                    <code>{node.desiredCameraPosition || "空"}</code>
-                    <small>{node.desiredMovementCount} 段运镜</small>
-                  </td>
-                  <td>
-                    <span className={`export-action export-action--${node.action}`}>
-                      {ACTION_LABELS[node.action]}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                      </td>
+                      <td>
+                        <code>{soundEffect.dialogueId}</code>
+                      </td>
+                      <td>
+                        <code>{soundEffect.assetName}</code>
+                      </td>
+                      <td>
+                        <code>
+                          {soundEffect.existingAssetPath
+                            .split(/[./]/)
+                            .filter(Boolean)
+                            .at(-1) || "空"}
+                        </code>
+                      </td>
+                      <td>
+                        <span
+                          className={`export-action export-action--${soundEffect.action}`}
+                        >
+                          {SOUND_EFFECT_ACTION_LABELS[soundEffect.action]}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </section>
+          )}
         </div>
 
         <footer>
@@ -300,14 +472,14 @@ export function StoryboardExportModal({
               disabled={
                 busy ||
                 blocked ||
-                selectedShotIndexes.length === 0 ||
+                !hasSelection ||
                 Boolean(result)
               }
               onChange={(event) => setConfirmed(event.target.checked)}
             />
             <span>
-              已核对 {changedNodes.length} 个节点的覆盖内容，并确认写入后保存 UE
-              对话资产
+              已核对 {changedNodes.length} 个镜头节点和{" "}
+              {changedSoundEffects.length} 个音效，并确认写入后保存 UE 对话资产
             </span>
           </label>
           <div>
@@ -325,11 +497,16 @@ export function StoryboardExportModal({
               disabled={
                 busy ||
                 blocked ||
-                selectedShotIndexes.length === 0 ||
+                !hasSelection ||
                 !confirmed ||
                 Boolean(result)
               }
-              onClick={() => onConfirm(selectedShotIndexes)}
+              onClick={() =>
+                onConfirm(
+                  selectedShotIndexes,
+                  selectedSoundEffectIndexes,
+                )
+              }
             >
               {busy ? (
                 <LoaderCircle className="spin" size={16} />

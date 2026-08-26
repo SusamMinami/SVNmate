@@ -12,6 +12,7 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
+import type { SoundEffectCatalogSnapshot } from "../data/soundEffectCatalog";
 import type { LarkStatus } from "../lark/client";
 
 interface DesktopSetupModalProps {
@@ -21,8 +22,10 @@ interface DesktopSetupModalProps {
   larkLoading: boolean;
   larkStatus: LarkStatus | null;
   larkError: string;
+  soundEffectCatalog: SoundEffectCatalogSnapshot;
   onAuthorize: () => void;
   onRefreshLark: () => void;
+  onSyncSoundEffectCatalog: () => Promise<SoundEffectCatalogSnapshot>;
 }
 
 function updateLabel(snapshot: DesktopUpdateSnapshot): string {
@@ -51,8 +54,10 @@ export function DesktopSetupModal({
   larkLoading,
   larkStatus,
   larkError,
+  soundEffectCatalog: initialSoundEffectCatalog,
   onAuthorize,
   onRefreshLark,
+  onSyncSoundEffectCatalog,
 }: DesktopSetupModalProps) {
   const desktop = window.shotSandboxDesktop;
   const [status, setStatus] = useState(initialStatus);
@@ -62,10 +67,20 @@ export function DesktopSetupModal({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [uePort, setUePort] = useState(String(initialStatus.ueMcpPort));
+  const [soundEffectCatalog, setSoundEffectCatalog] = useState(
+    initialSoundEffectCatalog,
+  );
+  const [catalogBusy, setCatalogBusy] = useState(false);
+  const [catalogStatus, setCatalogStatus] = useState("");
+  const [catalogError, setCatalogError] = useState("");
   const baseMissingScopes =
     larkStatus?.baseMissingScopes ?? larkStatus?.missingScopes ?? [];
+  const docsMissingScopes =
+    larkStatus?.docsMissingScopes ?? larkStatus?.missingScopes ?? [];
   const larkReady =
     Boolean(larkStatus?.authorized) && baseMissingScopes.length === 0;
+  const docsReady =
+    Boolean(larkStatus?.authorized) && docsMissingScopes.length === 0;
 
   useEffect(() => {
     if (!desktop) {
@@ -74,6 +89,10 @@ export function DesktopSetupModal({
     void desktop.getUpdateSnapshot().then(setUpdate);
     return desktop.onUpdateState(setUpdate);
   }, [desktop]);
+
+  useEffect(() => {
+    setSoundEffectCatalog(initialSoundEffectCatalog);
+  }, [initialSoundEffectCatalog]);
 
   async function installIntegration() {
     if (!desktop) {
@@ -132,6 +151,31 @@ export function DesktopSetupModal({
       );
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function updateSoundEffectCatalog() {
+    if (!docsReady) {
+      onAuthorize();
+      return;
+    }
+    setCatalogBusy(true);
+    setCatalogStatus("");
+    setCatalogError("");
+    try {
+      const snapshot = await onSyncSoundEffectCatalog();
+      setSoundEffectCatalog(snapshot);
+      setCatalogStatus(
+        `已同步 ${snapshot.entries.length} 项，文档版本 ${snapshot.revisionId}`,
+      );
+    } catch (catalogSyncError) {
+      setCatalogError(
+        catalogSyncError instanceof Error
+          ? catalogSyncError.message
+          : "音效资料库同步失败",
+      );
+    } finally {
+      setCatalogBusy(false);
     }
   }
 
@@ -218,6 +262,47 @@ export function DesktopSetupModal({
                   <LogIn size={14} />
                 )}
                 {larkReady ? "刷新" : "登录"}
+              </button>
+            </div>
+            <div className={docsReady ? "" : "is-warning"}>
+              {catalogBusy ? (
+                <LoaderCircle className="spin" size={17} />
+              ) : docsReady ? (
+                <Database size={17} />
+              ) : (
+                <CircleAlert size={17} />
+              )}
+              <span>
+                <strong>音效资料库</strong>
+                <small>
+                  {catalogBusy
+                    ? "正在从飞书文档同步"
+                    : catalogError
+                      ? catalogError
+                      : catalogStatus ||
+                        `${soundEffectCatalog.entries.length} 项 · ${
+                          soundEffectCatalog.source === "lark"
+                            ? `飞书版本 ${soundEffectCatalog.revisionId}`
+                            : "内置版本"
+                        }`}
+                </small>
+              </span>
+              <button
+                type="button"
+                aria-label={
+                  docsReady ? "从飞书同步音效资料库" : "授权音效资料库"
+                }
+                disabled={catalogBusy || larkLoading}
+                onClick={() => void updateSoundEffectCatalog()}
+              >
+                {catalogBusy ? (
+                  <LoaderCircle className="spin" size={14} />
+                ) : docsReady ? (
+                  <RefreshCw size={14} />
+                ) : (
+                  <LogIn size={14} />
+                )}
+                {docsReady ? "同步" : "授权"}
               </button>
             </div>
             <div className={status.traeDetected ? "" : "is-warning"}>

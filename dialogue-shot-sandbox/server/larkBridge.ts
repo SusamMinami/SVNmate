@@ -5,6 +5,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import type { Plugin, ViteDevServer, PreviewServer } from "vite";
+import { SOUND_EFFECT_CATALOG_SOURCE } from "../src/data/soundEffectCatalog";
 import {
   DirectorInputSchema,
   MiraDirectorResponseSchema,
@@ -17,6 +18,10 @@ import {
   findRelevantStoryboardCases,
   saveStoryboardRevisionCases,
 } from "./storyboardCaseLibrary";
+import {
+  loadSoundEffectCatalog,
+  syncSoundEffectCatalog,
+} from "./soundEffectCatalogStore";
 
 const execFileAsync = promisify(execFile);
 
@@ -38,9 +43,14 @@ const BASE_REQUIRED_SCOPES = [
   "base:record:create",
   "base:record:update",
 ] as const;
+const DOC_REQUIRED_SCOPES = [
+  "docs:document.content:read",
+  "docx:document:readonly",
+] as const;
 const REQUIRED_SCOPES = [
   ...MIRA_REQUIRED_SCOPES,
   ...BASE_REQUIRED_SCOPES,
+  ...DOC_REQUIRED_SCOPES,
 ] as const;
 const MIRA_QUERY = process.env.MIRA_BOT_QUERY || "Mira";
 const COMMAND_TIMEOUT_MS = 30_000;
@@ -87,7 +97,9 @@ interface AuthStatusSnapshot {
   missingScopes: string[];
   miraMissingScopes: string[];
   baseMissingScopes: string[];
+  docsMissingScopes: string[];
   caseLibraryReady: boolean;
+  soundEffectCatalogReady: boolean;
   miraBot: MiraBot | null;
 }
 
@@ -298,9 +310,13 @@ async function authStatus(): Promise<AuthStatusSnapshot> {
     missingScopes: scopeStatus.missingScopes,
     miraMissingScopes: scopeStatus.miraMissingScopes,
     baseMissingScopes: scopeStatus.baseMissingScopes,
+    docsMissingScopes: scopeStatus.docsMissingScopes,
     caseLibraryReady:
       Boolean(data.verified && user?.verified) &&
       scopeStatus.baseMissingScopes.length === 0,
+    soundEffectCatalogReady:
+      Boolean(data.verified && user?.verified) &&
+      scopeStatus.docsMissingScopes.length === 0,
     miraBot: state.miraBot,
   };
 }
@@ -309,6 +325,7 @@ export function classifyLarkScopes(scopeText: string): {
   missingScopes: string[];
   miraMissingScopes: string[];
   baseMissingScopes: string[];
+  docsMissingScopes: string[];
 } {
   const scopes = new Set(scopeText.split(/\s+/).filter(Boolean));
   const miraMissingScopes = MIRA_REQUIRED_SCOPES.filter(
@@ -317,10 +334,48 @@ export function classifyLarkScopes(scopeText: string): {
   const baseMissingScopes = BASE_REQUIRED_SCOPES.filter(
     (scope) => !scopes.has(scope),
   );
+  const docsMissingScopes = DOC_REQUIRED_SCOPES.filter(
+    (scope) => !scopes.has(scope),
+  );
   return {
     missingScopes: REQUIRED_SCOPES.filter((scope) => !scopes.has(scope)),
     miraMissingScopes: [...miraMissingScopes],
     baseMissingScopes: [...baseMissingScopes],
+    docsMissingScopes: [...docsMissingScopes],
+  };
+}
+
+async function fetchSoundEffectDocument(): Promise<{
+  content: string;
+  revisionId: number;
+}> {
+  const envelope = await runLark(
+    [
+      "docs",
+      "+fetch",
+      "--doc",
+      SOUND_EFFECT_CATALOG_SOURCE,
+      "--doc-format",
+      "markdown",
+      "--as",
+      "user",
+      "--format",
+      "json",
+    ],
+    60_000,
+  );
+  const data = unwrapData<{
+    document?: {
+      content?: string;
+      revision_id?: number;
+    };
+  }>(envelope);
+  if (!data.document?.content) {
+    throw new Error("飞书文档没有返回音效目录内容");
+  }
+  return {
+    content: data.document.content,
+    revisionId: Number(data.document.revision_id ?? 0),
   };
 }
 
@@ -631,6 +686,26 @@ export async function routeLarkRequest(
   try {
     if (request.method === "GET" && url.pathname === "/api/lark/status") {
       sendJson(response, 200, { ok: true, data: await authStatus() });
+      return true;
+    }
+    if (
+      request.method === "GET" &&
+      url.pathname === "/api/lark/sound-effects/catalog"
+    ) {
+      sendJson(response, 200, {
+        ok: true,
+        data: await loadSoundEffectCatalog(),
+      });
+      return true;
+    }
+    if (
+      request.method === "POST" &&
+      url.pathname === "/api/lark/sound-effects/sync"
+    ) {
+      sendJson(response, 200, {
+        ok: true,
+        data: await syncSoundEffectCatalog(fetchSoundEffectDocument),
+      });
       return true;
     }
     if (request.method === "GET" && url.pathname === "/api/lark/mira/discover") {

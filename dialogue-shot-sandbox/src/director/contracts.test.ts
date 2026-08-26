@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   DirectorDecisionSchema,
   DirectorRevisionReflectionSchema,
+  DirectorSoundEffectCueSchema,
 } from "./contracts";
 
 const baseDecision = {
@@ -107,5 +108,37 @@ describe("DirectorRevisionReflectionSchema", () => {
         avoid_when: "明确使用短边压迫构图",
       }).success,
     ).toBe(true);
+  });
+});
+
+describe("DirectorSoundEffectCueSchema", () => {
+  it("accepts an existing catalog asset with its matching category", () => {
+    expect(
+      DirectorSoundEffectCueSchema.safeParse({
+        dialogue_id: "204803",
+        asset_name: "A_SFX_Dialog_516918",
+        category: "special",
+        reason: "系统错误节点需要明确报警提示。",
+      }).success,
+    ).toBe(true);
+  });
+
+  it("accepts runtime catalog assets and rejects incomplete cues", () => {
+    expect(
+      DirectorSoundEffectCueSchema.safeParse({
+        dialogue_id: "204803",
+        asset_name: "A_SFX_Dialog_RuntimeAdded",
+        category: "action",
+        reason: "运行时同步加入的资产。",
+      }).success,
+    ).toBe(true);
+    expect(
+      DirectorSoundEffectCueSchema.safeParse({
+        dialogue_id: "204803",
+        asset_name: "",
+        category: "special",
+        reason: "资产名为空。",
+      }).success,
+    ).toBe(false);
   });
 });

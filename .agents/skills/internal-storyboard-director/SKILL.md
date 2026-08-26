@@ -21,10 +21,14 @@ description: "Designs UE4 dialogue storyboards through the local storyboard MCP 
 3. 阅读返回的完整 `request`：
    - `outline`：场景梗概
    - `participants`：2-12 名角色、槽位及背景
+   - `participants[].initial_position` / `initial_yaw_degrees`：Formation
+     BP 中的真实初始位置与朝向
+   - `participants[].can_turn`：该角色是否允许规划转身动作
    - `participants[].first_dialogue_id`：角色第一次发言节点
    - `participants[].last_dialogue_id`：角色最后一次发言节点
    - `dialogue`：按剧情顺序排列的台词
    - `adjacent_context.previous/next`：当前四位 ID 前一段和后一段对话
+   - `sound_effect_catalog`：允许推荐的现有音效资产、分类和用途描述
    - `constraints.supported_templates`：允许的镜头模板
 4. 分析戏剧目标、情绪推进、关系变化、信息揭示和视觉节奏。
 5. 根据角色关系、权力状态和当前事件设计语义站位。
@@ -87,6 +91,12 @@ description: "Designs UE4 dialogue storyboards through the local storyboard MCP 
 - 预判每个镜头中的人物投影，避免重要角色互相遮挡或堆叠。
 - 普通对话的单人镜头优先呈现主体正面或四分之三正面；侧面角度只用于
   明确的对峙、疏离、隐藏或观察意图。
+- 使用 BP 站位时不得假设角色天然朝向 `look_target`。先根据
+  `initial_yaw_degrees` 判断真实朝向；需要改变视线时，只允许使用
+  `constraints.supported_actor_turn_degrees` 中的左右 45°、90°、180°
+  离散转身。`can_turn=false` 的角色不得规划转身，应调整机位或构图。
+- 转身属于演员动作和镜头连续性的一部分，应在角色开始交流或视觉焦点变化的
+  镜头中完成，后续镜头继承新朝向；不得每次切镜都让角色无理由来回转身。
 - `camera_height=eye` 是中性、平等和客观的默认角度；`low` 用于权力、
   威胁或弱者视点，`high` 用于脆弱、受困、规模或环境压倒人物。高低角
   的含义必须结合剧情，不能机械等同于强弱。
@@ -164,6 +174,14 @@ description: "Designs UE4 dialogue storyboards through the local storyboard MCP 
   对角关系分离轮廓。
 - 群像通过前后层次与横向间距保持轮廓分离，单人镜头无需强行容纳全员。
 - 不输出 XYZ 坐标；镜头沙盘会把语义模板转换为 Three.js 机位。
+- 分析环境底声、画外事件、角色脚步和明确动作；只有
+  `sound_effect_catalog` 中存在足够匹配的资产时才写入
+  `sound_effects`，不得编造资产或为了凑数推荐。
+- 每条音效建议必须绑定当前 `dialogue` 中的一个 `dialogue_id`，并原样填写
+  目录中的 `asset_name` 与 `category`。每个节点只推荐一个最贴切资产，
+  整场最多 16 项。
+- 不输出或修改音效延迟；导出时保留节点原有 `DelayTime`。目录没有合适资产
+  时返回空数组。
 - `blocking.placements` 必须按 `participants` 原顺序覆盖每个角色一次。
 - 每个 placement 必须设置 `entry_dialogue_id`；它可以早于角色的
   `first_dialogue_id`，但不能晚于角色第一次发言。
@@ -250,6 +268,14 @@ description: "Designs UE4 dialogue storyboards through the local storyboard MCP 
       "intent": "该镜头推动叙事的原因"
     }
   ],
+  "sound_effects": [
+    {
+      "dialogue_id": "当前对话中的触发节点 ID",
+      "asset_name": "必须来自 sound_effect_catalog",
+      "category": "action",
+      "reason": "画面事件与该已有资产的匹配依据"
+    }
+  ],
   "revision_reflections": [
     {
       "shot_index": 1,
@@ -265,6 +291,8 @@ description: "Designs UE4 dialogue storyboards through the local storyboard MCP 
 
 `revision_reflections` 只在投影返修提交时填写。它记录可复用的事后结论，
 不记录或展开模型推理过程。
+
+`sound_effects` 没有合适推荐时填写空数组；投影返修时保留上一版建议。
 
 `formation` 只能使用：
 

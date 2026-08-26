@@ -33,6 +33,7 @@ export interface StoryboardTask {
   claimedAt?: string;
   cacheKey?: string;
   cacheSourceRequestId?: string;
+  cachePropagationDisabled?: boolean;
   input: DirectorInput;
   result?: MiraDirectorResponse;
   error?: string;
@@ -45,7 +46,7 @@ const PROCESSING_LEASE_MS = 20 * 60_000;
 const TASK_LOCK_TIMEOUT_MS = 5_000;
 const TASK_LOCK_STALE_MS = 30_000;
 export const STORYBOARD_CACHE_POLICY =
-  "shot-plan.v5:camera-language-v4-hidden-ui-filter";
+  "shot-plan.v5:camera-language-v4-sound-effects-v2";
 
 function taskDirectory(): string {
   return join(storyboardRuntimeRoot(), ".storyboard-data", "tasks");
@@ -185,7 +186,10 @@ async function completeMatchingActiveTasks(
   cacheKey: string,
   source: StoryboardTask,
 ): Promise<void> {
-  if (source.result?.status !== "ready") {
+  if (
+    source.result?.status !== "ready" ||
+    source.cachePropagationDisabled
+  ) {
     return;
   }
   const timestamp = new Date().toISOString();
@@ -194,6 +198,7 @@ async function completeMatchingActiveTasks(
       .filter(
         (task) =>
           task.requestId !== source.requestId &&
+          !task.cachePropagationDisabled &&
           (task.status === "pending" || task.status === "processing") &&
           taskCacheKey(task) === cacheKey,
       )
@@ -225,6 +230,7 @@ export async function getStoryboardTask(
 
 export async function createStoryboardTask(
   rawInput: unknown,
+  options: { forceRegenerate?: boolean } = {},
 ): Promise<StoryboardTask> {
   const input = DirectorInputSchema.parse(rawInput) as DirectorInput;
   const cacheKey = storyboardInputCacheKey(input);
@@ -232,37 +238,42 @@ export async function createStoryboardTask(
   const existing = tasks.find(
     (task) => task.requestId === input.request_id,
   );
-  const cached = tasks
-    .filter(
-      (task) =>
-        task.status === "completed" &&
-        task.result?.status === "ready" &&
-        task.cacheKey === cacheKey,
-    )
-    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
-  if (cached) {
-    cached.cacheKey = cacheKey;
-    await completeMatchingActiveTasks(tasks, cacheKey, cached);
-    if (
-      existing?.status === "pending" ||
-      existing?.status === "processing"
-    ) {
-      return (await getStoryboardTask(existing.requestId)) ?? cached;
+  if (options.forceRegenerate && existing) {
+    throw new Error("强制重新生成必须使用新的 request_id");
+  }
+  if (!options.forceRegenerate) {
+    const cached = tasks
+      .filter(
+        (task) =>
+          task.status === "completed" &&
+          task.result?.status === "ready" &&
+          task.cacheKey === cacheKey,
+      )
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
+    if (cached) {
+      cached.cacheKey = cacheKey;
+      await completeMatchingActiveTasks(tasks, cacheKey, cached);
+      if (
+        existing?.status === "pending" ||
+        existing?.status === "processing"
+      ) {
+        return (await getStoryboardTask(existing.requestId)) ?? cached;
+      }
+      return existing?.status === "completed" ? existing : cached;
     }
-    return existing?.status === "completed" ? existing : cached;
-  }
-  if (existing) {
-    return existing;
-  }
-  const active = tasks
-    .filter(
-      (task) =>
-        (task.status === "pending" || task.status === "processing") &&
-        taskCacheKey(task) === cacheKey,
-    )
-    .sort((left, right) => left.createdAt.localeCompare(right.createdAt))[0];
-  if (active) {
-    return active;
+    if (existing) {
+      return existing;
+    }
+    const active = tasks
+      .filter(
+        (task) =>
+          (task.status === "pending" || task.status === "processing") &&
+          taskCacheKey(task) === cacheKey,
+      )
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt))[0];
+    if (active) {
+      return active;
+    }
   }
   const timestamp = new Date().toISOString();
   const task: StoryboardTask = {
@@ -271,6 +282,7 @@ export async function createStoryboardTask(
     createdAt: timestamp,
     updatedAt: timestamp,
     cacheKey,
+    cachePropagationDisabled: options.forceRegenerate || undefined,
     input,
   };
   await writeTask(task);
@@ -613,6 +625,30 @@ export async function completeStoryboardTask(
       throw new Error(
         "shots 必须按原顺序覆盖所有 dialogue_id，且每个 ID 只能出现一次",
       );
+    }
+    const catalogKeys = new Set(
+      task.input.sound_effect_catalog.map(
+        (entry) => `${entry.category}:${entry.asset_name}`,
+      ),
+    );
+    const soundEffectDialogueIds = new Set<string>();
+    for (const cue of result.sound_effects) {
+      if (!dialogueIndexById.has(cue.dialogue_id)) {
+        throw new Error(
+          `音效 ${cue.asset_name} 使用了未知台词节点 ${cue.dialogue_id}`,
+        );
+      }
+      if (!catalogKeys.has(`${cue.category}:${cue.asset_name}`)) {
+        throw new Error(
+          `音效 ${cue.asset_name} 不在本次导演请求的资料库中`,
+        );
+      }
+      if (soundEffectDialogueIds.has(cue.dialogue_id)) {
+        throw new Error(
+          `台词节点 ${cue.dialogue_id} 只能推荐一个音效`,
+        );
+      }
+      soundEffectDialogueIds.add(cue.dialogue_id);
     }
     const openingShots = validatedShots.slice(0, 3);
     if (

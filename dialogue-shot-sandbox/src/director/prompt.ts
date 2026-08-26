@@ -54,10 +54,11 @@ export function buildDirectorPrompt(
       `request_id 必须原样返回：${input.request_id}`,
       "只输出完整的 shot-plan.v5 JSON，不要 Markdown 或解释文字。",
       "保留未列出镜头的台词分组和设计，只重新设计失败镜头（failed_shots）；返回结果仍须按原顺序覆盖每个 dialogue_id 一次。",
+      "保留上一版 sound_effects；投影返修不改变音效建议。",
       "根据每条 warnings 调整失败镜头的模板、主体、注视对象、焦段、机位高度、运动或构图语义。不要只改 intent 文案。",
       "在顶层 revision_reflections 中为每个失败镜头输出一条简短的事后总结，包含 shot_index、summary、root_cause、strategy、applies_when、avoid_when；只记录可复用结论，不输出推理过程。",
       input.constraints.preserve_input_formation
-        ? "角色站位来自 UE Blueprint，不得修改或假设 blocking.position 会改变实际坐标。"
+        ? "角色站位和初始朝向来自 UE Blueprint，不得修改或假设 blocking.position 会改变实际坐标；需要改变视线时只能规划支持的离散转身动作。"
         : "可以调整 blocking，但所有角色位置必须唯一，并保持进出场节点有效。",
       "继续遵守 16:9 主构图、21:9 安全区域、关系轴同侧、视线空间、角色不重叠、运镜起止画面可读和相邻镜头至少 30 度变化等约束。",
       revision.referenceCases?.length
@@ -80,8 +81,9 @@ export function buildDirectorPrompt(
     "按约每秒 4-5 个汉字估算台词时长；普通镜头至少覆盖连续两句台词，不能仅因说话人变化就切镜。常规镜头尽量保持 4-8 秒；若新镜头不足两句或预计不足 4 秒，优先与相邻台词合并并保留当前机位，除非遇到进出场边界或明确的重大情绪、动作、信息转折。",
     "不要输出 XYZ 坐标，软件会根据语义模板计算机位。",
     input.constraints.preserve_input_formation
-      ? "输入角色包含从 UE Blueprint 读取的 initial_position 与 initial_facing_target。必须以这些现有站位分析遮挡、关系轴和镜头，不得假设 blocking.position 会改变实际坐标。"
+      ? "输入角色包含从 UE Blueprint 读取的 initial_position、initial_facing_target 和 initial_yaw_degrees。必须以这些现有站位与朝向分析遮挡、关系轴和镜头，不得假设 blocking.position 会改变实际坐标。"
       : "角色初始坐标由软件根据 blocking.position 的语义站位确定。",
+    `演员只能使用离散转身 ${input.constraints.supported_actor_turn_degrees?.join("、") ?? "-180、-90、-45、45、90、180"} 度；can_turn=false 的角色不得转身。镜头沙盘会根据每镜 subject/look_target 生成必要转身动作，不能假设角色已经精确朝向对话对象。`,
     "blocking 必须覆盖所有参与角色，每个角色只能出现一次，position 不能重复。",
     "facing 可以是另一个实际角色槽位或 group_center；不要让角色面向自己。",
     "每个 shot 必须设置 look_target。单人和带群镜头填写当前主体正在交流或注视的实际角色槽位；双人、群像建立镜头填写 group_center。",
@@ -92,6 +94,10 @@ export function buildDirectorPrompt(
     "exit_dialogue_id 不能早于 entry_dialogue_id，也不能早于角色的 last_dialogue_id。只有文本或上下文明确支持离场时才设置，不能仅因角色不再发言就推断其离场。",
     "角色进场或离场节点必须位于镜头边界，单个 shot 不得跨越任何角色的进场或离场变化。",
     "结合 adjacent_context.previous 和 adjacent_context.next 理解前因后果，但 shots 只能使用当前 dialogue 中的 dialogue_id。",
+    "分析场景环境、画外事件、角色脚步和明确动作，在确实匹配时从 sound_effect_catalog 推荐已有音效。不要为了填满列表而推荐，也不要编造目录外资产。",
+    "sound_effects 中每项必须使用当前 dialogue 的一个 dialogue_id 作为触发节点，并原样填写目录中的 asset_name 与 category。每个节点最多推荐一个最贴切资产，整场最多 16 项。",
+    "reason 只说明对话、画面事件与该资产的匹配依据；不要输出延迟时间，写入时保持对话节点原有 DelayTime。",
+    "若目录中没有足够匹配的现有资产，sound_effects 必须返回空数组；相似但包含明显多余事件的资产不应推荐。",
     "所有镜头以 16:9 为主构图，同时检查叠加 21:9 画框后的安全区域。",
     "关键角色的眼睛、表情、手势和叙事动作应尽量保留在 21:9 中央区域，避免被上下裁切。",
     "按当前站位预判镜头投影，不能让两个重要角色在画面中重叠成一人；必要时调整语义站位、主体景别或左右构图。",
@@ -185,6 +191,14 @@ export function buildDirectorPrompt(
             intent: "这个镜头如何推动叙事",
           },
         ],
+        sound_effects: [
+          {
+            dialogue_id: "触发音效的当前台词节点ID",
+            asset_name: "必须来自 sound_effect_catalog",
+            category: "action",
+            reason: "画面中的明确动作为什么与该已有资产匹配",
+          },
+        ],
       },
       null,
       2,
@@ -215,6 +229,7 @@ export function buildDirectorPrompt(
     `允许的 depth_of_field：${input.constraints.supported_depth_of_field.join(", ")}`,
     `允许的 camera_movement：${input.constraints.supported_camera_movements.join(", ")}`,
     "允许的 movement_intensity：none, subtle, moderate, strong",
+    "允许的音效 category：environment, footstep, action, special",
     "camera_roll_degrees 允许 -45 到 45；不用 Dutch angle 时必须填 0。",
     "允许的 required_context：npc_background, npc_relationship, scene_layout, story_before, story_after",
     "输入数据：",

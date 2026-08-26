@@ -1,0 +1,321 @@
+import {
+  Bot,
+  CircleCheck,
+  Database,
+  LoaderCircle,
+  RefreshCw,
+  ShieldAlert,
+  SquareTerminal,
+  X,
+} from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import type { DirectorMode } from "../director/contracts";
+import type { LarkStatus } from "../lark/client";
+import type { TraeCollaborationStatus } from "../trae/client";
+
+interface WorkspaceStatusHubProps {
+  mode: DirectorMode;
+  traeLoading: boolean;
+  traeStatus: TraeCollaborationStatus | null;
+  traeError: string;
+  larkLoading: boolean;
+  larkStatus: LarkStatus | null;
+  larkError: string;
+  collectRevisionCases: boolean;
+  onRefreshTrae: () => void;
+  onSetupTrae: () => void;
+  onRefreshLark: () => void;
+  onAuthorize: () => void;
+  onCollectRevisionCasesChange: (enabled: boolean) => void;
+}
+
+type StatusPanel = "provider" | "cases";
+
+function larkConnectionLabel(
+  loading: boolean,
+  status: LarkStatus | null,
+  error: string,
+): string {
+  if (loading) {
+    return "正在检查飞书";
+  }
+  if (error) {
+    return "飞书桥不可用";
+  }
+  if (!status?.authorized) {
+    return "飞书未登录";
+  }
+  if (status.missingScopes.length > 0) {
+    return `缺少 ${status.missingScopes.length} 项权限`;
+  }
+  if (!status.miraBot) {
+    return "待发现 Mira";
+  }
+  return `已连接 ${status.miraBot.name}`;
+}
+
+export function WorkspaceStatusHub({
+  mode,
+  traeLoading,
+  traeStatus,
+  traeError,
+  larkLoading,
+  larkStatus,
+  larkError,
+  collectRevisionCases,
+  onRefreshTrae,
+  onSetupTrae,
+  onRefreshLark,
+  onAuthorize,
+  onCollectRevisionCasesChange,
+}: WorkspaceStatusHubProps) {
+  const [openPanel, setOpenPanel] = useState<StatusPanel | null>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const miraMissingScopes =
+    larkStatus?.miraMissingScopes ?? larkStatus?.missingScopes ?? [];
+  const baseMissingScopes =
+    larkStatus?.baseMissingScopes ?? larkStatus?.missingScopes ?? [];
+  const traeConnected = Boolean(traeStatus?.connected);
+  const miraReady =
+    Boolean(larkStatus?.authorized) &&
+    miraMissingScopes.length === 0 &&
+    Boolean(larkStatus?.miraBot);
+  const caseLibraryReady =
+    larkStatus?.caseLibraryReady ??
+    (Boolean(larkStatus?.authorized) && baseMissingScopes.length === 0);
+  const providerIsTrae = mode !== "mira";
+  const needsAuthorization =
+    !larkStatus?.authorized || (larkStatus?.missingScopes.length ?? 0) > 0;
+  const providerLoading = providerIsTrae ? traeLoading : larkLoading;
+  const providerReady = providerIsTrae ? traeConnected : miraReady;
+  const providerLabel =
+    providerIsTrae
+      ? traeLoading
+        ? "正在检查内部 TRAE MCP"
+        : traeError
+          ? "TRAE 本地桥不可用"
+          : traeConnected
+            ? "内部 TRAE MCP 已连接"
+            : traeStatus?.versionMismatch
+              ? "MCP 仍在运行旧版本"
+              : traeStatus?.configured
+                ? "MCP 配置已发现，等待连接"
+                : "尚未检测到内部 TRAE MCP"
+      : larkConnectionLabel(larkLoading, larkStatus, larkError);
+  const providerDetail =
+    providerIsTrae
+      ? traeConnected
+        ? `待处理 ${traeStatus?.stats.pending ?? 0} · 处理中 ${traeStatus?.stats.processing ?? 0}`
+        : traeStatus?.versionMismatch
+          ? `当前 ${traeStatus.serverVersion ?? "旧版"} · 需要 ${traeStatus.expectedVersion}；请在 TRAE 中停用后重新启用`
+          : traeStatus?.configured
+            ? "请在当前 TRAE 启用该 MCP"
+            : "仍可先提交任务，再启动 MCP 处理"
+      : miraReady
+        ? `飞书用户：${larkStatus?.userName || "已授权用户"}`
+        : "不可用时会自动降级到规则导演";
+  const caseLabel = !collectRevisionCases
+    ? "返修案例收集已关闭"
+    : caseLibraryReady
+      ? "返修案例收集已开启"
+      : "返修案例库尚未连接";
+  const caseDetail = !collectRevisionCases
+    ? "本次不读取或写入案例库"
+    : caseLibraryReady
+      ? "失败返修将写入待审核，并参考已通过案例"
+      : "需要飞书登录和多维表格权限";
+
+  useEffect(() => {
+    if (!openPanel) {
+      return;
+    }
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (
+        event.target instanceof Node &&
+        !rootRef.current?.contains(event.target)
+      ) {
+        setOpenPanel(null);
+      }
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpenPanel(null);
+      }
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsidePointer);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [openPanel]);
+
+  return (
+    <div className="workspace-status-hub" ref={rootRef}>
+      <button
+        className="workspace-status-icon"
+        data-state={
+          providerLoading ? "loading" : providerReady ? "ready" : "warning"
+        }
+        type="button"
+        aria-label="协作连接状态"
+        aria-haspopup="dialog"
+        aria-expanded={openPanel === "provider"}
+        onClick={() =>
+          setOpenPanel((current) =>
+            current === "provider" ? null : "provider",
+          )
+        }
+      >
+        {providerLoading ? (
+          <LoaderCircle className="spin" size={17} />
+        ) : providerIsTrae ? (
+          <SquareTerminal size={17} />
+        ) : (
+          <Bot size={17} />
+        )}
+        <span className="workspace-status-tooltip">{providerLabel}</span>
+      </button>
+
+      <button
+        className="workspace-status-icon"
+        data-state={
+          !collectRevisionCases
+            ? "inactive"
+            : caseLibraryReady
+              ? "ready"
+              : "warning"
+        }
+        type="button"
+        aria-label="返修案例状态"
+        aria-haspopup="dialog"
+        aria-expanded={openPanel === "cases"}
+        onClick={() =>
+          setOpenPanel((current) =>
+            current === "cases" ? null : "cases",
+          )
+        }
+      >
+        <Database size={17} />
+        <span className="workspace-status-tooltip">{caseLabel}</span>
+      </button>
+
+      {openPanel && (
+        <section
+          className="workspace-status-popover"
+          role="dialog"
+          aria-label={
+            openPanel === "provider" ? "协作连接状态" : "返修案例状态"
+          }
+        >
+          <header>
+            <span>
+              {openPanel === "provider" ? (
+                providerReady ? (
+                  <CircleCheck size={17} />
+                ) : (
+                  <ShieldAlert size={17} />
+                )
+              ) : (
+                <Database size={17} />
+              )}
+            </span>
+            <div>
+              <small>
+                {openPanel === "provider" ? "协作连接" : "案例库"}
+              </small>
+              <strong>
+                {openPanel === "provider" ? providerLabel : caseLabel}
+              </strong>
+            </div>
+            <button
+              className="icon-button"
+              type="button"
+              title="关闭"
+              aria-label="关闭状态详情"
+              onClick={() => setOpenPanel(null)}
+            >
+              <X size={15} />
+            </button>
+          </header>
+
+          {openPanel === "provider" ? (
+            <>
+              <p>{providerDetail}</p>
+              <button
+                className="button"
+                type="button"
+                title={
+                  providerIsTrae
+                    ? traeConnected
+                      ? "刷新协作状态"
+                      : traeStatus?.versionMismatch
+                        ? "查看 MCP 重启步骤"
+                        : "查看 MCP 配置"
+                    : needsAuthorization
+                      ? "授权飞书"
+                      : "刷新连接"
+                }
+                aria-label={
+                  providerIsTrae
+                    ? traeConnected
+                      ? "刷新内部 TRAE 协作状态"
+                      : "配置内部 TRAE MCP"
+                    : needsAuthorization
+                      ? "授权飞书"
+                      : "刷新飞书连接"
+                }
+                onClick={
+                  providerIsTrae
+                    ? traeConnected
+                      ? onRefreshTrae
+                      : onSetupTrae
+                    : needsAuthorization
+                      ? onAuthorize
+                      : onRefreshLark
+                }
+                disabled={providerLoading}
+              >
+                <RefreshCw size={14} />
+                {providerIsTrae
+                  ? traeConnected
+                    ? "刷新状态"
+                    : "查看配置"
+                  : needsAuthorization
+                    ? "授权飞书"
+                    : "刷新状态"}
+              </button>
+            </>
+          ) : (
+            <>
+              <label className="workspace-status-toggle">
+                <input
+                  type="checkbox"
+                  checked={collectRevisionCases}
+                  onChange={(event) =>
+                    onCollectRevisionCasesChange(event.target.checked)
+                  }
+                />
+                <span>
+                  <strong>收集返修案例</strong>
+                  <small>{caseDetail}</small>
+                </span>
+              </label>
+              {collectRevisionCases && (
+                <button
+                  className="button"
+                  type="button"
+                  onClick={caseLibraryReady ? onRefreshLark : onAuthorize}
+                  disabled={larkLoading}
+                >
+                  <RefreshCw size={14} />
+                  {caseLibraryReady ? "刷新案例库" : "登录飞书"}
+                </button>
+              )}
+            </>
+          )}
+        </section>
+      )}
+    </div>
+  );
+}

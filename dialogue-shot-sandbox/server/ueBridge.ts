@@ -37,6 +37,7 @@ import type {
   SelectedLevelActorsResult,
   StoryboardExportNodePreview,
   StoryboardExportRequest,
+  StoryboardExportSoundEffectPreview,
   UnrealTransform,
 } from "../src/types";
 import {
@@ -85,6 +86,7 @@ const SKELETAL_MESH_COMPONENT_CLASS =
   "/Script/Engine.SkeletalMeshComponent";
 const STATIC_MESH_COMPONENT_CLASS = "/Script/Engine.StaticMeshComponent";
 const DIALOGUE_SEARCH_PATH = "/Game/Seria/Task/dialoggraph";
+const SOUND_EFFECT_SEARCH_PATH = "/Game/Seria/WwiseSoundData/Events";
 const DIALOG_NPC_TABLE_PATH =
   "/Game/Seria/Task/Mod/DialogNPCTable.DialogNPCTable";
 const DEFAULT_CONFIG_CSV_DIRECTORY = "C:\\trunk\\doc\\csvdir";
@@ -487,12 +489,11 @@ const StoryboardVec3Schema = z.tuple([
 const StoryboardExportRequestSchema = z.object({
   dialogueId: z.string().regex(/^\d{4}$/),
   startId: z.string().regex(/^\d{4,}$/),
-  dialogueIds: z.array(z.string().regex(/^\d+$/)).min(1).max(500),
+  dialogueIds: z.array(z.string().regex(/^\d+$/)).max(500),
   participantModelIndexes: z
     .array(z.number().int().nonnegative())
-    .min(2)
     .max(12),
-  usesBlueprintFormation: z.literal(true),
+  usesBlueprintFormation: z.boolean(),
   shots: z
     .array(
       z.object({
@@ -523,10 +524,37 @@ const StoryboardExportRequestSchema = z.object({
         ]),
         cameraRollDegrees: z.number().finite().min(-45).max(45),
         projectionValid: z.boolean(),
+        actorActions: z
+          .array(
+            z.object({
+              modelIndex: z.number().int().nonnegative(),
+              montageName: z.string().regex(/^AM_Turn(?:Left|Right)(?:45|90|180)$/),
+              angleDegrees: z.union([
+                z.literal(-180),
+                z.literal(-90),
+                z.literal(-45),
+                z.literal(45),
+                z.literal(90),
+                z.literal(180),
+              ]),
+            }),
+          )
+          .max(24)
+          .optional()
+          .default([]),
       }),
     )
-    .min(1)
     .max(500),
+  soundEffects: z
+    .array(
+      z.object({
+        dialogueId: z.string().regex(/^\d+$/),
+        assetName: z.string().regex(/^A_SFX_[A-Za-z0-9_]+$/),
+      }),
+    )
+    .max(100)
+    .optional()
+    .default([]),
 });
 
 const StoryboardExportApplyRequestSchema = StoryboardExportRequestSchema.extend({
@@ -1203,6 +1231,8 @@ interface ReflectedProperty {
   Alias?: unknown;
   CurrentString?: unknown;
   CurrentUint32?: unknown;
+  CurrentFloat?: unknown;
+  CurrentPath?: unknown;
   [key: string]: unknown;
 }
 
@@ -1219,12 +1249,15 @@ interface StoryboardDialogueNodeContext extends DialogueNodeContext {
 }
 
 interface StoryboardExportNodeChange {
-  preview: StoryboardExportNodePreview;
+  preview: StoryboardExportNodePreview | null;
+  soundEffectPreview: StoryboardExportSoundEffectPreview | null;
   nodeDataPath: string;
   originalCommonProperties: ReflectedProperty[];
   desiredCommonProperties: ReflectedProperty[];
   originalMoveCameras: unknown[];
   desiredMoveCameras: unknown[];
+  writeCameraProperties: boolean;
+  writeSoundEffect: boolean;
   writeCommonProperties: boolean;
   writeMoveCameras: boolean;
 }
@@ -1449,6 +1482,17 @@ export function buildStoryboardCameraMove(
 }
 
 function validateStoryboardCoverage(request: StoryboardExportRequest): void {
+  const soundEffects = request.soundEffects ?? [];
+  if (request.shots.length === 0 && soundEffects.length === 0) {
+    throw new Error("至少选择一个镜头或音效");
+  }
+  if (
+    request.shots.length > 0 &&
+    (!request.usesBlueprintFormation ||
+      request.participantModelIndexes.length < 2)
+  ) {
+    throw new Error("镜头导出必须绑定完整的 UE Blueprint 站位");
+  }
   const actualIds = request.shots.flatMap((shot) => shot.dialogueIds);
   if (
     actualIds.length !== request.dialogueIds.length ||
@@ -1468,6 +1512,23 @@ function validateStoryboardCoverage(request: StoryboardExportRequest): void {
     request.participantModelIndexes.length
   ) {
     throw new Error("当前 BP 站位包含重复的模型槽位");
+  }
+  const soundEffectDialogueIds = soundEffects.map(
+    (soundEffect) => soundEffect.dialogueId,
+  );
+  if (
+    new Set(soundEffectDialogueIds).size !==
+    soundEffectDialogueIds.length
+  ) {
+    throw new Error("同一台词节点只能导出一个音效");
+  }
+  const invalidSoundEffectNode = soundEffectDialogueIds.find(
+    (dialogueId) => !dialogueId.startsWith(request.dialogueId),
+  );
+  if (invalidSoundEffectNode) {
+    throw new Error(
+      `音效节点 ${invalidSoundEffectNode} 不属于对话 ${request.dialogueId}`,
+    );
   }
 }
 
@@ -1739,11 +1800,38 @@ function exportAction(
       : "unchanged";
 }
 
+async function findSoundEffectAssetPath(
+  connection: UnrealInvoker,
+  assetName: string,
+): Promise<string> {
+  const result = await connection.invoke("asset.asset_search", {
+    Query: assetName,
+    PathFilter: SOUND_EFFECT_SEARCH_PATH,
+    Limit: 100,
+  });
+  const matches = Array.from(
+    new Set(
+      (Array.isArray(result) ? result : [])
+        .map((value) => assetPathFromSearch(String(value)))
+        .filter((value): value is string => Boolean(value))
+        .filter((value) => assetNameFromPath(value) === assetName),
+    ),
+  );
+  if (matches.length === 0) {
+    throw new Error(`UE 中未找到音效资产 ${assetName}`);
+  }
+  if (matches.length > 1) {
+    throw new Error(`UE 中存在多个同名音效资产 ${assetName}，无法自动确认`);
+  }
+  return matches[0];
+}
+
 async function prepareStoryboardExport(
   connection: UnrealInvoker,
   request: StoryboardExportRequest,
 ): Promise<PreparedStoryboardExport> {
   validateStoryboardCoverage(request);
+  const requestedSoundEffects = request.soundEffects ?? [];
   const dialogueAssets = await findDialogueAssetPath(
     connection,
     request.startId,
@@ -1768,16 +1856,25 @@ async function prepareStoryboardExport(
     dialogueAssetPath,
   );
   const exportedDialogue = parseDialogueExport(exportedText);
-  const layout = await readFormationExportLayout(
-    connection,
-    request.startId,
-    exportedDialogue.formationClassPath ?? "",
-    request.participantModelIndexes,
+  const layout =
+    request.shots.length > 0
+      ? await readFormationExportLayout(
+          connection,
+          request.startId,
+          exportedDialogue.formationClassPath ?? "",
+          request.participantModelIndexes,
+        )
+      : null;
+  const requestedDialogueIds = Array.from(
+    new Set([
+      ...request.dialogueIds,
+      ...requestedSoundEffects.map((soundEffect) => soundEffect.dialogueId),
+    ]),
   );
   const dialogueNodes = await readStoryboardDialogueNodes(
     connection,
     dialogueAssetPath,
-    request.dialogueIds,
+    requestedDialogueIds,
     exportedText,
   );
   const shotByDialogueId = new Map(
@@ -1788,33 +1885,54 @@ async function prepareStoryboardExport(
       ] as const),
     ),
   );
+  const resolvedSoundEffects: StoryboardExportSoundEffectPreview[] = [];
+  for (const [soundEffectIndex, soundEffect] of requestedSoundEffects.entries()) {
+    resolvedSoundEffects.push({
+      soundEffectIndex,
+      dialogueId: soundEffect.dialogueId,
+      assetName: soundEffect.assetName,
+      resolvedAssetPath: await findSoundEffectAssetPath(
+        connection,
+        soundEffect.assetName,
+      ),
+      existingAssetPath: "",
+      action: "unchanged",
+    });
+  }
+  const soundEffectByDialogueId = new Map(
+    resolvedSoundEffects.map((soundEffect) => [
+      soundEffect.dialogueId,
+      soundEffect,
+    ]),
+  );
   const changes = dialogueNodes.map((node) => {
     const shotEntry = shotByDialogueId.get(node.dialogueId);
-    if (!shotEntry) {
-      throw new Error(`台词节点 ${node.dialogueId} 没有所属镜头`);
-    }
-    const isShotStart = shotEntry.shot.dialogueId === node.dialogueId;
-    const role: StoryboardExportNodePreview["role"] = isShotStart
-      ? "shot_start"
-      : "continuation";
-    const desiredCameraPosition = isShotStart ? layout.cameraName : "";
-    const desiredMoveCameras = isShotStart
-      ? [buildStoryboardCameraMove(shotEntry.shot, layout)]
-      : [];
+    const soundEffect = soundEffectByDialogueId.get(node.dialogueId);
     const desiredCommonProperties = clonedValue(node.commonProperties);
-    desiredCommonProperties[node.cameraPropertyIndex].CurrentString =
-      desiredCameraPosition;
-    const writeCommonProperties =
-      node.existingCameraPosition !== desiredCameraPosition;
-    const writeMoveCameras =
-      unrealValueMismatch(
-        node.existingMoveCameras,
-        desiredMoveCameras,
-        "MoveCameras",
-      ) !== null;
-    const unchanged = !writeCommonProperties && !writeMoveCameras;
-    return {
-      preview: {
+    let preview: StoryboardExportNodePreview | null = null;
+    let desiredMoveCameras = node.existingMoveCameras;
+    let writeCameraProperties = false;
+    let writeMoveCameras = false;
+    if (shotEntry && layout) {
+      const isShotStart = shotEntry.shot.dialogueId === node.dialogueId;
+      const role: StoryboardExportNodePreview["role"] = isShotStart
+        ? "shot_start"
+        : "continuation";
+      const desiredCameraPosition = isShotStart ? layout.cameraName : "";
+      desiredMoveCameras = isShotStart
+        ? [buildStoryboardCameraMove(shotEntry.shot, layout)]
+        : [];
+      desiredCommonProperties[node.cameraPropertyIndex].CurrentString =
+        desiredCameraPosition;
+      writeCameraProperties =
+        node.existingCameraPosition !== desiredCameraPosition;
+      writeMoveCameras =
+        unrealValueMismatch(
+          node.existingMoveCameras,
+          desiredMoveCameras,
+          "MoveCameras",
+        ) !== null;
+      preview = {
         dialogueId: node.dialogueId,
         shotIndex: shotEntry.shotIndex,
         role,
@@ -1824,19 +1942,60 @@ async function prepareStoryboardExport(
           node.existingMoveCameras.length,
           desiredCameraPosition,
           desiredMoveCameras.length,
-          unchanged,
+          !writeCameraProperties && !writeMoveCameras,
         ),
         existingCameraPosition: node.existingCameraPosition,
         desiredCameraPosition,
         existingMovementCount: node.existingMoveCameras.length,
         desiredMovementCount: desiredMoveCameras.length,
-      },
+      };
+    }
+    let soundEffectPreview: StoryboardExportSoundEffectPreview | null = null;
+    let writeSoundEffect = false;
+    if (soundEffect) {
+      const propertyIndex = node.commonProperties.findIndex(
+        (property) =>
+          String(property.Alias).toLowerCase() === "soundeffect",
+      );
+      if (propertyIndex < 0) {
+        throw new Error(
+          `台词节点 ${node.dialogueId} 缺少 SoundEffect 属性`,
+        );
+      }
+      const rawExistingPath = unrealReferenceText(
+        node.commonProperties[propertyIndex].CurrentPath,
+      );
+      const existingAssetPath = ["none", "null"].includes(
+        rawExistingPath.toLowerCase(),
+      )
+        ? ""
+        : rawExistingPath;
+      writeSoundEffect =
+        existingAssetPath.toLowerCase() !==
+        soundEffect.resolvedAssetPath.toLowerCase();
+      desiredCommonProperties[propertyIndex].CurrentPath =
+        soundEffect.resolvedAssetPath;
+      soundEffectPreview = {
+        ...soundEffect,
+        existingAssetPath,
+        action: writeSoundEffect
+          ? existingAssetPath
+            ? "replace"
+            : "add"
+          : "unchanged",
+      };
+    }
+    return {
+      preview,
+      soundEffectPreview,
       nodeDataPath: node.nodeDataPath,
       originalCommonProperties: node.commonProperties,
       desiredCommonProperties,
       originalMoveCameras: node.existingMoveCameras,
       desiredMoveCameras,
-      writeCommonProperties,
+      writeCameraProperties,
+      writeSoundEffect,
+      writeCommonProperties: writeCameraProperties || writeSoundEffect,
       writeMoveCameras,
     };
   });
@@ -1846,11 +2005,12 @@ async function prepareStoryboardExport(
     ),
   );
   const dialoguePackagePath = dialogueAssetPath.split(".")[0];
-  const formationPackagePath = layout.assetPath.split(".")[0];
+  const formationPackagePath = layout?.assetPath.split(".")[0] ?? "";
   const shotPreviews = request.shots.map((shot, shotIndex) => ({
     shotIndex,
     dialogueIds: [...shot.dialogueIds],
     projectionValid: shot.projectionValid,
+    actorActionCount: shot.actorActions?.length ?? 0,
     blockedReasons: storyboardShotBlockedReasons(shot, shotIndex),
   }));
   const globalBlockedReasons = [
@@ -1859,7 +2019,8 @@ async function prepareStoryboardExport(
           `对话资产 ${dialoguePackagePath} 存在未保存修改，请先在 UE 中保存或撤销`,
         ]
       : []),
-    ...(dirtyPackages.has(formationPackagePath.toLowerCase())
+    ...(formationPackagePath &&
+    dirtyPackages.has(formationPackagePath.toLowerCase())
       ? [
           `Formation BP ${formationPackagePath} 存在未保存修改，请先在 UE 中保存或撤销`,
         ]
@@ -1879,23 +2040,27 @@ async function prepareStoryboardExport(
     .update(
       JSON.stringify({
         dialogueAssetPath,
-        formationAssetPath: layout.assetPath,
+        formationAssetPath: layout?.assetPath ?? "",
         request,
         nodes: changes.map((change) => ({
-          dialogueId: change.preview.dialogueId,
-          originalCameraPosition:
-            change.preview.existingCameraPosition,
+          dialogueId:
+            change.preview?.dialogueId ??
+            change.soundEffectPreview?.dialogueId,
+          originalCommonProperties: change.originalCommonProperties,
           originalMoveCameras: change.originalMoveCameras,
-          desiredCameraPosition:
-            change.preview.desiredCameraPosition,
+          desiredCommonProperties: change.desiredCommonProperties,
           desiredMoveCameras: change.desiredMoveCameras,
         })),
       }),
     )
     .digest("hex");
-  const changed = changes.filter(
+  const changedCameraNodes = changes.filter(
     (change) =>
-      change.writeCommonProperties || change.writeMoveCameras,
+      change.preview &&
+      (change.writeCameraProperties || change.writeMoveCameras),
+  );
+  const soundEffectPreviews = changes.flatMap((change) =>
+    change.soundEffectPreview ? [change.soundEffectPreview] : [],
   );
   return {
     preview: {
@@ -1903,22 +2068,35 @@ async function prepareStoryboardExport(
       dialogueId: request.dialogueId,
       startId: request.startId,
       dialogueAssetPath,
-      formationAssetPath: layout.assetPath,
-      cameraName: layout.cameraName,
+      formationAssetPath: layout?.assetPath ?? "",
+      cameraName: layout?.cameraName ?? "",
       shotCount: request.shots.length,
-      changedNodeCount: changed.length,
+      changedNodeCount: changedCameraNodes.length,
       overwrittenNodeCount: changes.filter(
-        (change) => change.preview.action === "replace",
+        (change) => change.preview?.action === "replace",
       ).length,
       clearedNodeCount: changes.filter(
-        (change) => change.preview.action === "clear",
+        (change) => change.preview?.action === "clear",
+      ).length,
+      soundEffectCount: soundEffectPreviews.length,
+      changedSoundEffectCount: soundEffectPreviews.filter(
+        (soundEffect) => soundEffect.action !== "unchanged",
+      ).length,
+      replacedSoundEffectCount: soundEffectPreviews.filter(
+        (soundEffect) => soundEffect.action === "replace",
       ).length,
       invalidShotCount,
       globalBlockedReasons,
       blockedReasons,
       warnings,
       shots: shotPreviews,
-      nodes: changes.map((change) => change.preview),
+      nodes: changes.flatMap((change) =>
+        change.preview ? [change.preview] : [],
+      ),
+      soundEffects: soundEffectPreviews.sort(
+        (left, right) =>
+          left.soundEffectIndex - right.soundEffectIndex,
+      ),
     },
     dialogueAsset: String(dialogueAsset),
     changes,
@@ -1954,7 +2132,7 @@ export async function exportDialogueStoryboard(
     const prepared = await prepareStoryboardExport(connection, request);
     if (prepared.preview.reviewToken !== reviewToken) {
       throw new Error(
-        "UE 中的对话镜头配置已发生变化，请重新检查后再导出",
+        "UE 中的对话镜头或音效配置已发生变化，请重新检查后再导出",
       );
     }
     if (prepared.preview.blockedReasons.length > 0) {
@@ -1971,6 +2149,7 @@ export async function exportDialogueStoryboard(
         startId: request.startId,
         dialogueAssetPath: prepared.preview.dialogueAssetPath,
         changedNodeCount: 0,
+        changedSoundEffectCount: 0,
         saved: false,
       };
     }
@@ -2002,36 +2181,38 @@ export async function exportDialogueStoryboard(
           ),
           "CommonDialogGraphProperties",
         ) as ReflectedProperty[];
-        const cameraPosition = String(
-          commonProperties.find(
-            (property) =>
-              String(property.Alias).toLowerCase() === "cameraposition",
-          )?.CurrentString ?? "",
-        );
-        const moveCameras = reflectedArray(
-          await readProperty(
-            connection,
-            change.nodeDataPath,
+        const mismatches: string[] = [];
+        if (change.writeCommonProperties) {
+          const commonPropertiesMismatch = unrealValueMismatch(
+            commonProperties,
+            change.desiredCommonProperties,
+            "CommonDialogGraphProperties",
+          );
+          if (commonPropertiesMismatch) {
+            mismatches.push(commonPropertiesMismatch);
+          }
+        }
+        if (change.writeMoveCameras) {
+          const moveCameras = reflectedArray(
+            await readProperty(
+              connection,
+              change.nodeDataPath,
+              "MoveCameras",
+            ),
             "MoveCameras",
-          ),
-          "MoveCameras",
-        );
-        const moveCamerasMismatch = unrealValueMismatch(
-          moveCameras,
-          change.desiredMoveCameras,
-          "MoveCameras",
-        );
-        const mismatches = [
-          ...(cameraPosition !== change.preview.desiredCameraPosition
-            ? [
-                `CameraPosition 期望 ${formatUnrealMismatchValue(change.preview.desiredCameraPosition)}，回读 ${formatUnrealMismatchValue(cameraPosition)}`,
-              ]
-            : []),
-          ...(moveCamerasMismatch ? [moveCamerasMismatch] : []),
-        ];
+          );
+          const moveCamerasMismatch = unrealValueMismatch(
+            moveCameras,
+            change.desiredMoveCameras,
+            "MoveCameras",
+          );
+          if (moveCamerasMismatch) {
+            mismatches.push(moveCamerasMismatch);
+          }
+        }
         if (mismatches.length > 0) {
           throw new Error(
-            `台词节点 ${change.preview.dialogueId} 写入后的回读结果不一致：${mismatches.join("；")}`,
+            `台词节点 ${change.preview?.dialogueId ?? change.soundEffectPreview?.dialogueId} 写入后的回读结果不一致：${mismatches.join("；")}`,
           );
         }
       }
@@ -2045,28 +2226,95 @@ export async function exportDialogueStoryboard(
         );
       }
     } catch (error) {
-      for (const change of written.reverse()) {
+      const recoveryFailures: string[] = [];
+      for (const change of [...written].reverse()) {
         if (change.writeCommonProperties) {
-          await connection
-            .invoke("reflect.write_object_property", {
+          try {
+            await connection.invoke("reflect.write_object_property", {
               ThisPtr: change.nodeDataPath,
               PropertyName: "CommonDialogGraphProperties",
               Value: change.originalCommonProperties,
-            })
-            .catch(() => undefined);
+            });
+          } catch (recoveryError) {
+            recoveryFailures.push(
+              `${change.nodeDataPath}.CommonDialogGraphProperties 恢复写入失败：${recoveryError instanceof Error ? recoveryError.message : String(recoveryError)}`,
+            );
+          }
         }
         if (change.writeMoveCameras) {
-          await connection
-            .invoke("reflect.write_object_property", {
+          try {
+            await connection.invoke("reflect.write_object_property", {
               ThisPtr: change.nodeDataPath,
               PropertyName: "MoveCameras",
               Value: change.originalMoveCameras,
-            })
-            .catch(() => undefined);
+            });
+          } catch (recoveryError) {
+            recoveryFailures.push(
+              `${change.nodeDataPath}.MoveCameras 恢复写入失败：${recoveryError instanceof Error ? recoveryError.message : String(recoveryError)}`,
+            );
+          }
         }
       }
+      for (const change of written) {
+        if (change.writeCommonProperties) {
+          try {
+            const restored = reflectedArray(
+              await readProperty(
+                connection,
+                change.nodeDataPath,
+                "CommonDialogGraphProperties",
+              ),
+              "CommonDialogGraphProperties",
+            );
+            const mismatch = unrealValueMismatch(
+              restored,
+              change.originalCommonProperties,
+              "CommonDialogGraphProperties",
+            );
+            if (mismatch) {
+              recoveryFailures.push(
+                `${change.nodeDataPath} 恢复回读不一致：${mismatch}`,
+              );
+            }
+          } catch (recoveryError) {
+            recoveryFailures.push(
+              `${change.nodeDataPath}.CommonDialogGraphProperties 恢复回读失败：${recoveryError instanceof Error ? recoveryError.message : String(recoveryError)}`,
+            );
+          }
+        }
+        if (change.writeMoveCameras) {
+          try {
+            const restored = reflectedArray(
+              await readProperty(
+                connection,
+                change.nodeDataPath,
+                "MoveCameras",
+              ),
+              "MoveCameras",
+            );
+            const mismatch = unrealValueMismatch(
+              restored,
+              change.originalMoveCameras,
+              "MoveCameras",
+            );
+            if (mismatch) {
+              recoveryFailures.push(
+                `${change.nodeDataPath} 恢复回读不一致：${mismatch}`,
+              );
+            }
+          } catch (recoveryError) {
+            recoveryFailures.push(
+              `${change.nodeDataPath}.MoveCameras 恢复回读失败：${recoveryError instanceof Error ? recoveryError.message : String(recoveryError)}`,
+            );
+          }
+        }
+      }
+      const recoveryMessage =
+        recoveryFailures.length > 0
+          ? `；恢复失败，请立即在 UE 中检查：${recoveryFailures.join("；")}`
+          : "；已恢复本轮未保存修改";
       throw new Error(
-        `${error instanceof Error ? error.message : "分镜导出失败"}；已尝试恢复本轮未保存修改`,
+        `${error instanceof Error ? error.message : "对话数据导出失败"}${recoveryMessage}`,
       );
     }
     return {
@@ -2074,7 +2322,9 @@ export async function exportDialogueStoryboard(
       dialogueId: request.dialogueId,
       startId: request.startId,
       dialogueAssetPath: prepared.preview.dialogueAssetPath,
-      changedNodeCount: changed.length,
+      changedNodeCount: prepared.preview.changedNodeCount,
+      changedSoundEffectCount:
+        prepared.preview.changedSoundEffectCount,
       saved: true,
     };
   } finally {
@@ -4381,6 +4631,44 @@ export async function readBlueprintFormation(
     if (slots.length === 0) {
       warnings.push("Blueprint 中没有数字命名的 ChildActorComponent 站位槽");
     }
+    let dialogueModels: string[] = [];
+    try {
+      const dialogueAssets = await findDialogueAssetPath(
+        connection,
+        input.startId,
+      );
+      if (dialogueAssets.length === 1) {
+        const dialogueAssetPath = dialogueAssets[0];
+        const dialogueAsset = await connection.invoke(
+          "asset.get_asset_by_path",
+          { AssetPath: dialogueAssetPath },
+        );
+        if (hasUnrealObjectReference(dialogueAsset)) {
+          const startNodeData = await findDialogueStartNodeData(
+            connection,
+            dialogueAssetPath,
+          );
+          const modelsValue = await readProperty(
+            connection,
+            startNodeData,
+            "DialogModels",
+          );
+          dialogueModels = (
+            Array.isArray(modelsValue) ? modelsValue : []
+          ).map(normalizedDialogueModelName);
+        }
+      } else if (dialogueAssets.length > 1) {
+        warnings.push(
+          `找到多个名为 ${input.startId} 的对话资产，未读取 DialogModels`,
+        );
+      }
+    } catch (error) {
+      warnings.push(
+        `未能读取对话 DialogModels：${
+          error instanceof Error ? error.message : "未知错误"
+        }`,
+      );
+    }
     return {
       status: slots.length > 0 ? "found" : "unavailable",
       message:
@@ -4392,6 +4680,7 @@ export async function readBlueprintFormation(
         blueprintAssetPath: assetPath,
         blueprintClassPath: classPath,
         slots: slots.sort((left, right) => left.modelIndex - right.modelIndex),
+        dialogueModels,
         warnings,
       },
     };

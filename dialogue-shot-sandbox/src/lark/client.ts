@@ -1,3 +1,5 @@
+import type { SoundEffectCatalogSnapshot } from "../data/soundEffectCatalog";
+
 export interface MiraBotInfo {
   openId: string;
   name: string;
@@ -15,7 +17,9 @@ export interface LarkStatus {
   missingScopes: string[];
   miraMissingScopes: string[];
   baseMissingScopes: string[];
+  docsMissingScopes: string[];
   caseLibraryReady: boolean;
+  soundEffectCatalogReady: boolean;
   miraBot: MiraBotInfo | null;
 }
 
@@ -81,6 +85,16 @@ export function startLarkAuthorization(): Promise<LarkAuthStart> {
 
 export function finishLarkAuthorization(): Promise<LarkStatus> {
   return api<LarkStatus>("/api/lark/auth/finish", {
+    method: "POST",
+  });
+}
+
+export function getSoundEffectCatalog(): Promise<SoundEffectCatalogSnapshot> {
+  return api<SoundEffectCatalogSnapshot>("/api/lark/sound-effects/catalog");
+}
+
+export function syncSoundEffectCatalog(): Promise<SoundEffectCatalogSnapshot> {
+  return api<SoundEffectCatalogSnapshot>("/api/lark/sound-effects/sync", {
     method: "POST",
   });
 }

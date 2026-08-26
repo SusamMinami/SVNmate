@@ -1,8 +1,10 @@
 import type { DialogueSequence, ShotPlan } from "../types";
+import type { SoundEffectCatalogEntry } from "../data/soundEffectCatalog";
 import { createDefaultBlocking, resolveBlocking } from "./blockingResolver";
 import {
   createDirectorInput,
   type DirectorSceneAnalysis,
+  type DirectorSoundEffectRecommendation,
 } from "./contracts";
 import {
   createRuleAnalysis,
@@ -10,6 +12,7 @@ import {
   reviseRuleDecisionsForProjection,
 } from "./ruleDirector";
 import { resolveShotDecisions } from "./shotResolver";
+import { recommendSoundEffects } from "./soundEffectRecommender";
 
 /**
  * Synchronous compatibility helper used for initial rendering and focused tests.
@@ -53,14 +56,20 @@ export function resolveRuleShotsWithRetry(
 
 export function createShotPreview(
   sequence: DialogueSequence,
-  options: { preserveInputPositions?: boolean } = {},
+  options: {
+    preserveInputPositions?: boolean;
+    soundEffectCatalog?: readonly SoundEffectCatalogEntry[];
+  } = {},
 ): {
   sequence: DialogueSequence;
   shots: ShotPlan[];
   blocking: ReturnType<typeof createDefaultBlocking>;
   analysis: DirectorSceneAnalysis;
+  soundEffects: DirectorSoundEffectRecommendation[];
 } {
-  const input = createDirectorInput(sequence, `${sequence.prefix}-rule`);
+  const input = createDirectorInput(sequence, `${sequence.prefix}-rule`, {
+    soundEffectCatalog: options.soundEffectCatalog,
+  });
   const blocking = createDefaultBlocking(input);
   const participants = resolveBlocking(
     sequence.participants,
@@ -75,5 +84,6 @@ export function createShotPreview(
     shots: resolveRuleShotsWithRetry(stagedSequence, decisions),
     blocking,
     analysis: createRuleAnalysis(input),
+    soundEffects: recommendSoundEffects(input),
   };
 }

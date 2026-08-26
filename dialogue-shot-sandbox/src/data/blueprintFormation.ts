@@ -30,7 +30,6 @@ function normalizedAssetPath(value: string): string {
 }
 
 function matchesResource(
-  modelName: string,
   modelClassPath: string,
   resource: ModelResource | undefined,
 ): boolean {
@@ -45,13 +44,7 @@ function matchesResource(
       return true;
     }
   }
-  const token = modelName.trim().toLowerCase();
-  return Boolean(
-    token &&
-      (classPath.includes(`/${token}/`) ||
-        classPath.endsWith(`/${token}`) ||
-        classPath.includes(`/bp_${token}`)),
-  );
+  return false;
 }
 
 function uePositionToStage(
@@ -75,21 +68,74 @@ function ueFacingTarget(
 function profileCandidates(
   database: DialogueDatabase,
   sequence: DialogueSequence,
+  modelIndex: number,
   modelName: string,
   modelClassPath: string,
 ): NpcProfile[] {
-  if (modelName.trim().toLowerCase() === "player") {
-    return sequence.participants.filter((participant) => participant.id === 1);
+  if (
+    modelIndex === 0 ||
+    modelName.trim().toLowerCase() === "player" ||
+    normalizedAssetPath(modelClassPath).endsWith(
+      "/seria/characters/eric/bp_eric",
+    )
+  ) {
+    return [
+      sequence.participants.find((participant) => participant.id === 1) ??
+        database.npcs.get(1) ?? {
+          id: 1,
+          name: "玩家",
+          note: "玩家角色",
+          introduction: "由玩家控制的对话参与者",
+          resourceId: null,
+          canTurn: true,
+        },
+    ];
   }
-  return sequence.participants.filter((participant) =>
-    matchesResource(
-      modelName,
-      modelClassPath,
-      participant.resourceId === null
-        ? undefined
-        : database.models.get(participant.resourceId),
-    ),
+  const speakingIds = new Set(
+    sequence.participants.map((participant) => participant.id),
   );
+  const profiles = new Map<number, NpcProfile>(
+    Array.from(database.npcs.entries()),
+  );
+  for (const participant of sequence.participants) {
+    profiles.set(participant.id, participant);
+  }
+  return Array.from(profiles.values())
+    .filter((participant) =>
+      matchesResource(
+        modelClassPath,
+        participant.resourceId === null
+          ? undefined
+          : database.models.get(participant.resourceId),
+      ),
+    )
+    .sort(
+      (left, right) =>
+        Number(speakingIds.has(right.id)) -
+          Number(speakingIds.has(left.id)) ||
+        left.id - right.id,
+    );
+}
+
+function placeholderProfile(
+  modelIndex: number,
+  modelName: string,
+  modelClassPath: string,
+): NpcProfile {
+  const className =
+    normalizedAssetPath(modelClassPath).split("/").at(-1) ?? "";
+  const fallbackName = className.replace(/^bp_/i, "") || `槽位 ${modelIndex}`;
+  return {
+    id: 2_000_000_000 + modelIndex,
+    name:
+      modelName && modelName.toLowerCase() !== "none"
+        ? modelName
+        : fallbackName,
+    note: `BP 槽位 ${modelIndex} 尚未映射 NPC 表`,
+    introduction: "该角色来自 Formation BP，当前没有可用的 NPC 资料",
+    resourceId: null,
+    canTurn: true,
+  };
 }
 
 function explicitNpcIdsByModelIndex(
@@ -112,39 +158,69 @@ export function applyBlueprintFormation(
   sequence: DialogueSequence,
   snapshot: BlueprintFormationSnapshot,
 ): AppliedBlueprintFormation {
-  const modelNames = sequence.formation?.modelNames ?? [];
+  const modelNames =
+    snapshot.dialogueModels && snapshot.dialogueModels.length > 0
+      ? snapshot.dialogueModels
+      : sequence.formation?.modelNames ?? [];
   const explicitNpcIds = explicitNpcIdsByModelIndex(sequence);
+  const speakingNpcIds = new Set(
+    sequence.participants.map((participant) => participant.id),
+  );
+  const warnings = [...sequence.warnings, ...snapshot.warnings];
   const activeSlots = snapshot.slots
     .filter((slot) => {
-      if (modelNames.length === 0) {
+      if (modelNames.length === 0 || slot.modelIndex === 0) {
         return true;
       }
-      const modelName = modelNames[slot.modelIndex];
-      return modelName && modelName.toLowerCase() !== "none";
+      const modelName = (modelNames[slot.modelIndex] ?? "").toLowerCase();
+      return !["", "none", "null"].includes(modelName);
     })
     .sort((left, right) => left.modelIndex - right.modelIndex)
     .slice(0, MAX_DIALOGUE_PARTICIPANTS);
-  const warnings = [...sequence.warnings, ...snapshot.warnings];
-  const mapped = activeSlots.flatMap((slot) => {
+  if (!activeSlots.some((slot) => slot.modelIndex === 0)) {
+    throw new Error("Formation BP 缺少固定的 0 号玩家槽位");
+  }
+  if (snapshot.slots.length > MAX_DIALOGUE_PARTICIPANTS) {
+    warnings.push(
+      `BP 包含 ${snapshot.slots.length} 个数字角色槽，当前最多读取前 ${MAX_DIALOGUE_PARTICIPANTS} 个`,
+    );
+  }
+  const mapped = activeSlots.map((slot) => {
     const modelName = modelNames[slot.modelIndex] ?? "";
     const candidates = profileCandidates(
       database,
       sequence,
+      slot.modelIndex,
       modelName,
       slot.modelClassPath,
     );
     const explicitIds = explicitNpcIds.get(slot.modelIndex);
     const explicitCandidates = explicitIds
-      ? candidates.filter((candidate) => explicitIds.has(candidate.id))
+      ? Array.from(explicitIds).flatMap((npcId) => {
+          const profile =
+            sequence.participants.find(
+              (participant) => participant.id === npcId,
+            ) ?? database.npcs.get(npcId);
+          return profile ? [profile] : [];
+        })
       : [];
-    const profile = explicitCandidates[0] ?? candidates[0];
-    if (!profile) {
+    const speakingCandidates = candidates.filter((candidate) =>
+      speakingNpcIds.has(candidate.id),
+    );
+    const profile =
+      explicitCandidates[0] ??
+      (speakingCandidates.length === 1
+        ? speakingCandidates[0]
+        : candidates.length === 1
+          ? candidates[0]
+          : undefined) ??
+      placeholderProfile(slot.modelIndex, modelName, slot.modelClassPath);
+    if (profile.id >= 2_000_000_000) {
       warnings.push(
-        `BP 槽位 ${slot.modelIndex}（${modelName}）无法映射到当前对话 NPC`,
+        `BP 槽位 ${slot.modelIndex}（${modelName || slot.modelClassPath}）无法映射 NPC 表，已作为场内未识别角色保留`,
       );
-      return [];
     }
-    return [{ slot, profile }];
+    return { slot, profile };
   });
 
   if (mapped.length < 2) {

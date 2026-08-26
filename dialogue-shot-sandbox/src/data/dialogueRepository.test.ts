@@ -24,8 +24,8 @@ describe("findDialogueSequence", () => {
       "204807",
     ]);
     expect(result.participants.map((participant) => participant.name)).toEqual([
-      "林澈",
       "玩家",
+      "林澈",
     ]);
     expect(result.adjacentContext.previous?.prefix).toBe("2047");
     expect(result.adjacentContext.previous?.dialogue[0].content).toContain(
@@ -69,17 +69,19 @@ describe("findDialogueSequence", () => {
       "B",
       "C",
       "D",
+      "E",
     ]);
     expect(
       result.participants.map((participant) => participant.entryDialogueId),
-    ).toEqual(["309901", "309901", "309903", "309904"]);
+    ).toEqual(["309901", "309901", "309901", "309903", "309904"]);
     expect(
       result.participants.map((participant) => participant.lastDialogueId),
-    ).toEqual(["309905", "309902", "309903", "309904"]);
+    ).toEqual(["309905", "309905", "309902", "309903", "309904"]);
     expect(
       result.participants.map((participant) => participant.exitDialogueId),
-    ).toEqual([null, null, null, null]);
+    ).toEqual([null, null, null, null, null]);
     expect(result.participants.map((participant) => participant.name)).toEqual([
+      "玩家",
       "岑队长",
       "洛安",
       "弥莎",
@@ -91,9 +93,11 @@ describe("findDialogueSequence", () => {
         result.participants.map((participant) =>
           participant.position.join(","),
         ),
-      ).size,
-    ).toBe(4);
-    expect(result.warnings).toEqual([]);
+    ).size,
+    ).toBe(5);
+    expect(result.warnings).toContain(
+      "对话表没有玩家台词，已按固定 0 号角色补充玩家",
+    );
   });
 
   it("ignores close-UI node content without creating a shot boundary", () => {
@@ -135,8 +139,8 @@ describe("findDialogueSequence", () => {
       "880005",
     ]);
     expect(result.participants.map((participant) => participant.name)).toEqual([
-      "林澈",
       "玩家",
+      "林澈",
     ]);
     expect(
       result.rows.filter((row) => row.content === "第一句可见台词。"),
@@ -179,7 +183,7 @@ describe("findDialogueSequence", () => {
     expect(result.contexts[0].sequence.participants[0].name).toBe("玩家");
   });
 
-  it("can return text context for a non-player single-speaker dialogue", () => {
+  it("includes the fixed player in a non-player single-speaker context", () => {
     const database = parseDialogueDatabase(
       [
         "##&Dialog.id,Dialog.NPCID,Dialog.Content,Dialog.NextID,Dialog.End",
@@ -203,7 +207,46 @@ describe("findDialogueSequence", () => {
     const result = searchDialogueContent(database, "旧称");
 
     expect(result.contexts).toHaveLength(1);
-    expect(result.contexts[0].sequence.participants).toHaveLength(1);
-    expect(result.contexts[0].sequence.participants[0].name).toBe("商会安保");
+    expect(result.contexts[0].sequence.participants).toHaveLength(2);
+    expect(
+      result.contexts[0].sequence.participants.map(
+        (participant) => participant.name,
+      ),
+    ).toEqual(["玩家", "商会安保"]);
+  });
+
+  it("rejects over-capacity casts instead of dropping a speaking participant", () => {
+    const npcIds = Array.from({ length: 12 }, (_, index) => 20_001 + index);
+    const dialogueRows = npcIds.map((npcId, index) => {
+      const dialogueId = `9900${String(index + 1).padStart(2, "0")}`;
+      const nextId =
+        index === npcIds.length - 1
+          ? ""
+          : `9900${String(index + 2).padStart(2, "0")}`;
+      return `${dialogueId},${npcId},角色 ${npcId} 发言,${nextId},${index === npcIds.length - 1}`;
+    });
+    const database = parseDialogueDatabase(
+      [
+        "##&Dialog.id,Dialog.NPCID,Dialog.Content,Dialog.NextID,Dialog.End",
+        "##对话ID,人物,内容,下一ID,结束",
+        "990000,,,990001,false",
+        ...dialogueRows,
+      ].join("\n"),
+      [
+        "##&DialogStart.id,DialogStart.Outline",
+        "##对话ID,剧情梗概",
+        "990000,超员对话",
+      ].join("\n"),
+      [
+        "##&NPC.id,NPC.name,NPC.npcintroduce",
+        "##id,NPC名字,NPC介绍",
+        ...npcIds.map((npcId) => `${npcId},角色 ${npcId},测试角色`),
+      ].join("\n"),
+      "test",
+    );
+
+    expect(() => findDialogueSequence(database, "9900")).toThrow(
+      "超过当前支持的 12 位上限",
+    );
   });
 });

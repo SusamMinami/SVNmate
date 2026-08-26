@@ -5,6 +5,7 @@ import {
   type DirectorProviderResult,
   type ShotDirectorProvider,
 } from "./contracts";
+import { resolveSoundEffectRecommendations } from "./soundEffectRecommender";
 
 interface BridgeEnvelope {
   ok?: boolean;
@@ -28,16 +29,22 @@ export class TraeDirectorProvider implements ShotDirectorProvider {
 
   constructor(private readonly endpoint = "/api/director/trae") {}
 
-  async design(input: DirectorInput): Promise<DirectorProviderResult> {
+  async design(
+    input: DirectorInput,
+    options: { forceRegenerate?: boolean } = {},
+  ): Promise<DirectorProviderResult> {
     let response: Response;
     try {
-      response = await fetch(this.endpoint, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
+      response = await fetch(
+        `${this.endpoint}${options.forceRegenerate ? "?force=1" : ""}`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(input),
         },
-        body: JSON.stringify(input),
-      });
+      );
     } catch {
       throw new Error("无法连接内部 TRAE 协作服务");
     }
@@ -94,6 +101,10 @@ export class TraeDirectorProvider implements ShotDirectorProvider {
           parsed.data.scene_analysis.emotional_progression,
         visualStrategy: parsed.data.scene_analysis.visual_strategy,
       },
+      soundEffects: resolveSoundEffectRecommendations(
+        input,
+        parsed.data.sound_effects,
+      ),
     };
   }
 }

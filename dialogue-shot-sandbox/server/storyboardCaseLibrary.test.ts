@@ -34,6 +34,7 @@ function testPlan(): {
       },
       blocking,
       shots: createRuleDecisions(input, blocking),
+      sound_effects: [],
     },
   };
 }

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { classifyLarkScopes } from "./larkBridge";
 
 describe("classifyLarkScopes", () => {
-  it("separates Mira and Base authorization requirements", () => {
+  it("separates Mira, Base and Docs authorization requirements", () => {
     const result = classifyLarkScopes(
       [
         "search:bot",
@@ -13,6 +13,8 @@ describe("classifyLarkScopes", () => {
         "base:record:read",
         "base:record:create",
         "base:record:update",
+        "docs:document.content:read",
+        "docx:document:readonly",
       ].join(" "),
     );
 
@@ -20,6 +22,7 @@ describe("classifyLarkScopes", () => {
       missingScopes: [],
       miraMissingScopes: [],
       baseMissingScopes: [],
+      docsMissingScopes: [],
     });
   });
 
@@ -30,6 +33,12 @@ describe("classifyLarkScopes", () => {
 
     expect(result.miraMissingScopes).toEqual([]);
     expect(result.baseMissingScopes).toContain("base:record:create");
-    expect(result.missingScopes).toEqual(result.baseMissingScopes);
+    expect(result.docsMissingScopes).toContain(
+      "docs:document.content:read",
+    );
+    expect(result.missingScopes).toEqual([
+      ...result.baseMissingScopes,
+      ...result.docsMissingScopes,
+    ]);
   });
 });

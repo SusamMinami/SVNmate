@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { BlueprintFormationSnapshot } from "../types";
+import { participantFacingYawDegrees } from "../director/actorActionPlanner";
 import { createDirectorInput } from "../director/contracts";
 import { createShotPreview } from "../director/shotPlanner";
 import { applyBlueprintFormation } from "./blueprintFormation";
@@ -126,6 +127,11 @@ describe("applyBlueprintFormation", () => {
         (participant) => participant.positionSource === "blueprint",
       ),
     ).toBe(true);
+    expect(
+      applied.sequence.participants.map(participantFacingYawDegrees),
+    ).toEqual([-100, -280, -380, -280].map((yaw) =>
+      ((yaw + 180) % 360 + 360) % 360 - 180
+    ));
     expect(() =>
       createShotPreview(applied.sequence, {
         preserveInputPositions: true,
@@ -146,4 +152,80 @@ describe("applyBlueprintFormation", () => {
       ),
     ).toBe(true);
   });
+
+  it("uses every registered BP slot even when only one NPC speaks", () => {
+    const database = parseDialogueDatabase(
+      dialogues,
+      starts,
+      npcs,
+      "test",
+      models,
+    );
+    const source = findDialogueSequence(database, "7350");
+    const silentSequence = {
+      ...source,
+      rows: source.rows.filter((row) => row.npcId === 101968),
+      participants: source.participants.filter(
+        (participant) => participant.id === 101968,
+      ),
+    };
+    const snapshot: BlueprintFormationSnapshot = {
+      dialogueId: "7350",
+      blueprintAssetPath:
+        "/Game/Seria/Task/Mod/MainQuest/Cha9/BP_735000.BP_735000",
+      blueprintClassPath:
+        "/Game/Seria/Task/Mod/MainQuest/Cha9/BP_735000.BP_735000_C",
+      dialogueModels: [
+        "player",
+        "N115_Finance_Female",
+        "M63_Cityguard",
+      ],
+      slots: [
+        slot(
+          0,
+          "/Game/Seria/Characters/Eric/BP_Eric.BP_Eric_C",
+          155,
+          -24,
+          160,
+        ),
+        slot(
+          1,
+          "/Game/Seria/NPC/N115_Finance_Female/BP_N115_Finance_Female.BP_N115_Finance_Female_C",
+          27,
+          -24,
+          60,
+        ),
+        slot(
+          2,
+          "/Game/Seria/NPC/M63_Cityguard/BP_M63_Cityguard_NPC.BP_M63_Cityguard_NPC_C",
+          34,
+          82,
+          -43,
+        ),
+      ],
+      warnings: [],
+    };
+
+    const applied = applyBlueprintFormation(
+      database,
+      silentSequence,
+      snapshot,
+    );
+
+    expect(
+      applied.sequence.participants.map((participant) => ({
+        modelIndex: participant.modelIndex,
+        npcId: participant.id,
+        yaw: participantFacingYawDegrees(participant),
+      })),
+    ).toEqual([
+      { modelIndex: 0, npcId: 1, yaw: 160 },
+      { modelIndex: 1, npcId: 101892, yaw: 60 },
+      { modelIndex: 2, npcId: 101968, yaw: -43 },
+    ]);
+    expect(applied.sequence.rows.every((row) => row.speakerSlot === "C")).toBe(
+      true,
+    );
+  });
+
 });

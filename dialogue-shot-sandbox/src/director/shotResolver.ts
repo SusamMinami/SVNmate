@@ -19,6 +19,7 @@ import {
   type CameraGeometry,
   type ProjectionAssessment,
 } from "./shotGeometry";
+import { planActorTurns } from "./actorActionPlanner";
 import { estimateShotDuration } from "./shotTiming";
 
 function cameraHeight(
@@ -518,6 +519,12 @@ export function resolveShotDecisions(
   let previousCoverage: ShotCoverage | null = null;
   let previousAxis: ShotAxis | null = null;
   let previousVisualAnchor: readonly [number, number] | null = null;
+  const currentFacingTargets = new Map(
+    sequence.participants.map((participant) => [
+      participant.slot,
+      participant.facingTarget,
+    ]),
+  );
 
   const shots = decisions.map((decision, index) => {
     const rows = decision.dialogue_ids.map((dialogueId) => {
@@ -551,37 +558,51 @@ export function resolveShotDecisions(
         `镜头 ${index + 1} 跨越了角色 ${attendanceChange.slot} 的进出场节点，请在该节点切镜`,
       );
     }
-    const activeParticipants = sequence.participants.filter(
-      (participant) =>
-        participant.entryIndex <= dialogueEndIndex &&
-        (participant.exitIndex === null ||
-          participant.exitIndex >= dialogueEndIndex),
+    let activeParticipants = sequence.participants
+      .filter(
+        (participant) =>
+          participant.entryIndex <= dialogueEndIndex &&
+          (participant.exitIndex === null ||
+            participant.exitIndex >= dialogueEndIndex),
+      )
+      .map((participant) => ({
+        ...participant,
+        facingTarget:
+          currentFacingTargets.get(participant.slot) ??
+          participant.facingTarget,
+      }));
+    let activeParticipantsBySlot = new Map(
+      activeParticipants.map((participant) => [
+        participant.slot,
+        participant,
+      ]),
     );
     const firstSpeaker =
       (firstRow.speakerSlot
-        ? participantsBySlot.get(firstRow.speakerSlot)
+        ? activeParticipantsBySlot.get(firstRow.speakerSlot)
         : undefined) ??
       (firstRow.npcId === null ? undefined : participantsById.get(firstRow.npcId));
     const groupSubject =
       decision.subject === "both" || decision.subject === "group";
-    const subject =
+    let subject =
       decision.subject === "both" || decision.subject === "group"
         ? firstSpeaker
-        : participantsBySlot.get(decision.subject);
+        : activeParticipantsBySlot.get(decision.subject);
     let lookTarget: DialogueParticipant | null =
       decision.look_target === "group_center"
         ? null
-        : (participantsBySlot.get(decision.look_target) ?? null);
+        : (activeParticipantsBySlot.get(decision.look_target) ?? null);
     if (!firstSpeaker || !subject) {
       throw new Error(`镜头 ${index + 1} 无法解析主体 ${decision.subject}`);
     }
+    const subjectSlot = subject.slot;
     if (
       !activeParticipants.some(
-        (participant) => participant.slot === subject.slot,
+        (participant) => participant.slot === subjectSlot,
       )
     ) {
       throw new Error(
-        `镜头 ${index + 1} 的主体 ${subject.slot} 尚未登场或已经离场`,
+        `镜头 ${index + 1} 的主体 ${subjectSlot} 尚未登场或已经离场`,
       );
     }
     if (
@@ -600,7 +621,7 @@ export function resolveShotDecisions(
       if (!lookTargetIsActive) {
         lookTarget =
           activeParticipants.find(
-            (participant) => participant.slot !== subject.slot,
+            (participant) => participant.slot !== subjectSlot,
           ) ?? null;
       }
       if (!lookTarget) {
@@ -659,6 +680,33 @@ export function resolveShotDecisions(
         `镜头 ${index + 1} 的带群中景需要至少两位在场角色并指定单个主体`,
       );
     }
+    const actorActionPlan = planActorTurns(
+      activeParticipants,
+      groupSubject
+        ? { kind: "group" }
+        : {
+            kind: "conversation",
+            subjectSlot: subject.slot,
+            lookTargetSlot: lookTarget?.slot ?? null,
+          },
+    );
+    activeParticipants = actorActionPlan.participants;
+    activeParticipantsBySlot = new Map(
+      activeParticipants.map((participant) => [
+        participant.slot,
+        participant,
+      ]),
+    );
+    for (const participant of activeParticipants) {
+      currentFacingTargets.set(
+        participant.slot,
+        participant.facingTarget,
+      );
+    }
+    subject = activeParticipantsBySlot.get(subject.slot) ?? subject;
+    lookTarget = lookTarget
+      ? activeParticipantsBySlot.get(lookTarget.slot) ?? lookTarget
+      : null;
     const geometry = geometryFor(
       decision,
       subject,
@@ -723,7 +771,10 @@ export function resolveShotDecisions(
       previousAxis?.id === axis.id &&
       previousLookTargetSlot === subject.slot &&
       lookTarget?.slot === previousVisualSubjectSlot;
-    const projectionWarnings = [...geometry.assessment.warnings];
+    const projectionWarnings = [
+      ...geometry.assessment.warnings,
+      ...actorActionPlan.warnings,
+    ];
     let motionEndAssessment: ProjectionAssessment | null = null;
     if (decision.camera_movement !== "static") {
       motionEndAssessment = assessProjection(
@@ -882,13 +933,13 @@ export function resolveShotDecisions(
       rationale: decision.intent,
       visualSubjectSlot: groupSubject ? null : subject.slot,
       lookTargetSlot: lookTarget?.slot ?? null,
-      facingOverrides:
-        groupSubject || !lookTarget
-          ? {}
-          : {
-              [subject.slot]: lookTarget.position,
-              [lookTarget.slot]: subject.position,
-            },
+      actorActions: actorActionPlan.actions,
+      facingOverrides: Object.fromEntries(
+        activeParticipants.map((participant) => [
+          participant.slot,
+          participant.facingTarget,
+        ]),
+      ),
       axis,
       projection: {
         expectedShotSize: geometry.shotSize,

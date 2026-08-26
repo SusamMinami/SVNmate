@@ -180,6 +180,7 @@ export interface BlueprintFormationSnapshot {
   blueprintAssetPath: string;
   blueprintClassPath: string;
   slots: BlueprintFormationSlot[];
+  dialogueModels?: string[];
   warnings: string[];
 }
 
@@ -352,6 +353,11 @@ export interface StoryboardExportShot {
   movementIntensity: MovementIntensity;
   cameraRollDegrees: number;
   projectionValid: boolean;
+  actorActions?: Array<{
+    modelIndex: number;
+    montageName: string;
+    angleDegrees: ActorTurnDegrees;
+  }>;
 }
 
 export interface StoryboardExportRequest {
@@ -361,6 +367,10 @@ export interface StoryboardExportRequest {
   participantModelIndexes: number[];
   usesBlueprintFormation: boolean;
   shots: StoryboardExportShot[];
+  soundEffects?: Array<{
+    dialogueId: string;
+    assetName: string;
+  }>;
 }
 
 export interface StoryboardExportNodePreview {
@@ -378,7 +388,17 @@ export interface StoryboardExportShotPreview {
   shotIndex: number;
   dialogueIds: string[];
   projectionValid: boolean;
+  actorActionCount?: number;
   blockedReasons: string[];
+}
+
+export interface StoryboardExportSoundEffectPreview {
+  soundEffectIndex: number;
+  dialogueId: string;
+  assetName: string;
+  resolvedAssetPath: string;
+  existingAssetPath: string;
+  action: "add" | "replace" | "unchanged";
 }
 
 export interface DialogueStoryboardExportPreview {
@@ -392,12 +412,16 @@ export interface DialogueStoryboardExportPreview {
   changedNodeCount: number;
   overwrittenNodeCount: number;
   clearedNodeCount: number;
+  soundEffectCount?: number;
+  changedSoundEffectCount?: number;
+  replacedSoundEffectCount?: number;
   invalidShotCount: number;
   globalBlockedReasons: string[];
   blockedReasons: string[];
   warnings: string[];
   shots: StoryboardExportShotPreview[];
   nodes: StoryboardExportNodePreview[];
+  soundEffects?: StoryboardExportSoundEffectPreview[];
 }
 
 export interface DialogueStoryboardExportResult {
@@ -406,6 +430,7 @@ export interface DialogueStoryboardExportResult {
   startId: string;
   dialogueAssetPath: string;
   changedNodeCount: number;
+  changedSoundEffectCount?: number;
   saved: boolean;
 }
 
@@ -692,6 +717,22 @@ export interface ShotAxis {
   cameraSide: -1 | 0 | 1;
 }
 
+export type ActorTurnDegrees = -180 | -90 | -45 | 45 | 90 | 180;
+
+export interface ActorTurnAction {
+  type: "turn";
+  participantSlot: ParticipantSlot;
+  participantName: string;
+  angleDegrees: ActorTurnDegrees;
+  montageName: string;
+  fromYawDegrees: number;
+  toYawDegrees: number;
+  target: ParticipantSlot | "group_center";
+  reason: string;
+}
+
+export type ActorAction = ActorTurnAction;
+
 export interface ShotPlan {
   id: string;
   index: number;
@@ -722,6 +763,7 @@ export interface ShotPlan {
   rationale: string;
   visualSubjectSlot: ParticipantSlot | null;
   lookTargetSlot: ParticipantSlot | null;
+  actorActions: ActorAction[];
   facingOverrides: Partial<Record<ParticipantSlot, Vec3>>;
   axis: ShotAxis;
   projection: ShotProjectionValidation;

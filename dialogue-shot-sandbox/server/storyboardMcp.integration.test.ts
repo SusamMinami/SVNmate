@@ -155,6 +155,7 @@ function validPlan(
       camera_height: "eye",
       intent: `覆盖台词节点 ${line.dialogue_id}`,
     })),
+    sound_effects: [],
   };
 }
 
@@ -299,7 +300,7 @@ describe("internal storyboard MCP", () => {
         }
         expect(presence.connected).toBe(true);
         expect(presence.compatible).toBe(true);
-        expect(presence.serverVersion).toBe("0.17.2");
+        expect(presence.serverVersion).toBe("0.18.0");
         expect(presence.transport).toBe("stdio");
 
         let claimed = await client.callTool({
@@ -441,6 +442,45 @@ describe("internal storyboard MCP", () => {
     expect(await getStoryboardTask(second.request_id)).toBeNull();
   });
 
+  it("creates a fresh task when TRAE regeneration is forced", async () => {
+    temporaryRoot = await mkdtemp(join(tmpdir(), "storyboard-force-"));
+    process.env.STORYBOARD_PROJECT_ROOT = temporaryRoot;
+    const sequence = findDialogueSequence(demoDatabase, "2048");
+    const first = createDirectorInput(sequence, "force-first-request");
+    const second = createDirectorInput(sequence, "force-second-request");
+    const firstTask = await createStoryboardTask(first);
+    await completeStoryboardTask(firstTask.requestId, validPlan(first));
+
+    const regenerated = await createStoryboardTask(second, {
+      forceRegenerate: true,
+    });
+
+    expect(regenerated.requestId).toBe(second.request_id);
+    expect(regenerated.status).toBe("pending");
+    expect(regenerated.cacheSourceRequestId).toBeUndefined();
+  });
+
+  it("keeps a forced regeneration isolated from an older active task", async () => {
+    temporaryRoot = await mkdtemp(join(tmpdir(), "storyboard-force-active-"));
+    process.env.STORYBOARD_PROJECT_ROOT = temporaryRoot;
+    const sequence = findDialogueSequence(demoDatabase, "2048");
+    const first = createDirectorInput(sequence, "force-active-first");
+    const second = createDirectorInput(sequence, "force-active-second");
+    const firstTask = await createStoryboardTask(first);
+    const regenerated = await createStoryboardTask(second, {
+      forceRegenerate: true,
+    });
+
+    await completeStoryboardTask(firstTask.requestId, validPlan(first));
+
+    expect((await getStoryboardTask(regenerated.requestId))?.status).toBe(
+      "pending",
+    );
+    await expect(
+      createStoryboardTask(second, { forceRegenerate: true }),
+    ).rejects.toThrow("必须使用新的 request_id");
+  });
+
   it("keeps a queued task active when the UI wait expires", async () => {
     temporaryRoot = await mkdtemp(join(tmpdir(), "storyboard-queue-timeout-"));
     process.env.STORYBOARD_PROJECT_ROOT = temporaryRoot;
@@ -494,6 +534,7 @@ describe("internal storyboard MCP", () => {
     const reordered = {
       constraints: input.constraints,
       adjacent_context: input.adjacent_context,
+      sound_effect_catalog: input.sound_effect_catalog,
       dialogue: input.dialogue,
       participants: input.participants,
       outline: input.outline,
@@ -558,6 +599,21 @@ describe("internal storyboard MCP", () => {
     expect((await getStoryboardTask(input.request_id))?.status).toBe("pending");
   });
 
+  it("rejects plans using the legacy contract without sound_effects", async () => {
+    temporaryRoot = await mkdtemp(join(tmpdir(), "storyboard-sound-schema-"));
+    process.env.STORYBOARD_PROJECT_ROOT = temporaryRoot;
+    const sequence = findDialogueSequence(demoDatabase, "2048");
+    const input = createDirectorInput(sequence, "sound-schema-request");
+    await createStoryboardTask(input);
+    const plan = validPlan(input);
+    delete plan.sound_effects;
+
+    await expect(
+      completeStoryboardTask(input.request_id, plan),
+    ).rejects.toThrow();
+    expect((await getStoryboardTask(input.request_id))?.status).toBe("pending");
+  });
+
   it("rejects plans without a relationship wide shot in the first three shots", async () => {
     temporaryRoot = await mkdtemp(join(tmpdir(), "storyboard-opening-wide-"));
     process.env.STORYBOARD_PROJECT_ROOT = temporaryRoot;
@@ -593,7 +649,7 @@ describe("internal storyboard MCP", () => {
       }>;
     };
     blocking.placements.find(
-      (placement) => placement.subject === "C",
+      (placement) => placement.subject === "D",
     )!.entry_dialogue_id = "309903";
 
     await expect(

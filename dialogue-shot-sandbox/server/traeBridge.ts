@@ -347,7 +347,8 @@ export async function routeTraeRequest(
     }
     if (request.method === "POST" && url.pathname === "/api/director/trae") {
       const input = DirectorInputSchema.parse(await readJson(request));
-      const task = await createStoryboardTask(input);
+      const forceRegenerate = url.searchParams.get("force") === "1";
+      const task = await createStoryboardTask(input, { forceRegenerate });
       const taskWasCompleted = task.status === "completed";
       const sharedRecords = await lookupSharedLibrary(input);
       const validSharedRecords = sharedRecords.filter((record) => {
@@ -360,7 +361,7 @@ export async function routeTraeRequest(
       const exactShared = findExactSharedStoryboard(input, validSharedRecords);
       let source: "generated" | "local-cache" | "shared-library" =
         taskWasCompleted ? "local-cache" : "generated";
-      if (!taskWasCompleted && exactShared) {
+      if (!forceRegenerate && !taskWasCompleted && exactShared) {
         await completeStoryboardTask(task.requestId, {
           ...exactShared.plan,
           request_id: task.requestId,

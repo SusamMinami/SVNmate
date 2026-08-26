@@ -4,6 +4,7 @@ import {
   type DirectorProviderResult,
   type ShotDirectorProvider,
 } from "./contracts";
+import { resolveSoundEffectRecommendations } from "./soundEffectRecommender";
 
 interface BridgeErrorPayload {
   code?: string;
@@ -79,6 +80,10 @@ export class MiraDirectorProvider implements ShotDirectorProvider {
           parsed.data.scene_analysis.emotional_progression,
         visualStrategy: parsed.data.scene_analysis.visual_strategy,
       },
+      soundEffects: resolveSoundEffectRecommendations(
+        input,
+        parsed.data.sound_effects,
+      ),
     };
   }
 }

@@ -10,6 +10,32 @@ import { buildDirectorPrompt } from "./prompt";
 import { createRuleDecisions } from "./ruleDirector";
 
 describe("buildDirectorPrompt", () => {
+  it("preserves BP facing and declares the supported actor turns", () => {
+    const sequence = findDialogueSequence(demoDatabase, "2048");
+    const input = createDirectorInput(sequence, "actor-turn-request", {
+      preserveInputFormation: true,
+    });
+    const prompt = buildDirectorPrompt(input, "Mira AI 导演");
+
+    expect(input.participants[0]).toMatchObject({
+      can_turn: true,
+      initial_yaw_degrees: expect.any(Number),
+    });
+    expect(input.constraints.supported_actor_turn_degrees).toEqual([
+      -180,
+      -90,
+      -45,
+      45,
+      90,
+      180,
+    ]);
+    expect(prompt).toContain("不能假设角色已经精确朝向对话对象");
+    expect(prompt).toContain("can_turn=false");
+    expect(prompt).toContain("sound_effect_catalog");
+    expect(prompt).toContain("A_SFX_Dialog_516918");
+    expect(prompt).toContain("目录中没有足够匹配");
+  });
+
   it("includes focused projection feedback for a model revision", () => {
     const sequence = findDialogueSequence(demoDatabase, "2048");
     const input = createDirectorInput(sequence, "projection-retry-request");
@@ -25,6 +51,7 @@ describe("buildDirectorPrompt", () => {
       },
       blocking,
       shots: createRuleDecisions(input, blocking),
+      sound_effects: [],
     };
 
     const prompt = buildDirectorPrompt(input, "Mira AI 导演", {
@@ -58,5 +85,6 @@ describe("buildDirectorPrompt", () => {
     expect(prompt).toContain("CASE-LOOKROOM");
     expect(prompt).toContain("revision_reflections");
     expect(prompt).toContain("不输出推理过程");
+    expect(prompt).toContain("保留上一版 sound_effects");
   });
 });

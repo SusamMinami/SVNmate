@@ -1,4 +1,9 @@
-import { ArrowRight, BookOpen, Move3d, Undo2 } from "lucide-react";
+import {
+  ArrowRight,
+  BookOpen,
+  Move3d,
+  Undo2,
+} from "lucide-react";
 import type {
   DirectorBlocking,
   DirectorSceneAnalysis,
@@ -73,9 +78,9 @@ export function StoryBriefModal({
                   ? "已命中飞书共享方案"
                   : source === "local-cache"
                     ? "已命中本地缓存"
-                    : "AI 导演分析完成"}
+                    : "AI 导演分析完成 · 包含占位建议"}
               </small>
-              <h2 id="story-brief-title">故事梗概</h2>
+              <h2 id="story-brief-title">分镜与占位方案</h2>
             </div>
           </div>
           <code>{sequence.prefix}</code>
@@ -118,7 +123,7 @@ export function StoryBriefModal({
           <section className="story-brief-modal__blocking">
             <div>
               <Move3d size={16} />
-              <span>AI 站位建议</span>
+              <span>AI 占位建议</span>
               <strong>{FORMATION_LABELS[blocking.formation]}</strong>
             </div>
             <p>{blocking.intent}</p>
@@ -153,14 +158,14 @@ export function StoryBriefModal({
           <div>
             <button className="button" type="button" onClick={onKeepCurrent}>
               <Undo2 size={15} />
-              保留当前方案
+              保留当前占位
             </button>
             <button
               className="button button--primary"
               type="button"
               onClick={onContinue}
             >
-              采用 AI 方案
+              采用 AI 占位
               <ArrowRight size={16} />
             </button>
           </div>

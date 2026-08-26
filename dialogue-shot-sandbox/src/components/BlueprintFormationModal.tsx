@@ -1,9 +1,11 @@
-import { Boxes, Check, Sparkles } from "lucide-react";
+import { Boxes, Check, Sparkles, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { BlueprintFormationSnapshot, DialogueSequence, ShotPlan } from "../types";
 import { StageView } from "./StageView";
 
-interface FormationOption {
+export type FormationOptionId = "blueprint" | "generated" | "ai";
+
+export interface FormationOption {
   sequence: DialogueSequence;
   shots: ShotPlan[];
 }
@@ -11,9 +13,14 @@ interface FormationOption {
 interface BlueprintFormationModalProps {
   blueprint: FormationOption;
   generated: FormationOption;
+  ai?: FormationOption;
+  aiLabel?: string;
   snapshot: BlueprintFormationSnapshot;
   mappedSlotCount: number;
-  onChoose: (choice: "blueprint" | "generated") => void;
+  initialChoice: FormationOptionId;
+  mode: "initial" | "switch";
+  onChoose: (choice: FormationOptionId) => void;
+  onClose: () => void;
 }
 
 function averageDistance(sequence: DialogueSequence): number {
@@ -37,14 +44,23 @@ function averageDistance(sequence: DialogueSequence): number {
 export function BlueprintFormationModal({
   blueprint,
   generated,
+  ai,
+  aiLabel,
   snapshot,
   mappedSlotCount,
+  initialChoice,
+  mode,
   onChoose,
+  onClose,
 }: BlueprintFormationModalProps) {
-  const [selected, setSelected] = useState<"blueprint" | "generated">(
-    "blueprint",
-  );
-  const option = selected === "blueprint" ? blueprint : generated;
+  const [selected, setSelected] =
+    useState<FormationOptionId>(initialChoice);
+  const option =
+    selected === "blueprint"
+      ? blueprint
+      : selected === "ai" && ai
+        ? ai
+        : generated;
   const shot = option.shots[0];
   const spacing = useMemo(
     () => averageDistance(option.sequence),
@@ -61,14 +77,33 @@ export function BlueprintFormationModal({
       >
         <header>
           <div>
-            <small>检测到 UE Blueprint 初始站位</small>
-            <h2 id="formation-compare-title">选择镜头分析使用的站位</h2>
+            <small>
+              {mode === "initial"
+                ? "检测到 UE Blueprint 初始占位"
+                : "当前对话已有多个占位方案"}
+            </small>
+            <h2 id="formation-compare-title">
+              {mode === "initial" ? "选择镜头分析使用的占位" : "切换占位方案"}
+            </h2>
           </div>
-          <code>{blueprint.sequence.startId}</code>
+          <div className="formation-compare-header-actions">
+            <code>{blueprint.sequence.startId}</code>
+            {mode === "switch" && (
+              <button
+                className="icon-button"
+                type="button"
+                title="关闭"
+                aria-label="关闭占位方案切换"
+                onClick={onClose}
+              >
+                <X size={16} />
+              </button>
+            )}
+          </div>
         </header>
 
         <div className="formation-compare-toolbar">
-          <div className="mode-segment" role="group" aria-label="站位来源">
+          <div className="mode-segment" role="group" aria-label="占位方案">
             <button
               type="button"
               className={selected === "blueprint" ? "is-active" : ""}
@@ -76,7 +111,10 @@ export function BlueprintFormationModal({
               onClick={() => setSelected("blueprint")}
             >
               <Boxes size={15} />
-              BP 站位
+              {snapshot.blueprintAssetPath
+                .split("/")
+                .at(-1)
+                ?.split(".")[0] ?? "BP 占位"}
             </button>
             <button
               type="button"
@@ -85,8 +123,19 @@ export function BlueprintFormationModal({
               onClick={() => setSelected("generated")}
             >
               <Sparkles size={15} />
-              导演重新排位
+              规则占位
             </button>
+            {ai && (
+              <button
+                type="button"
+                className={selected === "ai" ? "is-active" : ""}
+                aria-pressed={selected === "ai"}
+                onClick={() => setSelected("ai")}
+              >
+                <Sparkles size={15} />
+                {aiLabel ?? "AI 占位"}
+              </button>
+            )}
           </div>
           <dl className="formation-compare-metrics">
             <div>
@@ -94,7 +143,7 @@ export function BlueprintFormationModal({
               <dd>{option.sequence.participants.length}</dd>
             </div>
             <div>
-              <dt>BP 已映射</dt>
+              <dt>BP 角色槽</dt>
               <dd>{mappedSlotCount}</dd>
             </div>
             <div>
@@ -111,23 +160,33 @@ export function BlueprintFormationModal({
         <div className="formation-compare-summary">
           <strong>
             {selected === "blueprint"
-              ? "保留 UE 中已有的位置和朝向"
-              : "允许当前导演重新安排角色位置"}
+              ? "保留 UE 初始位置与朝向，镜头按需规划 45° / 90° / 180° 转身"
+              : selected === "ai"
+                ? "采用 AI 返回的角色占位、朝向关系与分镜"
+                : "使用规则导演自动安排的角色占位"}
           </strong>
           <span title={snapshot.blueprintAssetPath}>
-            {snapshot.blueprintAssetPath}
+            {selected === "blueprint"
+              ? snapshot.blueprintAssetPath
+              : selected === "ai"
+                ? aiLabel ?? "AI 占位"
+                : "规则导演占位"}
           </span>
         </div>
 
         <footer>
-          <span>确认后将按该站位重新计算关系轴与全部镜头。</span>
+          <span>
+            {mode === "initial"
+              ? "确认后将按该占位生成关系轴与全部镜头。"
+              : "切换后将载入该占位对应的完整分镜，无需重新分析。"}
+          </span>
           <button
             className="button button--primary"
             type="button"
             onClick={() => onChoose(selected)}
           >
             <Check size={16} />
-            使用此站位
+            使用此占位
           </button>
         </footer>
       </section>
