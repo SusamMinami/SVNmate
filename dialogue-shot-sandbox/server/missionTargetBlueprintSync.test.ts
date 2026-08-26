@@ -44,6 +44,7 @@ class BlueprintSyncConnection implements UnrealInvoker {
   }> = [];
   componentLocation = { X: 0, Y: 0, Z: 100 };
   componentRotation = { Pitch: 0, Yaw: 0, Roll: 0 };
+  formationClassPath = this.blueprintClassPath;
   commonProperties: Array<Record<string, unknown>> = [
     { Alias: "Virtual", CurrentBool: false },
     {
@@ -179,7 +180,7 @@ class BlueprintSyncConnection implements UnrealInvoker {
           return ["player", "Guard"];
         }
         if (property === "Formation") {
-          return this.blueprintClassPath;
+          return this.formationClassPath;
         }
         if (property === "CommonDialogGraphProperties") {
           return structuredClone(this.commonProperties);
@@ -212,6 +213,7 @@ class BlueprintSyncConnection implements UnrealInvoker {
         return true;
       }
       if (args.PropertyName === "Formation") {
+        this.formationClassPath = String(args.Value);
         return true;
       }
       if (args.PropertyName === "CommonDialogGraphProperties") {
@@ -352,6 +354,32 @@ class BackgroundPropConnection extends BlueprintSyncConnection {
         component.scale = parseVector(String(args.Value));
       }
       return true;
+    }
+    return super.invoke(action, args);
+  }
+}
+
+class AlternateSpatialShapeConnection extends BlueprintSyncConnection {
+  override async invoke(
+    action: string,
+    args: Record<string, unknown>,
+  ): Promise<unknown> {
+    if (
+      action === "reflect.read_object_property" &&
+      args.PropertyName === "Formation"
+    ) {
+      return {
+        ObjectPath: await super.invoke(action, args),
+      };
+    }
+    if (
+      action === "reflect.read_object_property" &&
+      args.PropertyName === "PreviewLevel"
+    ) {
+      const value = String(await super.invoke(action, args));
+      return {
+        AssetPathName: value.split(".")[0],
+      };
     }
     return super.invoke(action, args);
   }
@@ -683,12 +711,102 @@ describe("mission target Blueprint synchronization", () => {
     });
     expect(connection.previewLevel).toBe("");
   });
+
+  it("uses the current map when only Preview Level and Virtual are missing", async () => {
+    await writeConfigFixture();
+    const connection = new BlueprintSyncConnection();
+    connection.previewLevel = "";
+
+    const result = await registerBlueprintDialogueModels(
+      {
+        blueprintName: "BP_735200",
+        selectedModelIndexes: [],
+        taskId: "900001",
+        preserveModels: true,
+      },
+      () => connection,
+    );
+
+    expect(result).toMatchObject({
+      status: "registered",
+      dialogueModels: ["player", "Guard"],
+      spatialStatus: "configured",
+      spatialMapAssetPath:
+        "/Game/Test/Maps/PlacedMap.PlacedMap",
+    });
+    expect(connection.previewLevel).toBe(
+      "/Game/Test/Maps/PlacedMap.PlacedMap",
+    );
+    expect(connection.commonProperties[0]).toMatchObject({
+      Alias: "Virtual",
+      CurrentBool: true,
+    });
+    expect(
+      connection.calls.some(
+        (call) =>
+          call.action === "reflect.write_object_property" &&
+          call.args.PropertyName === "DialogModels",
+      ),
+    ).toBe(false);
+  });
+
+  it("accepts UE string booleans, lowercase structs and wrapped object paths on readback", async () => {
+    await writeConfigFixture();
+    const connection = new AlternateSpatialShapeConnection();
+    connection.commonProperties = [
+      { Alias: "Virtual", current_bool: "False" },
+      {
+        Alias: "PlayerInitPosition",
+        current_vector: { x: 100, y: 200, z: 200 },
+      },
+      {
+        Alias: "PlayerForward",
+        current_rotator: { pitch: 0, yaw: 0, roll: 0 },
+      },
+    ];
+    connection.specialProperties = [
+      { Alias: "Virtual", current_bool: 0 },
+    ];
+    connection.previewLevel = "";
+
+    const result = await registerBlueprintDialogueModels(
+      {
+        blueprintName: "BP_735200",
+        selectedModelIndexes: [],
+        preserveModels: true,
+      },
+      () => connection,
+    );
+
+    expect(result).toMatchObject({
+      status: "registered",
+      dialogueModels: ["player", "Guard"],
+      spatialStatus: "configured",
+    });
+    expect(connection.commonProperties).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          Alias: "Virtual",
+          current_bool: true,
+        }),
+        expect.objectContaining({
+          Alias: "PlayerInitPosition",
+          current_vector: { x: 100, y: 200, z: 200 },
+        }),
+      ]),
+    );
+    expect(connection.specialProperties[0]).toMatchObject({
+      current_bool: true,
+    });
+  });
 });
 
 describe("background prop import", () => {
   it("writes a selected Skeletal Mesh with its asset name and scale", async () => {
     await writeConfigFixture();
     const connection = new BackgroundPropConnection();
+    connection.commonProperties[0].CurrentBool = true;
+    connection.specialProperties[0].CurrentBool = true;
     connection.previewLevel =
       "/Game/Test/Maps/PlacedMap.PlacedMap";
     connection.selectedPlacementActors = [
@@ -790,6 +908,105 @@ describe("background prop import", () => {
       location: { X: -10, Y: -20, Z: 100 },
       rotation: { Pitch: 0, Yaw: -20, Roll: 0 },
       scale: { X: 0.9, Y: 0.9, Z: 0.9 },
+    });
+  });
+
+  it("fills missing dialogue metadata without changing DialogModels before import", async () => {
+    await writeConfigFixture();
+    const connection = new BackgroundPropConnection();
+    connection.formationClassPath = "None";
+    connection.commonProperties = [
+      { Alias: "Virtual", CurrentBool: false },
+      { Alias: "PlayerInitPosition" },
+      { Alias: "PlayerForward" },
+    ];
+    connection.specialProperties = [
+      { Alias: "Virtual", CurrentBool: false },
+    ];
+    connection.previewLevel = "";
+    connection.selectedPlacementActors = [
+      {
+        actor_ref: "PersistentLevel.BP_735200_C_0",
+        label: "BP_735200",
+        class_path: connection.blueprintClassPath,
+        skeletal_mesh_path: "",
+        static_mesh_path: "",
+        location: [700, 800, 900],
+        rotation: [0, 35, 0],
+        scale: [1, 1, 1],
+      },
+      {
+        actor_ref: "PersistentLevel.BP_BackgroundNpc_C_0",
+        label: "背景 NPC",
+        class_path:
+          "/Game/Test/NPC/BP_BackgroundNpc.BP_BackgroundNpc_C",
+        skeletal_mesh_path: "",
+        static_mesh_path: "",
+        location: [740, 810, 920],
+        rotation: [0, 50, 0],
+        scale: [1, 1, 1],
+      },
+    ];
+
+    const blockedPreview = await inspectBackgroundPropImport(
+      { blueprintName: "BP_735200" },
+      () => connection,
+    );
+    expect(blockedPreview.blockedReasons).toEqual(
+      expect.arrayContaining([
+        "对话 Formation 尚未指向当前 BP",
+        "对话尚未配置主角初始坐标",
+        "对话尚未配置主角朝向",
+        "对话尚未启用虚拟场景",
+        "对话尚未配置 Preview Level",
+      ]),
+    );
+
+    const result = await registerBlueprintDialogueModels(
+      {
+        blueprintName: "BP_735200",
+        selectedModelIndexes: [],
+        preserveModels: true,
+      },
+      () => connection,
+    );
+
+    expect(result).toMatchObject({
+      status: "registered",
+      dialogueModels: ["player", "Guard"],
+      spatialStatus: "configured",
+      spatialSource: "selected_actor",
+    });
+    expect(
+      connection.calls.some(
+        (call) =>
+          call.action === "reflect.write_object_property" &&
+          call.args.PropertyName === "DialogModels",
+      ),
+    ).toBe(false);
+    expect(connection.formationClassPath).toBe(
+      connection.blueprintClassPath,
+    );
+    expect(connection.previewLevel).toBe(
+      "/Game/Test/Maps/PlacedMap.PlacedMap",
+    );
+
+    const readyPreview = await inspectBackgroundPropImport(
+      { blueprintName: "BP_735200" },
+      () => connection,
+    );
+    expect(readyPreview.blockedReasons).toEqual([]);
+    expect(
+      readyPreview.items.find(
+        (item) => item.actorLabel === "背景 NPC",
+      ),
+    ).toMatchObject({
+      action: "create",
+      relativeTransform: {
+        location: expect.any(Object),
+        rotation: expect.any(Object),
+        scale: { x: 1, y: 1, z: 1 },
+      },
     });
   });
 });

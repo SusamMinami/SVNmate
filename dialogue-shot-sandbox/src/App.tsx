@@ -30,6 +30,10 @@ import {
 } from "react";
 import { DesktopSetupModal } from "./components/DesktopSetupModal";
 import { BlueprintFormationModal } from "./components/BlueprintFormationModal";
+import {
+  DialogueTextEditorModal,
+  type DialogueTextEditorItem,
+} from "./components/DialogueTextEditorModal";
 import { DirectorControl } from "./components/DirectorControl";
 import { LaunchScreen } from "./components/LaunchScreen";
 import { MissionTargetModal } from "./components/MissionTargetModal";
@@ -82,11 +86,13 @@ import {
   getBlueprintFormation,
   inspectDialogueStoryboardExport,
   updateDialogueContent,
+  updateDialogueContents,
 } from "./ue/client";
 import type {
   BlueprintFormationSnapshot,
   CameraMovement,
   DepthOfField,
+  DialogueContentUpdateRequest,
   DialogueContentSearchContext,
   DialogueContentSearchResult,
   DialogueDatabase,
@@ -196,8 +202,20 @@ function withUpdatedDialogueContent(
   dialogueNodeId: string,
   content: string,
 ): DialogueSequence {
+  return withUpdatedDialogueContents(
+    sequence,
+    new Map([[dialogueNodeId, content]]),
+  );
+}
+
+function withUpdatedDialogueContents(
+  sequence: DialogueSequence,
+  updates: ReadonlyMap<string, string>,
+): DialogueSequence {
   const updateRow = (row: DialogueRow) =>
-    row.id === dialogueNodeId ? { ...row, content } : row;
+    updates.has(row.id)
+      ? { ...row, content: updates.get(row.id)! }
+      : row;
   const updateAdjacent = (
     context: DialogueSequence["adjacentContext"]["previous"],
   ) =>
@@ -205,7 +223,9 @@ function withUpdatedDialogueContent(
       ? {
           ...context,
           dialogue: context.dialogue.map((row) =>
-            row.dialogueId === dialogueNodeId ? { ...row, content } : row,
+            updates.has(row.dialogueId)
+              ? { ...row, content: updates.get(row.dialogueId)! }
+              : row,
           ),
         }
       : null;
@@ -930,6 +950,8 @@ export default function App() {
   const [dialogueSaveBusy, setDialogueSaveBusy] = useState(false);
   const [dialogueSaveError, setDialogueSaveError] = useState("");
   const [dialogueSaveStatus, setDialogueSaveStatus] = useState("");
+  const [showDialogueTextEditor, setShowDialogueTextEditor] =
+    useState(false);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("camera");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dialogueEditorRef = useRef<HTMLDivElement>(null);
@@ -939,9 +961,11 @@ export default function App() {
 
   const activeShot: ShotPlan | undefined = shots[activeIndex] ?? shots[0];
   const activeDialogueId =
-    activeShot?.dialogueIds.includes(selectedDialogueId)
-      ? selectedDialogueId
-      : activeShot?.dialogueId;
+    activeShot
+      ? activeShot.dialogueIds.includes(selectedDialogueId)
+        ? selectedDialogueId
+        : activeShot.dialogueId
+      : selectedDialogueId;
   const activeDialogueRow = sequence.rows.find(
     (row) => row.id === activeDialogueId,
   );
@@ -978,6 +1002,64 @@ export default function App() {
       ),
     [sequence.participants],
   );
+  const dialogueTextEditorItems = useMemo<DialogueTextEditorItem[]>(() => {
+    if (!contentSearch) {
+      return activeDialogueRow
+        ? [
+            {
+              dialogueId: sequence.prefix,
+              startId: sequence.startId,
+              dialogueNodeId: activeDialogueRow.id,
+              speakerName:
+                activeDialogueRow.speakerSlot
+                  ? participantNamesBySlot.get(
+                      activeDialogueRow.speakerSlot,
+                    ) ?? "未知角色"
+                  : "未知角色",
+              content: activeDialogueRow.content,
+            },
+          ]
+        : [];
+    }
+    const seen = new Set<string>();
+    return contentSearch.contexts.flatMap((context) => {
+      const participants = new Map(
+        context.sequence.participants.map((participant) => [
+          participant.slot,
+          participant.name,
+        ]),
+      );
+      return context.matchedDialogueIds.flatMap((dialogueNodeId) => {
+        if (seen.has(dialogueNodeId)) {
+          return [];
+        }
+        const row = context.sequence.rows.find(
+          (candidate) => candidate.id === dialogueNodeId,
+        );
+        if (!row) {
+          return [];
+        }
+        seen.add(dialogueNodeId);
+        return [
+          {
+            dialogueId: context.prefix,
+            startId: context.sequence.startId,
+            dialogueNodeId,
+            speakerName: row.speakerSlot
+              ? participants.get(row.speakerSlot) ?? "未知角色"
+              : "未知角色",
+            content: row.content,
+          },
+        ];
+      });
+    });
+  }, [
+    activeDialogueRow,
+    contentSearch,
+    participantNamesBySlot,
+    sequence.prefix,
+    sequence.startId,
+  ]);
   const canExportStoryboard =
     shots.length > 0 &&
     sequence.participants.length >= 2 &&
@@ -1815,6 +1897,95 @@ export default function App() {
     }
   }
 
+  async function saveDialogueTextChanges(
+    items: DialogueContentUpdateRequest[],
+  ) {
+    if (items.length === 0 || dialogueSaveBusy) {
+      return;
+    }
+    const assetCount = new Set(items.map((item) => item.startId)).size;
+    if (
+      !window.confirm(
+        `将修改 ${items.length} 条对白，涉及 ${assetCount} 个对话资产。` +
+          "\n写入前会校验 UE 原文，成功后保存对应资产。" +
+          "\n\n是否继续？",
+      )
+    ) {
+      return;
+    }
+    setDialogueSaveBusy(true);
+    setDialogueSaveError("");
+    setDialogueSaveStatus("");
+    try {
+      const result = await updateDialogueContents({ items });
+      const updates = new Map(
+        result.items.map((item) => [
+          item.dialogueNodeId,
+          item.content,
+        ]),
+      );
+      const nextDatabase = {
+        ...database,
+        dialogueRows: database.dialogueRows.map((row) =>
+          updates.has(row.id)
+            ? { ...row, content: updates.get(row.id)! }
+            : row,
+        ),
+      };
+      setDatabase(nextDatabase);
+      const nextSequence = withUpdatedDialogueContents(sequence, updates);
+      setSequence(nextSequence);
+      setShots((current) =>
+        refreshShotDialogueText(nextSequence, current),
+      );
+      setContentSearch((current) => {
+        if (!current) {
+          return current;
+        }
+        const refreshed = searchDialogueContent(
+          nextDatabase,
+          current.query,
+        );
+        return refreshed.contexts.length > 0 ? refreshed : null;
+      });
+      setDesignedStoryboards((current) => {
+        const next = new Map(current);
+        for (const [prefix, cached] of next) {
+          if (
+            !cached.sequence.rows.some((row) => updates.has(row.id))
+          ) {
+            continue;
+          }
+          const cachedSequence = withUpdatedDialogueContents(
+            cached.sequence,
+            updates,
+          );
+          next.set(prefix, {
+            ...cached,
+            sequence: cachedSequence,
+            shots: refreshShotDialogueText(
+              cachedSequence,
+              cached.shots,
+            ),
+          });
+        }
+        return next;
+      });
+      setShowDialogueTextEditor(false);
+      setDialogueSaveStatus(
+        `已修改 ${result.updatedCount} 条对白并保存 ${result.savedAssetCount} 个对话资产`,
+      );
+    } catch (saveError) {
+      setDialogueSaveError(
+        saveError instanceof Error
+          ? saveError.message
+          : "批量对白保存失败",
+      );
+    } finally {
+      setDialogueSaveBusy(false);
+    }
+  }
+
   function currentStoryboardExportRequest(): StoryboardExportRequest {
     if (!canExportStoryboard) {
       throw new Error("当前方案未绑定完整的 UE Blueprint 站位");
@@ -2108,6 +2279,15 @@ export default function App() {
                 <span>{formationStatus}</span>
               </div>
             )}
+            {!activeShot && dialogueSaveStatus && (
+              <div
+                className="formation-status formation-status--blueprint"
+                role="status"
+              >
+                <Check size={15} />
+                <span>{dialogueSaveStatus}</span>
+              </div>
+            )}
             <DirectorControl
               mode={directorMode}
               appliedMode={appliedDirector}
@@ -2184,7 +2364,11 @@ export default function App() {
             </div>
           </section>
 
-          <section className="shot-list-section">
+          <section
+            className={`shot-list-section ${
+              contentSearch ? "has-floating-action" : ""
+            }`}
+          >
             <div className="section-label section-label--sticky">
               <span>
                 {contentSearch
@@ -2376,6 +2560,23 @@ export default function App() {
                   ))}
             </div>
           </section>
+          {contentSearch &&
+            database.sourceName !== "内置演示数据" &&
+            dialogueTextEditorItems.length > 0 && (
+              <button
+                className="icon-button dialogue-search-edit-fab"
+                type="button"
+                title="编辑搜索结果"
+                aria-label="编辑搜索结果"
+                onClick={() => {
+                  setDialogueSaveError("");
+                  setDialogueSaveStatus("");
+                  setShowDialogueTextEditor(true);
+                }}
+              >
+                <Pencil size={17} />
+              </button>
+            )}
         </aside>
 
         <section className="viewport-panel">
@@ -2693,6 +2894,24 @@ export default function App() {
           onClose={() => switchWorkspace("storyboard")}
         />
       </section>
+
+      {showDialogueTextEditor && dialogueTextEditorItems.length > 0 && (
+        <DialogueTextEditorModal
+          key={`${contentSearch?.query ?? ""}:${activeDialogueId ?? ""}`}
+          query={contentSearch?.query ?? ""}
+          items={dialogueTextEditorItems}
+          activeDialogueNodeId={activeDialogueId ?? ""}
+          busy={dialogueSaveBusy}
+          error={dialogueSaveError}
+          onClose={() => {
+            if (!dialogueSaveBusy) {
+              setShowDialogueTextEditor(false);
+              setDialogueSaveError("");
+            }
+          }}
+          onApply={(items) => void saveDialogueTextChanges(items)}
+        />
+      )}
 
       {storyboardExportPreview && storyboardExportRequest && (
         <StoryboardExportModal

@@ -11,6 +11,7 @@ import {
   MonitorUp,
   PackagePlus,
   PencilLine,
+  RefreshCw,
   Search,
   Trash2,
   X,
@@ -163,6 +164,7 @@ export function MissionTargetModal({
     useState<BackgroundPropImportPreview | null>(null);
   const [selectedBackgroundActorRefs, setSelectedBackgroundActorRefs] =
     useState<Set<string>>(new Set());
+  const [backgroundPropError, setBackgroundPropError] = useState("");
   const [mapLoadDecision, setMapLoadDecision] =
     useState<MapLoadDecision | null>(null);
   const [busy, setBusy] = useState(false);
@@ -180,8 +182,10 @@ export function MissionTargetModal({
         target.previewKind === "asset" &&
         Boolean(target.modelClassPath),
     ) ?? [];
-  const blueprintModelSlots =
-    blueprintInspection?.slots.filter((slot) => slot.modelIndex > 0) ?? [];
+  const blueprintRegistrationSlots = blueprintInspection?.slots ?? [];
+  const blueprintModelSlots = blueprintRegistrationSlots.filter(
+    (slot) => slot.modelIndex > 0,
+  );
   const selectedModelCount = blueprintModelSlots.filter((slot) =>
     selectedModelIndexes.has(slot.modelIndex),
   ).length;
@@ -233,19 +237,29 @@ export function MissionTargetModal({
   const allBackgroundItemsSelected =
     selectableBackgroundItems.length > 0 &&
     selectedBackgroundCount === selectableBackgroundItems.length;
+  const backgroundDialogueSetupReasons =
+    backgroundPropPreview?.blockedReasons.filter(
+      (reason) =>
+        reason.startsWith("对话 Formation") ||
+        reason.startsWith("对话尚未配置") ||
+        reason.startsWith("对话尚未启用虚拟场景"),
+    ) ?? [];
 
   function applyBlueprintInspection(
     inspection: MissionTargetBlueprintInspection,
     updateStatus = true,
+    resetModelSelection = true,
   ) {
     setBlueprintInspection(inspection);
-    setSelectedModelIndexes(
-      new Set(
-        inspection.slots
-          .filter((slot) => slot.modelIndex > 0)
-          .map((slot) => slot.modelIndex),
-      ),
-    );
+    if (resetModelSelection) {
+      setSelectedModelIndexes(
+        new Set(
+          inspection.slots
+            .filter((slot) => slot.modelIndex > 0)
+            .map((slot) => slot.modelIndex),
+        ),
+      );
+    }
     if (inspection.refreshedPlan) {
       setPlan(inspection.refreshedPlan);
       const refreshedIds = new Set(
@@ -312,6 +326,7 @@ export function MissionTargetModal({
     setBusy(true);
     setError("");
     setStatus("");
+    setBackgroundPropError("");
     try {
       const result = await loadMissionTargetPreview(selectedPlan, mapMode);
       setMapLoadDecision(null);
@@ -328,6 +343,71 @@ export function MissionTargetModal({
       } else {
         setError(message);
       }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function configureBackgroundDialogue() {
+    if (!blueprintName.trim()) {
+      return;
+    }
+    if (
+      !window.confirm(
+        "将补齐当前 BP 对应对话的 Formation、Preview Level、虚拟场景和主角初始 Transform。" +
+          "\n现有 DialogModels 保持不变。" +
+          "\n\n对话资产将保存，是否继续？",
+      )
+    ) {
+      return;
+    }
+    setBusy(true);
+    setBackgroundPropError("");
+    setError("");
+    setStatus("");
+    try {
+      const result = await registerBlueprintDialogueModels(
+        blueprintName.trim(),
+        [],
+        plan?.taskId,
+        targetOverrideItems,
+        true,
+      );
+      const inspection = await inspectMissionTargetBlueprint(
+        blueprintName.trim(),
+        plan ?? undefined,
+        plan?.taskId,
+        targetOverrideItems,
+      );
+      applyBlueprintInspection(inspection, false, false);
+      const preview = await inspectBackgroundPropImport(
+        blueprintName.trim(),
+      );
+      setBackgroundPropPreview(preview);
+      setSelectedBackgroundActorRefs((current) =>
+        new Set(
+          preview.items
+            .filter(
+              (item) =>
+                item.action !== "blocked" &&
+                current.has(item.actorRef),
+            )
+            .map((item) => item.actorRef),
+        ),
+      );
+      if (result.spatialStatus === "not_configured") {
+        setBackgroundPropError(
+          "Formation 已补齐，但无法确定 BP 的世界位置。请把该 BP 放入当前地图，或输入任务节点后重试。",
+        );
+      } else {
+        setStatus("已补齐对话空间配置，并重新读取 UE 当前选择");
+      }
+    } catch (configurationError) {
+      setBackgroundPropError(
+        configurationError instanceof Error
+          ? configurationError.message
+          : "补齐对话空间配置失败",
+      );
     } finally {
       setBusy(false);
     }
@@ -425,6 +505,7 @@ export function MissionTargetModal({
   async function clearPreview() {
     setBusy(true);
     setError("");
+    setBackgroundPropError("");
     try {
       const result = await clearMissionTargetPreview();
       setStatus(
@@ -450,6 +531,7 @@ export function MissionTargetModal({
     setBusy(true);
     setError("");
     setStatus("");
+    setBackgroundPropError("");
     try {
       const preview = await inspectBackgroundPropImport(
         blueprintName.trim(),
@@ -505,8 +587,9 @@ export function MissionTargetModal({
     }
     if (
       !window.confirm(
-        `将向 ${backgroundPropPreview.blueprintAssetPath} 写入 ${selectedBackgroundCount} 个背景资产组件。` +
+        `将向 ${backgroundPropPreview.blueprintAssetPath} 写入 ${selectedBackgroundCount} 个 UE Actor。` +
           "\n组件使用资产原名，并保留位置、旋转和缩放。" +
+          "\n不会写入 NPC 表或目标物表。" +
           "\n\nBP 将编译并保存，是否继续？",
       )
     ) {
@@ -524,11 +607,11 @@ export function MissionTargetModal({
       setSelectedBackgroundActorRefs(new Set());
       setStatus(
         result.status === "unchanged"
-          ? "所选背景资产已经与 BP 一致"
-          : `已写入背景资产：新增 ${result.createdComponentNames.length} 个，更新 ${result.updatedComponentNames.length} 个`,
+          ? "所选 UE Actor 已经与 BP 一致"
+          : `已直接写入 BP：新增 ${result.createdComponentNames.length} 个，更新 ${result.updatedComponentNames.length} 个`,
       );
     } catch (importError) {
-      setError(
+      setBackgroundPropError(
         importError instanceof Error
           ? importError.message
           : "背景资产写入 BP 失败",
@@ -630,8 +713,9 @@ export function MissionTargetModal({
             : "";
       setStatus(
         `已创建 ${result.blueprintAssetPath}：0 号玩家、${result.targetCount} 个目标物和 c1 摄像机；对话模型 ${
-          registration?.registeredCount ?? 0
-        } 个，None ${registration?.emptyCount ?? 0} 个${spatialMessage}`,
+          registration?.characterCount ??
+          (registration?.registeredCount ?? 0) + 1
+        } 个角色（含 0 号玩家），None ${registration?.emptyCount ?? 0} 个${spatialMessage}`,
       );
       try {
         const inspection = await inspectMissionTargetBlueprint(
@@ -710,7 +794,7 @@ export function MissionTargetModal({
               ? "；未找到关卡中的对应 BP，空间配置仍不完整"
             : "";
       setStatus(
-        `${result.status === "unchanged" ? "对话模型无需变更" : `已注册到对话 ${result.dialogueId}`}：模型 ${result.registeredCount} 个，None ${result.emptyCount} 个${unresolved}${spatialMessage}`,
+        `${result.status === "unchanged" ? "对话模型无需变更" : `已按 BP 槽位注册到对话 ${result.dialogueId}`}：角色 ${result.characterCount ?? result.registeredCount + 1} 个（含 0 号玩家），None ${result.emptyCount} 个${unresolved}${spatialMessage}`,
       );
       const inspection = await inspectMissionTargetBlueprint(
         blueprintName.trim(),
@@ -1006,6 +1090,26 @@ export function MissionTargetModal({
       {embedded ? <ArrowLeft size={17} /> : <X size={17} />}
     </button>
   );
+  const readUeSelectionButton = (
+    <button
+      className={embedded ? "button workspace-floating-command" : "button"}
+      type="button"
+      onClick={() => void inspectBackgroundProps()}
+      disabled={busy || !blueprintName.trim()}
+      title={
+        blueprintName.trim()
+          ? "读取 UE 当前选择，审核后直接写入当前 BP"
+          : "请先填写 BP 文件名"
+      }
+    >
+      {busy ? (
+        <LoaderCircle className="spin" size={16} />
+      ) : (
+        <RefreshCw size={16} />
+      )}
+      读取 UE 选择
+    </button>
+  );
 
   return (
     <div
@@ -1023,6 +1127,7 @@ export function MissionTargetModal({
       >
         {embedded ? (
           <div className="workspace-floating-actions">
+            {readUeSelectionButton}
             {returnButton}
           </div>
         ) : (
@@ -1036,7 +1141,10 @@ export function MissionTargetModal({
                 <h2 id="mission-target-title">任务目标物</h2>
               </div>
             </div>
-            {returnButton}
+            <div className="npc-registration-header-actions">
+              {readUeSelectionButton}
+              {returnButton}
+            </div>
           </header>
         )}
 
@@ -1084,7 +1192,7 @@ export function MissionTargetModal({
                 setError("");
                 setStatus("");
               }}
-              placeholder="BP_735100 或 /Game/.../BP_735100"
+              placeholder="7351、BP_735100 或 /Game/.../BP_735100"
               spellCheck={false}
             />
             <button
@@ -1119,7 +1227,7 @@ export function MissionTargetModal({
 
         <div className="mission-target-body">
           {isDialogueRegistration &&
-          !isBlueprintSync &&
+          (!isBlueprintSync || needsDialogueRegistration) &&
           blueprintInspection ? (
             <>
               <section className="mission-target-summary mission-target-summary--blueprint">
@@ -1133,14 +1241,15 @@ export function MissionTargetModal({
                     <dd>{blueprintInspection.dialogueId}</dd>
                   </div>
                   <div>
-                    <dt>模型槽位</dt>
-                    <dd>{blueprintModelSlots.length}</dd>
+                    <dt>注册策略</dt>
+                    <dd>BP 数字槽位</dd>
                   </div>
                   <div>
-                    <dt>已注册</dt>
+                    <dt>角色位 / 已注册</dt>
                     <dd>
+                      {blueprintRegistrationSlots.length} /{" "}
                       {
-                        blueprintModelSlots.filter(
+                        blueprintRegistrationSlots.filter(
                           (slot) => slot.status === "registered",
                         ).length
                       }
@@ -1177,10 +1286,11 @@ export function MissionTargetModal({
                     </tr>
                   </thead>
                   <tbody>
-                    {blueprintModelSlots.map((slot) => {
-                      const selected = selectedModelIndexes.has(
-                        slot.modelIndex,
-                      );
+                    {blueprintRegistrationSlots.map((slot) => {
+                      const playerSlot = slot.modelIndex === 0;
+                      const selected =
+                        playerSlot ||
+                        selectedModelIndexes.has(slot.modelIndex);
                       const label = dialogueModelLabel(slot, selected);
                       return (
                         <tr key={slot.modelIndex}>
@@ -1188,10 +1298,15 @@ export function MissionTargetModal({
                             <input
                               type="checkbox"
                               checked={selected}
+                              disabled={playerSlot || busy}
                               onChange={() =>
                                 toggleBlueprintModel(slot.modelIndex)
                               }
-                              aria-label={`选择 BP 模型槽位 ${slot.modelIndex}`}
+                              aria-label={
+                                playerSlot
+                                  ? "0 号玩家固定注册"
+                                  : `选择 BP 模型槽位 ${slot.modelIndex}`
+                              }
                             />
                           </td>
                           <td>
@@ -1412,29 +1527,16 @@ export function MissionTargetModal({
 
         <footer>
           <span>
-            {isBlueprintSync
+            {isDialogueRegistration &&
+            (!isBlueprintSync || needsDialogueRegistration)
+              ? `按 BP 槽位注册：已选择 ${selectedModelCount + 1} / ${blueprintRegistrationSlots.length} 个角色位，0 号玩家固定`
+              : isBlueprintSync
               ? `已选择 ${selectedSyncMappings.length} / ${blueprintSync?.mappings.length ?? 0} 个已映射目标物，${blueprintChangeCount} 项位置不同`
-              : isDialogueRegistration
-              ? `已选择 ${selectedModelCount} / ${blueprintModelSlots.length} 个 BP 模型，对话 ${blueprintInspection?.dialogueId ?? "未找到"}`
               : plan
               ? `已选择 ${selectedCount} / ${plan.targets.length} 个目标物，MapID ${plan.mapId}`
               : "检查 BP 不会修改对话或 UE 资产"}
           </span>
           <div>
-            <button
-              className="button"
-              type="button"
-              onClick={() => void inspectBackgroundProps()}
-              disabled={
-                busy ||
-                !blueprintName.trim() ||
-                blueprintInspection?.blueprintState !== "populated"
-              }
-              title="读取 UE 当前选择并写入非数字背景组件"
-            >
-              <Boxes size={15} />
-              背景资产
-            </button>
             <button
               className="button"
               type="button"
@@ -1508,7 +1610,7 @@ export function MissionTargetModal({
                 (canUpdateBlueprint
                   ? !plan || selectedSyncMappings.length === 0
                   : needsDialogueRegistration
-                  ? blueprintModelSlots.length === 0
+                  ? blueprintRegistrationSlots.length === 0
                   : syncBlocked ||
                     !plan ||
                     blueprintInspection.blueprintState !== "empty" ||
@@ -1518,7 +1620,7 @@ export function MissionTargetModal({
                 canUpdateBlueprint
                   ? "从最新目标物配置更新 BP 模型位置和对话空间配置"
                   : needsDialogueRegistration
-                  ? "按 BP 数字槽位顺序写入对应对话的 DialogModels"
+                  ? "直接读取 BP 全部数字槽位，0 号固定为玩家并按原序写入 DialogModels"
                   : syncBlocked
                     ? blueprintSync?.blockedReasons.join("；")
                   : "向空 PositionMode BP 写入所选资产并注册 DialogModels"
@@ -1536,7 +1638,7 @@ export function MissionTargetModal({
                 : canUpdateBlueprint
                   ? "修改 BP 位置"
                   : needsDialogueRegistration
-                  ? "注册到对话"
+                  ? "按 BP 注册到对话"
                   : syncBlocked
                     ? "无法修改 BP"
                   : "创建 BP"}
@@ -1557,17 +1659,18 @@ export function MissionTargetModal({
                   <Boxes size={18} />
                 </span>
                 <div>
-                  <small>UE 当前选择写入 Blueprint</small>
-                  <h3 id="background-prop-title">导入背景资产</h3>
+                  <small>跳过 NPC 与目标物配表</small>
+                  <h3 id="background-prop-title">UE 选择写入 BP</h3>
                 </div>
                 <button
                   className="icon-button"
                   type="button"
                   title="关闭"
-                  aria-label="关闭背景资产导入"
+                  aria-label="关闭 UE 选择写入 BP"
                   onClick={() => {
                     setBackgroundPropPreview(null);
                     setSelectedBackgroundActorRefs(new Set());
+                    setBackgroundPropError("");
                   }}
                   disabled={busy}
                 >
@@ -1593,6 +1696,12 @@ export function MissionTargetModal({
                   </span>
                 </div>
               )}
+              {backgroundPropError && (
+                <div className="mission-map-choice__error" role="alert">
+                  <AlertTriangle size={15} />
+                  <span>{backgroundPropError}</span>
+                </div>
+              )}
               <div className="background-prop-table-wrap">
                 <table className="mission-target-table background-prop-table">
                   <thead>
@@ -1609,7 +1718,7 @@ export function MissionTargetModal({
                             }
                           }}
                           onChange={toggleAllBackgroundProps}
-                          aria-label="选择全部背景资产"
+                          aria-label="选择全部 UE Actor"
                         />
                       </th>
                       <th>Actor</th>
@@ -1635,7 +1744,7 @@ export function MissionTargetModal({
                               onChange={() =>
                                 toggleBackgroundProp(item.actorRef)
                               }
-                              aria-label={`选择背景资产 ${item.actorLabel}`}
+                              aria-label={`选择 UE Actor ${item.actorLabel}`}
                             />
                           </td>
                           <td title={item.actorRef}>
@@ -1694,15 +1803,28 @@ export function MissionTargetModal({
               <footer>
                 <span>
                   已选择 {selectedBackgroundCount} /{" "}
-                  {selectableBackgroundItems.length} 个可导入资产
+                  {selectableBackgroundItems.length} 个可写入 Actor
                 </span>
                 <div>
+                  {backgroundDialogueSetupReasons.length > 0 && (
+                    <button
+                      className="button"
+                      type="button"
+                      onClick={() => void configureBackgroundDialogue()}
+                      disabled={busy}
+                      title="保留 DialogModels，只补齐当前 BP 所需的对话空间字段"
+                    >
+                      <Link2 size={15} />
+                      补齐对话配置
+                    </button>
+                  )}
                   <button
                     className="button"
                     type="button"
                     onClick={() => {
                       setBackgroundPropPreview(null);
                       setSelectedBackgroundActorRefs(new Set());
+                      setBackgroundPropError("");
                     }}
                     disabled={busy}
                   >

@@ -12,6 +12,8 @@ import type {
   BackgroundPropPreviewItem,
   BlueprintFormationSlot,
   BlueprintFormationSnapshot,
+  DialogueContentBatchUpdateRequest,
+  DialogueContentBatchUpdateResult,
   DialogueContentUpdateRequest,
   DialogueContentUpdateResult,
   DialogueStoryboardExportPreview,
@@ -432,6 +434,7 @@ const DialogueModelRegistrationRequestSchema = z.object({
   selectedModelIndexes: z
     .array(z.number().int().positive())
     .max(200),
+  preserveModels: z.boolean().optional(),
   taskId: z.string().regex(/^\d+$/).optional(),
   targetOverrides: z
     .array(MissionTargetTransformOverrideSchema)
@@ -528,6 +531,10 @@ const DialogueContentUpdateRequestSchema = z.object({
     .refine((value) => value.trim().length > 0, "对白内容不能为空"),
 });
 
+const DialogueContentBatchUpdateRequestSchema = z.object({
+  items: z.array(DialogueContentUpdateRequestSchema).min(1).max(200),
+});
+
 const ConfigTableOpenSchema = z.object({
   table: z.enum(["missionTarget", "npc", "model"]),
 });
@@ -570,6 +577,83 @@ function hasUnrealObjectReference(value: unknown): boolean {
   );
 }
 
+function unrealReferenceText(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    let knownPathField = false;
+    for (const key of [
+      "AssetPathName",
+      "assetPathName",
+      "ObjectPath",
+      "objectPath",
+      "AssetPath",
+      "assetPath",
+      "Path",
+      "path",
+      "Value",
+      "value",
+    ]) {
+      if (Object.prototype.hasOwnProperty.call(record, key)) {
+        knownPathField = true;
+      }
+      const candidate = record[key];
+      if (typeof candidate === "string" && candidate.trim()) {
+        return candidate;
+      }
+    }
+    if (knownPathField) {
+      return "";
+    }
+  }
+  return String(value ?? "");
+}
+
+function unrealBoolean(value: unknown): boolean {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return value !== 0;
+  }
+  return ["true", "1", "yes"].includes(
+    String(value ?? "").trim().toLowerCase(),
+  );
+}
+
+function unrealStructNumber(
+  value: unknown,
+  keys: string[],
+  tupleIndex: number,
+): number {
+  if (Array.isArray(value)) {
+    return Number(value[tupleIndex] ?? 0);
+  }
+  if (typeof value === "string") {
+    for (const key of keys) {
+      const matched = value.match(
+        new RegExp(`${key}\\s*=\\s*(-?[\\d.]+)`, "i"),
+      );
+      if (matched) {
+        return Number(matched[1]);
+      }
+    }
+    return 0;
+  }
+  const record = (value ?? {}) as Record<string, unknown>;
+  for (const key of keys) {
+    const matchedKey = Object.keys(record).find(
+      (candidate) => candidate.toLowerCase() === key.toLowerCase(),
+    );
+    if (matchedKey !== undefined) {
+      return Number(record[matchedKey] ?? 0);
+    }
+  }
+  return 0;
+}
+
 function assetPathFromSearch(value: string): string | null {
   return value.match(/\[([^\]]+)\]\s*$/)?.[1] ?? null;
 }
@@ -580,24 +664,20 @@ function assetNameFromPath(value: string): string {
 }
 
 function vector(value: unknown): { x: number; y: number; z: number } {
-  const item = value as Partial<Record<"X" | "Y" | "Z", unknown>>;
   return {
-    x: Number(item?.X ?? 0),
-    y: Number(item?.Y ?? 0),
-    z: Number(item?.Z ?? 0),
+    x: unrealStructNumber(value, ["X"], 0),
+    y: unrealStructNumber(value, ["Y"], 1),
+    z: unrealStructNumber(value, ["Z"], 2),
   };
 }
 
 function rotator(
   value: unknown,
 ): { pitch: number; yaw: number; roll: number } {
-  const item = value as Partial<
-    Record<"Pitch" | "Yaw" | "Roll", unknown>
-  >;
   return {
-    pitch: Number(item?.Pitch ?? 0),
-    yaw: Number(item?.Yaw ?? 0),
-    roll: Number(item?.Roll ?? 0),
+    pitch: unrealStructNumber(value, ["Pitch", "P"], 0),
+    yaw: unrealStructNumber(value, ["Yaw", "Y"], 1),
+    roll: unrealStructNumber(value, ["Roll", "R"], 2),
   };
 }
 
@@ -726,8 +806,8 @@ function formatRotator(value: UnrealTransform["rotation"]): string {
   return `(Pitch=${formatNumber(value.pitch)},Yaw=${formatNumber(value.yaw)},Roll=${formatNumber(value.roll)})`;
 }
 
-function normalizeObjectPath(value: string): string {
-  const trimmed = value.trim().replaceAll("\\", "/");
+function normalizeObjectPath(value: unknown): string {
+  const trimmed = unrealReferenceText(value).trim().replaceAll("\\", "/");
   const referencedPath = trimmed.match(/'([^']+)'/)?.[1] ?? trimmed;
   return referencedPath.toLowerCase();
 }
@@ -747,7 +827,12 @@ function blueprintNameFromInput(input: string): string {
     .trim()
     .replaceAll("\\", "/")
     .replace(/\.uasset$/i, "");
-  const name = assetNameFromPath(normalized.split("/").at(-1) ?? normalized);
+  const rawName = assetNameFromPath(
+    normalized.split("/").at(-1) ?? normalized,
+  );
+  const name = /^\d{4}$/.test(rawName)
+    ? `BP_${rawName}00`
+    : rawName;
   if (!/^[A-Za-z0-9_]+$/.test(name)) {
     throw new Error("请输入有效的 BP 文件名或 /Game/ 资产路径");
   }
@@ -2058,6 +2143,230 @@ export async function updateDialogueContent(
   }
 }
 
+interface PreparedDialogueContentChange {
+  request: DialogueContentUpdateRequest;
+  dialogueAssetPath: string;
+  dialogueAsset: string;
+  nodeDataPath: string;
+  originalProperties: ReflectedProperty[];
+  desiredProperties: ReflectedProperty[];
+  changed: boolean;
+}
+
+export async function updateDialogueContents(
+  rawRequest: unknown,
+  connectionFactory: () => UnrealInvoker = () => new UnrealMcpConnection(),
+): Promise<DialogueContentBatchUpdateResult> {
+  const request = DialogueContentBatchUpdateRequestSchema.parse(
+    rawRequest,
+  ) as DialogueContentBatchUpdateRequest;
+  const itemKeys = request.items.map(
+    (item) => `${item.startId}:${item.dialogueNodeId}`,
+  );
+  if (new Set(itemKeys).size !== itemKeys.length) {
+    throw new Error("批量对白修改中存在重复节点");
+  }
+  for (const item of request.items) {
+    if (
+      !item.startId.startsWith(item.dialogueId) ||
+      !item.dialogueNodeId.startsWith(item.dialogueId)
+    ) {
+      throw new Error(`台词节点 ${item.dialogueNodeId} 不属于对话 ${item.dialogueId}`);
+    }
+  }
+
+  const connection = connectionFactory();
+  await connectUnreal(connection);
+  const prepared: PreparedDialogueContentChange[] = [];
+  const written: PreparedDialogueContentChange[] = [];
+  const savedAssets = new Set<string>();
+  try {
+    const itemsByStartId = new Map<string, DialogueContentUpdateRequest[]>();
+    for (const item of request.items) {
+      const group = itemsByStartId.get(item.startId) ?? [];
+      group.push(item);
+      itemsByStartId.set(item.startId, group);
+    }
+
+    for (const [startId, items] of itemsByStartId) {
+      const dialogueAssets = await findDialogueAssetPath(connection, startId);
+      if (dialogueAssets.length === 0) {
+        throw new Error(`未找到对话资产 ${startId}`);
+      }
+      if (dialogueAssets.length > 1) {
+        throw new Error(`找到多个名为 ${startId} 的对话资产，无法自动确认`);
+      }
+      const dialogueAssetPath = dialogueAssets[0];
+      const dialogueAsset = await connection.invoke(
+        "asset.get_asset_by_path",
+        { AssetPath: dialogueAssetPath },
+      );
+      if (!hasUnrealObjectReference(dialogueAsset)) {
+        throw new Error(`无法加载对话资产：${dialogueAssetPath}`);
+      }
+      const exportedText = await exportAssetText(
+        connection,
+        dialogueAssetPath,
+      );
+      const nodes = await readDialogueNodes(
+        connection,
+        dialogueAssetPath,
+        items.map((item) => item.dialogueNodeId),
+        exportedText,
+      );
+      for (const [index, item] of items.entries()) {
+        const node = nodes[index];
+        const contentPropertyIndex = node.commonProperties.findIndex(
+          (property) =>
+            String(property.Alias).toLowerCase() === "content",
+        );
+        if (contentPropertyIndex < 0) {
+          throw new Error(
+            `台词节点 ${item.dialogueNodeId} 缺少 Content 属性`,
+          );
+        }
+        const existingContent = String(
+          node.commonProperties[contentPropertyIndex].CurrentString ?? "",
+        );
+        if (existingContent !== item.previousContent) {
+          throw new Error(
+            `台词节点 ${item.dialogueNodeId} 的 UE 内容已发生变化，请重新加载后再编辑`,
+          );
+        }
+        const desiredProperties = clonedValue(node.commonProperties);
+        desiredProperties[contentPropertyIndex].CurrentString = item.content;
+        prepared.push({
+          request: item,
+          dialogueAssetPath,
+          dialogueAsset: String(dialogueAsset),
+          nodeDataPath: node.nodeDataPath,
+          originalProperties: node.commonProperties,
+          desiredProperties,
+          changed: existingContent !== item.content,
+        });
+      }
+    }
+
+    const changed = prepared.filter((item) => item.changed);
+    const changedAssetPaths = Array.from(
+      new Set(changed.map((item) => item.dialogueAssetPath)),
+    );
+    const dirtyPackages = new Set(
+      (await dirtyContentPackages(connection)).map((path) =>
+        path.toLowerCase(),
+      ),
+    );
+    const dirtyAsset = changedAssetPaths.find((assetPath) =>
+      dirtyPackages.has(assetPath.split(".")[0].toLowerCase()),
+    );
+    if (dirtyAsset) {
+      throw new Error(
+        `对话资产 ${dirtyAsset.split(".")[0]} 存在未保存修改，请先在 UE 中保存或撤销`,
+      );
+    }
+
+    for (const change of changed) {
+      written.push(change);
+      await connection.invoke("reflect.write_object_property", {
+        ThisPtr: change.nodeDataPath,
+        PropertyName: "CommonDialogGraphProperties",
+        Value: change.desiredProperties,
+      });
+    }
+    for (const change of changed) {
+      const writtenProperties = reflectedArray(
+        await readProperty(
+          connection,
+          change.nodeDataPath,
+          "CommonDialogGraphProperties",
+        ),
+        "CommonDialogGraphProperties",
+      ) as ReflectedProperty[];
+      const writtenContent = String(
+        writtenProperties.find(
+          (property) =>
+            String(property.Alias).toLowerCase() === "content",
+        )?.CurrentString ?? "",
+      );
+      if (writtenContent !== change.request.content) {
+        throw new Error(
+          `台词节点 ${change.request.dialogueNodeId} 写入后的回读结果不一致`,
+        );
+      }
+    }
+    for (const assetPath of changedAssetPaths) {
+      const change = changed.find(
+        (item) => item.dialogueAssetPath === assetPath,
+      )!;
+      const saveResult = await connection.invoke("asset.save_asset", {
+        Asset: change.dialogueAsset || assetPath,
+      });
+      if (saveResult === false) {
+        throw new Error(`对话资产保存失败：${assetPath}`);
+      }
+      savedAssets.add(assetPath);
+    }
+
+    return {
+      updatedCount: changed.length,
+      unchangedCount: prepared.length - changed.length,
+      savedAssetCount: savedAssets.size,
+      items: prepared.map((item) => ({
+        status: item.changed ? "updated" : "unchanged",
+        dialogueId: item.request.dialogueId,
+        startId: item.request.startId,
+        dialogueNodeId: item.request.dialogueNodeId,
+        dialogueAssetPath: item.dialogueAssetPath,
+        content: item.request.content,
+        saved: item.changed,
+      })),
+    };
+  } catch (error) {
+    let recoveryFailed = false;
+    if (written.length > 0) {
+      for (const change of written.slice().reverse()) {
+        try {
+          await connection.invoke("reflect.write_object_property", {
+            ThisPtr: change.nodeDataPath,
+            PropertyName: "CommonDialogGraphProperties",
+            Value: change.originalProperties,
+          });
+        } catch {
+          recoveryFailed = true;
+        }
+      }
+      for (const assetPath of new Set(
+        written.map((item) => item.dialogueAssetPath),
+      )) {
+        const change = written.find(
+          (item) => item.dialogueAssetPath === assetPath,
+        )!;
+        try {
+          const saveResult = await connection.invoke("asset.save_asset", {
+            Asset: change.dialogueAsset || assetPath,
+          });
+          if (saveResult === false) {
+            recoveryFailed = true;
+          }
+        } catch {
+          recoveryFailed = true;
+        }
+      }
+    }
+    throw new Error(
+      `${error instanceof Error ? error.message : "批量对白保存失败"}${
+        written.length === 0
+          ? ""
+          : recoveryFailed
+            ? "；恢复失败，请立即在 UE 中检查涉及的对话资产"
+            : "；已恢复本批次修改"
+      }`,
+    );
+  } finally {
+    connection.close();
+  }
+}
+
 interface DialogueModelSourceSlot {
   modelIndex: number;
   targetId: string | null;
@@ -2302,7 +2611,7 @@ async function readDialogueRegistrationContext(
     dialogueAsset: String(dialogueAsset),
     startNodeData,
     formationClassPath:
-      formationName === "None" ? null : String(formationValue),
+      formationName === "None" ? null : unrealReferenceText(formationValue),
     existingModels,
     slots: buildDialogueModelRegistrationSlots(
       sourceSlots,
@@ -2331,6 +2640,34 @@ function reflectedPropertyIndex(
     (property) =>
       String(property.Alias ?? "").toLowerCase() === alias.toLowerCase(),
   );
+}
+
+function reflectedPropertyValue(
+  property: ReflectedProperty | null | undefined,
+  name: string,
+): unknown {
+  if (!property) {
+    return undefined;
+  }
+  const normalizedName = name.replaceAll("_", "").toLowerCase();
+  const key = Object.keys(property).find(
+    (candidate) =>
+      candidate.replaceAll("_", "").toLowerCase() === normalizedName,
+  );
+  return key === undefined ? undefined : property[key];
+}
+
+function setReflectedPropertyValue(
+  property: ReflectedProperty,
+  name: string,
+  value: unknown,
+): void {
+  const normalizedName = name.replaceAll("_", "").toLowerCase();
+  const key = Object.keys(property).find(
+    (candidate) =>
+      candidate.replaceAll("_", "").toLowerCase() === normalizedName,
+  );
+  property[key ?? name] = value;
 }
 
 async function readDialogueSpatialContext(
@@ -2371,29 +2708,43 @@ async function readDialogueSpatialContext(
   return {
     commonProperties,
     specialProperties,
-    previewLevel: String(previewValue ?? ""),
+    previewLevel: unrealReferenceText(previewValue),
     virtualEnabled:
       virtualIndex >= 0 &&
-      commonProperties[virtualIndex].CurrentBool === true,
+      unrealBoolean(
+        reflectedPropertyValue(
+          commonProperties[virtualIndex],
+          "CurrentBool",
+        ),
+      ),
     specialVirtualEnabled:
       specialVirtualIndex < 0 ||
-      specialProperties[specialVirtualIndex].CurrentBool === true,
+      unrealBoolean(
+        reflectedPropertyValue(
+          specialProperties[specialVirtualIndex],
+          "CurrentBool",
+        ),
+      ),
     forwardExplicit:
       rotationProperty !== null &&
-      Object.prototype.hasOwnProperty.call(
-        rotationProperty,
-        "CurrentRotator",
-      ),
+      reflectedPropertyValue(rotationProperty, "CurrentRotator") !==
+        undefined,
     root: {
-      explicit: Object.prototype.hasOwnProperty.call(
-        positionProperty,
-        "CurrentVector",
-      ),
+      explicit:
+        reflectedPropertyValue(positionProperty, "CurrentVector") !==
+        undefined,
       transform: {
-        location: vector(positionProperty.CurrentVector),
+        location: vector(
+          reflectedPropertyValue(positionProperty, "CurrentVector"),
+        ),
         rotation:
           rotationIndex >= 0
-            ? rotator(commonProperties[rotationIndex].CurrentRotator)
+            ? rotator(
+                reflectedPropertyValue(
+                  commonProperties[rotationIndex],
+                  "CurrentRotator",
+                ),
+              )
             : { pitch: 0, yaw: 0, roll: 0 },
       },
     },
@@ -2407,6 +2758,7 @@ function dialogueSpatialMetadataComplete(
     context.virtualEnabled &&
     context.specialVirtualEnabled &&
     context.root.explicit &&
+    context.forwardExplicit &&
     hasUnrealObjectReference(context.previewLevel)
   );
 }
@@ -2439,27 +2791,43 @@ function desiredDialogueSpatialProperties(
   if (virtualIndex < 0 || positionIndex < 0 || rotationIndex < 0) {
     throw new Error("对话开始节点缺少虚拟场景或主角初始坐标属性");
   }
-  commonProperties[virtualIndex].CurrentBool = true;
+  setReflectedPropertyValue(
+    commonProperties[virtualIndex],
+    "CurrentBool",
+    true,
+  );
   if (!fillMissingOnly || !context.root.explicit) {
-    commonProperties[positionIndex].CurrentVector = {
-      X: root.location.x,
-      Y: root.location.y,
-      Z: root.location.z,
-    };
+    setReflectedPropertyValue(
+      commonProperties[positionIndex],
+      "CurrentVector",
+      {
+        X: root.location.x,
+        Y: root.location.y,
+        Z: root.location.z,
+      },
+    );
   }
   if (!fillMissingOnly || !context.forwardExplicit) {
-    commonProperties[rotationIndex].CurrentRotator = {
-      Pitch: root.rotation.pitch,
-      Yaw: root.rotation.yaw,
-      Roll: root.rotation.roll,
-    };
+    setReflectedPropertyValue(
+      commonProperties[rotationIndex],
+      "CurrentRotator",
+      {
+        Pitch: root.rotation.pitch,
+        Yaw: root.rotation.yaw,
+        Roll: root.rotation.roll,
+      },
+    );
   }
   const specialVirtualIndex = reflectedPropertyIndex(
     specialProperties,
     "Virtual",
   );
   if (specialVirtualIndex >= 0) {
-    specialProperties[specialVirtualIndex].CurrentBool = true;
+    setReflectedPropertyValue(
+      specialProperties[specialVirtualIndex],
+      "CurrentBool",
+      true,
+    );
   }
   return { commonProperties, specialProperties };
 }
@@ -2476,6 +2844,7 @@ async function writeDialogueRegistration(
     fillMissingOnly?: boolean;
     source?: "selected_actor" | "level_scan" | "task_targets";
   },
+  preserveModels = false,
 ): Promise<DialogueModelRegistrationResult> {
   const builtModels =
     buildDialogueModelsForRegistration(
@@ -2485,10 +2854,10 @@ async function writeDialogueRegistration(
   const currentModels = context.existingModels.map(
     normalizedDialogueModelName,
   );
-  const dialogueModels = spatial?.preserveModels
+  const dialogueModels = preserveModels || spatial?.preserveModels
     ? currentModels
     : builtModels.dialogueModels;
-  const unresolvedIndexes = spatial?.preserveModels
+  const unresolvedIndexes = preserveModels || spatial?.preserveModels
     ? []
     : builtModels.unresolvedIndexes;
   const desiredFormation = blueprintClassPath(blueprintAssetPathValue);
@@ -2521,8 +2890,7 @@ async function writeDialogueRegistration(
   const spatialUnchanged =
     !spatialContext ||
     !desiredSpatial ||
-    (normalizeObjectPath(spatialContext.previewLevel) ===
-      normalizeObjectPath(desiredPreviewLevel) &&
+    (sameLevelPath(spatialContext.previewLevel, desiredPreviewLevel) &&
       JSON.stringify(spatialContext.commonProperties) ===
         JSON.stringify(desiredSpatial.commonProperties) &&
       JSON.stringify(spatialContext.specialProperties) ===
@@ -2596,7 +2964,7 @@ async function writeDialogueRegistration(
       ) {
         throw new Error("DialogModels 写入后的回读结果不一致");
       }
-      const writtenFormation = String(
+      const writtenFormation = unrealReferenceText(
         await readProperty(connection, context.startNodeData, "Formation"),
       );
       if (
@@ -2614,6 +2982,10 @@ async function writeDialogueRegistration(
           spatial.fillMissingOnly && spatialContext.root.explicit
             ? spatialContext.root.transform.location
             : spatial.rootTransform.location;
+        const expectedRootRotation =
+          spatial.fillMissingOnly && spatialContext.forwardExplicit
+            ? spatialContext.root.transform.rotation
+            : spatial.rootTransform.rotation;
         const virtualProperty =
           writtenSpatial.commonProperties[
             reflectedPropertyIndex(
@@ -2621,9 +2993,35 @@ async function writeDialogueRegistration(
               "Virtual",
             )
           ];
+        const specialVirtualProperty =
+          writtenSpatial.specialProperties[
+            reflectedPropertyIndex(
+              writtenSpatial.specialProperties,
+              "Virtual",
+            )
+          ];
+        const mismatches: string[] = [];
         if (
-          virtualProperty?.CurrentBool !== true ||
-          !writtenSpatial.root.explicit ||
+          !unrealBoolean(
+            reflectedPropertyValue(virtualProperty, "CurrentBool"),
+          )
+        ) {
+          mismatches.push("Common Virtual 未生效");
+        }
+        if (
+          specialVirtualProperty &&
+          !unrealBoolean(
+            reflectedPropertyValue(
+              specialVirtualProperty,
+              "CurrentBool",
+            ),
+          )
+        ) {
+          mismatches.push("Special Virtual 未生效");
+        }
+        if (!writtenSpatial.root.explicit) {
+          mismatches.push("PlayerInitPosition 仍为空");
+        } else if (
           Math.hypot(
             writtenSpatial.root.transform.location.x -
               expectedRootLocation.x,
@@ -2631,11 +3029,48 @@ async function writeDialogueRegistration(
               expectedRootLocation.y,
             writtenSpatial.root.transform.location.z -
               expectedRootLocation.z,
-          ) > 0.001 ||
-          normalizeObjectPath(writtenSpatial.previewLevel) !==
-            normalizeObjectPath(desiredPreviewLevel)
+          ) > 0.01
         ) {
-          throw new Error("对话空间配置写入后的回读结果不一致");
+          mismatches.push(
+            `PlayerInitPosition 期望 ${formatVector(expectedRootLocation)}，实际 ${formatVector(writtenSpatial.root.transform.location)}`,
+          );
+        }
+        if (!writtenSpatial.forwardExplicit) {
+          mismatches.push("PlayerForward 仍为空");
+        } else if (
+          Math.max(
+            Math.abs(
+              writtenSpatial.root.transform.rotation.pitch -
+                expectedRootRotation.pitch,
+            ),
+            Math.abs(
+              writtenSpatial.root.transform.rotation.yaw -
+                expectedRootRotation.yaw,
+            ),
+            Math.abs(
+              writtenSpatial.root.transform.rotation.roll -
+                expectedRootRotation.roll,
+            ),
+          ) > 0.001
+        ) {
+          mismatches.push(
+            `PlayerForward 期望 ${formatRotator(expectedRootRotation)}，实际 ${formatRotator(writtenSpatial.root.transform.rotation)}`,
+          );
+        }
+        if (
+          !sameLevelPath(
+            writtenSpatial.previewLevel,
+            desiredPreviewLevel,
+          )
+        ) {
+          mismatches.push(
+            `PreviewLevel 期望 ${desiredPreviewLevel}，实际 ${writtenSpatial.previewLevel || "空"}`,
+          );
+        }
+        if (mismatches.length > 0) {
+          throw new Error(
+            `对话空间配置写入后的回读结果不一致：${mismatches.join("；")}`,
+          );
         }
       }
       const saveResult = await connection.invoke("asset.save_asset", {
@@ -2705,6 +3140,7 @@ async function writeDialogueRegistration(
     dialogueAssetPath: context.dialogueAssetPath,
     dialogueModels,
     registeredCount,
+    characterCount: dialogueModels.filter((name) => name !== "None").length,
     emptyCount: Math.max(0, dialogueModels.length - 1 - registeredCount),
     unresolvedIndexes,
     spatialStatus: spatial
@@ -2808,8 +3244,8 @@ export async function inspectMissionTargetBlueprint(
       resolved.assetPath,
       sourceSlots,
     );
-    const registeredCount = dialogue.slots.filter(
-      (slot) => slot.modelIndex > 0 && slot.status === "registered",
+    const registeredCharacterCount = dialogue.slots.filter(
+      (slot) => slot.status === "registered",
     ).length;
     const formationMatched =
       dialogue.formationClassPath !== null &&
@@ -2875,8 +3311,8 @@ export async function inspectMissionTargetBlueprint(
       message: `${
         blueprintState === "empty"
           ? "BP 尚未创建站位组件"
-          : `BP 已有 ${Math.max(0, numericComponents.length - 1)} 个模型槽`
-      }；对话已注册 ${registeredCount} 个模型${
+          : `BP 已识别 ${numericComponents.length} 个角色位（含 0 号玩家）`
+      }；对话已注册 ${registeredCharacterCount} 个角色${
         formationMatched ? "" : "；Formation 未指向当前 BP"
       }${
         sync
@@ -3389,9 +3825,10 @@ export async function registerBlueprintDialogueModels(
       (component) => component.variableName === "0",
     );
     if (
-      !playerSlot ||
-      normalizeObjectPath(playerSlot.childActorClass) !==
-        normalizeObjectPath(PLAYER_CLASS)
+      !request.preserveModels &&
+      (!playerSlot ||
+        normalizeObjectPath(playerSlot.childActorClass) !==
+          normalizeObjectPath(PLAYER_CLASS))
     ) {
       throw new Error("BP 的 0 号位不是玩家 BP_Eric");
     }
@@ -3439,7 +3876,7 @@ export async function registerBlueprintDialogueModels(
     if (!spatialAlreadyComplete) {
       const needsActorPlacement =
         !dialogueSpatial.root.explicit ||
-        !hasUnrealObjectReference(dialogueSpatial.previewLevel);
+        !dialogueSpatial.forwardExplicit;
       const placement = needsActorPlacement
         ? await findBlueprintActorPlacement(
             connection,
@@ -3449,8 +3886,10 @@ export async function registerBlueprintDialogueModels(
       if (placement) {
         if (
           hasUnrealObjectReference(dialogueSpatial.previewLevel) &&
-          normalizeLevelPath(dialogueSpatial.previewLevel) !==
-            normalizeLevelPath(placement.mapAssetPath)
+          !sameLevelPath(
+            dialogueSpatial.previewLevel,
+            placement.mapAssetPath,
+          )
         ) {
           throw new Error(
             `对话 Preview Level 为 ${dialogueSpatial.previewLevel}，但 BP Actor 位于 ${placement.mapAssetPath}，已停止写入`,
@@ -3465,38 +3904,42 @@ export async function registerBlueprintDialogueModels(
           fillMissingOnly: true,
           source: placement.source,
         };
-      } else if (request.taskId) {
-      const plan = withMissionTargetOverrides(
-        await readConfiguredMissionTargetPlan(request.taskId),
-        request.targetOverrides,
-      );
-      const sync = buildMissionTargetBlueprintSync(
-        plan.targets,
-        numericComponents.map((component) => ({
-          modelIndex: Number(component.variableName),
-          modelClassPath: component.childActorClass,
-          transform: component.transform,
-        })),
-        dialogueSpatial.root,
-        configCsvDirectory,
-      );
-      if (sync.canUpdateBlueprint) {
-        spatial = {
-          mapAssetPath: plan.mapAssetPath,
-          rootTransform: sync.rootTransform,
-          fillMissingOnly: true,
-          source: "task_targets",
-        };
-      }
       } else if (
         dialogueSpatial.root.explicit &&
-        hasUnrealObjectReference(dialogueSpatial.previewLevel)
+        dialogueSpatial.forwardExplicit
       ) {
         spatial = {
-          mapAssetPath: dialogueSpatial.previewLevel,
+          mapAssetPath: hasUnrealObjectReference(
+            dialogueSpatial.previewLevel,
+          )
+            ? dialogueSpatial.previewLevel
+            : await currentMapName(connection),
           rootTransform: dialogueSpatial.root.transform,
           fillMissingOnly: true,
         };
+      } else if (request.taskId) {
+        const plan = withMissionTargetOverrides(
+          await readConfiguredMissionTargetPlan(request.taskId),
+          request.targetOverrides,
+        );
+        const sync = buildMissionTargetBlueprintSync(
+          plan.targets,
+          numericComponents.map((component) => ({
+            modelIndex: Number(component.variableName),
+            modelClassPath: component.childActorClass,
+            transform: component.transform,
+          })),
+          dialogueSpatial.root,
+          configCsvDirectory,
+        );
+        if (sync.canUpdateBlueprint) {
+          spatial = {
+            mapAssetPath: plan.mapAssetPath,
+            rootTransform: sync.rootTransform,
+            fillMissingOnly: true,
+            source: "task_targets",
+          };
+        }
       }
     }
     mutationStarted = true;
@@ -3506,6 +3949,7 @@ export async function registerBlueprintDialogueModels(
       context,
       new Set(request.selectedModelIndexes),
       spatial,
+      request.preserveModels === true,
     );
     return spatialAlreadyComplete
       ? {
@@ -3521,7 +3965,11 @@ export async function registerBlueprintDialogueModels(
           };
   } catch (error) {
     const message =
-      error instanceof Error ? error.message : "注册 DialogModels 失败";
+      error instanceof Error
+        ? error.message
+        : request.preserveModels
+          ? "补齐对话空间配置失败"
+          : "注册 DialogModels 失败";
     throw new Error(
       mutationStarted
         ? `${message}；对话资产可能留有未保存修改，请在 UE 中检查`
@@ -4002,6 +4450,28 @@ function normalizeLevelPath(value: string): string {
     .toLowerCase();
 }
 
+function levelAssetToken(value: string): string {
+  return (
+    normalizeLevelPath(value)
+      .split("/")
+      .at(-1) ?? ""
+  ).replace(/^(?:world_|uedpie_\d+_)+/i, "");
+}
+
+function sameLevelPath(left: string, right: string): boolean {
+  const normalizedLeft = normalizeLevelPath(left);
+  const normalizedRight = normalizeLevelPath(right);
+  if (normalizedLeft === normalizedRight) {
+    return true;
+  }
+  if (normalizedLeft.includes("/") && normalizedRight.includes("/")) {
+    return false;
+  }
+  const leftToken = levelAssetToken(normalizedLeft);
+  const rightToken = levelAssetToken(normalizedRight);
+  return Boolean(leftToken && leftToken === rightToken);
+}
+
 function scriptResult(value: unknown): string {
   const result = value as {
     bSuccess?: boolean;
@@ -4311,11 +4781,16 @@ async function prepareBackgroundPropImport(
   if (!spatial.root.explicit) {
     blockedReasons.push("对话尚未配置主角初始坐标");
   }
+  if (!spatial.forwardExplicit) {
+    blockedReasons.push("对话尚未配置主角朝向");
+  }
+  if (!spatial.virtualEnabled || !spatial.specialVirtualEnabled) {
+    blockedReasons.push("对话尚未启用虚拟场景");
+  }
   if (!hasUnrealObjectReference(spatial.previewLevel)) {
     blockedReasons.push("对话尚未配置 Preview Level");
   } else if (
-    normalizeLevelPath(spatial.previewLevel) !==
-    normalizeLevelPath(mapAssetPath)
+    !sameLevelPath(spatial.previewLevel, mapAssetPath)
   ) {
     blockedReasons.push(
       `当前地图 ${mapAssetPath} 与 Preview Level ${spatial.previewLevel} 不一致`,
@@ -4836,7 +5311,7 @@ export async function clearMissionTargetPreview(
     } catch (error) {
       discoveredFromLevel = false;
       actors =
-        currentMap === normalizeLevelPath(activeMissionPreviewMap)
+        sameLevelPath(currentMap, activeMissionPreviewMap)
           ? [...activeMissionPreviewActors]
           : [];
       if (actors.length === 0) {
@@ -4877,9 +5352,10 @@ export async function inspectMissionTargetMap(
     return {
       currentMapAssetPath,
       expectedMapAssetPath: request.mapAssetPath,
-      matches:
-        normalizeLevelPath(currentMapAssetPath) ===
-        normalizeLevelPath(request.mapAssetPath),
+      matches: sameLevelPath(
+        currentMapAssetPath,
+        request.mapAssetPath,
+      ),
     };
   } finally {
     connection.close();
@@ -4919,7 +5395,7 @@ export async function loadMissionTargetPreview(
     const expectedMap = normalizeLevelPath(plan.mapAssetPath);
     let currentMap = normalizeLevelPath(await currentMapName(connection));
     let autoOpenedMap = false;
-    if (currentMap !== expectedMap) {
+    if (!sameLevelPath(currentMap, expectedMap)) {
       if (request.mapMode === "require-current") {
         throw new Error(
           `UE 尚未切换到 ${plan.mapName}，当前关卡为 ${currentMap}`,
@@ -4937,7 +5413,7 @@ export async function loadMissionTargetPreview(
         LevelName: plan.mapAssetPath,
       });
       currentMap = normalizeLevelPath(await currentMapName(connection));
-      if (currentMap !== expectedMap) {
+      if (!sameLevelPath(currentMap, expectedMap)) {
         throw new Error(
           `自动打开地图失败：期望 ${plan.mapAssetPath}，当前 ${currentMap}`,
         );
@@ -5098,6 +5574,13 @@ export async function routeUeRequest(
       sendJson(response, 200, {
         ok: true,
         data: await updateDialogueContent(body),
+      });
+      return true;
+    }
+    if (url.pathname === "/api/ue/dialogue/content/batch") {
+      sendJson(response, 200, {
+        ok: true,
+        data: await updateDialogueContents(body),
       });
       return true;
     }

@@ -178,4 +178,32 @@ describe("findDialogueSequence", () => {
     expect(result.contexts[0].sequence.participants).toHaveLength(1);
     expect(result.contexts[0].sequence.participants[0].name).toBe("玩家");
   });
+
+  it("can return text context for a non-player single-speaker dialogue", () => {
+    const database = parseDialogueDatabase(
+      [
+        "##&Dialog.id,Dialog.NPCID,Dialog.Content,Dialog.NextID,Dialog.End",
+        "##对话ID,人物,内容,下一ID,结束",
+        "735300,,,735301,false",
+        "735301,101968,第二段也使用旧称。,,true",
+      ].join("\n"),
+      [
+        "##&DialogStart.id,DialogStart.Outline",
+        "##对话ID,剧情梗概",
+        "735300,单人对白",
+      ].join("\n"),
+      [
+        "##&NPC.id,NPC.name,NPC.npcintroduce,NPC.resource_id",
+        "##id,名称,介绍,资源",
+        "101968,商会安保,守卫,200135",
+      ].join("\n"),
+      "test",
+    );
+
+    const result = searchDialogueContent(database, "旧称");
+
+    expect(result.contexts).toHaveLength(1);
+    expect(result.contexts[0].sequence.participants).toHaveLength(1);
+    expect(result.contexts[0].sequence.participants[0].name).toBe("商会安保");
+  });
 });

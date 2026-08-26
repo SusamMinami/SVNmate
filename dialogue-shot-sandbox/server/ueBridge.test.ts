@@ -670,6 +670,25 @@ describe("mission target UE preview", () => {
       matches: false,
     });
   });
+
+  it("matches a short World_ map name to the configured level asset", async () => {
+    const connection = new FakeUnrealConnection({
+      currentMaps: ["World_08_01_UrbanArea"],
+    });
+
+    await expect(
+      inspectMissionTargetMap(
+        {
+          mapAssetPath:
+            "/Game/Seria/Maps/08_01_UrbanArea/08_01_UrbanArea",
+        },
+        () => connection,
+      ),
+    ).resolves.toMatchObject({
+      currentMapAssetPath: "World_08_01_UrbanArea",
+      matches: true,
+    });
+  });
 });
 
 describe("mission target Blueprint creation", () => {
@@ -909,7 +928,7 @@ describe("dialogue model registration", () => {
   it("inspects populated BP slots and writes selected models to the dialogue", async () => {
     const connection = new FakeDialogueRegistrationConnection();
     const inspection = await inspectMissionTargetBlueprint(
-      { blueprintName: "BP_735200" },
+      { blueprintName: "7352" },
       () => connection,
     );
 
@@ -935,12 +954,19 @@ describe("dialogue model registration", () => {
         },
       ],
     });
+    expect(
+      connection.calls.find(
+        (call) =>
+          call.action === "asset.asset_search" &&
+          String(call.args.Query).startsWith("BP_"),
+      )?.args.Query,
+    ).toBe("BP_735200");
     connection.formationClassPath =
       "/Game/Seria/Task/Mod/Legacy/BP_Old.BP_Old_C";
 
     const result = await registerBlueprintDialogueModels(
       {
-        blueprintName: "BP_735200",
+        blueprintName: "7352",
         selectedModelIndexes: [1, 2],
       },
       () => connection,
@@ -951,6 +977,7 @@ describe("dialogue model registration", () => {
       dialogueId: "735200",
       dialogueModels: ["player", "One_Sit", "Two", "None"],
       registeredCount: 2,
+      characterCount: 3,
       emptyCount: 1,
       unresolvedIndexes: [],
       spatialStatus: "unchanged",

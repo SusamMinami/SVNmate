@@ -40,6 +40,8 @@ Content Browser 中只选中 Blueprint 资产不会被识别，因为目标物�
 - 当前关卡路径。
 
 地图路径会与 `d地图配置表.csv` 的资源路径匹配，以提供候选 MapID。
+读取后候选 Actor 默认全选，可通过表头或逐行复选框排除不需要注册的对象；
+NPC 表、目标物表和完整注册都只处理当前勾选项。
 
 同一份 UE 选择读取协议也被“任务目标物”工作区的“背景资产”功能复用，但不
 复用 NPC 配表界面：Blueprint Actor 作为 ChildActor 写入 BP，原生 Skeletal

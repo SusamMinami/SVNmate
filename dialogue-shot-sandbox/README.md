@@ -43,6 +43,13 @@ Mira 和内部 TRAE 会收到失败镜头、台词节点和验收原因后重新
 
 浏览器不支持目录选择 API 时，会自动回退为目录文件上传。读取和解析均在本地浏览器中完成，不会上传配置内容。
 
+### 对白搜索与批量编辑
+
+按对白文字搜索后，左栏右下角会显示编辑按钮。该入口不依赖分镜是否已经生成：
+可直接编辑当前节点，也可输入替换文本、勾选任意命中项后批量写回 UE。
+批量操作会先检查所有节点原文和相关脏资产，再统一写入、回读并按对话资产保存；
+失败时恢复本批次已修改的节点。
+
 ### UE Blueprint 初始站位
 
 读取真实配置后，查询对话会自动根据 `DialogStart.Formation` 检查对应
@@ -76,7 +83,8 @@ NPC、模型资源、地图和世界坐标、Pitch/Yaw/Roll 旋转关系。目�
 [`docs/mission-target-preview.md`](docs/mission-target-preview.md)。
 
 同一工作区也可将已勾选且具有实际模型资源的目标物写入用户预先创建的空镜头
-Blueprint。输入 BP 文件名或完整 `/Game/` 路径后点击“创建 BP”，工具会按
+Blueprint。输入四位对话 ID、BP 文件名或完整 `/Game/` 路径后点击“创建 BP”；
+四位 ID 会自动按 `BP_<ID>00` 展开。工具会按
 `0=玩家、1..N=目标物顺序、c1=摄像机` 创建组件，编译、回读并保存资产。
 目标 BP 必须继承 `PositionModeBase`，且不能已有数字站位组件或 `c1`，避免
 覆盖人工调整结果。目标物以第一个已选对象为局部坐标锚点，保留相对位移。
@@ -93,16 +101,22 @@ Formation、Preview Level、虚拟场景和主角初始坐标。
 使用 UE 当前选中的同类 BP Actor；未选择时扫描当前地图中的唯一同类实例。
 已有完整空间配置不会覆盖，多个实例则要求用户明确选择。
 
-“背景资产”可将 UE 当前选择的 Blueprint Actor、Skeletal Mesh 或 Static Mesh
-直接写入已检查的 BP。组件使用资产原名且不进入 DialogModels，并保留关卡中
-的位置、旋转和缩放；同名冲突会阻止写入，不自动改名。
+已包含数字角色位的 BP 使用独立的“按 BP 注册到对话”策略，不依赖任务目标物
+表。界面显示全部数字槽位，包含固定注册为 `player` 的 0 号玩家；其余槽位可
+逐项勾选，并按原槽位序号写入 `DialogModels`。
+
+任务目标物页右上角的“读取 UE 选择”可将 Blueprint Actor、Skeletal Mesh 或
+Static Mesh 直接写入 BP，跳过 NPC 与目标物配表。组件使用资产原名且不进入
+DialogModels，并保留关卡中的位置、旋转和缩放；缺少 Formation、Preview
+Level 或主角 Transform 时可先在审核层补齐，同名冲突仍会阻止写入。
 
 ### UE NPC 注册草稿
 
 在 UE 关卡视口或 World Outliner 中选中 Actor 后，从左侧工具轨道进入
 “注册 NPC”即可读取所选实例的 Generated Class、世界 Transform 和当前地图。
 工具会匹配可复用的模型 ID，并列出使用相同模型的 NPC ID、名称、头衔和
-转身配置供选择。
+转身配置供选择。候选 Actor 默认全选，可通过表头或逐行复选框排除本次不注册
+的对象。
 桌面端会保存用户选择的 `doc\csvdir` 绝对路径，注册扫描和 Excel 写入均从
 同一个 doc 根目录读取，不要求项目位于 `C:\trunk`。
 

@@ -2,6 +2,8 @@ import type {
   BackgroundPropImportPreview,
   BackgroundPropImportResult,
   BlueprintFormationSnapshot,
+  DialogueContentBatchUpdateRequest,
+  DialogueContentBatchUpdateResult,
   DialogueContentUpdateRequest,
   DialogueContentUpdateResult,
   DialogueStoryboardExportPreview,
@@ -249,6 +251,7 @@ export function registerBlueprintDialogueModels(
   targetOverrides?: Array<
     Pick<MissionTargetUpdateItem, "targetId" | "transform">
   >,
+  preserveModels = false,
 ): Promise<DialogueModelRegistrationResult> {
   return postUe(
     "/api/ue/mission-targets/register-dialogue",
@@ -257,6 +260,7 @@ export function registerBlueprintDialogueModels(
       selectedModelIndexes,
       taskId,
       targetOverrides,
+      ...(preserveModels ? { preserveModels: true } : {}),
     },
     false,
   );
@@ -283,6 +287,12 @@ export function updateDialogueContent(
   request: DialogueContentUpdateRequest,
 ): Promise<DialogueContentUpdateResult> {
   return postUe("/api/ue/dialogue/content", request, false);
+}
+
+export function updateDialogueContents(
+  request: DialogueContentBatchUpdateRequest,
+): Promise<DialogueContentBatchUpdateResult> {
+  return postUe("/api/ue/dialogue/content/batch", request, false);
 }
 
 export function checkMissionTargetBlueprint(

@@ -103,6 +103,9 @@ export function NpcRegistrationModal({
   const [candidates, setCandidates] = useState<
     NpcRegistrationCandidate[]
   >([]);
+  const [selectedActorRefs, setSelectedActorRefs] = useState<Set<string>>(
+    new Set(),
+  );
   const [npcChoices, setNpcChoices] = useState<Record<string, string>>({});
   const [newNpcDrafts, setNewNpcDrafts] = useState<
     Record<string, NewNpcDraft>
@@ -136,17 +139,23 @@ export function NpcRegistrationModal({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
-  const missingModelCount = candidates.filter(
+  const selectedCandidates = candidates.filter((candidate) =>
+    selectedActorRefs.has(candidate.actor.actorRef),
+  );
+  const selectedCandidateCount = selectedCandidates.length;
+  const allCandidatesSelected =
+    candidates.length > 0 && selectedCandidateCount === candidates.length;
+  const missingModelCount = selectedCandidates.filter(
     (candidate) =>
       candidate.targetMatches.length === 0 &&
       candidate.modelOptions.length === 0,
   ).length;
-  const newNpcCount = candidates.filter(
+  const newNpcCount = selectedCandidates.filter(
     (candidate) =>
       (npcChoices[candidate.actor.actorRef] ?? "new") === "new" &&
       registeredNpcIds[candidate.actor.actorRef] === undefined,
   ).length;
-  const newTargetCount = candidates.filter(
+  const newTargetCount = selectedCandidates.filter(
     (candidate) =>
       candidate.targetMatches.length === 0 &&
       !writtenTargetActorRefs.has(candidate.actor.actorRef),
@@ -231,6 +240,13 @@ export function NpcRegistrationModal({
       const result = await scanSelectedNpcRegistration();
       setSelection(result.selection);
       setCandidates(result.candidates);
+      setSelectedActorRefs(
+        new Set(
+          result.candidates.map(
+            (candidate) => candidate.actor.actorRef,
+          ),
+        ),
+      );
       const nextChoices: Record<string, string> = {};
       const nextDrafts: Record<string, NewNpcDraft> = {};
       const nextMapChoices: Record<string, string> = {};
@@ -271,6 +287,7 @@ export function NpcRegistrationModal({
     } catch (selectionError) {
       setSelection(null);
       setCandidates([]);
+      setSelectedActorRefs(new Set());
       setNpcChoices({});
       setMapChoices({});
       setError(
@@ -281,6 +298,28 @@ export function NpcRegistrationModal({
     } finally {
       setBusy(false);
     }
+  }
+
+  function toggleCandidate(actorRef: string) {
+    setSelectedActorRefs((current) => {
+      const next = new Set(current);
+      if (next.has(actorRef)) {
+        next.delete(actorRef);
+      } else {
+        next.add(actorRef);
+      }
+      return next;
+    });
+  }
+
+  function toggleAllCandidates() {
+    setSelectedActorRefs(
+      allCandidatesSelected
+        ? new Set()
+        : new Set(
+            candidates.map((candidate) => candidate.actor.actorRef),
+          ),
+    );
   }
 
   function updateEditDraft(
@@ -505,7 +544,7 @@ export function NpcRegistrationModal({
   }
 
   async function writeNpcOnly() {
-    const pendingCandidates = candidates.filter(
+    const pendingCandidates = selectedCandidates.filter(
       (candidate) =>
         (npcChoices[candidate.actor.actorRef] ?? "new") === "new" &&
         registeredNpcIds[candidate.actor.actorRef] === undefined,
@@ -562,7 +601,7 @@ export function NpcRegistrationModal({
   }
 
   async function writeTargetOnly() {
-    const pendingCandidates = candidates.filter(
+    const pendingCandidates = selectedCandidates.filter(
       (candidate) =>
         candidate.targetMatches.length === 0 &&
         !writtenTargetActorRefs.has(candidate.actor.actorRef),
@@ -654,7 +693,7 @@ export function NpcRegistrationModal({
   }
 
   async function writeNewItems() {
-    const pendingCandidates = candidates.filter(
+    const pendingCandidates = selectedCandidates.filter(
       (candidate) =>
         candidate.targetMatches.length === 0 &&
         !writtenTargetActorRefs.has(candidate.actor.actorRef),
@@ -1004,9 +1043,24 @@ export function NpcRegistrationModal({
               </tbody>
             </table>
           ) : candidates.length > 0 ? (
-            <table className="npc-registration-table">
+            <table className="npc-registration-table npc-registration-write-table">
               <thead>
                 <tr>
+                  <th className="mission-target-select">
+                    <input
+                      type="checkbox"
+                      checked={allCandidatesSelected}
+                      ref={(element) => {
+                        if (element) {
+                          element.indeterminate =
+                            selectedCandidateCount > 0 &&
+                            !allCandidatesSelected;
+                        }
+                      }}
+                      onChange={toggleAllCandidates}
+                      aria-label="选择全部待注册 Actor"
+                    />
+                  </th>
                   <th>UE Actor</th>
                   <th>模型资源</th>
                   <th>NPC 复用</th>
@@ -1035,8 +1089,21 @@ export function NpcRegistrationModal({
                     registeredNpcIds[actor.actorRef];
                   const isWritten =
                     writtenTargetActorRefs.has(actor.actorRef);
+                  const selected = selectedActorRefs.has(actor.actorRef);
                   return (
-                    <tr key={actor.actorRef}>
+                    <tr
+                      key={actor.actorRef}
+                      className={selected ? undefined : "is-unselected"}
+                    >
+                      <td className="mission-target-select">
+                        <input
+                          type="checkbox"
+                          checked={selected}
+                          disabled={busy}
+                          onChange={() => toggleCandidate(actor.actorRef)}
+                          aria-label={`选择待注册 Actor ${actor.label}`}
+                        />
+                      </td>
                       <td title={actor.classPath}>
                         <strong>{actor.label}</strong>
                         <small>{actorClassName(actor.classPath)}</small>
@@ -1066,7 +1133,9 @@ export function NpcRegistrationModal({
                           <select
                             value={choice}
                             disabled={
-                              busy || registeredNpcId !== undefined
+                              busy ||
+                              !selected ||
+                              registeredNpcId !== undefined
                             }
                             onChange={(event) =>
                               setNpcChoices((current) => ({
@@ -1098,7 +1167,7 @@ export function NpcRegistrationModal({
                           <div className="npc-registration-new-fields">
                             <input
                               value={draft.name}
-                              disabled={busy}
+                              disabled={busy || !selected}
                               onChange={(event) =>
                                 setNewNpcDrafts((current) => ({
                                   ...current,
@@ -1113,7 +1182,7 @@ export function NpcRegistrationModal({
                             />
                             <input
                               value={draft.title}
-                              disabled={busy}
+                              disabled={busy || !selected}
                               onChange={(event) =>
                                 setNewNpcDrafts((current) => ({
                                   ...current,
@@ -1130,7 +1199,7 @@ export function NpcRegistrationModal({
                               <input
                                 type="checkbox"
                                 checked={draft.canTurn}
-                                disabled={busy}
+                                disabled={busy || !selected}
                                 onChange={(event) =>
                                   setNewNpcDrafts((current) => ({
                                     ...current,
@@ -1150,7 +1219,7 @@ export function NpcRegistrationModal({
                         {candidate.mapOptions.length > 1 ? (
                           <select
                             value={mapChoices[actor.actorRef] ?? ""}
-                            disabled={busy}
+                            disabled={busy || !selected}
                             onChange={(event) =>
                               setMapChoices((current) => ({
                                 ...current,
@@ -1251,7 +1320,7 @@ export function NpcRegistrationModal({
                   invalidEditCount ? ` · ${invalidEditCount} 项格式错误` : ""
                 }`
               : selection
-                ? `${candidates.length} 个 Actor · ${missingModelCount} 个模型待注册 · ${newNpcCount} 个 NPC 待新建 · ${newTargetCount} 个目标物待新增`
+                ? `已选择 ${selectedCandidateCount} / ${candidates.length} 个 Actor · ${missingModelCount} 个模型待注册 · ${newNpcCount} 个 NPC 待新建 · ${newTargetCount} 个目标物待新增`
                 : "只读取关卡选择，不修改地图或配置表"}
           </span>
           <div>

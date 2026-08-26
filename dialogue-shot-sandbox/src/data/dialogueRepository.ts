@@ -233,7 +233,11 @@ function buildDialogueSequence(
   }
 
   const selectedIds = participantIds.slice(0, MAX_DIALOGUE_PARTICIPANTS);
-  if (selectedIds.length === 1 && selectedIds[0] !== 1) {
+  if (
+    requireTwoParticipants &&
+    selectedIds.length === 1 &&
+    selectedIds[0] !== 1
+  ) {
     selectedIds.push(1);
     warnings.push("仅检测到一位说话人，已补充玩家作为对景角色");
   }

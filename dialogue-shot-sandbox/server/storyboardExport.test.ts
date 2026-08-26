@@ -6,6 +6,7 @@ import {
   exportDialogueStoryboard,
   inspectDialogueStoryboardExport,
   updateDialogueContent,
+  updateDialogueContents,
   type UnrealInvoker,
 } from "./ueBridge";
 
@@ -466,5 +467,81 @@ describe("dialogue content update", () => {
     expect(connection.commonByData.get("ActionData1")?.[2].CurrentString).toBe(
       "对白 735201",
     );
+  });
+
+  it("updates multiple nodes and saves their dialogue asset once", async () => {
+    const connection = new FakeStoryboardExportConnection();
+
+    const result = await updateDialogueContents(
+      {
+        items: [
+          {
+            dialogueId: "7352",
+            startId: "735200",
+            dialogueNodeId: "735201",
+            previousContent: "对白 735201",
+            content: "统一术语一",
+          },
+          {
+            dialogueId: "7352",
+            startId: "735200",
+            dialogueNodeId: "735202",
+            previousContent: "对白 735202",
+            content: "统一术语二",
+          },
+        ],
+      },
+      () => connection,
+    );
+
+    expect(result).toMatchObject({
+      updatedCount: 2,
+      unchangedCount: 0,
+      savedAssetCount: 1,
+    });
+    expect(connection.commonByData.get("ActionData1")?.[2].CurrentString).toBe(
+      "统一术语一",
+    );
+    expect(connection.commonByData.get("ActionData2")?.[2].CurrentString).toBe(
+      "统一术语二",
+    );
+    expect(
+      connection.calls.filter(
+        (call) => call.action === "asset.save_asset",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("preflights every batch item before writing any node", async () => {
+    const connection = new FakeStoryboardExportConnection();
+
+    await expect(
+      updateDialogueContents(
+        {
+          items: [
+            {
+              dialogueId: "7352",
+              startId: "735200",
+              dialogueNodeId: "735201",
+              previousContent: "对白 735201",
+              content: "第一条修改",
+            },
+            {
+              dialogueId: "7352",
+              startId: "735200",
+              dialogueNodeId: "735202",
+              previousContent: "已经过期",
+              content: "第二条修改",
+            },
+          ],
+        },
+        () => connection,
+      ),
+    ).rejects.toThrow("节点 735202 的 UE 内容已发生变化");
+    expect(
+      connection.calls.some(
+        (call) => call.action === "reflect.write_object_property",
+      ),
+    ).toBe(false);
   });
 });

@@ -127,7 +127,10 @@ FOV = 2 * atan(35 / (2 * focalLength))
 公共实现位于 `server/ueBridge.ts` 的 `findDialogueAssetPath`、
 `exportAssetText`、`readDialogueNodes`、`dirtyContentPackages` 和
 `readProperty`。分镜导出在此基础上继续处理 `CameraPosition` 与
-`MoveCameras`；对白编辑只处理一个节点的 `Content`。
+`MoveCameras`；单条对白编辑只处理一个节点的 `Content`。文字搜索结果还可
+通过独立编辑窗口批量替换：先对全部勾选节点执行资产定位、原文和脏资产预检，
+再统一写入并逐条回读，同一对话资产只保存一次。任一步骤失败时恢复本批次已
+写入节点，避免逐条保存造成无法确认的部分成功状态。
 
 ## 后续验证
 

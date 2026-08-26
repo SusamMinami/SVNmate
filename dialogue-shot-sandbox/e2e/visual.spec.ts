@@ -1659,6 +1659,138 @@ test("edits the active dialogue, cancels on outside click and saves to UE", asyn
   });
 });
 
+test("batch edits text search results without requiring a storyboard", async ({
+  page,
+}, testInfo) => {
+  let batchRequest: Record<string, unknown> | null = null;
+  await page.route("**/api/ue/formation/read", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          status: "not_found",
+          message: "未找到测试 BP",
+        },
+      }),
+    });
+  });
+  await page.route("**/api/ue/dialogue/content/batch", async (route) => {
+    batchRequest = route.request().postDataJSON();
+    const items = batchRequest?.items as Array<Record<string, string>>;
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          updatedCount: items.length,
+          unchangedCount: 0,
+          savedAssetCount: 2,
+          items: items.map((item, index) => ({
+            status: "updated",
+            dialogueId: item.dialogueId,
+            startId: item.startId,
+            dialogueNodeId: item.dialogueNodeId,
+            dialogueAssetPath: `/Game/Test/${item.startId}.${item.startId}`,
+            content: item.content,
+            saved: true,
+            index,
+          })),
+        },
+      }),
+    });
+  });
+  const fixtureDirectory = await writeDirectoryFixture(
+    testInfo.outputPath("dialogue-batch-edit", "csvdir"),
+    [
+      {
+        name: "对话表.csv",
+        content: [
+          "##&Dialog.id,Dialog.NPCID,Dialog.Content,Dialog.NextID,Dialog.End",
+          "##对话ID,人物,内容,下一ID,结束",
+          "735200,,,735201,false",
+          "735201,1,旧称在第一段。,735202,false",
+          "735202,101968,第一段结束。,,true",
+          "735300,,,735301,false",
+          "735301,101968,第二段也使用旧称。,,true",
+        ].join("\n"),
+      },
+      {
+        name: "对话表_开始节点.csv",
+        content: [
+          "##&DialogStart.id,DialogStart.Outline",
+          "##对话ID,剧情梗概",
+          "735200,第一组",
+          "735300,第二组",
+        ].join("\n"),
+      },
+      {
+        name: "NPC表.csv",
+        content: [
+          "##&NPC.id,NPC.name,NPC.npcintroduce,NPC.resource_id",
+          "##id,名称,介绍,资源",
+          "1,玩家,玩家,",
+          "101968,商会安保,守卫,200135",
+        ].join("\n"),
+      },
+    ],
+  );
+
+  await page.goto("/");
+  await page.locator('input[type="file"]').setInputFiles(fixtureDirectory);
+  const searchInput = page.getByLabel("四位数对话 ID 或对白内容");
+  await searchInput.fill("旧称");
+  await page.getByRole("button", { name: "搜索对白内容" }).click();
+  await page
+    .getByRole("button", { name: /对话 7353 节点 735301/ })
+    .click();
+  await expect(page.locator(".stage-view")).toHaveCount(0);
+
+  await page.getByRole("button", { name: "编辑搜索结果" }).click();
+  const editor = page.getByRole("dialog", { name: "对白文本编辑" });
+  await expect(editor).toBeVisible();
+  await expect(
+    editor.getByLabel("选择对白节点 735301"),
+  ).toBeChecked();
+  await editor.getByLabel("选择全部匹配对白").check();
+  await editor.getByLabel("批量替换内容").fill("新称");
+  await expect(editor.getByText("旧称在第一段。", { exact: true })).toBeVisible();
+  await expect(editor.getByText("新称在第一段。", { exact: true })).toBeVisible();
+  await editor.screenshot({
+    path: testInfo.outputPath("dialogue-batch-editor.png"),
+  });
+
+  page.once("dialog", async (confirmation) => {
+    expect(confirmation.message()).toContain("修改 2 条对白");
+    await confirmation.accept();
+  });
+  await editor.getByRole("button", { name: "应用 2 条" }).click();
+
+  await expect(
+    page.getByText("已修改 2 条对白并保存 2 个对话资产"),
+  ).toBeVisible();
+  expect(batchRequest).toMatchObject({
+    items: [
+      {
+        dialogueId: "7352",
+        startId: "735200",
+        dialogueNodeId: "735201",
+        previousContent: "旧称在第一段。",
+        content: "新称在第一段。",
+      },
+      {
+        dialogueId: "7353",
+        startId: "735300",
+        dialogueNodeId: "735301",
+        previousContent: "第二段也使用旧称。",
+        content: "第二段也使用新称。",
+      },
+    ],
+  });
+});
+
 test("offers the detected Blueprint formation before designing shots", async ({
   page,
 }, testInfo) => {
@@ -2492,6 +2624,18 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
   await expect(
     registration.getByLabel("守卫预览 NPC 复用方式"),
   ).toHaveValue("101968");
+  await expect(
+    registration.getByLabel("选择待注册 Actor 守卫预览"),
+  ).toBeChecked();
+  const newActorCheckbox = registration.getByLabel(
+    "选择待注册 Actor 守卫新增",
+  );
+  await expect(newActorCheckbox).toBeChecked();
+  await newActorCheckbox.uncheck();
+  await expect(
+    registration.getByRole("button", { name: "NPC 表" }),
+  ).toBeDisabled();
+  await newActorCheckbox.check();
   const newNpcSelect = registration.getByLabel("守卫新增 NPC 复用方式");
   await expect(newNpcSelect.locator("option").first()).toHaveText("新建 NPC");
   await newNpcSelect.selectOption("new");
@@ -2563,12 +2707,156 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
   ).toBeVisible();
 });
 
+test("registers every numeric slot from an existing positioned Blueprint", async ({
+  page,
+}, testInfo) => {
+  let registrationRequest: Record<string, unknown> | null = null;
+  await page.route(
+    "**/api/ue/mission-targets/inspect-blueprint",
+    async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          data: {
+            blueprintState: "populated",
+            blueprintAssetPath:
+              "/Game/Seria/Task/Mod/Test/BP_735200.BP_735200",
+            blueprintClassPath:
+              "/Game/Seria/Task/Mod/Test/BP_735200.BP_735200_C",
+            parentClassPath:
+              "/Game/Seria/Task/Mod/PositionMode/PositionModeBase.PositionModeBase_C",
+            dialogueId: "735200",
+            dialogueAssetPath:
+              "/Game/Seria/Task/dialoggraph/Test/735200.735200",
+            formationClassPath: null,
+            slots: [
+              {
+                modelIndex: 0,
+                targetId: null,
+                modelClassPath:
+                  "/Game/Seria/Characters/Eric/BP_Eric.BP_Eric_C",
+                existingModelName: "player",
+                suggestedModelName: "player",
+                candidateModelNames: ["player"],
+                status: "registered",
+              },
+              {
+                modelIndex: 1,
+                targetId: null,
+                modelClassPath: "/Game/Test/BP_One.BP_One_C",
+                existingModelName: "One",
+                suggestedModelName: "One",
+                candidateModelNames: ["One"],
+                status: "registered",
+              },
+              {
+                modelIndex: 2,
+                targetId: null,
+                modelClassPath: "/Game/Test/BP_Two.BP_Two_C",
+                existingModelName: "None",
+                suggestedModelName: "Two",
+                candidateModelNames: ["Two"],
+                status: "available",
+              },
+              {
+                modelIndex: 3,
+                targetId: null,
+                modelClassPath: "/Game/Test/BP_Three.BP_Three_C",
+                existingModelName: "None",
+                suggestedModelName: null,
+                candidateModelNames: [],
+                status: "unmapped",
+              },
+            ],
+            message:
+              "BP 已识别 4 个角色位（含 0 号玩家）；对话已注册 2 个角色；Formation 未指向当前 BP",
+          },
+        }),
+      });
+    },
+  );
+  await page.route(
+    "**/api/ue/mission-targets/register-dialogue",
+    async (route) => {
+      registrationRequest = route.request().postDataJSON();
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          data: {
+            status: "registered",
+            blueprintAssetPath:
+              "/Game/Seria/Task/Mod/Test/BP_735200.BP_735200",
+            dialogueId: "735200",
+            dialogueAssetPath:
+              "/Game/Seria/Task/dialoggraph/Test/735200.735200",
+            dialogueModels: ["player", "One", "None", "None"],
+            registeredCount: 1,
+            emptyCount: 2,
+            unresolvedIndexes: [3],
+            spatialStatus: "unchanged",
+            spatialMapAssetPath: "/Game/Test/Maps/TestMap.TestMap",
+          },
+        }),
+      });
+    },
+  );
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "任务目标物" }).click();
+  const workspace = page.getByRole("region", {
+    name: "任务目标物",
+    exact: true,
+  });
+  await workspace.getByLabel("BP 文件名").fill("7352");
+  await workspace
+    .getByRole("button", { name: "检查 BP 与对话模型" })
+    .click();
+
+  await expect(
+    workspace.getByText("BP 数字槽位", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    workspace.locator(".mission-target-dialogue-table tbody tr"),
+  ).toHaveCount(4);
+  await expect(workspace.getByLabel("0 号玩家固定注册")).toBeChecked();
+  await expect(workspace.getByLabel("0 号玩家固定注册")).toBeDisabled();
+  await expect(
+    workspace.getByText(/已选择 4 \/ 4 个角色位/),
+  ).toBeVisible();
+
+  await workspace.getByLabel("选择 BP 模型槽位 2").uncheck();
+  await expect(
+    workspace.getByText(/已选择 3 \/ 4 个角色位/),
+  ).toBeVisible();
+  await workspace.screenshot({
+    path: testInfo.outputPath("existing-blueprint-slot-registration.png"),
+  });
+  await workspace
+    .getByRole("button", { name: "按 BP 注册到对话" })
+    .click();
+
+  expect(registrationRequest).toEqual({
+    blueprintName: "7352",
+    selectedModelIndexes: [1, 3],
+    targetOverrides: [],
+  });
+  await expect(
+    workspace.getByText(/角色 2 个（含 0 号玩家）/),
+  ).toBeVisible();
+});
+
 test("offers bidirectional position sync for a registered Blueprint", async ({
   page,
 }, testInfo) => {
   let updateBlueprintRequest: Record<string, unknown> | null = null;
   let updateTargetsRequest: Record<string, unknown> | null = null;
   let backgroundApplyRequest: Record<string, unknown> | null = null;
+  let backgroundDialogueRequest: Record<string, unknown> | null = null;
+  let backgroundInspectCount = 0;
   await page.route("**/api/ue/formation/read", async (route) => {
     await route.fulfill({
       status: 200,
@@ -2740,6 +3028,7 @@ test("offers bidirectional position sync for a registered Blueprint", async ({
   await page.route(
     "**/api/ue/mission-targets/background-props/inspect",
     async (route) => {
+      backgroundInspectCount += 1;
       await route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -2779,7 +3068,41 @@ test("offers bidirectional position sync for a registered Blueprint", async ({
                 message: "新增背景组件",
               },
             ],
-            blockedReasons: [],
+            blockedReasons:
+              backgroundInspectCount === 1
+                ? [
+                    "对话 Formation 尚未指向当前 BP",
+                    "对话尚未配置 Preview Level",
+                  ]
+                : [],
+          },
+        }),
+      });
+    },
+  );
+  await page.route(
+    "**/api/ue/mission-targets/register-dialogue",
+    async (route) => {
+      backgroundDialogueRequest = route.request().postDataJSON();
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          data: {
+            status: "registered",
+            blueprintAssetPath:
+              "/Game/Seria/Task/Mod/Test/BP_735000.BP_735000",
+            dialogueId: "735000",
+            dialogueAssetPath:
+              "/Game/Seria/Task/dialoggraph/Test/735000.735000",
+            dialogueModels: ["player", "Guard"],
+            registeredCount: 1,
+            emptyCount: 0,
+            unresolvedIndexes: [],
+            spatialStatus: "configured",
+            spatialSource: "selected_actor",
+            spatialMapAssetPath: "/Game/Test/Maps/TestMap.TestMap",
           },
         }),
       });
@@ -2901,9 +3224,9 @@ test("offers bidirectional position sync for a registered Blueprint", async ({
     dialog.getByText(/已选择 1 \/ 1 个已映射目标物/),
   ).toBeVisible();
 
-  await dialog.getByRole("button", { name: "背景资产" }).click();
+  await dialog.getByRole("button", { name: "读取 UE 选择" }).click();
   const backgroundDialog = dialog.getByRole("dialog", {
-    name: "导入背景资产",
+    name: "UE 选择写入 BP",
   });
   await expect(backgroundDialog.getByText("场景旗帜")).toBeVisible();
   await expect(backgroundDialog.getByText("Skeletal Mesh")).toBeVisible();
@@ -2911,15 +3234,40 @@ test("offers bidirectional position sync for a registered Blueprint", async ({
     backgroundDialog.getByText("SK_Banner", { exact: true }),
   ).toBeVisible();
   await expect(backgroundDialog.getByText("1.50, 0.75, 2.00")).toBeVisible();
+  await expect(
+    backgroundDialog.getByText(/Formation 尚未指向当前 BP/),
+  ).toBeVisible();
+  page.once("dialog", async (confirmation) => {
+    expect(confirmation.message()).toContain("现有 DialogModels 保持不变");
+    await confirmation.accept();
+  });
+  await backgroundDialog
+    .getByRole("button", { name: "补齐对话配置" })
+    .click();
+  await expect(
+    backgroundDialog.getByRole("button", {
+      name: "写入 BP",
+      exact: true,
+    }),
+  ).toBeEnabled();
+  expect(backgroundDialogueRequest).toEqual({
+    blueprintName: "BP_735000",
+    selectedModelIndexes: [],
+    taskId: "900001",
+    targetOverrides: [],
+    preserveModels: true,
+  });
   await backgroundDialog.screenshot({
     path: testInfo.outputPath("background-prop-import.png"),
   });
   page.once("dialog", async (confirmation) => {
-    expect(confirmation.message()).toContain("保留位置、旋转和缩放");
+    expect(confirmation.message()).toContain("不会写入 NPC 表或目标物表");
     await confirmation.accept();
   });
-  await backgroundDialog.getByRole("button", { name: "写入 BP" }).click();
-  await expect(dialog.getByText(/已写入背景资产：新增 1 个/)).toBeVisible();
+  await backgroundDialog
+    .getByRole("button", { name: "写入 BP", exact: true })
+    .click();
+  await expect(dialog.getByText(/已直接写入 BP：新增 1 个/)).toBeVisible();
   expect(backgroundApplyRequest).toEqual({
     blueprintName: "BP_735000",
     reviewToken: "a".repeat(64),

@@ -303,6 +303,7 @@ export interface DialogueModelRegistrationResult {
   dialogueAssetPath: string;
   dialogueModels: string[];
   registeredCount: number;
+  characterCount: number;
   emptyCount: number;
   unresolvedIndexes: number[];
   spatialStatus?: "configured" | "unchanged" | "not_configured";
@@ -404,6 +405,17 @@ export interface DialogueContentUpdateResult {
   dialogueAssetPath: string;
   content: string;
   saved: boolean;
+}
+
+export interface DialogueContentBatchUpdateRequest {
+  items: DialogueContentUpdateRequest[];
+}
+
+export interface DialogueContentBatchUpdateResult {
+  updatedCount: number;
+  unchangedCount: number;
+  savedAssetCount: number;
+  items: DialogueContentUpdateResult[];
 }
 
 export interface SelectedLevelActor {
