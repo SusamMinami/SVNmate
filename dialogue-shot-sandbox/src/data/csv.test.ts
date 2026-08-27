@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findDocCsvFile } from "./csv";
+import { findDocCsvFile } from "./csvLoader";
 
 function fixtureFile(relativePath: string): File {
   return {

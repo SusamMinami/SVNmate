@@ -10,32 +10,27 @@ import type {
   NpcProfile,
 } from "../types";
 
-const DIALOGUE_FILENAME = "对话表.csv";
-const START_FILENAME = "对话表_开始节点.csv";
-const NPC_FILENAME = "NPC表.csv";
-const MODEL_FILENAME = "m模型资源表.csv";
-const MISSION_FILENAME = "任务表.csv";
-const DUNGEON_MISSION_FILENAME = "副本任务表.csv";
-const MISSION_POSITION_FILENAME = "m目标物表.csv";
-const MAP_CONFIG_FILENAME = "d地图配置表.csv";
-const MAP_RESOURCE_FILENAME = "d地图资源表.csv";
+export const DIALOGUE_FILENAME = "对话表.csv";
+export const START_FILENAME = "对话表_开始节点.csv";
+export const NPC_FILENAME = "NPC表.csv";
+export const MODEL_FILENAME = "m模型资源表.csv";
+export const MISSION_FILENAME = "任务表.csv";
+export const DUNGEON_MISSION_FILENAME = "副本任务表.csv";
+export const MISSION_POSITION_FILENAME = "m目标物表.csv";
+export const MAP_CONFIG_FILENAME = "d地图配置表.csv";
+export const MAP_RESOURCE_FILENAME = "d地图资源表.csv";
 
-type CsvMatrix = string[][];
-
-function parseMatrix(filename: string, text: string): CsvMatrix {
-  const result = Papa.parse<string[]>(text, {
-    skipEmptyLines: "greedy",
-  });
-  if (result.errors.length > 0) {
-    const first = result.errors[0];
-    const rowNumber = (first.row ?? 0) + 1;
-    throw new Error(`${filename} 第 ${rowNumber} 行解析失败：${first.message}`);
-  }
-  const rows = result.data.map((row) => row.map((cell) => String(cell ?? "")));
-  if (rows.length < 2) {
-    throw new Error(`${filename} 缺少双表头`);
-  }
-  return rows;
+export interface DialogueCsvPayload {
+  dialogueText: string;
+  startText: string;
+  npcText: string;
+  sourceName: string;
+  modelText: string;
+  missionText: string;
+  dungeonMissionText: string;
+  missionPositionText: string;
+  mapConfigText: string;
+  mapResourceText: string;
 }
 
 function normalizeMember(value: string): string {
@@ -71,6 +66,81 @@ function optionalValueAt(row: string[], index: number): string {
   return index < 0 ? "" : (row[index] ?? "").trim();
 }
 
+interface CsvHeaders {
+  members: string[];
+  descriptions: string[];
+  indexes: Map<string, number>;
+}
+
+const CSV_PARSE_CHUNK_SIZE = 256 * 1024;
+
+function forEachCsvDataRow<TContext>(
+  filename: string,
+  text: string,
+  requiredMembers: string[],
+  createContext: (headers: CsvHeaders) => TContext,
+  visit: (
+    row: string[],
+    rowNumber: number,
+    headers: CsvHeaders,
+    context: TContext,
+  ) => void,
+): void {
+  let parsedRowCount = 0;
+  let memberHeader: string[] | null = null;
+  let headers: CsvHeaders | null = null;
+  let context: TContext | null = null;
+  let failure: Error | null = null;
+
+  Papa.parse<string[]>(text, {
+    skipEmptyLines: "greedy",
+    chunkSize: CSV_PARSE_CHUNK_SIZE,
+    chunk(result: Papa.ParseResult<string[]>, parser: Papa.Parser) {
+      if (result.errors.length > 0) {
+        const first = result.errors[0];
+        failure = new Error(
+          `${filename} 第 ${(first.row ?? parsedRowCount) + 1} 行解析失败：${first.message}`,
+        );
+        parser.abort();
+        return;
+      }
+
+      for (const data of result.data) {
+        parsedRowCount += 1;
+        const row = data.map((cell: string) => String(cell ?? ""));
+        try {
+          if (parsedRowCount === 1) {
+            memberHeader = row;
+            continue;
+          }
+          if (parsedRowCount === 2) {
+            headers = {
+              members: memberHeader!,
+              descriptions: row,
+              indexes: indexesFor(filename, memberHeader!, requiredMembers),
+            };
+            context = createContext(headers);
+            continue;
+          }
+          visit(row, parsedRowCount, headers!, context!);
+        } catch (error) {
+          failure = error instanceof Error ? error : new Error(String(error));
+          parser.abort();
+          break;
+        }
+      }
+    },
+    complete() {},
+  });
+
+  if (failure) {
+    throw failure;
+  }
+  if (parsedRowCount < 2) {
+    throw new Error(`${filename} 缺少双表头`);
+  }
+}
+
 function optionalInteger(value: string): number | null {
   if (!/^-?\d+$/.test(value)) {
     return null;
@@ -103,39 +173,46 @@ function speakerModelIndex(value: string): number | null {
 }
 
 function parseDialogues(text: string): DialogueRow[] {
-  const rows = parseMatrix(DIALOGUE_FILENAME, text);
-  const indexes = indexesFor(DIALOGUE_FILENAME, rows[0], [
-    "Dialog.id",
-    "Dialog.NPCID",
-    "Dialog.Content",
-    "Dialog.NextID",
-    "Dialog.End",
-  ]);
-  const stateIndex = optionalIndex(rows[0], "Dialog.State");
-  const relativeTransformsIndex = optionalIndex(
-    rows[0],
-    "Dialog.RelativeTransformsString",
-  );
-  const characterBehaviourIndex = optionalIndex(
-    rows[0],
-    "Dialog.CharacterBehaviourString",
-  );
-
-  return rows.slice(2).flatMap((row, index) => {
-    const id = valueAt(row, indexes, "Dialog.id");
-    if (!id) {
-      return [];
-    }
-    const state = optionalInteger(optionalValueAt(row, stateIndex));
-    return [
-      {
+  const rows: DialogueRow[] = [];
+  forEachCsvDataRow(
+    DIALOGUE_FILENAME,
+    text,
+    [
+      "Dialog.id",
+      "Dialog.NPCID",
+      "Dialog.Content",
+      "Dialog.NextID",
+      "Dialog.End",
+    ],
+    ({ members }) => ({
+      stateIndex: optionalIndex(members, "Dialog.State"),
+      relativeTransformsIndex: optionalIndex(
+        members,
+        "Dialog.RelativeTransformsString",
+      ),
+      characterBehaviourIndex: optionalIndex(
+        members,
+        "Dialog.CharacterBehaviourString",
+      ),
+    }),
+    (
+      row,
+      rowNumber,
+      { indexes },
+      { stateIndex, relativeTransformsIndex, characterBehaviourIndex },
+    ) => {
+      const id = valueAt(row, indexes, "Dialog.id");
+      if (!id) {
+        return;
+      }
+      rows.push({
         id,
         npcId: optionalInteger(valueAt(row, indexes, "Dialog.NPCID")),
         content: valueAt(row, indexes, "Dialog.Content"),
         nextId: firstReference(valueAt(row, indexes, "Dialog.NextID")),
         isEnd: valueAt(row, indexes, "Dialog.End").toLowerCase() === "true",
-        rowNumber: index + 3,
-        state,
+        rowNumber,
+        state: optionalInteger(optionalValueAt(row, stateIndex)),
         speakerSlot: null,
         speakerModelIndex: speakerModelIndex(
           optionalValueAt(row, characterBehaviourIndex),
@@ -148,68 +225,75 @@ function parseDialogues(text: string): DialogueRow[] {
           row,
           characterBehaviourIndex,
         ),
-      },
-    ];
-  });
+      });
+    },
+  );
+  return rows;
 }
 
 function parseStarts(text: string): DialogueStart[] {
-  const rows = parseMatrix(START_FILENAME, text);
-  const indexes = indexesFor(START_FILENAME, rows[0], [
-    "DialogStart.id",
-    "DialogStart.Outline",
-  ]);
-  const formationIndex = optionalIndex(rows[0], "DialogStart.Formation");
-  const modelIndex = optionalIndex(rows[0], "DialogStart.Model");
-
-  return rows.slice(2).flatMap((row, index) => {
-    const id = valueAt(row, indexes, "DialogStart.id");
-    if (!id) {
-      return [];
-    }
-    const rawModelNames = optionalValueAt(row, modelIndex);
-    return [
-      {
+  const starts: DialogueStart[] = [];
+  forEachCsvDataRow(
+    START_FILENAME,
+    text,
+    ["DialogStart.id", "DialogStart.Outline"],
+    ({ members }) => ({
+      formationIndex: optionalIndex(members, "DialogStart.Formation"),
+      modelIndex: optionalIndex(members, "DialogStart.Model"),
+    }),
+    (row, rowNumber, { indexes }, { formationIndex, modelIndex }) => {
+      const id = valueAt(row, indexes, "DialogStart.id");
+      if (!id) {
+        return;
+      }
+      const rawModelNames = optionalValueAt(row, modelIndex);
+      starts.push({
         id,
         outline: valueAt(row, indexes, "DialogStart.Outline"),
-        rowNumber: index + 3,
+        rowNumber,
         formationClassPath:
           optionalValueAt(row, formationIndex) || null,
         modelNames: rawModelNames
           ? rawModelNames.split(";").map((value) => value.trim())
           : [],
-      },
-    ];
-  });
+      });
+    },
+  );
+  return starts;
 }
 
 function parseNpcs(text: string): Map<number, NpcProfile> {
-  const rows = parseMatrix(NPC_FILENAME, text);
-  const indexes = indexesFor(NPC_FILENAME, rows[0], [
-    "NPC.id",
-    "NPC.name",
-    "NPC.npcintroduce",
-  ]);
-  const resourceIndex = optionalIndex(rows[0], "NPC.resource_id");
-  const titleIndex = optionalIndex(rows[0], "NPC.title");
-  const canTurnIndex = optionalIndex(rows[0], "NPC.ifturn");
   const npcs = new Map<number, NpcProfile>();
-
-  rows.slice(2).forEach((row) => {
-    const id = optionalInteger(valueAt(row, indexes, "NPC.id"));
-    if (id === null || id <= 0) {
-      return;
-    }
-    npcs.set(id, {
-      id,
-      name: valueAt(row, indexes, "NPC.name") || `NPC ${id}`,
-      note: "",
-      introduction: valueAt(row, indexes, "NPC.npcintroduce"),
-      resourceId: optionalInteger(optionalValueAt(row, resourceIndex)),
-      title: optionalValueAt(row, titleIndex),
-      canTurn: optionalBoolean(optionalValueAt(row, canTurnIndex)),
-    });
-  });
+  forEachCsvDataRow(
+    NPC_FILENAME,
+    text,
+    ["NPC.id", "NPC.name", "NPC.npcintroduce"],
+    ({ members }) => ({
+      resourceIndex: optionalIndex(members, "NPC.resource_id"),
+      titleIndex: optionalIndex(members, "NPC.title"),
+      canTurnIndex: optionalIndex(members, "NPC.ifturn"),
+    }),
+    (
+      row,
+      _rowNumber,
+      { indexes },
+      { resourceIndex, titleIndex, canTurnIndex },
+    ) => {
+      const id = optionalInteger(valueAt(row, indexes, "NPC.id"));
+      if (id === null || id <= 0) {
+        return;
+      }
+      npcs.set(id, {
+        id,
+        name: valueAt(row, indexes, "NPC.name") || `NPC ${id}`,
+        note: "",
+        introduction: valueAt(row, indexes, "NPC.npcintroduce"),
+        resourceId: optionalInteger(optionalValueAt(row, resourceIndex)),
+        title: optionalValueAt(row, titleIndex),
+        canTurn: optionalBoolean(optionalValueAt(row, canTurnIndex)),
+      });
+    },
+  );
   return npcs;
 }
 
@@ -218,24 +302,34 @@ function parseModels(text: string): Map<number, ModelResource> {
   if (!text.trim()) {
     return models;
   }
-  const rows = parseMatrix(MODEL_FILENAME, text);
-  const indexes = indexesFor(MODEL_FILENAME, rows[0], ["Model.id"]);
-  const generatedPathIndex = optionalIndex(rows[0], "Model.path");
-  const configuredPathIndex = rows[1].findIndex((value) =>
-    value.trim().replace(/^##/, "").startsWith("配置填写在此列"),
+  forEachCsvDataRow(
+    MODEL_FILENAME,
+    text,
+    ["Model.id"],
+    ({ members, descriptions }) => ({
+      generatedPathIndex: optionalIndex(members, "Model.path"),
+      configuredPathIndex: descriptions.findIndex((value) =>
+        value.trim().replace(/^##/, "").startsWith("配置填写在此列"),
+      ),
+    }),
+    (
+      row,
+      rowNumber,
+      { indexes },
+      { generatedPathIndex, configuredPathIndex },
+    ) => {
+      const id = optionalInteger(valueAt(row, indexes, "Model.id"));
+      if (id === null || id <= 0 || models.has(id)) {
+        return;
+      }
+      models.set(id, {
+        id,
+        configuredPath: optionalValueAt(row, configuredPathIndex),
+        generatedClassPath: optionalValueAt(row, generatedPathIndex),
+        rowNumber,
+      });
+    },
   );
-  rows.slice(2).forEach((row, index) => {
-    const id = optionalInteger(valueAt(row, indexes, "Model.id"));
-    if (id === null || id <= 0 || models.has(id)) {
-      return;
-    }
-    models.set(id, {
-      id,
-      configuredPath: optionalValueAt(row, configuredPathIndex),
-      generatedClassPath: optionalValueAt(row, generatedPathIndex),
-      rowNumber: index + 3,
-    });
-  });
   return models;
 }
 
@@ -247,65 +341,74 @@ function parseMissions(
   if (!text.trim()) {
     return [];
   }
-  const rows = parseMatrix(filename, text);
-  const indexes = indexesFor(filename, rows[0], [
-    "Mission.id",
-    "Mission.Name",
-    "Mission.ShowNPC",
-  ]);
-  return rows.slice(2).flatMap((row, index) => {
-    const id = valueAt(row, indexes, "Mission.id");
-    if (!id) {
-      return [];
-    }
-    return [{
-      id,
-      name: valueAt(row, indexes, "Mission.Name"),
-      source,
-      showTargetIds: valueAt(row, indexes, "Mission.ShowNPC"),
-      rowNumber: index + 3,
-    }];
-  });
+  const missions: MissionTaskRow[] = [];
+  forEachCsvDataRow(
+    filename,
+    text,
+    ["Mission.id", "Mission.Name", "Mission.ShowNPC"],
+    () => null,
+    (row, rowNumber, { indexes }) => {
+      const id = valueAt(row, indexes, "Mission.id");
+      if (!id) {
+        return;
+      }
+      missions.push({
+        id,
+        name: valueAt(row, indexes, "Mission.Name"),
+        source,
+        showTargetIds: valueAt(row, indexes, "Mission.ShowNPC"),
+        rowNumber,
+      });
+    },
+  );
+  return missions;
 }
 
 function parseMissionPositions(text: string): MissionPositionRow[] {
   if (!text.trim()) {
     return [];
   }
-  const rows = parseMatrix(MISSION_POSITION_FILENAME, text);
-  const indexes = indexesFor(MISSION_POSITION_FILENAME, rows[0], [
-    "MissionPosition.ID",
-    "MissionPosition.type",
-    "MissionPosition.NPCID",
-    "MissionPosition.ItemID",
-    "MissionPosition.BluePrint",
-    "MissionPosition.MapID",
-    "MissionPosition.Position",
-    "MissionPosition.Rotation",
-  ]);
-  const descriptionIndex = rows[1].findIndex(
-    (value) => value.trim() === "描述",
-  );
-  return rows.slice(2).flatMap((row, index) => {
-    const id = valueAt(row, indexes, "MissionPosition.ID");
-    if (!id) {
-      return [];
-    }
-    return [{
-      id,
-      type: optionalInteger(valueAt(row, indexes, "MissionPosition.type")),
-      description: optionalValueAt(row, descriptionIndex),
-      npcId: optionalInteger(valueAt(row, indexes, "MissionPosition.NPCID")),
-      itemId: optionalInteger(valueAt(row, indexes, "MissionPosition.ItemID")),
-      blueprintModelId: optionalInteger(
-        valueAt(row, indexes, "MissionPosition.BluePrint"),
+  const positions: MissionPositionRow[] = [];
+  forEachCsvDataRow(
+    MISSION_POSITION_FILENAME,
+    text,
+    [
+      "MissionPosition.ID",
+      "MissionPosition.type",
+      "MissionPosition.NPCID",
+      "MissionPosition.ItemID",
+      "MissionPosition.BluePrint",
+      "MissionPosition.MapID",
+      "MissionPosition.Position",
+      "MissionPosition.Rotation",
+    ],
+    ({ descriptions }) => ({
+      descriptionIndex: descriptions.findIndex(
+        (value) => value.trim() === "描述",
       ),
-      mapId: valueAt(row, indexes, "MissionPosition.MapID"),
-      positionText: valueAt(row, indexes, "MissionPosition.Position"),
-      rotationText: valueAt(row, indexes, "MissionPosition.Rotation"),
-      rowNumber: index + 3,
-    }];
-  });
+    }),
+    (row, rowNumber, { indexes }, { descriptionIndex }) => {
+      const id = valueAt(row, indexes, "MissionPosition.ID");
+      if (!id) {
+        return;
+      }
+      positions.push({
+        id,
+        type: optionalInteger(valueAt(row, indexes, "MissionPosition.type")),
+        description: optionalValueAt(row, descriptionIndex),
+        npcId: optionalInteger(valueAt(row, indexes, "MissionPosition.NPCID")),
+        itemId: optionalInteger(valueAt(row, indexes, "MissionPosition.ItemID")),
+        blueprintModelId: optionalInteger(
+          valueAt(row, indexes, "MissionPosition.BluePrint"),
+        ),
+        mapId: valueAt(row, indexes, "MissionPosition.MapID"),
+        positionText: valueAt(row, indexes, "MissionPosition.Position"),
+        rotationText: valueAt(row, indexes, "MissionPosition.Rotation"),
+        rowNumber,
+      });
+    },
+  );
+  return positions;
 }
 
 function parseMapConfigs(
@@ -317,46 +420,49 @@ function parseMapConfigs(
   }
   const resourcePaths = new Map<string, string>();
   if (mapResourceText.trim()) {
-    const resourceRows = parseMatrix(MAP_RESOURCE_FILENAME, mapResourceText);
-    const resourceIndexes = indexesFor(
+    forEachCsvDataRow(
       MAP_RESOURCE_FILENAME,
-      resourceRows[0],
+      mapResourceText,
       ["Scene.id", "Scene.path"],
+      () => null,
+      (row, _rowNumber, { indexes }) => {
+        const id = valueAt(row, indexes, "Scene.id");
+        const path = valueAt(row, indexes, "Scene.path");
+        if (id && path && !resourcePaths.has(id)) {
+          resourcePaths.set(id, path);
+        }
+      },
     );
-    for (const row of resourceRows.slice(2)) {
-      const id = valueAt(row, resourceIndexes, "Scene.id");
-      const path = valueAt(row, resourceIndexes, "Scene.path");
-      if (id && path && !resourcePaths.has(id)) {
-        resourcePaths.set(id, path);
-      }
-    }
   }
 
-  const rows = parseMatrix(MAP_CONFIG_FILENAME, mapConfigText);
-  const indexes = indexesFor(MAP_CONFIG_FILENAME, rows[0], [
-    "MapConfig.id",
-    "MapConfig.name",
-    "MapConfig.resourceid",
-  ]);
-  const commentPathIndex = rows[1].findIndex(
-    (value) => value.trim() === "地图资源（注释用）",
+  const maps: MapConfigRow[] = [];
+  forEachCsvDataRow(
+    MAP_CONFIG_FILENAME,
+    mapConfigText,
+    ["MapConfig.id", "MapConfig.name", "MapConfig.resourceid"],
+    ({ descriptions }) => ({
+      commentPathIndex: descriptions.findIndex(
+        (value) => value.trim() === "地图资源（注释用）",
+      ),
+    }),
+    (row, rowNumber, { indexes }, { commentPathIndex }) => {
+      const id = valueAt(row, indexes, "MapConfig.id");
+      if (!id) {
+        return;
+      }
+      const resourceId = valueAt(row, indexes, "MapConfig.resourceid");
+      maps.push({
+        id,
+        name: valueAt(row, indexes, "MapConfig.name"),
+        resourceId,
+        assetPath:
+          resourcePaths.get(resourceId) ||
+          optionalValueAt(row, commentPathIndex),
+        rowNumber,
+      });
+    },
   );
-  return rows.slice(2).flatMap((row, index) => {
-    const id = valueAt(row, indexes, "MapConfig.id");
-    if (!id) {
-      return [];
-    }
-    const resourceId = valueAt(row, indexes, "MapConfig.resourceid");
-    return [{
-      id,
-      name: valueAt(row, indexes, "MapConfig.name"),
-      resourceId,
-      assetPath:
-        resourcePaths.get(resourceId) ||
-        optionalValueAt(row, commentPathIndex),
-      rowNumber: index + 3,
-    }];
-  });
+  return maps;
 }
 
 export function parseDialogueDatabase(
@@ -388,6 +494,23 @@ export function parseDialogueDatabase(
     mapConfigs: parseMapConfigs(mapConfigText, mapResourceText),
     sourceName,
   };
+}
+
+export function parseDialogueDatabasePayload(
+  payload: DialogueCsvPayload,
+): DialogueDatabase {
+  return parseDialogueDatabase(
+    payload.dialogueText,
+    payload.startText,
+    payload.npcText,
+    payload.sourceName,
+    payload.modelText,
+    payload.missionText,
+    payload.dungeonMissionText,
+    payload.missionPositionText,
+    payload.mapConfigText,
+    payload.mapResourceText,
+  );
 }
 
 export function parseNpcRegistrationDatabase(
@@ -437,145 +560,4 @@ export function parseMissionTargetDatabase(
     mapConfigs: parseMapConfigs(mapConfigText, mapResourceText),
     sourceName,
   };
-}
-
-async function readFile(directory: FileSystemDirectoryHandle, filename: string) {
-  const handle = await directory.getFileHandle(filename);
-  return (await handle.getFile()).text();
-}
-
-async function readOptionalFile(
-  directory: FileSystemDirectoryHandle,
-  filename: string,
-): Promise<string> {
-  try {
-    return await readFile(directory, filename);
-  } catch {
-    return "";
-  }
-}
-
-export async function loadDocDirectory(
-  root: FileSystemDirectoryHandle,
-): Promise<DialogueDatabase> {
-  const csvDirectory =
-    root.name.toLowerCase() === "csvdir"
-      ? root
-      : await root.getDirectoryHandle("csvdir");
-  const [
-    dialogueText,
-    startText,
-    npcText,
-    modelText,
-    missionText,
-    dungeonMissionText,
-    missionPositionText,
-    mapConfigText,
-    mapResourceText,
-  ] = await Promise.all([
-    readFile(csvDirectory, DIALOGUE_FILENAME),
-    readFile(csvDirectory, START_FILENAME),
-    readFile(csvDirectory, NPC_FILENAME),
-    readOptionalFile(csvDirectory, MODEL_FILENAME),
-    readOptionalFile(csvDirectory, MISSION_FILENAME),
-    readOptionalFile(csvDirectory, DUNGEON_MISSION_FILENAME),
-    readOptionalFile(csvDirectory, MISSION_POSITION_FILENAME),
-    readOptionalFile(csvDirectory, MAP_CONFIG_FILENAME),
-    readOptionalFile(csvDirectory, MAP_RESOURCE_FILENAME),
-  ]);
-  return parseDialogueDatabase(
-    dialogueText,
-    startText,
-    npcText,
-    `${root.name}\\csvdir`,
-    modelText,
-    missionText,
-    dungeonMissionText,
-    missionPositionText,
-    mapConfigText,
-    mapResourceText,
-  );
-}
-
-export function findDocCsvFile(
-  files: File[],
-  filename: string,
-): File | null {
-  const normalizedSuffix = `/csvdir/${filename}`.toLowerCase();
-  const directDirectoryPath = `csvdir/${filename}`.toLowerCase();
-  return (
-    files.find((file) => {
-      const relativePath = (file.webkitRelativePath || file.name)
-        .replaceAll("\\", "/")
-        .toLowerCase();
-      return (
-        relativePath.endsWith(normalizedSuffix) ||
-        relativePath === directDirectoryPath ||
-        relativePath === filename.toLowerCase()
-      );
-    }) ?? null
-  );
-}
-
-function fileByName(files: File[], filename: string, required = true): File | null {
-  const match = findDocCsvFile(files, filename);
-  if (!match && required) {
-    throw new Error(`选择的目录中未找到 csvdir\\${filename}`);
-  }
-  return match;
-}
-
-export async function loadDocFiles(fileList: FileList): Promise<DialogueDatabase> {
-  const files = Array.from(fileList);
-  const dialogue = fileByName(files, DIALOGUE_FILENAME)!;
-  const start = fileByName(files, START_FILENAME)!;
-  const npc = fileByName(files, NPC_FILENAME)!;
-  const model = fileByName(files, MODEL_FILENAME, false);
-  const mission = fileByName(files, MISSION_FILENAME, false);
-  const dungeonMission = fileByName(
-    files,
-    DUNGEON_MISSION_FILENAME,
-    false,
-  );
-  const missionPosition = fileByName(
-    files,
-    MISSION_POSITION_FILENAME,
-    false,
-  );
-  const mapConfig = fileByName(files, MAP_CONFIG_FILENAME, false);
-  const mapResource = fileByName(files, MAP_RESOURCE_FILENAME, false);
-  const [
-    dialogueText,
-    startText,
-    npcText,
-    modelText,
-    missionText,
-    dungeonMissionText,
-    missionPositionText,
-    mapConfigText,
-    mapResourceText,
-  ] = await Promise.all([
-    dialogue.text(),
-    start.text(),
-    npc.text(),
-    model?.text() ?? "",
-    mission?.text() ?? "",
-    dungeonMission?.text() ?? "",
-    missionPosition?.text() ?? "",
-    mapConfig?.text() ?? "",
-    mapResource?.text() ?? "",
-  ]);
-  const rootName = dialogue.webkitRelativePath.split(/[\\/]/)[0] || "已选目录";
-  return parseDialogueDatabase(
-    dialogueText,
-    startText,
-    npcText,
-    rootName,
-    modelText,
-    missionText,
-    dungeonMissionText,
-    missionPositionText,
-    mapConfigText,
-    mapResourceText,
-  );
 }

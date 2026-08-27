@@ -24,6 +24,9 @@ import {
 } from "lucide-react";
 import {
   FormEvent,
+  lazy,
+  memo,
+  Suspense,
   useCallback,
   useEffect,
   useMemo,
@@ -31,31 +34,23 @@ import {
   useState,
 } from "react";
 import packageMetadata from "../package.json";
-import { DesktopSetupModal } from "./components/DesktopSetupModal";
-import {
-  BlueprintFormationModal,
-  type FormationOptionId,
-} from "./components/BlueprintFormationModal";
-import {
-  DialogueTextEditorModal,
-  type DialogueTextEditorItem,
-} from "./components/DialogueTextEditorModal";
+import { useCollaborationConnections } from "./app/useCollaborationConnections";
+import { useStoryboardExport } from "./app/useStoryboardExport";
+import { useWorkspaceNavigation } from "./app/useWorkspaceNavigation";
+import type { FormationOptionId } from "./components/BlueprintFormationModal";
+import type { DialogueTextEditorItem } from "./components/DialogueTextEditorModal";
 import { DirectorControl } from "./components/DirectorControl";
 import { LaunchScreen } from "./components/LaunchScreen";
 import { MissionTargetModal } from "./components/MissionTargetModal";
 import { NpcRegistrationModal } from "./components/NpcRegistrationModal";
-import { SharedPlanCompareModal } from "./components/SharedPlanCompareModal";
 import { SoundEffectRecommendations } from "./components/SoundEffectRecommendations";
 import { StageView } from "./components/StageView";
-import { StoryboardExportModal } from "./components/StoryboardExportModal";
-import { StoryBriefModal } from "./components/StoryBriefModal";
-import { TraeCollaborationModal } from "./components/TraeCollaborationModal";
 import { WorkspaceStatusHub } from "./components/WorkspaceStatusHub";
 import {
   findDocCsvFile,
   loadDocDirectory,
   loadDocFiles,
-} from "./data/csv";
+} from "./data/csvLoader";
 import { applyBlueprintFormation } from "./data/blueprintFormation";
 import { demoDatabase } from "./data/demo";
 import {
@@ -81,26 +76,14 @@ import { participantFacingYawDegrees } from "./director/actorActionPlanner";
 import { createShotPreview } from "./director/shotPlanner";
 import { estimateShotDuration } from "./director/shotTiming";
 import {
-  discoverMira,
-  finishLarkAuthorization,
-  getLarkStatus,
   getSoundEffectCatalog,
-  startLarkAuthorization,
   syncSoundEffectCatalog,
-  type LarkAuthChallenge,
-  type LarkStatus,
 } from "./lark/client";
 import {
-  getTraeMcpConfig,
-  getTraeStatus,
   resolveSharedStoryboardConflict,
-  type TraeCollaborationStatus,
-  type TraeMcpConfig,
 } from "./trae/client";
 import {
-  exportDialogueStoryboard,
   getBlueprintFormation,
-  inspectDialogueStoryboardExport,
   updateDialogueContent,
   updateDialogueContents,
 } from "./ue/client";
@@ -113,7 +96,6 @@ import type {
   DialogueContentSearchResult,
   DialogueDatabase,
   DialogueRow,
-  DialogueStoryboardExportPreview,
   DialogueSequence,
   CompositionMode,
   CompositionTransition,
@@ -123,8 +105,45 @@ import type {
   ShotCoverage,
   ShotPlan,
   ShotSize,
-  StoryboardExportRequest,
 } from "./types";
+
+const LazyBlueprintFormationModal = lazy(() =>
+  import("./components/BlueprintFormationModal").then((module) => ({
+    default: module.BlueprintFormationModal,
+  })),
+);
+const LazyDesktopSetupModal = lazy(() =>
+  import("./components/DesktopSetupModal").then((module) => ({
+    default: module.DesktopSetupModal,
+  })),
+);
+const LazyDialogueTextEditorModal = lazy(() =>
+  import("./components/DialogueTextEditorModal").then((module) => ({
+    default: module.DialogueTextEditorModal,
+  })),
+);
+const LazySharedPlanCompareModal = lazy(() =>
+  import("./components/SharedPlanCompareModal").then((module) => ({
+    default: module.SharedPlanCompareModal,
+  })),
+);
+const LazyStoryboardExportModal = lazy(() =>
+  import("./components/StoryboardExportModal").then((module) => ({
+    default: module.StoryboardExportModal,
+  })),
+);
+const LazyStoryBriefModal = lazy(() =>
+  import("./components/StoryBriefModal").then((module) => ({
+    default: module.StoryBriefModal,
+  })),
+);
+const LazyTraeCollaborationModal = lazy(() =>
+  import("./components/TraeCollaborationModal").then((module) => ({
+    default: module.TraeCollaborationModal,
+  })),
+);
+const MemoizedMissionTargetModal = memo(MissionTargetModal);
+const MemoizedNpcRegistrationModal = memo(NpcRegistrationModal);
 
 function buildSequence(
   database: DialogueDatabase,
@@ -142,7 +161,6 @@ const initial = buildSequence(
   initialSoundEffectCatalog.entries,
 );
 const APP_VERSION = `v${packageMetadata.version}`;
-const CASE_COLLECTION_STORAGE_KEY = "shot-sandbox.collect-revision-cases";
 const LAUNCH_SCREEN_STORAGE_KEY = "shot-sandbox.launch-screen-seen";
 
 interface PendingDirectorPresentation {
@@ -176,15 +194,6 @@ interface ApplySequenceOptions {
 }
 
 type InspectorTab = "camera" | "composition" | "direction" | "ue";
-type WorkspaceView = "storyboard" | "npc" | "targets";
-type WorkspaceDirection = "up" | "down";
-
-const WORKSPACE_ORDER: Record<WorkspaceView, number> = {
-  storyboard: 0,
-  npc: 1,
-  targets: 2,
-};
-const WORKSPACE_TRANSITION_MS = 720;
 
 interface CachedStoryboard {
   sequence: DialogueSequence;
@@ -998,38 +1007,33 @@ export default function App() {
   const [desktopSetup, setDesktopSetup] =
     useState<DesktopSetupStatus | null>(null);
   const [showDesktopSetup, setShowDesktopSetup] = useState(false);
-  const [activeWorkspace, setActiveWorkspace] =
-    useState<WorkspaceView>("storyboard");
-  const [outgoingWorkspace, setOutgoingWorkspace] =
-    useState<WorkspaceView | null>(null);
-  const [workspaceDirection, setWorkspaceDirection] =
-    useState<WorkspaceDirection>("up");
-  const workspaceTransitionTimerRef = useRef<number | null>(null);
-  const [traeStatus, setTraeStatus] =
-    useState<TraeCollaborationStatus | null>(null);
-  const [traeLoading, setTraeLoading] = useState(false);
-  const [traeError, setTraeError] = useState("");
-  const [traeConfig, setTraeConfig] = useState<TraeMcpConfig | null>(null);
-  const [larkStatus, setLarkStatus] = useState<LarkStatus | null>(null);
-  const [larkLoading, setLarkLoading] = useState(false);
-  const [larkError, setLarkError] = useState("");
-  const [authStart, setAuthStart] = useState<LarkAuthChallenge | null>(null);
-  const [authFinishing, setAuthFinishing] = useState(false);
-  const [collectRevisionCases, setCollectRevisionCases] = useState(
-    () => window.localStorage.getItem(CASE_COLLECTION_STORAGE_KEY) !== "0",
-  );
-  const [storyboardExportPreview, setStoryboardExportPreview] =
-    useState<DialogueStoryboardExportPreview | null>(null);
-  const [storyboardExportRequest, setStoryboardExportRequest] =
-    useState<StoryboardExportRequest | null>(null);
-  const [storyboardExportMode, setStoryboardExportMode] = useState<
-    "current" | "all" | "sound"
-  >("current");
-  const [storyboardExportShotNumber, setStoryboardExportShotNumber] =
-    useState(1);
-  const [storyboardExportBusy, setStoryboardExportBusy] = useState(false);
-  const [storyboardExportError, setStoryboardExportError] = useState("");
-  const [storyboardExportResult, setStoryboardExportResult] = useState("");
+  const {
+    activeWorkspace,
+    outgoingWorkspace,
+    workspaceDirection,
+    switchWorkspace,
+    closeToolWorkspace,
+  } = useWorkspaceNavigation();
+  const {
+    traeStatus,
+    traeLoading,
+    traeError,
+    traeConfig,
+    larkStatus,
+    larkLoading,
+    larkError,
+    authStart,
+    authFinishing,
+    collectRevisionCases,
+    refreshTraeConnection,
+    setupTrae,
+    refreshLarkConnection,
+    beginAuthorization,
+    finishAuthorization,
+    changeCaseCollection,
+    closeTraeConfig,
+    closeAuthorization,
+  } = useCollaborationConnections();
   const [contentSearch, setContentSearch] =
     useState<DialogueContentSearchResult | null>(null);
   const [designedStoryboards, setDesignedStoryboards] = useState<
@@ -1071,7 +1075,6 @@ export default function App() {
   const dialogueEditorRef = useRef<HTMLDivElement>(null);
   const directorRunRef = useRef(0);
   const formationRunRef = useRef(0);
-  const authFinishingRef = useRef(false);
   const activeIndexRef = useRef(activeIndex);
   const directorModeRef = useRef(directorMode);
   const sequenceRef = useRef(sequence);
@@ -1088,6 +1091,26 @@ export default function App() {
   soundEffectCatalogRef.current = soundEffectCatalog;
 
   const activeShot: ShotPlan | undefined = shots[activeIndex] ?? shots[0];
+  const {
+    preview: storyboardExportPreview,
+    request: storyboardExportRequest,
+    mode: storyboardExportMode,
+    currentShotNumber: storyboardExportShotNumber,
+    busy: storyboardExportBusy,
+    error: storyboardExportError,
+    result: storyboardExportResult,
+    canExport: canExportStoryboard,
+    previewCurrent: previewStoryboardExport,
+    previewCurrentSoundEffects: previewCurrentSoundEffectExport,
+    previewAll: previewAllStoryboardExport,
+    confirm: confirmStoryboardExport,
+    close: closeStoryboardExport,
+  } = useStoryboardExport({
+    sequence,
+    shots,
+    soundEffects,
+    activeShot,
+  });
   const activeDialogueId =
     activeShot
       ? activeShot.dialogueIds.includes(selectedDialogueId)
@@ -1188,14 +1211,6 @@ export default function App() {
     sequence.prefix,
     sequence.startId,
   ]);
-  const canExportStoryboard =
-    shots.length > 0 &&
-    sequence.participants.length >= 2 &&
-    sequence.participants.every(
-      (participant) =>
-        participant.positionSource === "blueprint" &&
-        participant.modelIndex !== null,
-    );
   const activeFormationName =
     activeFormationVariant === "blueprint" && formationChoice
       ? blueprintDisplayName(formationChoice.snapshot.blueprintAssetPath)
@@ -1235,35 +1250,6 @@ export default function App() {
   ) {
     setSoundEffects(recommendations);
   }
-
-  function switchWorkspace(nextWorkspace: WorkspaceView) {
-    if (nextWorkspace === activeWorkspace) {
-      return;
-    }
-    if (workspaceTransitionTimerRef.current !== null) {
-      window.clearTimeout(workspaceTransitionTimerRef.current);
-    }
-    setWorkspaceDirection(
-      WORKSPACE_ORDER[nextWorkspace] > WORKSPACE_ORDER[activeWorkspace]
-        ? "up"
-        : "down",
-    );
-    setOutgoingWorkspace(activeWorkspace);
-    setActiveWorkspace(nextWorkspace);
-    workspaceTransitionTimerRef.current = window.setTimeout(() => {
-      setOutgoingWorkspace(null);
-      workspaceTransitionTimerRef.current = null;
-    }, WORKSPACE_TRANSITION_MS);
-  }
-
-  useEffect(
-    () => () => {
-      if (workspaceTransitionTimerRef.current !== null) {
-        window.clearTimeout(workspaceTransitionTimerRef.current);
-      }
-    },
-    [],
-  );
 
   useEffect(() => {
     void refreshTraeConnection();
@@ -1370,67 +1356,6 @@ export default function App() {
     return () =>
       document.removeEventListener("pointerdown", cancelOnOutsidePointer);
   }, [dialogueSaveBusy, editingDialogueId]);
-
-  async function refreshTraeConnection(showLoading = true) {
-    if (showLoading) {
-      setTraeLoading(true);
-    }
-    setTraeError("");
-    try {
-      setTraeStatus(await getTraeStatus());
-    } catch (connectionError) {
-      setTraeError(
-        connectionError instanceof Error
-          ? connectionError.message
-          : "TRAE 连接检查失败",
-      );
-    } finally {
-      if (showLoading) {
-        setTraeLoading(false);
-      }
-    }
-  }
-
-  async function setupTrae() {
-    setTraeLoading(true);
-    setTraeError("");
-    try {
-      setTraeConfig(await getTraeMcpConfig());
-    } catch (configError) {
-      setTraeError(
-        configError instanceof Error
-          ? configError.message
-          : "无法读取内部 TRAE MCP 配置",
-      );
-    } finally {
-      setTraeLoading(false);
-    }
-  }
-
-  async function refreshLarkConnection(discover: boolean) {
-    setLarkLoading(true);
-    setLarkError("");
-    try {
-      const status = await getLarkStatus();
-      if (
-        discover &&
-        status.authorized &&
-        status.miraMissingScopes.length === 0
-      ) {
-        const discovery = await discoverMira();
-        status.miraBot = discovery.selected;
-      }
-      setLarkStatus(status);
-    } catch (connectionError) {
-      setLarkError(
-        connectionError instanceof Error
-          ? connectionError.message
-          : "飞书连接检查失败",
-      );
-    } finally {
-      setLarkLoading(false);
-    }
-  }
 
   async function refreshSoundEffectCatalogFromLark() {
     const snapshot = await syncSoundEffectCatalog();
@@ -1981,70 +1906,6 @@ export default function App() {
     }
   }
 
-  async function beginAuthorization() {
-    setLarkLoading(true);
-    setLarkError("");
-    try {
-      const result = await startLarkAuthorization();
-      if ("alreadyAuthorized" in result) {
-        setLarkStatus(result.status);
-        setAuthStart(null);
-        return;
-      }
-      setAuthStart(result);
-    } catch (authorizationError) {
-      setLarkError(
-        authorizationError instanceof Error
-          ? authorizationError.message
-          : "无法发起飞书授权",
-      );
-    } finally {
-      setLarkLoading(false);
-    }
-  }
-
-  function changeCaseCollection(enabled: boolean) {
-    setCollectRevisionCases(enabled);
-    window.localStorage.setItem(
-      CASE_COLLECTION_STORAGE_KEY,
-      enabled ? "1" : "0",
-    );
-  }
-
-  async function finishAuthorization() {
-    if (authFinishingRef.current) {
-      return;
-    }
-    authFinishingRef.current = true;
-    setAuthFinishing(true);
-    try {
-      const status = await finishLarkAuthorization();
-      const discovery =
-        status.miraMissingScopes.length === 0
-          ? await discoverMira()
-          : null;
-      status.miraBot = discovery?.selected ?? null;
-      setLarkStatus(status);
-      setLarkError("");
-      setAuthStart(null);
-    } catch (authorizationError) {
-      const message =
-        authorizationError instanceof Error
-          ? authorizationError.message
-          : "飞书授权尚未完成";
-      if (/授权码已失效|device_code is invalid/i.test(message)) {
-        setAuthStart(null);
-        await beginAuthorization();
-        setLarkError("旧授权码已失效，已生成新的二维码，请重新扫码");
-      } else {
-        setLarkError(message);
-      }
-    } finally {
-      authFinishingRef.current = false;
-      setAuthFinishing(false);
-    }
-  }
-
   async function chooseDirectory() {
     if (window.shotSandboxDesktop) {
       fileInputRef.current?.click();
@@ -2337,208 +2198,6 @@ export default function App() {
     }
   }
 
-  function currentStoryboardExportRequest(
-    selectedShots: ShotPlan[] = shots,
-    selectedSoundEffects: DirectorSoundEffectRecommendation[] = soundEffects,
-  ): StoryboardExportRequest {
-    if (selectedShots.length > 0 && !canExportStoryboard) {
-      throw new Error("当前方案未绑定完整的 UE Blueprint 站位");
-    }
-    return {
-      dialogueId: sequence.prefix,
-      startId: sequence.startId,
-      dialogueIds: selectedShots.flatMap((shot) => shot.dialogueIds),
-      participantModelIndexes:
-        selectedShots.length > 0
-          ? sequence.participants.map((participant) => participant.modelIndex!)
-          : [],
-      usesBlueprintFormation: selectedShots.length > 0,
-      soundEffects: selectedSoundEffects.map((recommendation) => ({
-        dialogueId: recommendation.dialogueId,
-        assetName: recommendation.assetName,
-      })),
-      shots: selectedShots.map((shot) => ({
-        dialogueId: shot.dialogueId,
-        dialogueIds: [...shot.dialogueIds],
-        cameraPosition: shot.cameraPosition,
-        cameraTarget: shot.cameraTarget,
-        cameraEndPosition: shot.cameraEndPosition,
-        cameraEndTarget: shot.cameraEndTarget,
-        focalLength: shot.focalLength,
-        endFocalLength: shot.endFocalLength,
-        cameraMovement: shot.cameraMovement,
-        movementIntensity: shot.movementIntensity,
-        cameraRollDegrees: shot.cameraRollDegrees,
-        projectionValid: shot.projection.valid,
-        actorActions: shot.actorActions.flatMap((action) => {
-          const participant = sequence.participants.find(
-            (candidate) => candidate.slot === action.participantSlot,
-          );
-          return participant?.modelIndex === null ||
-            participant?.modelIndex === undefined
-            ? []
-            : [
-                {
-                  modelIndex: participant.modelIndex,
-                  montageName: action.montageName,
-                  angleDegrees: action.angleDegrees,
-                },
-              ];
-        }),
-      })),
-    };
-  }
-
-  async function previewStoryboardExport() {
-    setStoryboardExportBusy(true);
-    setStoryboardExportError("");
-    setStoryboardExportResult("");
-    try {
-      if (!activeShot) {
-        throw new Error("当前没有可导出的镜头");
-      }
-      const activeDialogueIds = new Set(activeShot.dialogueIds);
-      const request = currentStoryboardExportRequest(
-        [activeShot],
-        soundEffects.filter((recommendation) =>
-          activeDialogueIds.has(recommendation.dialogueId),
-        ),
-      );
-      const preview = await inspectDialogueStoryboardExport(request);
-      const resolvedActiveIndex = shots.indexOf(activeShot);
-      setStoryboardExportMode("current");
-      setStoryboardExportShotNumber(
-        (resolvedActiveIndex >= 0 ? resolvedActiveIndex : 0) + 1,
-      );
-      setStoryboardExportRequest(request);
-      setStoryboardExportPreview(preview);
-    } catch (exportError) {
-      setStoryboardExportError(
-        exportError instanceof Error
-          ? exportError.message
-          : "无法检查 UE 分镜写入",
-      );
-    } finally {
-      setStoryboardExportBusy(false);
-    }
-  }
-
-  async function previewCurrentSoundEffectExport() {
-    setStoryboardExportBusy(true);
-    setStoryboardExportError("");
-    setStoryboardExportResult("");
-    try {
-      if (!activeShot) {
-        throw new Error("当前没有可导出的分镜");
-      }
-      const activeDialogueIds = new Set(activeShot.dialogueIds);
-      const currentSoundEffects = soundEffects.filter((recommendation) =>
-        activeDialogueIds.has(recommendation.dialogueId),
-      );
-      if (currentSoundEffects.length === 0) {
-        throw new Error("当前分镜没有可写入的音效建议");
-      }
-      const request = currentStoryboardExportRequest(
-        [],
-        currentSoundEffects,
-      );
-      const preview = await inspectDialogueStoryboardExport(request);
-      const resolvedActiveIndex = shots.indexOf(activeShot);
-      setStoryboardExportMode("sound");
-      setStoryboardExportShotNumber(
-        (resolvedActiveIndex >= 0 ? resolvedActiveIndex : 0) + 1,
-      );
-      setStoryboardExportRequest(request);
-      setStoryboardExportPreview(preview);
-    } catch (exportError) {
-      setStoryboardExportError(
-        exportError instanceof Error
-          ? exportError.message
-          : "无法检查当前分镜音效写入",
-      );
-    } finally {
-      setStoryboardExportBusy(false);
-    }
-  }
-
-  async function previewAllStoryboardExport() {
-    setStoryboardExportBusy(true);
-    setStoryboardExportError("");
-    setStoryboardExportResult("");
-    try {
-      const request = currentStoryboardExportRequest();
-      const preview = await inspectDialogueStoryboardExport(request);
-      setStoryboardExportMode("all");
-      setStoryboardExportRequest(request);
-      setStoryboardExportPreview(preview);
-    } catch (exportError) {
-      setStoryboardExportError(
-        exportError instanceof Error
-          ? exportError.message
-          : "无法检查全部 UE 分镜写入",
-      );
-    } finally {
-      setStoryboardExportBusy(false);
-    }
-  }
-
-  async function confirmStoryboardExport(
-    selectedShotIndexes: number[],
-    selectedSoundEffectIndexes: number[],
-  ) {
-    if (!storyboardExportPreview || !storyboardExportRequest) {
-      return;
-    }
-    setStoryboardExportBusy(true);
-    setStoryboardExportError("");
-    try {
-      const selectedIndexes = new Set(selectedShotIndexes);
-      const selectedShots = storyboardExportRequest.shots.filter(
-        (_, index) => selectedIndexes.has(index),
-      );
-      const selectedSoundIndexes = new Set(selectedSoundEffectIndexes);
-      const availableSoundEffects =
-        storyboardExportRequest.soundEffects ?? [];
-      const selectedSoundEffects =
-        availableSoundEffects.filter((_, index) =>
-          selectedSoundIndexes.has(index),
-        );
-      if (selectedShots.length === 0 && selectedSoundEffects.length === 0) {
-        throw new Error("请至少选择一个要导出的镜头或音效");
-      }
-      const selectedRequest: StoryboardExportRequest = {
-        ...storyboardExportRequest,
-        dialogueIds: selectedShots.flatMap((shot) => shot.dialogueIds),
-        shots: selectedShots,
-        soundEffects: selectedSoundEffects,
-      };
-      const exportsEntirePreview =
-        selectedShots.length === storyboardExportRequest.shots.length &&
-        selectedSoundEffects.length ===
-          availableSoundEffects.length;
-      const selectedPreview = exportsEntirePreview
-        ? storyboardExportPreview
-        : await inspectDialogueStoryboardExport(selectedRequest);
-      const result = await exportDialogueStoryboard(
-        selectedRequest,
-        selectedPreview.reviewToken,
-      );
-      setStoryboardExportResult(
-        result.status === "unchanged"
-          ? "所选镜头与音效已与 UE 对话资产一致，无需写入"
-          : `已写入 ${result.changedNodeCount} 个镜头节点和 ${result.changedSoundEffectCount ?? 0} 个音效并保存`,
-      );
-    } catch (exportError) {
-      setStoryboardExportError(
-        exportError instanceof Error
-          ? exportError.message
-          : "分镜导出失败",
-      );
-    } finally {
-      setStoryboardExportBusy(false);
-    }
-  }
-
   return (
     <main
       className="app-shell"
@@ -2736,6 +2395,7 @@ export default function App() {
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
                   placeholder="例如 7352 或台词关键词"
+                  disabled={loading}
                 />
                 <button
                   className="button button--primary query-analysis-button"
@@ -2751,6 +2411,7 @@ export default function App() {
                       : "搜索对白内容"
                   }
                   disabled={
+                    loading ||
                     directorLoading ||
                     formationChecking ||
                     query.trim().length === 0
@@ -3365,9 +3026,9 @@ export default function App() {
         inert={activeWorkspace !== "npc" || undefined}
         aria-label="NPC 注册工作区"
       >
-        <NpcRegistrationModal
+        <MemoizedNpcRegistrationModal
           embedded
-          onClose={() => switchWorkspace("storyboard")}
+          onClose={closeToolWorkspace}
         />
       </section>
 
@@ -3390,151 +3051,140 @@ export default function App() {
         inert={activeWorkspace !== "targets" || undefined}
         aria-label="任务目标物工作区"
       >
-        <MissionTargetModal
+        <MemoizedMissionTargetModal
           embedded
           database={database}
-          onClose={() => switchWorkspace("storyboard")}
+          onClose={closeToolWorkspace}
         />
       </section>
 
-      {showDialogueTextEditor && dialogueTextEditorItems.length > 0 && (
-        <DialogueTextEditorModal
-          key={`${contentSearch?.query ?? ""}:${activeDialogueId ?? ""}`}
-          query={contentSearch?.query ?? ""}
-          items={dialogueTextEditorItems}
-          activeDialogueNodeId={activeDialogueId ?? ""}
-          busy={dialogueSaveBusy}
-          error={dialogueSaveError}
-          onClose={() => {
-            if (!dialogueSaveBusy) {
-              setShowDialogueTextEditor(false);
-              setDialogueSaveError("");
+      <Suspense fallback={null}>
+        {showDialogueTextEditor && dialogueTextEditorItems.length > 0 && (
+          <LazyDialogueTextEditorModal
+            key={`${contentSearch?.query ?? ""}:${activeDialogueId ?? ""}`}
+            query={contentSearch?.query ?? ""}
+            items={dialogueTextEditorItems}
+            activeDialogueNodeId={activeDialogueId ?? ""}
+            busy={dialogueSaveBusy}
+            error={dialogueSaveError}
+            onClose={() => {
+              if (!dialogueSaveBusy) {
+                setShowDialogueTextEditor(false);
+                setDialogueSaveError("");
+              }
+            }}
+            onApply={(items) => void saveDialogueTextChanges(items)}
+          />
+        )}
+
+        {storyboardExportPreview && storyboardExportRequest && (
+          <LazyStoryboardExportModal
+            preview={storyboardExportPreview}
+            mode={storyboardExportMode}
+            currentShotNumber={storyboardExportShotNumber}
+            busy={storyboardExportBusy}
+            error={storyboardExportError}
+            result={storyboardExportResult}
+            onClose={closeStoryboardExport}
+            onShowAll={() => void previewAllStoryboardExport()}
+            onConfirm={(selectedShotIndexes, selectedSoundEffectIndexes) =>
+              void confirmStoryboardExport(
+                selectedShotIndexes,
+                selectedSoundEffectIndexes,
+              )
             }
-          }}
-          onApply={(items) => void saveDialogueTextChanges(items)}
-        />
-      )}
+          />
+        )}
 
-      {storyboardExportPreview && storyboardExportRequest && (
-        <StoryboardExportModal
-          preview={storyboardExportPreview}
-          mode={storyboardExportMode}
-          currentShotNumber={storyboardExportShotNumber}
-          busy={storyboardExportBusy}
-          error={storyboardExportError}
-          result={storyboardExportResult}
-          onClose={() => {
-            setStoryboardExportPreview(null);
-            setStoryboardExportRequest(null);
-            setStoryboardExportMode("current");
-            setStoryboardExportError("");
-            setStoryboardExportResult("");
-          }}
-          onShowAll={() => void previewAllStoryboardExport()}
-          onConfirm={(selectedShotIndexes, selectedSoundEffectIndexes) =>
-            void confirmStoryboardExport(
-              selectedShotIndexes,
-              selectedSoundEffectIndexes,
-            )
-          }
-        />
-      )}
+        {sharedComparison && (
+          <LazySharedPlanCompareModal
+            local={sharedComparison.local}
+            shared={sharedComparison.shared}
+            busy={sharedComparisonBusy}
+            error={sharedComparisonError}
+            onChoose={(choice) => void chooseSharedPlan(choice)}
+          />
+        )}
 
-      {sharedComparison && (
-        <SharedPlanCompareModal
-          local={sharedComparison.local}
-          shared={sharedComparison.shared}
-          busy={sharedComparisonBusy}
-          error={sharedComparisonError}
-          onChoose={(choice) => void chooseSharedPlan(choice)}
-        />
-      )}
+        {formationChoice && formationChoiceMode && !sharedComparison && (
+          <LazyBlueprintFormationModal
+            blueprint={formationChoice.blueprint}
+            generated={formationChoice.generated}
+            ai={
+              formationChoice.ai
+                ? {
+                    sequence: {
+                      ...formationChoice.ai.sequence,
+                      participants: formationChoice.ai.result.participants,
+                    },
+                    shots: formationChoice.ai.result.shots,
+                  }
+                : undefined
+            }
+            aiLabel={
+              formationChoice.ai
+                ? `${directorLabel(formationChoice.ai.result.appliedMode)} 占位`
+                : undefined
+            }
+            snapshot={formationChoice.snapshot}
+            mappedSlotCount={formationChoice.mappedSlotCount}
+            initialChoice={
+              formationChoiceMode === "initial"
+                ? "blueprint"
+                : activeFormationVariant
+            }
+            mode={formationChoiceMode}
+            onChoose={chooseFormation}
+            onClose={() => setFormationChoiceMode(null)}
+          />
+        )}
 
-      {formationChoice && formationChoiceMode && !sharedComparison && (
-        <BlueprintFormationModal
-          blueprint={formationChoice.blueprint}
-          generated={formationChoice.generated}
-          ai={
-            formationChoice.ai
-              ? {
-                  sequence: {
-                    ...formationChoice.ai.sequence,
-                    participants:
-                      formationChoice.ai.result.participants,
-                  },
-                  shots: formationChoice.ai.result.shots,
-                }
-              : undefined
-          }
-          aiLabel={
-            formationChoice.ai
-              ? `${directorLabel(formationChoice.ai.result.appliedMode)} 占位`
-              : undefined
-          }
-          snapshot={formationChoice.snapshot}
-          mappedSlotCount={formationChoice.mappedSlotCount}
-          initialChoice={
-            formationChoiceMode === "initial"
-              ? "blueprint"
-              : activeFormationVariant
-          }
-          mode={formationChoiceMode}
-          onChoose={chooseFormation}
-          onClose={() => setFormationChoiceMode(null)}
-        />
-      )}
+        {pendingDirectorResult?.result.analysis &&
+          !sharedComparison &&
+          !formationChoiceMode && (
+            <LazyStoryBriefModal
+              sequence={{
+                ...pendingDirectorResult.sequence,
+                participants: pendingDirectorResult.result.participants,
+              }}
+              analysis={pendingDirectorResult.result.analysis}
+              blocking={pendingDirectorResult.result.blocking}
+              source={pendingDirectorResult.result.sharedSource}
+              onContinue={() => {
+                applyDirectorResult(
+                  pendingDirectorResult.sequence,
+                  pendingDirectorResult.result,
+                );
+                setDirectorMode(pendingDirectorResult.result.appliedMode);
+                setPendingDirectorResult(null);
+              }}
+              onKeepCurrent={() => setPendingDirectorResult(null)}
+            />
+          )}
 
-      {pendingDirectorResult?.result.analysis &&
-        !sharedComparison &&
-        !formationChoiceMode && (
-        <StoryBriefModal
-          sequence={{
-            ...pendingDirectorResult.sequence,
-            participants: pendingDirectorResult.result.participants,
-          }}
-          analysis={pendingDirectorResult.result.analysis}
-          blocking={pendingDirectorResult.result.blocking}
-          source={pendingDirectorResult.result.sharedSource}
-          onContinue={() => {
-            applyDirectorResult(
-              pendingDirectorResult.sequence,
-              pendingDirectorResult.result,
-            );
-            setDirectorMode(pendingDirectorResult.result.appliedMode);
-            setPendingDirectorResult(null);
-          }}
-          onKeepCurrent={() => setPendingDirectorResult(null)}
-        />
-      )}
+        {showDesktopSetup && desktopSetup && (
+          <LazyDesktopSetupModal
+            initialStatus={desktopSetup}
+            onClose={() => setShowDesktopSetup(false)}
+            onRefreshTrae={() => void refreshTraeConnection()}
+            larkLoading={larkLoading}
+            larkStatus={larkStatus}
+            larkError={larkError}
+            soundEffectCatalog={soundEffectCatalog}
+            onAuthorize={() => void beginAuthorization()}
+            onRefreshLark={() => void refreshLarkConnection(false)}
+            onSyncSoundEffectCatalog={refreshSoundEffectCatalogFromLark}
+          />
+        )}
 
-      {showDesktopSetup && desktopSetup && (
-        <DesktopSetupModal
-          initialStatus={desktopSetup}
-          onClose={() => setShowDesktopSetup(false)}
-          onRefreshTrae={() => void refreshTraeConnection()}
-          larkLoading={larkLoading}
-          larkStatus={larkStatus}
-          larkError={larkError}
-          soundEffectCatalog={soundEffectCatalog}
-          onAuthorize={() => void beginAuthorization()}
-          onRefreshLark={() => void refreshLarkConnection(false)}
-          onSyncSoundEffectCatalog={refreshSoundEffectCatalogFromLark}
-        />
-      )}
-
-      {traeConfig && (
-        <TraeCollaborationModal
-          config={traeConfig}
-          onClose={() => {
-            setTraeConfig(null);
-            void refreshTraeConnection();
-          }}
-          onRefresh={() => {
-            setTraeConfig(null);
-            void refreshTraeConnection();
-          }}
-        />
-      )}
+        {traeConfig && (
+          <LazyTraeCollaborationModal
+            config={traeConfig}
+            onClose={closeTraeConfig}
+            onRefresh={closeTraeConfig}
+          />
+        )}
+      </Suspense>
 
       {authStart && (
         <div className="modal-backdrop" role="presentation">
@@ -3554,7 +3204,7 @@ export default function App() {
                 type="button"
                 title="关闭"
                 aria-label="关闭飞书授权"
-                onClick={() => setAuthStart(null)}
+                onClick={closeAuthorization}
                 disabled={authFinishing}
               >
                 <X size={17} />
@@ -3587,7 +3237,7 @@ export default function App() {
               <button
                 className="button"
                 type="button"
-                onClick={() => setAuthStart(null)}
+                onClick={closeAuthorization}
                 disabled={authFinishing}
               >
                 稍后处理

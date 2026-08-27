@@ -2,6 +2,7 @@
 
 interface DesktopSetupStatus {
   firstRun: boolean;
+  setupCompleted: boolean;
   version: string;
   packaged: boolean;
   portable: boolean;

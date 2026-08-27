@@ -146,6 +146,9 @@ FOV = 2 * atan(35 / (2 * focalLength))
 再统一写入并逐条回读，同一对话资产只保存一次。任一步骤失败时恢复本批次已
 写入节点，避免逐条保存造成无法确认的部分成功状态。
 
+UE TCP 连接由 `server/ue/transport.ts` 管理，HTTP 入口位于
+`server/ue/routes.ts`，并统一通过 `server/ue/services.ts` 调用上述业务实现。
+
 ## 后续验证
 
 - 在 UE 中对一个专用测试对话执行真实写入，确认

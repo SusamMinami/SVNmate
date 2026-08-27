@@ -7,9 +7,9 @@ import {
   getConfigCsvDirectory,
   getConfigTablePaths,
   readConfiguredMissionTargetPlan,
-  scanSelectedNpcRegistration,
-  type UnrealInvoker,
-} from "./ueBridge";
+} from "./configRepository";
+import { scanSelectedNpcRegistration } from "./ueBridge";
+import type { UnrealInvoker } from "./ue/transport";
 
 const DEFAULT_CSV_DIRECTORY = "C:\\trunk\\doc\\csvdir";
 let temporaryRoot = "";

@@ -139,7 +139,7 @@ Transform。Yaw 被转换为角色朝向向量，镜头求解和正面偏角验�
 POST /api/ue/formation/read
 ```
 
-Node/Electron 主进程默认通过 `127.0.0.1:12031` 连接项目现有的
+Electron 主进程中的 UE 传输服务默认通过 `127.0.0.1:12031` 连接项目现有的
 `OmniMcpCore`。`12031` 是当前插件约定的默认端口，不是 TRAE 的分镜 MCP
 端口。首次启动页会直接调用 OmniMcpCore 验证连接；若同事的插件配置不同，
 可在该页面修改端口并保存。
@@ -168,7 +168,11 @@ Node/Electron 主进程默认通过 `127.0.0.1:12031` 连接项目现有的
 
 ## 主要代码
 
-- `server/ueBridge.ts`：UE TCP 协议、资产检索和 SCS 读取。
+- `server/ue/transport.ts`：UE TCP 帧协议、连接超时与端口配置。
+- `server/ue/services.ts`：供 HTTP 层调用的 UE 服务门面。
+- `server/ue/routes.ts`：本地 HTTP 与 Vite 开发服务适配。
+- `server/ueBridge.ts`：资产检索、SCS 读取和 UE 业务操作。
+- `server/configRepository.ts`：CSV 数据目录与 Excel 源表路径。
 - `src/ue/client.ts`：前端 UE 查询、预检与显式写入 API 客户端。
 - `src/data/csv.ts`：Formation、Model、模型资源和动作字段解析。
 - `src/data/blueprintFormation.ts`：模型槽与 NPC 实例映射、坐标转换。

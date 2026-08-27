@@ -12,6 +12,7 @@ import {
   MAX_DIALOGUE_PARTICIPANTS,
   PARTICIPANT_SLOTS,
 } from "../types";
+import { getDialogueDatabaseIndex } from "./databaseIndex";
 
 export const PARTICIPANT_COLORS = [
   "#e85d47",
@@ -86,12 +87,7 @@ function followDialogueChain(
   ignoredDialogueNodeCount: number;
   warnings: string[];
 } {
-  const rowsById = new Map<string, DialogueRow>();
-  database.dialogueRows.forEach((row) => {
-    if (!rowsById.has(row.id)) {
-      rowsById.set(row.id, row);
-    }
-  });
+  const index = getDialogueDatabaseIndex(database);
 
   const rows: DialogueRow[] = [];
   let ignoredDialogueNodeCount = 0;
@@ -105,7 +101,7 @@ function followDialogueChain(
       break;
     }
     visited.add(currentId);
-    const row = rowsById.get(currentId);
+    const row = index.dialogueRowsById.get(currentId);
     if (!row) {
       warnings.push(`NextID ${currentId} 在对话表中不存在`);
       break;
@@ -122,21 +118,19 @@ function followDialogueChain(
   }
 
   if (rows.length === 0) {
-    const fallback = database.dialogueRows
+    const fallback = (index.dialogueRowsByPrefix.get(prefix) ?? [])
       .filter(
         (row) =>
-          row.id.startsWith(prefix) &&
           row.state !== 4 &&
           row.content &&
           row.npcId !== null &&
           row.npcId > 0,
-      )
-      .sort((left, right) => numericSort(left.id, right.id));
+      );
     if (fallback.length > 0) {
       warnings.push("开始节点无法形成链路，已按对话 ID 顺序预览");
-      ignoredDialogueNodeCount = database.dialogueRows.filter(
-        (row) => row.id.startsWith(prefix) && row.state === 4,
-      ).length;
+      ignoredDialogueNodeCount = (
+        index.dialogueRowsByPrefix.get(prefix) ?? []
+      ).filter((row) => row.state === 4).length;
       return { rows: fallback, ignoredDialogueNodeCount, warnings };
     }
   }
@@ -159,12 +153,9 @@ function contextForPrefix(
   if (!prefix) {
     return null;
   }
-  const start = database.starts
-    .filter((item) => item.id.startsWith(prefix))
-    .sort((left, right) => numericSort(left.id, right.id))[0];
-  const fallbackStart = database.dialogueRows
-    .filter((row) => row.id.startsWith(prefix))
-    .sort((left, right) => numericSort(left.id, right.id))[0];
+  const index = getDialogueDatabaseIndex(database);
+  const start = index.startsByPrefix.get(prefix)?.[0];
+  const fallbackStart = index.dialogueRowsByPrefix.get(prefix)?.[0];
   const startId = start?.id ?? fallbackStart?.id;
   if (!startId) {
     return null;
@@ -199,12 +190,9 @@ function buildDialogueSequence(
     throw new Error("请输入四位数对话 ID");
   }
 
-  const starts = database.starts
-    .filter((start) => start.id.startsWith(prefix))
-    .sort((left, right) => numericSort(left.id, right.id));
-  const fallbackStart = database.dialogueRows
-    .filter((row) => row.id.startsWith(prefix))
-    .sort((left, right) => numericSort(left.id, right.id))[0];
+  const index = getDialogueDatabaseIndex(database);
+  const starts = index.startsByPrefix.get(prefix) ?? [];
+  const fallbackStart = index.dialogueRowsByPrefix.get(prefix)?.[0];
   const startId = starts[0]?.id ?? fallbackStart?.id;
   if (!startId) {
     throw new Error(`没有找到对话 ID ${prefix}`);
@@ -338,12 +326,9 @@ export function searchDialogueContent(
     throw new Error("请输入对话 ID 或对白内容");
   }
   const normalizedQuery = query.toLocaleLowerCase();
-  const matches = database.dialogueRows.filter(
-    (row) =>
-      row.state !== 4 &&
-      Boolean(row.content) &&
-      row.content.toLocaleLowerCase().includes(normalizedQuery) &&
-      /^\d{4,}$/.test(row.id),
+  const matches = getDialogueDatabaseIndex(database).searchableDialogueRows.flatMap(
+    ({ row, normalizedContent }) =>
+      normalizedContent.includes(normalizedQuery) ? [row] : [],
   );
   const matchesByPrefix = new Map<string, DialogueRow[]>();
   for (const row of matches) {

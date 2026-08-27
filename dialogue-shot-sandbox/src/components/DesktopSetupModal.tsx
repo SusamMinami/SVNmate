@@ -81,6 +81,7 @@ export function DesktopSetupModal({
     Boolean(larkStatus?.authorized) && baseMissingScopes.length === 0;
   const docsReady =
     Boolean(larkStatus?.authorized) && docsMissingScopes.length === 0;
+  const isInitialSetup = !status.setupCompleted;
 
   useEffect(() => {
     if (!desktop) {
@@ -189,7 +190,7 @@ export function DesktopSetupModal({
       >
         <header>
           <div>
-            <small>{status.firstRun ? "首次启动" : "桌面版设置"}</small>
+            <small>{isInitialSetup ? "首次启动" : "桌面版设置"}</small>
             <h2 id="desktop-setup-title">运行环境与数据协作</h2>
           </div>
           <button
@@ -385,15 +386,24 @@ export function DesktopSetupModal({
             </div>
           </section>
 
-          <section className="setup-instructions">
-            <h3>首次配置</h3>
-            <ol>
-              <li>登录飞书，连接共享方案与返修案例库。</li>
-              <li>生成独立的 TRAE 集成目录。</li>
-              <li>在 TRAE 中打开该目录，并启用项目 MCP 与 Skill。</li>
-              <li>启动 UE 编辑器并确认 OmniMcpCore 端口检测通过。</li>
-            </ol>
-            <p>应用每次启动都会同步内置 Skill；TRAE 已打开时请重载窗口。</p>
+          <section
+            className="setup-instructions"
+            aria-label={isInitialSetup ? "首次配置" : "TRAE 集成"}
+          >
+            {isInitialSetup && (
+              <>
+                <h3>首次配置</h3>
+                <ol>
+                  <li>登录飞书，连接共享方案与返修案例库。</li>
+                  <li>生成独立的 TRAE 集成目录。</li>
+                  <li>在 TRAE 中打开该目录，并启用项目 MCP 与 Skill。</li>
+                  <li>启动 UE 编辑器并确认 OmniMcpCore 端口检测通过。</li>
+                </ol>
+                <p>
+                  应用每次启动都会同步内置 Skill；TRAE 已打开时请重载窗口。
+                </p>
+              </>
+            )}
             <code title={status.integrationRoot}>{status.integrationRoot}</code>
             <div className="setup-actions">
               <button

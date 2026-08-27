@@ -69,6 +69,21 @@
 - Excel 配表写入必须复用同一 Excel 实例，批量读取校验范围，并对 Excel 忙
   COM 错误进行有限重试；不得通过外壳并行启动多个工作簿后依赖固定延时。
 
+## 代码边界
+
+- `src/App.tsx` 只负责组合工作区和跨域流程。独立状态流程放入 `src/app`
+  hooks；新增复杂功能不得继续向根组件堆叠成组的 `useState` 和请求处理函数。
+- `src/data/csv.ts` 是纯 CSV 解析层，不能引用浏览器或 Electron API。
+  解析必须逐块消费并直接生成业务对象，不得恢复完整二维字符串矩阵。浏览器
+  目录读取与 Worker 调度属于 `src/data/csvLoader.ts`；正式界面不回退到
+  主线程解析。
+- `src/data/databaseIndex.ts` 统一维护按数据库实例缓存的查询索引。需要按 ID、
+  对话前缀或地图关联查找时，应扩展该索引，避免在业务组件中重复全表扫描。
+- `server/ue/transport.ts` 只负责 UE TCP 协议和连接配置；
+  `server/ue/routes.ts` 只负责 HTTP/Vite 适配；`server/ue/services.ts` 是供
+  路由调用的服务门面；配置目录与 Excel 路径归 `server/configRepository.ts`。
+  新增 UE 功能必须先进入业务服务，再通过门面暴露，不能把协议处理写回路由层。
+
 ## 界面规范
 
 - 全局视觉、工作区、动效和可访问性约束以 [`DESIGN.md`](DESIGN.md) 为准。

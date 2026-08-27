@@ -4,6 +4,7 @@ import type {
   MissionTargetPreviewPlan,
   UnrealTransform,
 } from "../types";
+import { getDialogueDatabaseIndex } from "./databaseIndex";
 
 function parseTargetIds(taskId: string, rawValue: string): string[] {
   const rawIds = rawValue.split(",");
@@ -112,9 +113,8 @@ export function resolveMissionTargets(
     );
   }
 
-  const taskMatches = database.missionRows.filter(
-    (task) => task.id === taskId,
-  );
+  const index = getDialogueDatabaseIndex(database);
+  const taskMatches = index.missionRowsById.get(taskId) ?? [];
   if (taskMatches.length === 0) {
     throw new Error(`没有找到任务节点 ${taskId}`);
   }
@@ -127,9 +127,7 @@ export function resolveMissionTargets(
   const task = taskMatches[0];
   const targetIds = parseTargetIds(taskId, task.showTargetIds);
   const targets = targetIds.map((targetId) => {
-    const matches = database.missionPositions.filter(
-      (target) => target.id === targetId,
-    );
+    const matches = index.missionPositionsById.get(targetId) ?? [];
     if (matches.length === 0) {
       throw new Error(
         `任务节点 ${taskId} 引用了不存在的目标物 ${targetId}`,
@@ -160,7 +158,7 @@ export function resolveMissionTargets(
   }
 
   const mapId = mapIds[0];
-  const mapMatches = database.mapConfigs.filter((map) => map.id === mapId);
+  const mapMatches = index.mapConfigsById.get(mapId) ?? [];
   if (mapMatches.length === 0) {
     throw new Error(`MapID ${mapId} 在地图配置表中不存在`);
   }

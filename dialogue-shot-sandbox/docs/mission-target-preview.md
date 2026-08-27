@@ -255,9 +255,14 @@ BP 输入框右侧的检查按钮会读取 BP、对应数字槽位、同名 Dial
 
 ## 主要代码
 
-- `src/data/csv.ts`：读取任务、目标物、NPC、模型、地图和场景资源 CSV。
+- `src/data/csv.ts`：分块解析任务、目标物、NPC、模型、地图和场景资源 CSV。
+- `src/data/csvLoader.ts` 与 `src/data/csv.worker.ts`：读取目录并在独立 Worker
+  中执行解析。
+- `src/data/databaseIndex.ts`：缓存任务、目标物和地图 ID 索引。
 - `src/data/missionTargetResolver.ts`：执行跨表解析和加载前硬校验。
 - `src/data/missionTargetBlueprintSync.ts`：目标物与 BP 槽位映射及双向坐标换算。
-- `server/ueBridge.ts`：自动开图、目标物预览及空 Blueprint 填充。
+- `server/ueBridge.ts`：自动开图、目标物预览及 Blueprint 业务实现。
+- `server/ue/transport.ts`、`server/ue/services.ts`、`server/ue/routes.ts`：
+  分别负责 UE TCP、服务门面和本地 HTTP 接口。
 - `src/components/MissionTargetModal.tsx`：任务输入、变更摘要与目标物详情。
 - `src/ue/client.ts`：前端 UE API 客户端。

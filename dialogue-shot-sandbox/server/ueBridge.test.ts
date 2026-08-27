@@ -6,8 +6,6 @@ import {
   buildMissionTargetBlueprintComponents,
   clearMissionTargetPreview,
   compareDialogueModelOrder,
-  configureUnrealMcpPort,
-  getUnrealMcpEndpoint,
   inspectMissionTargetMap,
   inspectMissionTargetBlueprint,
   inspectUnrealMcpConnection,
@@ -17,8 +15,12 @@ import {
   readSelectedLevelActors,
   registerBlueprintDialogueModels,
   resetMissionTargetPreviewState,
-  type UnrealInvoker,
 } from "./ueBridge";
+import {
+  configureUnrealMcpPort,
+  getUnrealMcpEndpoint,
+  type UnrealInvoker,
+} from "./ue/transport";
 
 class FakeUnrealConnection implements UnrealInvoker {
   readonly calls: Array<{

@@ -1591,6 +1591,7 @@ test("guides an unsigned user to Feishu on first desktop launch", async ({
   await page.addInitScript(() => {
     const status = {
       firstRun: true,
+      setupCompleted: false,
       version: "0.17.2",
       packaged: true,
       portable: false,
@@ -1619,7 +1620,11 @@ test("guides an unsigned user to Feishu on first desktop launch", async ({
       setUeMcpPort: async () => status,
       getPathForFile: () => "C:\\Test\\doc\\csvdir\\NPC表.csv",
       setDataCsvDirectory: async () => status,
-      completeSetup: async () => ({ ...status, firstRun: false }),
+      completeSetup: async () => ({
+        ...status,
+        firstRun: false,
+        setupCompleted: true,
+      }),
       checkForUpdates: async () => ({ state: "idle" }),
       getUpdateSnapshot: async () => ({ state: "idle" }),
       installUpdate: async () => undefined,
@@ -1634,6 +1639,9 @@ test("guides an unsigned user to Feishu on first desktop launch", async ({
     name: "运行环境与数据协作",
   });
   await expect(setup).toBeVisible();
+  await expect(
+    setup.getByRole("heading", { name: "首次配置" }),
+  ).toBeVisible();
   await expect(setup.getByText("首次使用请登录")).toBeVisible();
   await setup.getByRole("button", { name: "登录" }).click();
   await expect(
@@ -1723,6 +1731,7 @@ test("manually syncs the sound effect catalog from settings", async ({
   await page.addInitScript(() => {
     const status = {
       firstRun: true,
+      setupCompleted: false,
       version: "0.20.1",
       packaged: true,
       portable: false,
@@ -1751,7 +1760,11 @@ test("manually syncs the sound effect catalog from settings", async ({
       setUeMcpPort: async () => status,
       getPathForFile: () => "C:\\Test\\doc\\csvdir\\NPC表.csv",
       setDataCsvDirectory: async () => status,
-      completeSetup: async () => ({ ...status, firstRun: false }),
+      completeSetup: async () => ({
+        ...status,
+        firstRun: false,
+        setupCompleted: true,
+      }),
       checkForUpdates: async () => ({ state: "idle" }),
       getUpdateSnapshot: async () => ({ state: "idle" }),
       installUpdate: async () => undefined,
@@ -1802,6 +1815,7 @@ test("syncs the selected desktop doc path for registration data", async ({
   await page.addInitScript(() => {
     const status = {
       firstRun: false,
+      setupCompleted: true,
       version: "0.17.2",
       packaged: true,
       portable: false,
@@ -1910,6 +1924,23 @@ test("syncs the selected desktop doc path for registration data", async ({
     name: "运行环境与数据协作",
   });
   await expect(settingsDialog).toBeVisible();
+  await expect(
+    settingsDialog.getByRole("heading", { name: "首次配置" }),
+  ).toHaveCount(0);
+  await expect(
+    settingsDialog.getByText(
+      "应用每次启动都会同步内置 Skill；TRAE 已打开时请重载窗口。",
+    ),
+  ).toHaveCount(0);
+  await expect(
+    settingsDialog.getByText(
+      "C:\\Test\\Shot Sandbox\\trae-integration",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  await expect(
+    settingsDialog.getByRole("button", { name: "同步配置与 Skill" }),
+  ).toBeVisible();
   await settingsDialog.getByRole("button", { name: "关闭桌面版设置" }).click();
 
   await page.locator('input[type="file"]').setInputFiles(fixtureRoot);

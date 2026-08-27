@@ -8,6 +8,7 @@ import {
 import { Camera, Map } from "lucide-react";
 import {
   type PointerEvent as ReactPointerEvent,
+  memo,
   useEffect,
   useMemo,
   useRef,
@@ -244,7 +245,7 @@ function StageFloor({ compact = false }: { compact?: boolean }) {
 }
 
 function ShotCamera({ shot }: { shot: ShotPlan }) {
-  const { camera } = useThree();
+  const { camera, invalidate } = useThree();
   const startPosition = useMemo(
     () => new THREE.Vector3(...shot.cameraPosition),
     [shot.cameraPosition],
@@ -275,8 +276,10 @@ function ShotCamera({ shot }: { shot: ShotPlan }) {
     }
     camera.lookAt(startTarget);
     camera.rotateZ(THREE.MathUtils.degToRad(shot.cameraRollDegrees));
+    invalidate();
   }, [
     camera,
+    invalidate,
     shot.id,
     shot.focalLength,
     shot.cameraRollDegrees,
@@ -307,6 +310,9 @@ function ShotCamera({ shot }: { shot: ShotPlan }) {
     }
     camera.lookAt(currentTarget);
     camera.rotateZ(THREE.MathUtils.degToRad(shot.cameraRollDegrees));
+    if (rawProgress < 1) {
+      invalidate();
+    }
   });
   return null;
 }
@@ -337,6 +343,7 @@ function MainStage({
         />
       ))}
       <ContactShadows
+        frames={1}
         opacity={0.38}
         scale={8}
         blur={2.4}
@@ -462,7 +469,7 @@ function TopCamera({
   participants: DialogueParticipant[];
   compact?: boolean;
 }) {
-  const { camera, size } = useThree();
+  const { camera, invalidate, size } = useThree();
   const frame = useMemo(() => {
     const points = participants.map((participant) => [
       participant.position[0],
@@ -485,7 +492,7 @@ function TopCamera({
         : Math.max(11, maxZ - minZ + 11),
     };
   }, [compact, participants]);
-  useFrame(() => {
+  useEffect(() => {
     const fitZoom = Math.min(
       size.width / frame.worldWidth,
       size.height / frame.worldDepth,
@@ -502,7 +509,8 @@ function TopCamera({
       camera.zoom = targetZoom;
       camera.updateProjectionMatrix();
     }
-  });
+    invalidate();
+  }, [camera, frame, invalidate, size.height, size.width]);
   return null;
 }
 
@@ -612,7 +620,7 @@ function CameraFrameGuides({
   );
 }
 
-export function StageView({
+function StageViewComponent({
   participants,
   shot,
   shotIndex = 0,
@@ -711,7 +719,7 @@ export function StageView({
               key="shot-main"
               shadows
               dpr={[1, 1.6]}
-              frameloop={active ? "always" : "never"}
+              frameloop={active ? "demand" : "never"}
               camera={{ position: [...shot.cameraPosition], fov: 42 }}
               gl={{ antialias: true }}
             >
@@ -724,7 +732,7 @@ export function StageView({
             <Canvas
               key="blocking-main"
               orthographic
-              frameloop={active ? "always" : "never"}
+              frameloop={active ? "demand" : "never"}
               camera={{ position: [0, 10, 0], zoom: 24, near: 0.1, far: 40 }}
               dpr={[1, 1.5]}
               gl={{ antialias: true }}
@@ -822,7 +830,7 @@ export function StageView({
             <Canvas
               key="blocking-inset"
               orthographic
-              frameloop={active ? "always" : "never"}
+              frameloop={active ? "demand" : "never"}
               camera={{ position: [0, 10, 0], zoom: 24, near: 0.1, far: 40 }}
               dpr={[1, 1.5]}
               gl={{ antialias: true }}
@@ -839,7 +847,7 @@ export function StageView({
               key="shot-inset"
               shadows
               dpr={[1, 1.4]}
-              frameloop={active ? "always" : "never"}
+              frameloop={active ? "demand" : "never"}
               camera={{ position: [...shot.cameraPosition], fov: 42 }}
               gl={{ antialias: true }}
             >
@@ -856,3 +864,5 @@ export function StageView({
     </div>
   );
 }
+
+export const StageView = memo(StageViewComponent);

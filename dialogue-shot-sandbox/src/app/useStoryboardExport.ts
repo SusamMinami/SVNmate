@@ -1,0 +1,271 @@
+import { useCallback, useMemo, useState } from "react";
+import type { DirectorSoundEffectRecommendation } from "../director/contracts";
+import type {
+  DialogueSequence,
+  DialogueStoryboardExportPreview,
+  ShotPlan,
+  StoryboardExportRequest,
+} from "../types";
+import {
+  exportDialogueStoryboard,
+  inspectDialogueStoryboardExport,
+} from "../ue/client";
+
+type StoryboardExportMode = "current" | "all" | "sound";
+
+interface UseStoryboardExportOptions {
+  sequence: DialogueSequence;
+  shots: ShotPlan[];
+  soundEffects: DirectorSoundEffectRecommendation[];
+  activeShot?: ShotPlan;
+}
+
+export function useStoryboardExport({
+  sequence,
+  shots,
+  soundEffects,
+  activeShot,
+}: UseStoryboardExportOptions) {
+  const [preview, setPreview] =
+    useState<DialogueStoryboardExportPreview | null>(null);
+  const [request, setRequest] = useState<StoryboardExportRequest | null>(null);
+  const [mode, setMode] = useState<StoryboardExportMode>("current");
+  const [currentShotNumber, setCurrentShotNumber] = useState(1);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [result, setResult] = useState("");
+
+  const canExport = useMemo(
+    () =>
+      shots.length > 0 &&
+      sequence.participants.length >= 2 &&
+      sequence.participants.every(
+        (participant) =>
+          participant.positionSource === "blueprint" &&
+          participant.modelIndex !== null,
+      ),
+    [sequence.participants, shots.length],
+  );
+
+  const buildRequest = useCallback(
+    (
+      selectedShots: ShotPlan[] = shots,
+      selectedSoundEffects: DirectorSoundEffectRecommendation[] = soundEffects,
+    ): StoryboardExportRequest => {
+      if (selectedShots.length > 0 && !canExport) {
+        throw new Error("当前方案未绑定完整的 UE Blueprint 站位");
+      }
+      return {
+        dialogueId: sequence.prefix,
+        startId: sequence.startId,
+        dialogueIds: selectedShots.flatMap((shot) => shot.dialogueIds),
+        participantModelIndexes:
+          selectedShots.length > 0
+            ? sequence.participants.map((participant) => participant.modelIndex!)
+            : [],
+        usesBlueprintFormation: selectedShots.length > 0,
+        soundEffects: selectedSoundEffects.map((recommendation) => ({
+          dialogueId: recommendation.dialogueId,
+          assetName: recommendation.assetName,
+        })),
+        shots: selectedShots.map((shot) => ({
+          dialogueId: shot.dialogueId,
+          dialogueIds: [...shot.dialogueIds],
+          cameraPosition: shot.cameraPosition,
+          cameraTarget: shot.cameraTarget,
+          cameraEndPosition: shot.cameraEndPosition,
+          cameraEndTarget: shot.cameraEndTarget,
+          focalLength: shot.focalLength,
+          endFocalLength: shot.endFocalLength,
+          cameraMovement: shot.cameraMovement,
+          movementIntensity: shot.movementIntensity,
+          cameraRollDegrees: shot.cameraRollDegrees,
+          projectionValid: shot.projection.valid,
+          actorActions: shot.actorActions.flatMap((action) => {
+            const participant = sequence.participants.find(
+              (candidate) => candidate.slot === action.participantSlot,
+            );
+            return participant?.modelIndex === null ||
+              participant?.modelIndex === undefined
+              ? []
+              : [
+                  {
+                    modelIndex: participant.modelIndex,
+                    montageName: action.montageName,
+                    angleDegrees: action.angleDegrees,
+                  },
+                ];
+          }),
+        })),
+      };
+    },
+    [canExport, sequence, shots, soundEffects],
+  );
+
+  const previewCurrent = useCallback(async () => {
+    setBusy(true);
+    setError("");
+    setResult("");
+    try {
+      if (!activeShot) {
+        throw new Error("当前没有可导出的镜头");
+      }
+      const activeDialogueIds = new Set(activeShot.dialogueIds);
+      const nextRequest = buildRequest(
+        [activeShot],
+        soundEffects.filter((recommendation) =>
+          activeDialogueIds.has(recommendation.dialogueId),
+        ),
+      );
+      const nextPreview = await inspectDialogueStoryboardExport(nextRequest);
+      const activeIndex = shots.indexOf(activeShot);
+      setMode("current");
+      setCurrentShotNumber((activeIndex >= 0 ? activeIndex : 0) + 1);
+      setRequest(nextRequest);
+      setPreview(nextPreview);
+    } catch (exportError) {
+      setError(
+        exportError instanceof Error
+          ? exportError.message
+          : "无法检查 UE 分镜写入",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }, [activeShot, buildRequest, shots, soundEffects]);
+
+  const previewCurrentSoundEffects = useCallback(async () => {
+    setBusy(true);
+    setError("");
+    setResult("");
+    try {
+      if (!activeShot) {
+        throw new Error("当前没有可导出的分镜");
+      }
+      const activeDialogueIds = new Set(activeShot.dialogueIds);
+      const currentSoundEffects = soundEffects.filter((recommendation) =>
+        activeDialogueIds.has(recommendation.dialogueId),
+      );
+      if (currentSoundEffects.length === 0) {
+        throw new Error("当前分镜没有可写入的音效建议");
+      }
+      const nextRequest = buildRequest([], currentSoundEffects);
+      const nextPreview = await inspectDialogueStoryboardExport(nextRequest);
+      const activeIndex = shots.indexOf(activeShot);
+      setMode("sound");
+      setCurrentShotNumber((activeIndex >= 0 ? activeIndex : 0) + 1);
+      setRequest(nextRequest);
+      setPreview(nextPreview);
+    } catch (exportError) {
+      setError(
+        exportError instanceof Error
+          ? exportError.message
+          : "无法检查当前分镜音效写入",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }, [activeShot, buildRequest, shots, soundEffects]);
+
+  const previewAll = useCallback(async () => {
+    setBusy(true);
+    setError("");
+    setResult("");
+    try {
+      const nextRequest = buildRequest();
+      const nextPreview = await inspectDialogueStoryboardExport(nextRequest);
+      setMode("all");
+      setRequest(nextRequest);
+      setPreview(nextPreview);
+    } catch (exportError) {
+      setError(
+        exportError instanceof Error
+          ? exportError.message
+          : "无法检查全部 UE 分镜写入",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }, [buildRequest]);
+
+  const confirm = useCallback(
+    async (
+      selectedShotIndexes: number[],
+      selectedSoundEffectIndexes: number[],
+    ) => {
+      if (!preview || !request) {
+        return;
+      }
+      setBusy(true);
+      setError("");
+      try {
+        const selectedIndexes = new Set(selectedShotIndexes);
+        const selectedShots = request.shots.filter((_, index) =>
+          selectedIndexes.has(index),
+        );
+        const selectedSoundIndexes = new Set(selectedSoundEffectIndexes);
+        const availableSoundEffects = request.soundEffects ?? [];
+        const selectedSoundEffects = availableSoundEffects.filter((_, index) =>
+          selectedSoundIndexes.has(index),
+        );
+        if (selectedShots.length === 0 && selectedSoundEffects.length === 0) {
+          throw new Error("请至少选择一个要导出的镜头或音效");
+        }
+        const selectedRequest: StoryboardExportRequest = {
+          ...request,
+          dialogueIds: selectedShots.flatMap((shot) => shot.dialogueIds),
+          shots: selectedShots,
+          soundEffects: selectedSoundEffects,
+        };
+        const exportsEntirePreview =
+          selectedShots.length === request.shots.length &&
+          selectedSoundEffects.length === availableSoundEffects.length;
+        const selectedPreview = exportsEntirePreview
+          ? preview
+          : await inspectDialogueStoryboardExport(selectedRequest);
+        const exportResult = await exportDialogueStoryboard(
+          selectedRequest,
+          selectedPreview.reviewToken,
+        );
+        setResult(
+          exportResult.status === "unchanged"
+            ? "所选镜头与音效已与 UE 对话资产一致，无需写入"
+            : `已写入 ${exportResult.changedNodeCount} 个镜头节点和 ${exportResult.changedSoundEffectCount ?? 0} 个音效并保存`,
+        );
+      } catch (exportError) {
+        setError(
+          exportError instanceof Error
+            ? exportError.message
+            : "分镜导出失败",
+        );
+      } finally {
+        setBusy(false);
+      }
+    },
+    [preview, request],
+  );
+
+  const close = useCallback(() => {
+    setPreview(null);
+    setRequest(null);
+    setMode("current");
+    setError("");
+    setResult("");
+  }, []);
+
+  return {
+    preview,
+    request,
+    mode,
+    currentShotNumber,
+    busy,
+    error,
+    result,
+    canExport,
+    previewCurrent,
+    previewCurrentSoundEffects,
+    previewAll,
+    confirm,
+    close,
+  };
+}

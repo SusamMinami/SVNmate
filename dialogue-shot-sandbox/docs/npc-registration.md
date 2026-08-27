@@ -190,7 +190,10 @@ Range 一次读取后在内存中匹配，避免大表逐单元格跨进程扫�
 
 ## 主要代码
 
-- `server/ueBridge.ts`：读取 UE 选择并打开固定 Excel 源表。
+- `server/ueBridge.ts`：读取 UE 选择并生成注册候选。
+- `server/configRepository.ts`：管理 CSV 数据目录与对应 Excel 源表路径。
+- `server/excelRegistration.ts`：串行执行 Excel COM 读取和写入。
+- `server/ue/transport.ts` 与 `server/ue/routes.ts`：UE TCP 连接和本地 API。
 - `src/data/npcRegistration.ts`：匹配地图、模型和可复用 NPC。
 - `src/components/NpcRegistrationModal.tsx`：注册草稿与复用选择界面。
 - `src/ue/client.ts`：前端 UE 与源表 API 客户端。

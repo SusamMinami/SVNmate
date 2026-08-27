@@ -23,12 +23,14 @@ import {
 import { routeLarkRequest } from "../server/larkBridge";
 import {
   configureConfigCsvDirectory,
-  configureUnrealMcpPort,
   getConfigCsvDirectory,
+} from "../server/configRepository";
+import { inspectUnrealMcpConnection } from "../server/ueBridge";
+import { routeUeRequest } from "../server/ue/routes";
+import {
+  configureUnrealMcpPort,
   getUnrealMcpEndpoint,
-  inspectUnrealMcpConnection,
-  routeUeRequest,
-} from "../server/ueBridge";
+} from "../server/ue/transport";
 import {
   getStoryboardMcpPresence,
   STORYBOARD_MCP_VERSION,
@@ -260,44 +262,6 @@ async function installTraeIntegration(): Promise<void> {
   ]);
 }
 
-async function migrateLegacyGlobalMcpConfiguration(): Promise<void> {
-  const expectedServer = storyboardMcpConfigTemplate().mcpServers[
-    "internal-storyboard-collaboration"
-  ];
-  if (!("url" in expectedServer)) {
-    return;
-  }
-  const candidates = ["Trae CN", "Trae"].map((productName) =>
-    join(app.getPath("appData"), productName, "User", "mcp.json"),
-  );
-  for (const configPath of candidates) {
-    try {
-      const config = JSON.parse(await readFile(configPath, "utf8")) as {
-        mcpServers?: Record<
-          string,
-          { command?: string; args?: string[]; url?: string }
-        >;
-      };
-      const legacy =
-        config.mcpServers?.["internal-storyboard-collaboration"];
-      if (
-        !legacy?.command?.toLowerCase().endsWith(".exe") ||
-        !legacy.args?.includes("--storyboard-mcp")
-      ) {
-        continue;
-      }
-      config.mcpServers!["internal-storyboard-collaboration"] = {
-        url: expectedServer.url,
-      };
-      await writeFile(configPath, JSON.stringify(config, null, 2), "utf8");
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        console.error("[storyboard-mcp] global config migration failed", error);
-      }
-    }
-  }
-}
-
 async function setupStatus() {
   const state = await readDesktopState();
   const [
@@ -318,6 +282,7 @@ async function setupStatus() {
     firstRun:
       !state.setupCompleted ||
       (integration.exists && !integration.current),
+    setupCompleted: state.setupCompleted,
     version: app.getVersion(),
     packaged: app.isPackaged,
     portable: Boolean(process.env.PORTABLE_EXECUTABLE_FILE),
@@ -573,7 +538,6 @@ async function runDesktop(): Promise<void> {
   const desktopState = await readDesktopState();
   configureUnrealMcpPort(desktopState.ueMcpPort);
   configureConfigCsvDirectory(desktopState.dataCsvDirectory);
-  await migrateLegacyGlobalMcpConfiguration();
   await installTraeIntegration();
   registerDesktopIpc();
   configureUpdater();

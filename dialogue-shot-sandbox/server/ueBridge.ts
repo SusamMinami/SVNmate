@@ -1,10 +1,7 @@
-import { type IncomingMessage, type ServerResponse } from "node:http";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { access, readFile, unlink } from "node:fs/promises";
-import net from "node:net";
-import { basename, dirname, join, resolve } from "node:path";
-import type { Plugin, PreviewServer, ViteDevServer } from "vite";
+import { join } from "node:path";
 import { z } from "zod";
 import type {
   BackgroundPropImportPreview,
@@ -40,38 +37,27 @@ import type {
   StoryboardExportSoundEffectPreview,
   UnrealTransform,
 } from "../src/types";
-import {
-  parseMissionTargetDatabase,
-  parseNpcRegistrationDatabase,
-} from "../src/data/csv";
+import { parseNpcRegistrationDatabase } from "../src/data/csv";
 import {
   blueprintTransformFromWorld,
   buildMissionTargetBlueprintSync,
   missionTargetBlueprintRootForCreation,
   type MissionTargetBlueprintRoot,
 } from "../src/data/missionTargetBlueprintSync";
-import { resolveMissionTargets } from "../src/data/missionTargetResolver";
 import { buildNpcRegistrationCandidates } from "../src/data/npcRegistration";
 import {
-  updateMissionTargetTransforms,
-  writeNpcRegistrationDraft,
-} from "./excelRegistration";
+  getConfigCsvDirectory,
+  getConfigCsvPaths,
+  getConfigTablePaths,
+  readConfiguredMissionTargetPlan,
+} from "./configRepository";
+import { updateMissionTargetTransforms } from "./excelRegistration";
+import {
+  getUnrealMcpEndpoint,
+  UnrealMcpConnection,
+  type UnrealInvoker,
+} from "./ue/transport";
 
-const UE_MCP_HOST = process.env.UE_MCP_HOST || "127.0.0.1";
-const DEFAULT_UE_MCP_PORT = 12031;
-const environmentUeMcpPort = Number.parseInt(
-  process.env.UE_MCP_PORT || String(DEFAULT_UE_MCP_PORT),
-  10,
-);
-let ueMcpPort =
-  Number.isInteger(environmentUeMcpPort) &&
-  environmentUeMcpPort >= 1 &&
-  environmentUeMcpPort <= 65_535
-    ? environmentUeMcpPort
-    : DEFAULT_UE_MCP_PORT;
-const CONNECT_TIMEOUT_MS = 1_500;
-const REQUEST_TIMEOUT_MS = 8_000;
-const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 const PREVIEW_MARKER_CLASS = "/Script/Engine.TargetPoint";
 const PREVIEW_ACTOR_PREFIX = "ShotSandboxMissionTargetPreview";
 const PREVIEW_DELETE_RETRY_DELAYS_MS = [50, 100, 200, 400, 800, 1_200];
@@ -89,86 +75,6 @@ const DIALOGUE_SEARCH_PATH = "/Game/Seria/Task/dialoggraph";
 const SOUND_EFFECT_SEARCH_PATH = "/Game/Seria/WwiseSoundData/Events";
 const DIALOG_NPC_TABLE_PATH =
   "/Game/Seria/Task/Mod/DialogNPCTable.DialogNPCTable";
-const DEFAULT_CONFIG_CSV_DIRECTORY = "C:\\trunk\\doc\\csvdir";
-let configCsvDirectory = DEFAULT_CONFIG_CSV_DIRECTORY;
-
-export function configureConfigCsvDirectory(directoryPath: string): void {
-  const normalized = resolve(directoryPath.trim());
-  configCsvDirectory =
-    basename(normalized).toLowerCase() === "csvdir"
-      ? normalized
-      : join(normalized, "csvdir");
-}
-
-export function getConfigCsvDirectory(): string {
-  return configCsvDirectory;
-}
-
-function configCsvPaths() {
-  return {
-    npc: join(configCsvDirectory, "NPC表.csv"),
-    model: join(configCsvDirectory, "m模型资源表.csv"),
-    mission: join(configCsvDirectory, "任务表.csv"),
-    dungeonMission: join(configCsvDirectory, "副本任务表.csv"),
-    missionTarget: join(configCsvDirectory, "m目标物表.csv"),
-    map: join(configCsvDirectory, "d地图配置表.csv"),
-    scene: join(configCsvDirectory, "d地图资源表.csv"),
-  };
-}
-
-export function getConfigTablePaths() {
-  const xlsDirectory = join(dirname(configCsvDirectory), "xlsdir");
-  return {
-    missionTarget: join(xlsDirectory, "r任务剧情", "m目标物表.xlsm"),
-    npc: join(xlsDirectory, "NPC表.xlsm"),
-    model: join(xlsDirectory, "m模型资源表.xlsm"),
-  };
-}
-
-async function readOptionalConfigFile(path: string): Promise<string> {
-  try {
-    return await readFile(path, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return "";
-    }
-    throw error;
-  }
-}
-
-export async function readConfiguredMissionTargetPlan(
-  taskId: string,
-): Promise<MissionTargetPreviewPlan> {
-  const paths = configCsvPaths();
-  const [
-    npcText,
-    modelText,
-    missionText,
-    dungeonMissionText,
-    missionTargetText,
-    mapText,
-    sceneText,
-  ] = await Promise.all([
-    readFile(paths.npc, "utf8"),
-    readFile(paths.model, "utf8"),
-    readFile(paths.mission, "utf8"),
-    readOptionalConfigFile(paths.dungeonMission),
-    readFile(paths.missionTarget, "utf8"),
-    readFile(paths.map, "utf8"),
-    readFile(paths.scene, "utf8"),
-  ]);
-  const database = parseMissionTargetDatabase(
-    npcText,
-    modelText,
-    missionText,
-    dungeonMissionText,
-    missionTargetText,
-    mapText,
-    sceneText,
-    configCsvDirectory,
-  );
-  return resolveMissionTargets(database, taskId);
-}
 
 function withMissionTargetOverrides(
   plan: MissionTargetPreviewPlan,
@@ -220,141 +126,10 @@ function withMissionTargetOverrides(
   };
 }
 
-interface UnrealResponse {
-  success?: boolean;
-  Value?: unknown;
-  Output?: { ReturnValue?: unknown };
-  errorLogs?: string;
-}
-
-export interface UnrealInvoker {
-  connect(): Promise<void>;
-  invoke(action: string, args: Record<string, unknown>): Promise<unknown>;
-  close(): void;
-}
-
-export function getUnrealMcpEndpoint(): { host: string; port: number } {
-  return { host: UE_MCP_HOST, port: ueMcpPort };
-}
-
-export function configureUnrealMcpPort(port: number): void {
-  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
-    throw new Error("UE MCP 端口必须是 1-65535 的整数");
-  }
-  ueMcpPort = port;
-}
-
 export interface BlueprintFormationLookup {
   status: "found" | "not_found" | "editor_offline" | "unavailable";
   message: string;
   snapshot?: BlueprintFormationSnapshot;
-}
-
-class UnrealMcpConnection implements UnrealInvoker {
-  private readonly socket = new net.Socket();
-  private buffer = Buffer.alloc(0);
-  private expectedLength: number | null = null;
-  private waiters: Array<{
-    resolve: (value: UnrealResponse) => void;
-    reject: (error: Error) => void;
-    timer: NodeJS.Timeout;
-  }> = [];
-
-  async connect(): Promise<void> {
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.socket.destroy();
-        reject(new Error("连接 UE 编辑器超时"));
-      }, CONNECT_TIMEOUT_MS);
-      this.socket.once("connect", () => {
-        clearTimeout(timer);
-        resolve();
-      });
-      this.socket.once("error", (error) => {
-        clearTimeout(timer);
-        reject(error);
-      });
-      this.socket.connect(ueMcpPort, UE_MCP_HOST);
-    });
-    this.socket.on("data", (chunk) =>
-      this.consume(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)),
-    );
-    this.socket.on("error", (error) => this.rejectAll(error));
-    this.socket.on("close", () =>
-      this.rejectAll(new Error("UE 编辑器连接已关闭")),
-    );
-  }
-
-  async invoke(action: string, args: Record<string, unknown>): Promise<unknown> {
-    const response = await this.request({
-      proto_type: "tool_call",
-      tool_name: "unreal_invoke",
-      tool_args: { action, args },
-    });
-    if (response.success === false) {
-      throw new Error(response.errorLogs || `UE 操作失败：${action}`);
-    }
-    return response.Value ?? response.Output?.ReturnValue;
-  }
-
-  close(): void {
-    this.socket.end();
-  }
-
-  private request(payload: Record<string, unknown>): Promise<UnrealResponse> {
-    const body = Buffer.from(JSON.stringify(payload), "utf8");
-    const header = Buffer.alloc(4);
-    header.writeUInt32BE(body.length);
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        reject(new Error("UE 编辑器响应超时"));
-        this.socket.destroy();
-      }, REQUEST_TIMEOUT_MS);
-      this.waiters.push({ resolve, reject, timer });
-      this.socket.write(Buffer.concat([header, body]));
-    });
-  }
-
-  private consume(chunk: Buffer): void {
-    this.buffer = Buffer.concat([this.buffer, chunk]);
-    while (true) {
-      if (this.expectedLength === null) {
-        if (this.buffer.length < 4) {
-          return;
-        }
-        this.expectedLength = this.buffer.readUInt32BE(0);
-        this.buffer = this.buffer.subarray(4);
-        if (this.expectedLength > MAX_RESPONSE_BYTES) {
-          this.rejectAll(new Error("UE 编辑器响应超过大小限制"));
-          this.socket.destroy();
-          return;
-        }
-      }
-      if (this.buffer.length < this.expectedLength) {
-        return;
-      }
-      const payload = this.buffer.subarray(0, this.expectedLength);
-      this.buffer = this.buffer.subarray(this.expectedLength);
-      this.expectedLength = null;
-      const waiter = this.waiters.shift();
-      if (!waiter) {
-        continue;
-      }
-      clearTimeout(waiter.timer);
-      try {
-        waiter.resolve(JSON.parse(payload.toString("utf8")) as UnrealResponse);
-      } catch {
-        waiter.reject(new Error("UE 编辑器返回了无效 JSON"));
-      }
-    }
-  }
-
-  private rejectAll(error: Error): void {
-    for (const waiter of this.waiters.splice(0)) {
-      clearTimeout(waiter.timer);
-      waiter.reject(error);
-    }
-  }
 }
 
 const VectorSchema = z.object({
@@ -3653,7 +3428,7 @@ export async function inspectMissionTargetBlueprint(
           transform: component.transform,
         })),
         spatial.root,
-        configCsvDirectory,
+        getConfigCsvDirectory(),
       );
       const registrationByIndex = new Map(
         dialogue.slots.map((slot) => [slot.modelIndex, slot]),
@@ -3820,7 +3595,7 @@ async function prepareMissionTargetBlueprintSync(
       transform: component.transform,
     })),
     spatial.root,
-    configCsvDirectory,
+    getConfigCsvDirectory(),
   );
   const formationMatched =
     dialogue.formationClassPath !== null &&
@@ -4345,7 +4120,7 @@ export async function registerBlueprintDialogueModels(
             transform: component.transform,
           })),
           dialogueSpatial.root,
-          configCsvDirectory,
+          getConfigCsvDirectory(),
         );
         if (sync.canUpdateBlueprint) {
           spatial = {
@@ -5046,7 +4821,7 @@ export async function appendMissionTargetBlueprint(
             transform: component.transform,
           })),
           dialogueSpatial.root,
-          configCsvDirectory,
+          getConfigCsvDirectory(),
         );
         if (!inferredSync.canUpdateBlueprint) {
           throw new Error(
@@ -5074,7 +4849,7 @@ export async function appendMissionTargetBlueprint(
         transform: component.transform,
       })),
       { explicit: true, transform: rootTransform },
-      configCsvDirectory,
+      getConfigCsvDirectory(),
     );
     const mappedTargetIds = new Set(
       existingSync.mappings.map((mapping) => mapping.targetId),
@@ -5935,7 +5710,7 @@ export async function applyBackgroundPropImport(
 export async function scanSelectedNpcRegistration(
   connectionFactory: () => UnrealInvoker = () => new UnrealMcpConnection(),
 ): Promise<NpcRegistrationScanResult> {
-  const csvPaths = configCsvPaths();
+  const csvPaths = getConfigCsvPaths();
   const [
     selection,
     npcText,
@@ -5957,7 +5732,7 @@ export async function scanSelectedNpcRegistration(
     missionTargetText,
     mapText,
     sceneText,
-    configCsvDirectory,
+    getConfigCsvDirectory(),
   );
   return {
     selection,
@@ -6054,8 +5829,9 @@ async function connectUnreal(connection: UnrealInvoker): Promise<void> {
     await connection.connect();
   } catch {
     connection.close();
+    const endpoint = getUnrealMcpEndpoint();
     throw new Error(
-      `无法连接 UE 编辑器 OmniMcpCore（${UE_MCP_HOST}:${ueMcpPort}），请确认 UE 编辑器和插件正在运行`,
+      `无法连接 UE 编辑器 OmniMcpCore（${endpoint.host}:${endpoint.port}），请确认 UE 编辑器和插件正在运行`,
     );
   }
 }
@@ -6342,252 +6118,4 @@ export async function loadMissionTargetPreview(
   } finally {
     connection.close();
   }
-}
-
-function sendJson(
-  response: ServerResponse,
-  status: number,
-  body: unknown,
-): void {
-  response.statusCode = status;
-  response.setHeader("Content-Type", "application/json; charset=utf-8");
-  response.setHeader("Cache-Control", "no-store");
-  response.end(JSON.stringify(body));
-}
-
-async function readJson(request: IncomingMessage): Promise<unknown> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of request) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
-}
-
-export async function routeUeRequest(
-  request: IncomingMessage,
-  response: ServerResponse,
-): Promise<boolean> {
-  const url = new URL(request.url || "/", "http://127.0.0.1");
-  if (!url.pathname.startsWith("/api/ue/")) {
-    return false;
-  }
-  if (request.method !== "POST") {
-    sendJson(response, 404, {
-      ok: false,
-      error: { message: "未知 UE 集成 API" },
-    });
-    return true;
-  }
-  try {
-    if (url.pathname === "/api/ue/mission-targets/clear") {
-      sendJson(response, 200, {
-        ok: true,
-        data: await clearMissionTargetPreview(),
-      });
-      return true;
-    }
-    if (url.pathname === "/api/ue/selection/read") {
-      sendJson(response, 200, {
-        ok: true,
-        data: await readSelectedLevelActors(),
-      });
-      return true;
-    }
-    if (url.pathname === "/api/ue/selection/registration") {
-      sendJson(response, 200, {
-        ok: true,
-        data: await scanSelectedNpcRegistration(),
-      });
-      return true;
-    }
-    const body = (await readJson(request)) as Record<string, unknown>;
-    if (url.pathname === "/api/ue/storyboard/inspect") {
-      sendJson(response, 200, {
-        ok: true,
-        data: await inspectDialogueStoryboardExport(body),
-      });
-      return true;
-    }
-    if (url.pathname === "/api/ue/storyboard/export") {
-      sendJson(response, 200, {
-        ok: true,
-        data: await exportDialogueStoryboard(body),
-      });
-      return true;
-    }
-    if (url.pathname === "/api/ue/dialogue/content") {
-      sendJson(response, 200, {
-        ok: true,
-        data: await updateDialogueContent(body),
-      });
-      return true;
-    }
-    if (url.pathname === "/api/ue/dialogue/content/batch") {
-      sendJson(response, 200, {
-        ok: true,
-        data: await updateDialogueContents(body),
-      });
-      return true;
-    }
-    if (url.pathname === "/api/ue/mission-targets/map-status") {
-      sendJson(response, 200, {
-        ok: true,
-        data: await inspectMissionTargetMap(body),
-      });
-      return true;
-    }
-    if (url.pathname === "/api/ue/mission-targets/load") {
-      sendJson(response, 200, {
-        ok: true,
-        data: await loadMissionTargetPreview(body),
-      });
-      return true;
-    }
-    if (url.pathname === "/api/ue/mission-targets/create-blueprint") {
-      sendJson(response, 200, {
-        ok: true,
-        data: await populateMissionTargetBlueprint(body),
-      });
-      return true;
-    }
-    if (url.pathname === "/api/ue/mission-targets/append-blueprint") {
-      sendJson(response, 200, {
-        ok: true,
-        data: await appendMissionTargetBlueprint(body),
-      });
-      return true;
-    }
-    if (url.pathname === "/api/ue/mission-targets/inspect-blueprint") {
-      sendJson(response, 200, {
-        ok: true,
-        data: await inspectMissionTargetBlueprint(body),
-      });
-      return true;
-    }
-    if (url.pathname === "/api/ue/mission-targets/update-blueprint") {
-      sendJson(response, 200, {
-        ok: true,
-        data: await updateMissionTargetBlueprintPositions(body),
-      });
-      return true;
-    }
-    if (url.pathname === "/api/ue/mission-targets/update-from-blueprint") {
-      sendJson(response, 200, {
-        ok: true,
-        data: await syncBlueprintPositionsToMissionTargets(body),
-      });
-      return true;
-    }
-    if (
-      url.pathname ===
-      "/api/ue/mission-targets/background-props/inspect"
-    ) {
-      sendJson(response, 200, {
-        ok: true,
-        data: await inspectBackgroundPropImport(body),
-      });
-      return true;
-    }
-    if (
-      url.pathname ===
-      "/api/ue/mission-targets/background-props/apply"
-    ) {
-      sendJson(response, 200, {
-        ok: true,
-        data: await applyBackgroundPropImport(body),
-      });
-      return true;
-    }
-    if (url.pathname === "/api/ue/mission-targets/register-dialogue") {
-      sendJson(response, 200, {
-        ok: true,
-        data: await registerBlueprintDialogueModels(body),
-      });
-      return true;
-    }
-    if (url.pathname === "/api/ue/mission-targets/check-blueprint") {
-      sendJson(response, 200, {
-        ok: true,
-        data: await inspectMissionTargetBlueprintCompatibility(body),
-      });
-      return true;
-    }
-    if (url.pathname === "/api/ue/config-table/open") {
-      sendJson(response, 200, {
-        ok: true,
-        data: await openConfigTable(body),
-      });
-      return true;
-    }
-    if (url.pathname === "/api/ue/config-registration/write") {
-      sendJson(response, 200, {
-        ok: true,
-        data: await writeNpcRegistrationDraft({
-          ...body,
-          paths: getConfigTablePaths(),
-        }),
-      });
-      return true;
-    }
-    if (url.pathname === "/api/ue/config-registration/update-targets") {
-      sendJson(response, 200, {
-        ok: true,
-        data: await updateMissionTargetTransforms({
-          ...body,
-          targetPath: getConfigTablePaths().missionTarget,
-        }),
-      });
-      return true;
-    }
-    if (url.pathname === "/api/ue/formation/read") {
-      const dialogueId = String(body.dialogueId ?? "");
-      const startId = String(body.startId ?? "");
-      const formationClassPath = String(body.formationClassPath ?? "");
-      if (!/^\d{4}$/.test(dialogueId) || !/^\d{4,}$/.test(startId)) {
-        throw new Error("对话 ID 或开始节点 ID 无效");
-      }
-      sendJson(response, 200, {
-        ok: true,
-        data: await readBlueprintFormation({
-          dialogueId,
-          startId,
-          formationClassPath,
-        }),
-      });
-      return true;
-    }
-    sendJson(response, 404, {
-      ok: false,
-      error: { message: "未知 UE 集成 API" },
-    });
-  } catch (error) {
-    sendJson(response, 400, {
-      ok: false,
-      error: {
-        message:
-          error instanceof Error ? error.message : "UE 集成操作失败",
-      },
-    });
-  }
-  return true;
-}
-
-function installMiddleware(server: ViteDevServer | PreviewServer): void {
-  server.middlewares.use(async (request, response, next) => {
-    if (!(await routeUeRequest(request, response))) {
-      next();
-    }
-  });
-}
-
-export function ueBridgePlugin(): Plugin {
-  return {
-    name: "ue-blueprint-formation-bridge",
-    configureServer(server) {
-      installMiddleware(server);
-    },
-    configurePreviewServer(server) {
-      installMiddleware(server);
-    },
-  };
 }

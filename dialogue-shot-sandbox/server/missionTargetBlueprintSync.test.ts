@@ -3,17 +3,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { MissionTargetPreviewPlan } from "../src/types";
+import { configureConfigCsvDirectory } from "./configRepository";
 import {
   appendMissionTargetBlueprint,
-  configureConfigCsvDirectory,
   applyBackgroundPropImport,
   inspectBackgroundPropImport,
   inspectMissionTargetBlueprint,
   registerBlueprintDialogueModels,
   syncBlueprintPositionsToMissionTargets,
   updateMissionTargetBlueprintPositions,
-  type UnrealInvoker,
 } from "./ueBridge";
+import type { UnrealInvoker } from "./ue/transport";
 
 const DEFAULT_CSV_DIRECTORY = "C:\\trunk\\doc\\csvdir";
 let temporaryRoot = "";

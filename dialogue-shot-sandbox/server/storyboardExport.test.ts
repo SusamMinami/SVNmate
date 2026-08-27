@@ -7,8 +7,8 @@ import {
   inspectDialogueStoryboardExport,
   updateDialogueContent,
   updateDialogueContents,
-  type UnrealInvoker,
 } from "./ueBridge";
+import type { UnrealInvoker } from "./ue/transport";
 
 function commonProperties(
   dialogueId: string,
