@@ -537,7 +537,7 @@ test("removes a character after the AI-directed exit node", async ({
   await page.getByRole("button", { name: "TRAE 协作" }).click();
   await page.getByRole("button", { name: "分析对话与站位" }).click();
   await page
-    .getByRole("dialog", { name: "分镜与占位方案" })
+    .getByRole("dialog", { name: "对比 AI 与当前占位" })
     .getByRole("button", { name: "采用 AI 占位" })
     .click();
 
@@ -624,7 +624,7 @@ test("switches the main canvas between shot and blocking views", async ({
   await expect(page.locator(".shot-hud")).toContainText("双人建立镜头");
 });
 
-test("shows local content immediately and presents the AI story brief before applying it", async ({
+test("shows local content immediately and compares AI blocking before applying it", async ({
   page,
 }, testInfo) => {
   let formationRequests = 0;
@@ -829,7 +829,10 @@ test("shows local content immediately and presents the AI story brief before app
     path: testInfo.outputPath("header-status-popover.png"),
     fullPage: true,
   });
-  await page.getByRole("button", { name: "关闭状态详情" }).click();
+  await page.locator(".viewport-toolbar").click();
+  await expect(
+    page.getByRole("dialog", { name: "返修案例状态" }),
+  ).toHaveCount(0);
 
   await expect(page.locator(".section-label--sticky")).toContainText(
     "本地预览",
@@ -851,17 +854,20 @@ test("shows local content immediately and presents the AI story brief before app
   expect(directorRequests).toBe(1);
 
   releaseDirector();
-  const dialog = page.getByRole("dialog", { name: "分镜与占位方案" });
+  const dialog = page.getByRole("dialog", {
+    name: "对比 AI 与当前占位",
+  });
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByText("迫使隐瞒者说明钥匙真相。")).toBeVisible();
-  await expect(dialog.getByText("对峙分组")).toBeVisible();
-
-  await expect(dialog.getByText("AI 占位建议")).toBeVisible();
   await expect(
-    dialog.getByRole("button", { name: "保留当前占位" }),
+    dialog.getByRole("button", { name: "当前 · 规则导演占位" }),
   ).toBeVisible();
+  await expect(
+    dialog.getByRole("button", { name: "内部 TRAE 建议占位" }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(dialog.getByText("迫使隐瞒者说明钥匙真相。"))
+    .toHaveCount(0);
   await dialog.screenshot({
-    path: testInfo.outputPath("ai-story-and-formation-review.png"),
+    path: testInfo.outputPath("ai-formation-review.png"),
   });
   await dialog.getByRole("button", { name: "采用 AI 占位" }).click();
   await expect(dialog).toBeHidden();
@@ -918,10 +924,146 @@ test("shows local content immediately and presents the AI story brief before app
   ).toBeVisible();
 });
 
+test("manages the pending TRAE queue from the status popover", async ({
+  page,
+}, testInfo) => {
+  let queue = [
+    {
+      requestId: "queue-a",
+      dialogueId: "3001",
+      outline: "第一段待处理剧情",
+      firstLine: "第一段台词",
+      dialogueCount: 4,
+      participantNames: ["玩家", "甲"],
+      createdAt: "2026-08-27T01:00:00.000Z",
+    },
+    {
+      requestId: "queue-b",
+      dialogueId: "3002",
+      outline: "第二段待处理剧情",
+      firstLine: "第二段台词",
+      dialogueCount: 6,
+      participantNames: ["玩家", "乙"],
+      createdAt: "2026-08-27T01:01:00.000Z",
+    },
+  ];
+  const reorderedRequests: string[][] = [];
+  const deletedRequests: string[] = [];
+  await page.addInitScript(() => {
+    window.sessionStorage.setItem("shot-sandbox.launch-screen-seen", "1");
+  });
+  await page.route("**/api/trae/status", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          configured: true,
+          connected: true,
+          versionMismatch: false,
+          expectedVersion: "0.18.0",
+          serverVersion: "0.18.0",
+          transport: "http",
+          lastSeenAt: "2026-08-27T01:02:00.000Z",
+          mcpName: "internal-storyboard-collaboration",
+          mcpConfigPath: "C:\\workspace\\.trae\\mcp.json",
+          skillName: "internal-storyboard-director",
+          stats: {
+            pending: queue.length,
+            processing: 0,
+            completed: 0,
+            failed: 0,
+          },
+          queue,
+        },
+      }),
+    });
+  });
+  await page.route("**/api/trae/queue/reorder", async (route) => {
+    const request = route.request().postDataJSON() as {
+      request_ids: string[];
+    };
+    reorderedRequests.push(request.request_ids);
+    const byId = new Map(queue.map((task) => [task.requestId, task]));
+    queue = request.request_ids.map((requestId) => byId.get(requestId)!);
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ ok: true, data: queue }),
+    });
+  });
+  await page.route("**/api/trae/queue/delete", async (route) => {
+    const request = route.request().postDataJSON() as {
+      request_id: string;
+    };
+    deletedRequests.push(request.request_id);
+    queue = queue.filter((task) => task.requestId !== request.request_id);
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: { requestId: request.request_id },
+      }),
+    });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "协作连接状态" }).click();
+  const statusDialog = page.getByRole("dialog", { name: "协作连接状态" });
+  await expect(statusDialog).toBeVisible();
+  await expect(
+    statusDialog.getByRole("button", { name: "关闭状态详情" }),
+  ).toHaveCount(0);
+  const queueItems = statusDialog.locator(".workspace-status-queue li");
+  await expect(queueItems).toHaveCount(2);
+  await expect(queueItems.nth(0)).toContainText("对话 3001");
+  await statusDialog.screenshot({
+    path: testInfo.outputPath("trae-pending-queue.png"),
+  });
+
+  await queueItems.nth(0).dragTo(queueItems.nth(1));
+  await expect.poll(() => reorderedRequests.length).toBe(1);
+  expect(reorderedRequests[0]).toEqual(["queue-b", "queue-a"]);
+  await expect(queueItems.nth(0)).toContainText("对话 3002");
+
+  page.once("dialog", async (dialog) => dialog.dismiss());
+  await statusDialog
+    .getByRole("button", { name: "删除待处理分镜 3002" })
+    .click();
+  expect(deletedRequests).toEqual([]);
+  await expect(queueItems).toHaveCount(2);
+
+  page.once("dialog", async (dialog) => dialog.accept());
+  await statusDialog
+    .getByRole("button", { name: "删除待处理分镜 3002" })
+    .click();
+  await expect.poll(() => deletedRequests).toEqual(["queue-b"]);
+  await expect(queueItems).toHaveCount(1);
+  await expect(queueItems.first()).toContainText("对话 3001");
+
+  await page.locator(".viewport-toolbar").click();
+  await expect(statusDialog).toHaveCount(0);
+});
+
 test("reuses a cached TRAE plan and forces regeneration on the repeated click", async ({
   page,
 }) => {
   const requestUrls: string[] = [];
+  const requestBodies: Array<{
+    request_id: string;
+    participants: Array<{
+      slot: string;
+      initial_position: [number, number, number];
+    }>;
+    dialogue: Array<{ dialogue_id: string; speaker: "A" | "B" }>;
+    constraints: { preserve_input_formation?: boolean };
+  }> = [];
+  let releaseFormationRegeneration!: () => void;
+  const formationRegenerationGate = new Promise<void>((resolve) => {
+    releaseFormationRegeneration = resolve;
+  });
   await page.route("**/api/trae/status", async (route) => {
     await route.fulfill({
       status: 200,
@@ -947,10 +1089,19 @@ test("reuses a cached TRAE plan and forces regeneration on the repeated click", 
     requestUrls.push(route.request().url());
     const input = route.request().postDataJSON() as {
       request_id: string;
-      participants: Array<{ slot: string }>;
+      participants: Array<{
+        slot: string;
+        initial_position: [number, number, number];
+      }>;
       dialogue: Array<{ dialogue_id: string; speaker: "A" | "B" }>;
+      constraints: { preserve_input_formation?: boolean };
     };
-    const regenerated = requestUrls.length > 1;
+    requestBodies.push(input);
+    const requestNumber = requestUrls.length;
+    const regenerated = requestNumber > 1;
+    if (requestNumber === 3) {
+      await formationRegenerationGate;
+    }
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -961,9 +1112,12 @@ test("reuses a cached TRAE plan and forces regeneration on the repeated click", 
           request_id: input.request_id,
           status: "ready",
           scene_analysis: {
-            dramatic_goal: regenerated
-              ? "重新生成的 TRAE 方案"
-              : "已缓存的 TRAE 方案",
+            dramatic_goal:
+              requestNumber === 3
+                ? "按当前占位生成的 TRAE 方案"
+                : regenerated
+                  ? "重新生成的 TRAE 方案"
+                  : "已缓存的 TRAE 方案",
             emotional_progression: "由试探逐步推进到合作。",
             visual_strategy: "保持关系镜头后进入正反打。",
           },
@@ -1013,7 +1167,12 @@ test("reuses a cached TRAE plan and forces regeneration on the repeated click", 
                 ? "establish_geography"
                 : "individual_perspective",
             camera_height: "eye",
-            intent: regenerated ? "强制重新生成。" : "直接复用缓存。",
+            intent:
+              requestNumber === 3
+                ? "按当前占位重新生成。"
+                : regenerated
+                  ? "强制重新生成。"
+                  : "直接复用缓存。",
           })),
         },
         meta: {
@@ -1031,7 +1190,7 @@ test("reuses a cached TRAE plan and forces regeneration on the repeated click", 
 
   await expect(page.getByText(/实际：内部 TRAE/)).toBeVisible();
   await expect(
-    page.getByRole("dialog", { name: "分镜与占位方案" }),
+    page.getByRole("dialog", { name: "对比 AI 与当前占位" }),
   ).toHaveCount(0);
   expect(new URL(requestUrls[0]).search).toBe("");
 
@@ -1040,17 +1199,41 @@ test("reuses a cached TRAE plan and forces regeneration on the repeated click", 
   await traeButton.click();
 
   const regeneratedDialog = page.getByRole("dialog", {
-    name: "分镜与占位方案",
+    name: "对比 AI 与当前占位",
   });
   await expect(regeneratedDialog).toBeVisible();
   expect(new URL(requestUrls[1]).search).toBe("?force=1");
-  await expect(
-    regeneratedDialog.getByText("重新生成的 TRAE 方案"),
-  ).toBeVisible();
   await regeneratedDialog
-    .getByRole("button", { name: "采用 AI 占位" })
+    .getByRole("button", { name: "当前 · 内部 TRAE 占位" })
     .click();
-  await expect(page.locator(".shot-row").nth(2)).toHaveClass(/is-active/);
+  await regeneratedDialog
+    .getByRole("button", { name: "按当前占位重新生成" })
+    .click();
+
+  await expect(regeneratedDialog).toBeHidden();
+  await expect(page.locator(".section-label--sticky")).toContainText(
+    "内部 TRAE 已出方案",
+  );
+  await page.locator(".shot-row").nth(1).click();
+  await expect(page.locator(".shot-row").nth(1)).toHaveClass(/is-active/);
+  await expect.poll(() => requestUrls.length).toBe(3);
+  expect(new URL(requestUrls[2]).search).toBe("?force=1");
+  expect(requestBodies[2].constraints.preserve_input_formation).toBe(true);
+  expect(requestBodies[2].participants.map((participant) =>
+    participant.initial_position,
+  )).toEqual([
+    [-2.05, 0, -0.18],
+    [2.05, 0, -0.18],
+  ]);
+
+  releaseFormationRegeneration();
+  await expect(page.locator(".section-label--sticky")).not.toContainText(
+    "已出方案",
+  );
+  await expect(page.locator(".shot-row").nth(1)).toHaveClass(/is-active/);
+  await page.getByRole("tab", { name: "导演" }).click();
+  await expect(page.getByText("按当前占位重新生成。", { exact: true }))
+    .toBeVisible();
 });
 
 test("previews shared and local plans before resolving a library conflict", async ({
@@ -1301,12 +1484,14 @@ test("switches to internal TRAE and visibly degrades when collaboration fails", 
   await page.goto("/");
   await page.getByRole("button", { name: "TRAE 协作" }).click();
   await page.getByRole("button", { name: "协作连接状态" }).click();
+  const statusDialog = page.getByRole("dialog", {
+    name: "协作连接状态",
+  });
   await expect(
-    page
-      .getByRole("dialog", { name: "协作连接状态" })
-      .getByText(/内部 TRAE MCP 已连接/),
+    statusDialog.getByText(/内部 TRAE MCP 已连接/),
   ).toBeVisible();
-  await page.getByRole("button", { name: "关闭状态详情" }).click();
+  await page.locator(".viewport-toolbar").click();
+  await expect(statusDialog).toHaveCount(0);
 
   await expect(
     page.getByText(
@@ -2607,11 +2792,20 @@ test("offers the detected Blueprint formation before designing shots", async ({
     page.getByText("LOCAL CAMERA WORKSPACE / 01"),
   ).toBeHidden();
   await expect(dialog.getByText("BP 角色槽")).toBeVisible();
+  await expect(
+    dialog.locator(".actor-label").filter({ hasText: "玩家" }).first(),
+  ).toHaveAttribute("data-facing-target", "-0.700,0.000,2.800");
   await dialog.screenshot({
     path: testInfo.outputPath("blueprint-formation-choice.png"),
   });
-  await dialog.getByRole("button", { name: "使用此占位" }).click();
+  await dialog.getByRole("button", { name: "关闭占位选择" }).click();
   await expect(dialog).toBeHidden();
+  await page.getByRole("button", { name: "切换占位方案" }).click();
+  const reopenedDialog = page.getByRole("dialog", {
+    name: "切换占位方案",
+  });
+  await reopenedDialog.getByRole("button", { name: "BP_735000" }).click();
+  await reopenedDialog.getByRole("button", { name: "使用此占位" }).click();
   const formationStatus = page.locator(".formation-status").first();
   await expect(formationStatus).toContainText("占位方案");
   await expect(formationStatus).toContainText("BP_735000");
@@ -2640,14 +2834,29 @@ test("offers the detected Blueprint formation before designing shots", async ({
     .click();
   await expect(formationStatus).toContainText("BP_735000");
   expect(formationRequests).toBe(1);
+  await page
+    .getByRole("button", { name: "重新读取 BP_735000 位置" })
+    .click();
+  const refreshedDialog = page.getByRole("dialog", {
+    name: "切换占位方案",
+  });
+  await expect(refreshedDialog).toBeVisible();
+  expect(formationRequests).toBe(2);
+  await refreshedDialog
+    .getByRole("button", { name: "关闭占位方案切换" })
+    .click();
   await page.getByRole("button", { name: "TRAE 协作" }).click();
   const aiReviewDialog = page.getByRole("dialog", {
-    name: "分镜与占位方案",
+    name: "对比 AI 与当前占位",
   });
   await expect(aiReviewDialog).toBeVisible();
-  await expect(aiReviewDialog.getByText("AI 占位建议")).toBeVisible();
+  await expect(
+    aiReviewDialog.getByRole("button", {
+      name: "当前 · BP_735000",
+    }),
+  ).toBeVisible();
   await aiReviewDialog
-    .getByRole("button", { name: "保留当前占位" })
+    .getByRole("button", { name: "采用 AI 占位" })
     .click();
   await page.getByRole("button", { name: "切换占位方案" }).click();
   const aiSwitchDialog = page.getByRole("dialog", {

@@ -27,6 +27,7 @@ interface StageViewProps {
   shotIndex?: number;
   shotCount?: number;
   active?: boolean;
+  applyShotFacingOverrides?: boolean;
 }
 
 interface CharacterProps {
@@ -185,6 +186,12 @@ function Character({
           ]
             .filter(Boolean)
             .join(" ")}
+          data-position={participant.position
+            .map((value) => value.toFixed(3))
+            .join(",")}
+          data-facing-target={participant.facingTarget
+            .map((value) => value.toFixed(3))
+            .join(",")}
           style={{ borderColor: participant.color }}
           title={`${participant.slot} ${participant.name} NPC ${participant.id}${
             pending ? " · 未登场" : ""
@@ -626,6 +633,7 @@ function StageViewComponent({
   shotIndex = 0,
   shotCount = 1,
   active = true,
+  applyShotFacingOverrides = true,
 }: StageViewProps) {
   const [viewMode, setViewMode] = useState<"shot" | "blocking">("shot");
   const pointerProbeRef = useRef<HTMLDivElement>(null);
@@ -644,10 +652,13 @@ function StageViewComponent({
   const stagedPresentParticipants = useMemo(
     () =>
       presentParticipants.map((participant) => {
+        if (!applyShotFacingOverrides) {
+          return participant;
+        }
         const facingTarget = shot.facingOverrides[participant.slot];
         return facingTarget ? { ...participant, facingTarget } : participant;
       }),
-    [presentParticipants, shot.facingOverrides],
+    [applyShotFacingOverrides, presentParticipants, shot.facingOverrides],
   );
   const blockingParticipants = useMemo(
     () =>
@@ -658,13 +669,21 @@ function StageViewComponent({
             participant.exitIndex >= shot.dialogueEndIndex,
         )
         .map((participant) => {
-          if (participant.entryIndex > shot.dialogueEndIndex) {
+          if (
+            !applyShotFacingOverrides ||
+            participant.entryIndex > shot.dialogueEndIndex
+          ) {
             return participant;
           }
           const facingTarget = shot.facingOverrides[participant.slot];
           return facingTarget ? { ...participant, facingTarget } : participant;
         }),
-    [participants, shot.dialogueEndIndex, shot.facingOverrides],
+    [
+      applyShotFacingOverrides,
+      participants,
+      shot.dialogueEndIndex,
+      shot.facingOverrides,
+    ],
   );
   const pendingCount =
     blockingParticipants.length - stagedPresentParticipants.length;

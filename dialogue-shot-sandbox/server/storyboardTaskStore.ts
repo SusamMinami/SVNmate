@@ -40,11 +40,23 @@ export interface StoryboardTask {
   projectionRevisionAttempts?: number;
   projectionRevisionBase?: ReadyDirectorResponse;
   projectionRevisionFailedShotIndexes?: number[];
+  queueOrder?: number;
+}
+
+export interface StoryboardQueueItem {
+  requestId: string;
+  dialogueId: string;
+  outline: string;
+  firstLine: string;
+  dialogueCount: number;
+  participantNames: string[];
+  createdAt: string;
 }
 
 const PROCESSING_LEASE_MS = 20 * 60_000;
 const TASK_LOCK_TIMEOUT_MS = 5_000;
 const TASK_LOCK_STALE_MS = 30_000;
+const QUEUE_LOCK_NAME = ".queue.lock";
 export const STORYBOARD_CACHE_POLICY =
   "shot-plan.v5:camera-language-v4-sound-effects-v2";
 
@@ -154,6 +166,43 @@ async function withTaskLock<T>(
   }
 }
 
+async function withQueueLock<T>(operation: () => Promise<T>): Promise<T> {
+  await mkdir(taskDirectory(), { recursive: true });
+  const lockPath = join(taskDirectory(), QUEUE_LOCK_NAME);
+  const deadline = Date.now() + TASK_LOCK_TIMEOUT_MS;
+  while (true) {
+    try {
+      const handle = await open(lockPath, "wx");
+      try {
+        return await operation();
+      } finally {
+        await handle.close();
+        await unlink(lockPath).catch(() => undefined);
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+        throw error;
+      }
+      try {
+        const lock = await stat(lockPath);
+        if (Date.now() - lock.mtimeMs > TASK_LOCK_STALE_MS) {
+          await unlink(lockPath).catch(() => undefined);
+          continue;
+        }
+      } catch (statError) {
+        if ((statError as NodeJS.ErrnoException).code === "ENOENT") {
+          continue;
+        }
+        throw statError;
+      }
+      if (Date.now() >= deadline) {
+        throw new Error("分镜待处理队列正在更新，请稍后重试");
+      }
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 25));
+    }
+  }
+}
+
 async function readAllTasks(): Promise<StoryboardTask[]> {
   await mkdir(taskDirectory(), { recursive: true });
   const tasks: StoryboardTask[] = [];
@@ -168,6 +217,33 @@ async function readAllTasks(): Promise<StoryboardTask[]> {
     );
   }
   return tasks;
+}
+
+function compareQueueOrder(
+  left: StoryboardTask,
+  right: StoryboardTask,
+): number {
+  const leftOrder = left.queueOrder ?? Number.MAX_SAFE_INTEGER;
+  const rightOrder = right.queueOrder ?? Number.MAX_SAFE_INTEGER;
+  return (
+    leftOrder - rightOrder ||
+    left.createdAt.localeCompare(right.createdAt) ||
+    left.requestId.localeCompare(right.requestId)
+  );
+}
+
+function queueItem(task: StoryboardTask): StoryboardQueueItem {
+  return {
+    requestId: task.requestId,
+    dialogueId: task.input.dialogue_prefix,
+    outline: task.input.outline,
+    firstLine: task.input.dialogue[0]?.content ?? "",
+    dialogueCount: task.input.dialogue.length,
+    participantNames: task.input.participants.map(
+      (participant) => participant.name,
+    ),
+    createdAt: task.createdAt,
+  };
 }
 
 function taskCacheKey(task: StoryboardTask): string {
@@ -297,32 +373,24 @@ function processingLeaseExpired(task: StoryboardTask): boolean {
 }
 
 export async function claimPendingStoryboardTask(): Promise<StoryboardTask | null> {
-  await mkdir(taskDirectory(), { recursive: true });
-  const filenames = (await readdir(taskDirectory()))
-    .filter((filename) => filename.endsWith(".json"))
-    .sort();
-  const tasks: StoryboardTask[] = [];
-  for (const filename of filenames) {
-    const task = JSON.parse(
-      await readFile(join(taskDirectory(), filename), "utf8"),
-    ) as StoryboardTask;
-    if (task.status === "pending" || processingLeaseExpired(task)) {
-      tasks.push(task);
+  return withQueueLock(async () => {
+    const tasks = (await readAllTasks())
+      .filter(
+        (task) => task.status === "pending" || processingLeaseExpired(task),
+      )
+      .sort(compareQueueOrder);
+    const task = tasks[0];
+    if (!task) {
+      return null;
     }
-  }
-  const task = tasks.sort((left, right) =>
-    left.createdAt.localeCompare(right.createdAt),
-  )[0];
-  if (!task) {
-    return null;
-  }
-  const timestamp = new Date().toISOString();
-  task.status = "processing";
-  task.claimedAt = timestamp;
-  task.updatedAt = timestamp;
-  task.error = undefined;
-  await writeTask(task);
-  return task;
+    const timestamp = new Date().toISOString();
+    task.status = "processing";
+    task.claimedAt = timestamp;
+    task.updatedAt = timestamp;
+    task.error = undefined;
+    await writeTask(task);
+    return task;
+  });
 }
 
 export async function completeStoryboardTask(
@@ -708,6 +776,63 @@ export async function failStoryboardTask(
   task.updatedAt = new Date().toISOString();
   await writeTask(task);
   return task;
+}
+
+export async function listPendingStoryboardTasks(): Promise<
+  StoryboardQueueItem[]
+> {
+  return (await readAllTasks())
+    .filter((task) => task.status === "pending")
+    .sort(compareQueueOrder)
+    .map(queueItem);
+}
+
+export async function reorderPendingStoryboardTasks(
+  requestIds: string[],
+): Promise<StoryboardQueueItem[]> {
+  if (
+    requestIds.length === 0 ||
+    new Set(requestIds).size !== requestIds.length ||
+    requestIds.some((requestId) => !/^[A-Za-z0-9._-]{1,120}$/.test(requestId))
+  ) {
+    throw new Error("待处理顺序无效");
+  }
+  return withQueueLock(async () => {
+    const pending = (await readAllTasks())
+      .filter((task) => task.status === "pending")
+      .sort(compareQueueOrder);
+    const pendingIds = new Set(pending.map((task) => task.requestId));
+    if (
+      requestIds.length !== pending.length ||
+      requestIds.some((requestId) => !pendingIds.has(requestId))
+    ) {
+      throw new Error("待处理队列已变化，请刷新后重试");
+    }
+    const taskById = new Map(pending.map((task) => [task.requestId, task]));
+    const reordered = requestIds.map((requestId, queueOrder) => ({
+      ...taskById.get(requestId)!,
+      queueOrder,
+    }));
+    await Promise.all(reordered.map(writeTask));
+    return reordered.map(queueItem);
+  });
+}
+
+export async function deletePendingStoryboardTask(
+  requestId: string,
+): Promise<{ requestId: string }> {
+  safeRequestId(requestId);
+  return withQueueLock(async () => {
+    const task = await getStoryboardTask(requestId);
+    if (!task) {
+      throw new Error(`未找到待处理分镜 ${requestId}`);
+    }
+    if (task.status !== "pending") {
+      throw new Error("任务已被领取或完成，不能从待处理队列删除");
+    }
+    await unlink(taskPath(requestId));
+    return { requestId };
+  });
 }
 
 export async function storyboardTaskStats(): Promise<{

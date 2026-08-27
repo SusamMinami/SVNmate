@@ -2,6 +2,7 @@ import {
   Bot,
   CircleCheck,
   Database,
+  GripVertical,
   LoaderCircle,
   RefreshCw,
   ShieldAlert,
@@ -27,6 +28,8 @@ interface WorkspaceStatusHubProps {
   onRefreshLark: () => void;
   onAuthorize: () => void;
   onCollectRevisionCasesChange: (enabled: boolean) => void;
+  onReorderPendingTasks: (requestIds: string[]) => Promise<void>;
+  onDeletePendingTask: (requestId: string) => Promise<void>;
 }
 
 type StatusPanel = "provider" | "cases";
@@ -68,9 +71,15 @@ export function WorkspaceStatusHub({
   onRefreshLark,
   onAuthorize,
   onCollectRevisionCasesChange,
+  onReorderPendingTasks,
+  onDeletePendingTask,
 }: WorkspaceStatusHubProps) {
   const [openPanel, setOpenPanel] = useState<StatusPanel | null>(null);
+  const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);
+  const [queueBusy, setQueueBusy] = useState(false);
+  const [queueError, setQueueError] = useState("");
   const rootRef = useRef<HTMLDivElement>(null);
+  const pendingTasks = traeStatus?.queue ?? [];
   const miraMissingScopes =
     larkStatus?.miraMissingScopes ?? larkStatus?.missingScopes ?? [];
   const baseMissingScopes =
@@ -150,6 +159,60 @@ export function WorkspaceStatusHub({
     };
   }, [openPanel]);
 
+  async function movePendingTask(targetRequestId: string) {
+    if (
+      !draggingTaskId ||
+      draggingTaskId === targetRequestId ||
+      queueBusy
+    ) {
+      setDraggingTaskId(null);
+      return;
+    }
+    const requestIds = pendingTasks.map((task) => task.requestId);
+    const sourceIndex = requestIds.indexOf(draggingTaskId);
+    const targetIndex = requestIds.indexOf(targetRequestId);
+    if (sourceIndex < 0 || targetIndex < 0) {
+      setDraggingTaskId(null);
+      return;
+    }
+    const [moved] = requestIds.splice(sourceIndex, 1);
+    requestIds.splice(targetIndex, 0, moved);
+    setQueueBusy(true);
+    setQueueError("");
+    try {
+      await onReorderPendingTasks(requestIds);
+    } catch (error) {
+      setQueueError(
+        error instanceof Error ? error.message : "无法更新待处理顺序",
+      );
+    } finally {
+      setQueueBusy(false);
+      setDraggingTaskId(null);
+    }
+  }
+
+  async function removePendingTask(requestId: string, dialogueId: string) {
+    if (
+      queueBusy ||
+      !window.confirm(
+        `确定删除待处理分镜 ${dialogueId} 吗？\n删除后 TRAE 将不会处理该任务。`,
+      )
+    ) {
+      return;
+    }
+    setQueueBusy(true);
+    setQueueError("");
+    try {
+      await onDeletePendingTask(requestId);
+    } catch (error) {
+      setQueueError(
+        error instanceof Error ? error.message : "无法删除待处理分镜",
+      );
+    } finally {
+      setQueueBusy(false);
+    }
+  }
+
   return (
     <div className="workspace-status-hub" ref={rootRef}>
       <button
@@ -228,20 +291,93 @@ export function WorkspaceStatusHub({
                 {openPanel === "provider" ? providerLabel : caseLabel}
               </strong>
             </div>
-            <button
-              className="icon-button"
-              type="button"
-              title="关闭"
-              aria-label="关闭状态详情"
-              onClick={() => setOpenPanel(null)}
-            >
-              <X size={15} />
-            </button>
           </header>
 
           {openPanel === "provider" ? (
             <>
               <p>{providerDetail}</p>
+              {providerIsTrae && (
+                <section
+                  className="workspace-status-queue"
+                  aria-label="待处理分镜队列"
+                  aria-busy={queueBusy}
+                >
+                  <header>
+                    <strong>待处理队列</strong>
+                    <small>{pendingTasks.length} 项</small>
+                  </header>
+                  {pendingTasks.length === 0 ? (
+                    <p>当前没有等待处理的分镜</p>
+                  ) : (
+                    <ol>
+                      {pendingTasks.map((task) => (
+                        <li
+                          className={
+                            draggingTaskId === task.requestId
+                              ? "is-dragging"
+                              : ""
+                          }
+                          draggable={!queueBusy}
+                          key={task.requestId}
+                          onDragStart={(event) => {
+                            event.dataTransfer.effectAllowed = "move";
+                            event.dataTransfer.setData(
+                              "text/plain",
+                              task.requestId,
+                            );
+                            setDraggingTaskId(task.requestId);
+                          }}
+                          onDragOver={(event) => {
+                            if (!queueBusy) {
+                              event.preventDefault();
+                              event.dataTransfer.dropEffect = "move";
+                            }
+                          }}
+                          onDrop={(event) => {
+                            event.preventDefault();
+                            void movePendingTask(task.requestId);
+                          }}
+                          onDragEnd={() => setDraggingTaskId(null)}
+                        >
+                          <GripVertical
+                            className="workspace-status-queue__handle"
+                            size={14}
+                            aria-hidden="true"
+                          />
+                          <div>
+                            <strong>对话 {task.dialogueId}</strong>
+                            <span>{task.outline || task.firstLine}</span>
+                            <small>
+                              {task.dialogueCount} 句 ·{" "}
+                              {task.participantNames.join("、")}
+                            </small>
+                          </div>
+                          <button
+                            className="workspace-status-queue__delete"
+                            type="button"
+                            title={`删除待处理分镜 ${task.dialogueId}`}
+                            aria-label={`删除待处理分镜 ${task.dialogueId}`}
+                            disabled={queueBusy}
+                            onClick={() =>
+                              void removePendingTask(
+                                task.requestId,
+                                task.dialogueId,
+                              )
+                            }
+                          >
+                            <X size={13} />
+                          </button>
+                        </li>
+                      ))}
+                    </ol>
+                  )}
+                  {queueError && (
+                    <p className="workspace-status-queue__error" role="alert">
+                      {queueError}
+                    </p>
+                  )}
+                </section>
+              )}
               <button
                 className="button"
                 type="button"

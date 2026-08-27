@@ -14,6 +14,7 @@ import {
   LocateFixed,
   MapPinned,
   Pencil,
+  RefreshCw,
   RotateCw,
   Search,
   Settings,
@@ -37,7 +38,10 @@ import packageMetadata from "../package.json";
 import { useCollaborationConnections } from "./app/useCollaborationConnections";
 import { useStoryboardExport } from "./app/useStoryboardExport";
 import { useWorkspaceNavigation } from "./app/useWorkspaceNavigation";
-import type { FormationOptionId } from "./components/BlueprintFormationModal";
+import type {
+  FormationOptionId,
+  FormationSelectionId,
+} from "./components/BlueprintFormationModal";
 import type { DialogueTextEditorItem } from "./components/DialogueTextEditorModal";
 import { DirectorControl } from "./components/DirectorControl";
 import { LaunchScreen } from "./components/LaunchScreen";
@@ -132,11 +136,6 @@ const LazyStoryboardExportModal = lazy(() =>
     default: module.StoryboardExportModal,
   })),
 );
-const LazyStoryBriefModal = lazy(() =>
-  import("./components/StoryBriefModal").then((module) => ({
-    default: module.StoryBriefModal,
-  })),
-);
 const LazyTraeCollaborationModal = lazy(() =>
   import("./components/TraeCollaborationModal").then((module) => ({
     default: module.TraeCollaborationModal,
@@ -166,6 +165,7 @@ const LAUNCH_SCREEN_STORAGE_KEY = "shot-sandbox.launch-screen-seen";
 interface PendingDirectorPresentation {
   sequence: DialogueSequence;
   result: DirectorRunResult;
+  reviewFormation?: boolean;
 }
 
 interface SharedComparisonPresentation {
@@ -184,6 +184,29 @@ interface FormationChoicePresentation {
   sourceSequence: DialogueSequence;
 }
 
+function createFormationChoice(
+  database: DialogueDatabase,
+  sourceSequence: DialogueSequence,
+  snapshot: BlueprintFormationSnapshot,
+  requestedMode: DirectorMode,
+  soundEffectCatalog: SoundEffectCatalogSnapshot["entries"],
+  ai?: PendingDirectorPresentation,
+): FormationChoicePresentation {
+  const imported = applyBlueprintFormation(database, sourceSequence, snapshot);
+  return {
+    blueprint: createShotPreview(imported.sequence, {
+      preserveInputPositions: true,
+      soundEffectCatalog,
+    }),
+    generated: createShotPreview(sourceSequence, { soundEffectCatalog }),
+    ai,
+    snapshot,
+    mappedSlotCount: imported.mappedSlotCount,
+    requestedMode,
+    sourceSequence,
+  };
+}
+
 interface ApplySequenceOptions {
   preserveInputPositions?: boolean;
   fallbackPreserveInputPositions?: boolean;
@@ -191,6 +214,7 @@ interface ApplySequenceOptions {
   forceRegenerate?: boolean;
   preserveActiveShot?: boolean;
   keepBackgroundRequest?: boolean;
+  applyResultImmediately?: boolean;
 }
 
 type InspectorTab = "camera" | "composition" | "direction" | "ue";
@@ -1033,6 +1057,8 @@ export default function App() {
     changeCaseCollection,
     closeTraeConfig,
     closeAuthorization,
+    reorderPendingTasks,
+    deletePendingTask,
   } = useCollaborationConnections();
   const [contentSearch, setContentSearch] =
     useState<DialogueContentSearchResult | null>(null);
@@ -1235,9 +1261,15 @@ export default function App() {
       : (traeStatus?.stats.pending ?? 0) > 0
         ? "协作任务已排队，等待模型可用"
         : "已提交，等待内部 TRAE 接收";
+  const browsingPreviousAiPlan =
+    directorLoading &&
+    directorLoadingMode !== null &&
+    appliedDirector === directorLoadingMode;
   const traeWaitDetail =
-    (traeStatus?.stats.processing ?? 0) > 0
-      ? "对话与规则分镜保持可用，完成后再确认 TRAE 方案"
+    browsingPreviousAiPlan
+      ? "当前 AI 分镜仍可浏览，完成后自动切换到按当前占位生成的新方案"
+      : (traeStatus?.stats.processing ?? 0) > 0
+        ? "对话与规则分镜保持可用，完成后再确认 TRAE 方案"
       : "模型繁忙时会继续排队，不会立即判定协作失败";
 
   const dismissLaunchScreen = useCallback(() => {
@@ -1474,7 +1506,17 @@ export default function App() {
         result.appliedMode === requestedMode &&
         result.analysis
       ) {
-        if (
+        if (options.applyResultImmediately) {
+          if (directorModeRef.current === requestedMode) {
+            applyDirectorResult(nextSequence, result);
+          } else {
+            setPendingDirectorResult({
+              sequence: nextSequence,
+              result,
+              reviewFormation: false,
+            });
+          }
+        } else if (
           requestedMode === "trae" &&
           (result.sharedSource === "local-cache" ||
             result.sharedSource === "shared-library") &&
@@ -1525,6 +1567,8 @@ export default function App() {
     const usesBlueprintFormation = result.participants.every(
       (participant) => participant.positionSource === "blueprint",
     );
+    const preservesInputFormation =
+      result.input.constraints.preserve_input_formation === true;
     setSequence({
       ...sourceSequence,
       participants: result.participants,
@@ -1560,6 +1604,8 @@ export default function App() {
           : "使用规则导演自动安排的角色位置"
         : usesBlueprintFormation
           ? `${directorLabel(result.appliedMode)} 分镜沿用 BP 占位`
+          : preservesInputFormation
+            ? `${directorLabel(result.appliedMode)} 分镜沿用当前占位`
           : `使用 ${directorLabel(result.appliedMode)} 返回的角色占位`,
     );
     focusPlanShot(result.shots, sourceSequence, true);
@@ -1664,30 +1710,72 @@ export default function App() {
     }
     if (lookup.status === "found" && lookup.snapshot) {
       setFormationStatus(lookup.message);
-      const generated = createShotPreview(nextSequence, {
-        soundEffectCatalog: soundEffectCatalog.entries,
-      });
-      const imported = applyBlueprintFormation(
-        nextDatabase,
-        nextSequence,
-        lookup.snapshot,
+      setFormationChoice(
+        createFormationChoice(
+          nextDatabase,
+          nextSequence,
+          lookup.snapshot,
+          requestedMode,
+          soundEffectCatalog.entries,
+        ),
       );
-      setFormationChoice({
-        blueprint: createShotPreview(imported.sequence, {
-          preserveInputPositions: true,
-          soundEffectCatalog: soundEffectCatalog.entries,
-        }),
-        generated,
-        snapshot: lookup.snapshot,
-        mappedSlotCount: imported.mappedSlotCount,
-        requestedMode,
-        sourceSequence: nextSequence,
-      });
       setFormationChoiceMode("initial");
       return;
     }
     setFormationStatus(skippedBlueprintMessage(lookup.message));
     await applySequence(nextSequence, requestedMode);
+  }
+
+  async function refreshBlueprintFormation() {
+    if (!formationChoice || formationChecking) {
+      return;
+    }
+    const formationRunId = ++formationRunRef.current;
+    setFormationChecking(true);
+    setFormationStatus("正在重新读取 UE Blueprint 站位...");
+    setError("");
+    try {
+      const sourceSequence = findDialogueSequence(database, sequence.prefix);
+      const lookup = await getBlueprintFormation({
+        dialogueId: sourceSequence.prefix,
+        startId: sourceSequence.startId,
+        formationClassPath: sourceSequence.formation?.classPath,
+      });
+      if (formationRunId !== formationRunRef.current) {
+        return;
+      }
+      if (lookup.status !== "found" || !lookup.snapshot) {
+        setFormationStatus(skippedBlueprintMessage(lookup.message));
+        return;
+      }
+      setFormationChoice(
+        createFormationChoice(
+          database,
+          sourceSequence,
+          lookup.snapshot,
+          formationChoice.requestedMode,
+          soundEffectCatalog.entries,
+          formationChoice.ai,
+        ),
+      );
+      setFormationStatus(`${lookup.message}，请确认是否采用最新位置`);
+      setFormationChoiceMode("switch");
+    } catch (formationError) {
+      if (formationRunId !== formationRunRef.current) {
+        return;
+      }
+      setFormationStatus(
+        skippedBlueprintMessage(
+          formationError instanceof Error
+            ? formationError.message
+            : "BP 站位重新读取失败",
+        ),
+      );
+    } finally {
+      if (formationRunId === formationRunRef.current) {
+        setFormationChecking(false);
+      }
+    }
   }
 
   function chooseFormation(choice: FormationOptionId) {
@@ -1746,6 +1834,31 @@ export default function App() {
       formationChoice.requestedMode,
       { preserveInputPositions: useBlueprint },
     );
+  }
+
+  function choosePendingDirectorFormation(choice: FormationSelectionId) {
+    if (
+      !pendingDirectorResult ||
+      (choice !== "current" && choice !== "ai")
+    ) {
+      return;
+    }
+    const currentFormationSequence = sequence;
+    const pending = pendingDirectorResult;
+    applyDirectorResult(pending.sequence, pending.result);
+    setDirectorMode(pending.result.appliedMode);
+    setPendingDirectorResult(null);
+    if (choice === "ai") {
+      return;
+    }
+    void applySequence(currentFormationSequence, pending.result.appliedMode, {
+      preserveInputPositions: true,
+      fallbackPreserveInputPositions: true,
+      keepCurrentPreview: true,
+      forceRegenerate: true,
+      preserveActiveShot: true,
+      applyResultImmediately: true,
+    });
   }
 
   function openContentSearchContext(
@@ -1858,6 +1971,18 @@ export default function App() {
       } else if (mode === "trae") {
         void refreshTraeConnection();
       }
+      return;
+    }
+    if (
+      mode !== "rule" &&
+      pendingDirectorResult?.reviewFormation === false &&
+      pendingDirectorResult.result.appliedMode === mode
+    ) {
+      applyDirectorResult(
+        pendingDirectorResult.sequence,
+        pendingDirectorResult.result,
+      );
+      setPendingDirectorResult(null);
       return;
     }
     if (mode === "mira") {
@@ -2347,6 +2472,8 @@ export default function App() {
               onRefreshLark={() => void refreshLarkConnection(true)}
               onAuthorize={() => void beginAuthorization()}
               onCollectRevisionCasesChange={changeCaseCollection}
+              onReorderPendingTasks={reorderPendingTasks}
+              onDeletePendingTask={deletePendingTask}
             />
           )}
           <div className="source-status">
@@ -2434,13 +2561,35 @@ export default function App() {
                 <Boxes size={15} />
                 <div className="formation-status__content">
                   <small>占位方案</small>
-                  <strong>
-                    {formationChecking
-                      ? "正在读取 BP"
-                      : formationChoiceMode === "initial"
-                        ? "等待选择"
-                        : activeFormationName}
-                  </strong>
+                  {activeFormationVariant === "blueprint" &&
+                  formationChoiceMode !== "initial" &&
+                  formationChoice ? (
+                    <button
+                      className="formation-status__reload"
+                      type="button"
+                      title={`重新读取 ${activeFormationName} 位置`}
+                      aria-label={`重新读取 ${activeFormationName} 位置`}
+                      disabled={directorLoading || formationChecking}
+                      onClick={() => void refreshBlueprintFormation()}
+                    >
+                      <strong>
+                        {formationChecking ? "正在读取 BP" : activeFormationName}
+                      </strong>
+                      {formationChecking ? (
+                        <LoaderCircle className="spin" size={13} />
+                      ) : (
+                        <RefreshCw size={13} />
+                      )}
+                    </button>
+                  ) : (
+                    <strong>
+                      {formationChecking
+                        ? "正在读取 BP"
+                        : formationChoiceMode === "initial"
+                          ? "等待选择"
+                          : activeFormationName}
+                    </strong>
+                  )}
                   {formationStatus && <span>{formationStatus}</span>}
                 </div>
                 {formationChoice &&
@@ -2547,7 +2696,9 @@ export default function App() {
                   <>
                     {shots.length} 镜 ·{" "}
                     {directorLoading && directorMode !== "rule"
-                      ? "本地预览"
+                      ? browsingPreviousAiPlan
+                        ? `${directorLabel(appliedDirector)} 已出方案`
+                        : "本地预览"
                       : directorLabel(appliedDirector)}
                     {fallbackReason ? "（已降级）" : ""}
                     {sequence.ignoredDialogueNodeCount > 0
@@ -2782,7 +2933,9 @@ export default function App() {
                       {directorLoadingMode === "trae"
                         ? traeWaitDetail
                         : directorLoadingMode === "mira"
-                          ? "本地分镜已显示，AI 完成后将展示故事梗概"
+                          ? browsingPreviousAiPlan
+                            ? "当前 AI 分镜仍可浏览，完成后自动切换到新方案"
+                            : "本地分镜已显示，AI 完成后将先对比角色占位"
                           : "正在维护动态关系轴与视线连续"}
                     </small>
                   </div>
@@ -3134,31 +3287,43 @@ export default function App() {
                 : activeFormationVariant
             }
             mode={formationChoiceMode}
-            onChoose={chooseFormation}
+            onChoose={(choice) => {
+              if (choice !== "current") {
+                chooseFormation(choice);
+              }
+            }}
             onClose={() => setFormationChoiceMode(null)}
           />
         )}
 
         {pendingDirectorResult?.result.analysis &&
+          pendingDirectorResult.reviewFormation !== false &&
           !sharedComparison &&
           !formationChoiceMode && (
-            <LazyStoryBriefModal
-              sequence={{
-                ...pendingDirectorResult.sequence,
-                participants: pendingDirectorResult.result.participants,
+            <LazyBlueprintFormationModal
+              current={{ sequence, shots }}
+              currentLabel={`当前 · ${activeFormationName}`}
+              currentDetail={
+                activeFormationSource === "blueprint" && formationChoice
+                  ? formationChoice.snapshot.blueprintAssetPath
+                  : activeFormationName
+              }
+              currentUsesBlueprint={activeFormationSource === "blueprint"}
+              ai={{
+                sequence: {
+                  ...pendingDirectorResult.sequence,
+                  participants: pendingDirectorResult.result.participants,
+                },
+                shots: pendingDirectorResult.result.shots,
               }}
-              analysis={pendingDirectorResult.result.analysis}
-              blocking={pendingDirectorResult.result.blocking}
-              source={pendingDirectorResult.result.sharedSource}
-              onContinue={() => {
-                applyDirectorResult(
-                  pendingDirectorResult.sequence,
-                  pendingDirectorResult.result,
-                );
-                setDirectorMode(pendingDirectorResult.result.appliedMode);
-                setPendingDirectorResult(null);
-              }}
-              onKeepCurrent={() => setPendingDirectorResult(null)}
+              aiLabel={`${directorLabel(
+                pendingDirectorResult.result.appliedMode,
+              )} 建议占位`}
+              aiSource={pendingDirectorResult.result.sharedSource}
+              initialChoice="ai"
+              mode="ai-review"
+              onChoose={choosePendingDirectorFormation}
+              onClose={() => undefined}
             />
           )}
 

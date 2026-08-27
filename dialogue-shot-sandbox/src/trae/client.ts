@@ -3,6 +3,16 @@ import type {
   ReadyDirectorResponse,
 } from "../director/contracts";
 
+export interface TraePendingTask {
+  requestId: string;
+  dialogueId: string;
+  outline: string;
+  firstLine: string;
+  dialogueCount: number;
+  participantNames: string[];
+  createdAt: string;
+}
+
 export interface TraeCollaborationStatus {
   configured: boolean;
   connected: boolean;
@@ -20,6 +30,7 @@ export interface TraeCollaborationStatus {
     completed: number;
     failed: number;
   };
+  queue?: TraePendingTask[];
 }
 
 export interface TraeMcpConfig {
@@ -60,6 +71,26 @@ export function getTraeStatus(): Promise<TraeCollaborationStatus> {
 
 export function getTraeMcpConfig(): Promise<TraeMcpConfig> {
   return api<TraeMcpConfig>("/api/trae/mcp-config");
+}
+
+export function reorderTraeQueue(
+  requestIds: string[],
+): Promise<TraePendingTask[]> {
+  return api<TraePendingTask[]>("/api/trae/queue/reorder", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ request_ids: requestIds }),
+  });
+}
+
+export function deleteTraeQueueItem(
+  requestId: string,
+): Promise<{ requestId: string }> {
+  return api("/api/trae/queue/delete", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ request_id: requestId }),
+  });
 }
 
 export function resolveSharedStoryboardConflict(

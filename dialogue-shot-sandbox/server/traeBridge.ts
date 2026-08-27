@@ -15,7 +15,10 @@ import {
 import {
   completeStoryboardTask,
   createStoryboardTask,
+  deletePendingStoryboardTask,
   getStoryboardTask,
+  listPendingStoryboardTasks,
+  reorderPendingStoryboardTasks,
   storyboardTaskStats,
 } from "./storyboardTaskStore";
 import {
@@ -65,6 +68,12 @@ const SharedResolutionSchema = z.object({
   record_id: z.string().min(1),
   input: DirectorInputSchema,
   plan: MiraReadyResponseSchema,
+});
+const QueueReorderSchema = z.object({
+  request_ids: z.array(z.string().min(1).max(120)).min(1).max(500),
+});
+const QueueDeleteSchema = z.object({
+  request_id: z.string().min(1).max(120),
 });
 
 function appRoot(): string {
@@ -156,10 +165,11 @@ async function isMcpConfigured(): Promise<boolean> {
 }
 
 async function collaborationStatus() {
-  const [configured, presence, stats] = await Promise.all([
+  const [configured, presence, stats, queue] = await Promise.all([
     isMcpConfigured(),
     getStoryboardMcpPresence(),
     storyboardTaskStats(),
+    listPendingStoryboardTasks(),
   ]);
   return {
     configured,
@@ -173,6 +183,7 @@ async function collaborationStatus() {
     mcpConfigPath: storyboardMcpConfigPath(),
     skillName: "internal-storyboard-director",
     stats,
+    queue,
   };
 }
 
@@ -300,6 +311,28 @@ export async function routeTraeRequest(
             "在 TRAE 中输入“处理待分镜任务”。",
           ],
         },
+      });
+      return true;
+    }
+    if (
+      request.method === "POST" &&
+      url.pathname === "/api/trae/queue/reorder"
+    ) {
+      const body = QueueReorderSchema.parse(await readJson(request));
+      sendJson(response, 200, {
+        ok: true,
+        data: await reorderPendingStoryboardTasks(body.request_ids),
+      });
+      return true;
+    }
+    if (
+      request.method === "POST" &&
+      url.pathname === "/api/trae/queue/delete"
+    ) {
+      const body = QueueDeleteSchema.parse(await readJson(request));
+      sendJson(response, 200, {
+        ok: true,
+        data: await deletePendingStoryboardTask(body.request_id),
       });
       return true;
     }
