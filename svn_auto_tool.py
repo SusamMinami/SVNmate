@@ -3067,26 +3067,96 @@ $pidToWait = {os.getpid()}
 $appDir = {json.dumps(str(APP_DIR))}
 $zipPath = {json.dumps(str(zip_path))}
 $extractDir = Join-Path (Split-Path -Parent $zipPath) 'extract'
-while (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue) {{
-    Start-Sleep -Milliseconds 500
+$logPath = Join-Path (Split-Path -Parent $zipPath) 'apply_update.log'
+$appExe = Join-Path $appDir 'SVNAutoTool.exe'
+
+function Write-UpdateLog([string] $message) {{
+    $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    Add-Content -LiteralPath $logPath -Value "$timestamp  $message" -Encoding UTF8
 }}
-if (Test-Path $extractDir) {{ Remove-Item $extractDir -Recurse -Force }}
-Expand-Archive -LiteralPath $zipPath -DestinationPath $extractDir -Force
-$payload = Join-Path $extractDir '一键更新SVN'
-Copy-Item -Path (Join-Path $payload '*') -Destination $appDir -Recurse -Force
-Start-Process -FilePath (Join-Path $appDir 'SVNAutoTool.exe')
+
+function Wait-FileUnlocked([string] $path, [int] $timeoutSeconds) {{
+    $deadline = [DateTime]::UtcNow.AddSeconds($timeoutSeconds)
+    while ([DateTime]::UtcNow -lt $deadline) {{
+        if (-not (Test-Path -LiteralPath $path)) {{
+            return
+        }}
+        try {{
+            $stream = [System.IO.File]::Open(
+                $path,
+                [System.IO.FileMode]::Open,
+                [System.IO.FileAccess]::ReadWrite,
+                [System.IO.FileShare]::None
+            )
+            $stream.Dispose()
+            return
+        }} catch {{
+            Start-Sleep -Milliseconds 500
+        }}
+    }}
+    throw "等待程序文件解除占用超时：$path"
+}}
+
+try {{
+    Write-UpdateLog '等待 SVNmate 退出'
+    while (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue) {{
+        Start-Sleep -Milliseconds 500
+    }}
+    Wait-FileUnlocked $appExe 60
+
+    if (Test-Path -LiteralPath $extractDir) {{
+        Remove-Item -LiteralPath $extractDir -Recurse -Force
+    }}
+    Expand-Archive -LiteralPath $zipPath -DestinationPath $extractDir -Force
+    $payload = Join-Path $extractDir '一键更新SVN'
+    if (-not (Test-Path -LiteralPath $payload -PathType Container)) {{
+        throw "更新包缺少目录：$payload"
+    }}
+
+    Copy-Item -Path (Join-Path $payload '*') -Destination $appDir -Recurse -Force
+    Start-Process -FilePath $appExe
+    Write-UpdateLog '更新完成，已重新启动 SVNmate'
+}} catch {{
+    $message = $_.Exception.Message
+    Write-UpdateLog "更新失败：$message"
+    try {{
+        Add-Type -AssemblyName System.Windows.Forms
+        [System.Windows.Forms.MessageBox]::Show(
+            "SVNmate 更新失败：$message`n`n详细日志：$logPath",
+            'SVNmate 更新失败',
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Error
+        ) | Out-Null
+    }} catch {{
+    }}
+    exit 1
+}}
 """
-        script_path.write_text(script.strip(), encoding="utf-8")
+        script_path.write_text(script.strip(), encoding="utf-8-sig")
+        creation_flags = 0
+        if os.name == "nt":
+            creation_flags = (
+                subprocess.DETACHED_PROCESS
+                | subprocess.CREATE_NEW_PROCESS_GROUP
+                | subprocess.CREATE_NO_WINDOW
+            )
         subprocess.Popen(
             [
                 "powershell",
                 "-NoProfile",
+                "-NonInteractive",
+                "-WindowStyle",
+                "Hidden",
                 "-ExecutionPolicy",
                 "Bypass",
                 "-File",
                 str(script_path),
             ],
-            creationflags=self._visible_console_flags(),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=creation_flags,
+            close_fds=True,
         )
 
     @staticmethod

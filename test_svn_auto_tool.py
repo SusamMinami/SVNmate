@@ -75,6 +75,68 @@ class ToolModuleIntegrationTests(unittest.TestCase):
             )
 
 
+class SelfUpdateTests(unittest.TestCase):
+    def test_updater_is_detached_without_inherited_standard_handles(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="SVNmate self update ") as temp_dir:
+            app_dir = Path(temp_dir)
+            update_dir = app_dir / "_updates"
+            update_dir.mkdir()
+            zip_path = update_dir / RELEASE_ASSET_NAME
+            zip_path.write_bytes(b"test")
+            tool = SvnAutoTool.__new__(SvnAutoTool)
+
+            with (
+                patch("svn_auto_tool.APP_DIR", app_dir),
+                patch("svn_auto_tool.os.getpid", return_value=4321),
+                patch("svn_auto_tool.subprocess.Popen") as popen,
+            ):
+                tool._launch_update_installer(zip_path)
+
+            command = popen.call_args.args[0]
+            options = popen.call_args.kwargs
+            expected_flags = 0
+            if os.name == "nt":
+                expected_flags = (
+                    subprocess.DETACHED_PROCESS
+                    | subprocess.CREATE_NEW_PROCESS_GROUP
+                    | subprocess.CREATE_NO_WINDOW
+                )
+
+            self.assertIn("-NonInteractive", command)
+            self.assertIn("Hidden", command)
+            self.assertIs(options["stdin"], subprocess.DEVNULL)
+            self.assertIs(options["stdout"], subprocess.DEVNULL)
+            self.assertIs(options["stderr"], subprocess.DEVNULL)
+            self.assertTrue(options["close_fds"])
+            self.assertEqual(options["creationflags"], expected_flags)
+
+    def test_update_script_waits_for_executable_unlock_and_logs_result(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="SVNmate self update ") as temp_dir:
+            app_dir = Path(temp_dir)
+            update_dir = app_dir / "_updates"
+            update_dir.mkdir()
+            zip_path = update_dir / RELEASE_ASSET_NAME
+            zip_path.write_bytes(b"test")
+            tool = SvnAutoTool.__new__(SvnAutoTool)
+
+            with (
+                patch("svn_auto_tool.APP_DIR", app_dir),
+                patch("svn_auto_tool.os.getpid", return_value=4321),
+                patch("svn_auto_tool.subprocess.Popen"),
+            ):
+                tool._launch_update_installer(zip_path)
+
+            script_path = update_dir / "apply_update.ps1"
+            self.assertTrue(script_path.read_bytes().startswith(b"\xef\xbb\xbf"))
+            script = script_path.read_text(encoding="utf-8-sig")
+            self.assertIn("$pidToWait = 4321", script)
+            self.assertIn("Wait-FileUnlocked $appExe 60", script)
+            self.assertIn("[System.IO.FileShare]::None", script)
+            self.assertIn("'apply_update.log'", script)
+            self.assertIn("Write-UpdateLog '更新完成", script)
+            self.assertIn("更新失败：$message", script)
+
+
 class TrayInteractionTests(unittest.TestCase):
     @unittest.skipUnless(os.name == "nt", "Windows named mutex only")
     def test_named_mutex_allows_only_one_running_instance(self) -> None:
