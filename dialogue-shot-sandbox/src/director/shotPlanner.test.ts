@@ -23,6 +23,59 @@ describe("createShotPlan", () => {
     expect(shots.every((shot) => shot.axis.cameraSide === 1)).toBe(true);
   });
 
+  it("keeps silent scene actors in composition but out of relationship axes", () => {
+    const backgroundParticipant = {
+      ...sequence.participants[1],
+      id: 999_001,
+      instanceId: "bp:background:2",
+      slot: "C" as const,
+      name: "背景守卫",
+      position: [2.4, 0, -1.8] as const,
+      facingTarget: [0, 0, 0] as const,
+      modelIndex: 2,
+      positionSource: "blueprint" as const,
+      firstDialogueId: sequence.rows[0].id,
+      firstDialogueIndex: 0,
+      lastDialogueId: sequence.rows.at(-1)!.id,
+      lastDialogueIndex: sequence.rows.length - 1,
+      entryDialogueId: sequence.rows[0].id,
+      entryIndex: 0,
+      exitDialogueId: null,
+      exitIndex: null,
+    };
+    const sceneSequence = {
+      ...sequence,
+      participants: [...sequence.participants, backgroundParticipant],
+    };
+    const input = createDirectorInput(sceneSequence, "background-axis-test");
+    const preview = createShotPreview(sceneSequence);
+
+    expect(input.participants.map((participant) => participant.role)).toEqual([
+      "dialogue",
+      "dialogue",
+      "background",
+    ]);
+    expect(preview.sequence.participants.map((participant) => participant.slot))
+      .toEqual(["A", "B", "C"]);
+    expect(
+      preview.shots.some((shot) =>
+        shot.projection.visibleParticipantSlots.includes("C"),
+      ),
+    ).toBe(true);
+    expect(preview.shots[0].projection.coverage).toBe("two-shot");
+    expect(
+      preview.shots.every(
+        (shot) =>
+          !shot.axis.participantSlots.includes("C") &&
+          shot.visualSubjectSlot !== "C" &&
+          shot.lookTargetSlot !== "C" &&
+          shot.actorActions.every(
+            (action) => action.participantSlot !== "C",
+          ),
+      ),
+    ).toBe(true);
+  });
+
   it("does not cut only because the speaker changes", () => {
     expect(shots[0].dialogueIds).toEqual(["204801", "204802"]);
     expect(shots[1].dialogueIds).toEqual(["204803", "204804"]);
@@ -357,7 +410,7 @@ describe("createShotPlan", () => {
     const groupShots = groupPreview.shots;
 
     expect(groupShots[0].kind).toBe("master");
-    expect(groupShots[0].label).toBe("3人群像建立镜头");
+    expect(groupShots[0].label).toBe("双人建立镜头");
     expect(groupShots.slice(0, 3).every((shot) => shot.kind === "master"))
       .toBe(true);
     expect(groupShots.map((shot) => shot.coverageIntent)).toEqual([

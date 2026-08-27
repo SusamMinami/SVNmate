@@ -1,6 +1,7 @@
 import { Boxes, Check, MapPin, Sparkles, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { BlueprintFormationSnapshot, DialogueSequence, ShotPlan } from "../types";
+import { splitDialogueParticipants } from "../data/dialogueRoles";
 import { StageView } from "./StageView";
 
 export type FormationOptionId = "blueprint" | "generated" | "ai";
@@ -77,6 +78,16 @@ export function BlueprintFormationModal({
   const shot = option?.shots[0];
   const spacing = useMemo(
     () => (option ? averageDistance(option.sequence) : 0),
+    [option],
+  );
+  const participantRoles = useMemo(
+    () =>
+      option
+        ? splitDialogueParticipants(
+            option.sequence.participants,
+            option.sequence.rows,
+          )
+        : { dialogue: [], background: [] },
     [option],
   );
   if (!option || !shot) {
@@ -200,8 +211,11 @@ export function BlueprintFormationModal({
           </div>
           <dl className="formation-compare-metrics">
             <div>
-              <dt>参与角色</dt>
-              <dd>{option.sequence.participants.length}</dd>
+              <dt>对白 / 背景</dt>
+              <dd>
+                {participantRoles.dialogue.length} /{" "}
+                {participantRoles.background.length}
+              </dd>
             </div>
             <div>
               <dt>{isAiReview ? "当前预览" : "BP 角色槽"}</dt>
@@ -235,10 +249,10 @@ export function BlueprintFormationModal({
           <strong>
             {selected === "current"
               ? currentUsesBlueprint
-                ? "保留当前 BP 位置与朝向，由 AI 重新规划镜头"
+                ? "保留当前 BP 位置与朝向，仅为对白角色重新规划镜头"
                 : "保留当前角色占位，由 AI 重新规划镜头"
               : selected === "blueprint"
-              ? "保留 UE 初始位置与朝向，镜头按需规划 45° / 90° / 180° 转身"
+              ? "保留全部 UE 角色；背景 NPC 只参与构图，不参与关系轴"
               : selected === "ai"
                 ? "采用 AI 返回的角色占位、朝向关系与分镜"
                 : "使用规则导演自动安排的角色占位"}
@@ -269,7 +283,7 @@ export function BlueprintFormationModal({
                 ? "先进入这版 AI 分镜，后台将按当前占位重新生成。"
                 : "直接进入 AI 已生成的分镜方案。"
               : mode === "initial"
-              ? "确认后将按该占位生成关系轴与全部镜头。"
+              ? "确认后仅按对白角色生成关系轴；背景 NPC 保留在镜头构图中。"
               : "切换后将载入该占位对应的完整分镜，无需重新分析。"}
           </span>
           <button

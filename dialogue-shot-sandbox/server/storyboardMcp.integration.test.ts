@@ -16,6 +16,7 @@ import { findDialogueSequence } from "../src/data/dialogueRepository";
 import {
   BLOCKING_POSITIONS,
   createDirectorInput,
+  directorDialogueParticipants,
 } from "../src/director/contracts";
 import {
   getStoryboardMcpPresence,
@@ -75,7 +76,8 @@ afterEach(async () => {
 function validPlan(
   input: ReturnType<typeof createDirectorInput>,
 ): Record<string, unknown> {
-  const isGroupDialogue = input.participants.length > 2;
+  const dialogueParticipants = directorDialogueParticipants(input);
+  const isGroupDialogue = dialogueParticipants.length > 2;
   return {
     schema_version: "shot-plan.v5",
     request_id: input.request_id,
@@ -116,7 +118,7 @@ function validPlan(
       look_target:
         index === 0
           ? "group_center"
-          : input.participants.find(
+          : dialogueParticipants.find(
               (participant) => participant.slot !== line.speaker,
             )?.slot,
       lens_mm: index === 0 ? (isGroupDialogue ? 28 : 35) : 50,
@@ -695,6 +697,49 @@ describe("internal storyboard MCP", () => {
     expect((await getStoryboardTask(input.request_id))?.status).toBe("pending");
   });
 
+  it("rejects background NPCs as shot subjects or relationship targets", async () => {
+    temporaryRoot = await mkdtemp(join(tmpdir(), "storyboard-background-role-"));
+    process.env.STORYBOARD_PROJECT_ROOT = temporaryRoot;
+    const sequence = findDialogueSequence(demoDatabase, "2048");
+    const input = createDirectorInput(
+      {
+        ...sequence,
+        participants: [
+          ...sequence.participants,
+          {
+            ...sequence.participants[1],
+            id: 999_001,
+            instanceId: "bp:background:2",
+            slot: "C" as const,
+            name: "背景守卫",
+            modelIndex: 2,
+          },
+        ],
+      },
+      "background-role-validation-request",
+    );
+    await createStoryboardTask(input);
+    const plan = validPlan(input);
+    const shots = plan.shots as Array<{
+      subject: string;
+      look_target: string;
+    }>;
+    shots[1].subject = "A";
+    shots[1].look_target = "C";
+
+    await expect(
+      completeStoryboardTask(input.request_id, plan),
+    ).rejects.toThrow("不能使用背景 NPC C 建立关系轴");
+
+    shots[1].subject = "C";
+    shots[1].look_target = "A";
+
+    await expect(
+      completeStoryboardTask(input.request_id, plan),
+    ).rejects.toThrow("背景 NPC C 作为主体");
+    expect((await getStoryboardTask(input.request_id))?.status).toBe("pending");
+  });
+
   it("rejects an entrance scheduled after the character first speaks", async () => {
     temporaryRoot = await mkdtemp(join(tmpdir(), "storyboard-entry-"));
     process.env.STORYBOARD_PROJECT_ROOT = temporaryRoot;
@@ -780,6 +825,7 @@ describe("internal storyboard MCP", () => {
       composition_transition: "recenter",
       coverage_intent: "reestablish_geography",
     });
+    shots[4].look_target = "D";
 
     const task = await completeStoryboardTask(input.request_id, plan);
 

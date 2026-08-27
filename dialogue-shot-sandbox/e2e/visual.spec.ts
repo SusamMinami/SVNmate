@@ -2525,7 +2525,10 @@ test("offers the detected Blueprint formation before designing shots", async ({
     const input = route.request().postDataJSON() as {
       request_id: string;
       dialogue: Array<{ dialogue_id: string }>;
-      participants: Array<{ slot: "A" | "B" }>;
+      participants: Array<{
+        slot: "A" | "B" | "C";
+        role: "dialogue" | "background";
+      }>;
     };
     await directorGate;
     await route.fulfill({
@@ -2547,8 +2550,13 @@ test("offers the detected Blueprint formation before designing shots", async ({
             intent: "AI 将双方安排为清晰对景。",
             placements: input.participants.map((participant, index) => ({
               subject: participant.slot,
-              position: index === 0 ? "front_left" : "front_right",
-              facing: index === 0 ? "B" : "A",
+              position: ["front_left", "front_right", "back_center"][index],
+              facing:
+                participant.role === "background"
+                  ? "group_center"
+                  : participant.slot === "A"
+                    ? "B"
+                    : "A",
               entry_dialogue_id: input.dialogue[0].dialogue_id,
               exit_dialogue_id: null,
               intent: "建立 AI 对景占位。",
@@ -2598,14 +2606,18 @@ test("offers the detected Blueprint formation before designing shots", async ({
         ok: true,
         data: {
           status: "found",
-          message: "已读取 2 个 BP 站位槽",
+          message: "已读取 3 个 BP 站位槽",
           snapshot: {
             dialogueId: "7350",
             blueprintAssetPath:
               "/Game/Seria/Task/Mod/MainQuest/Cha9/BP_735000.BP_735000",
             blueprintClassPath:
               "/Game/Seria/Task/Mod/MainQuest/Cha9/BP_735000.BP_735000_C",
-            dialogueModels: ["player", "M63_Cityguard"],
+            dialogueModels: [
+              "player",
+              "M63_Cityguard",
+              "N115_Finance_Female",
+            ],
             warnings: [],
             slots: [
               {
@@ -2629,6 +2641,18 @@ test("offers the detected Blueprint formation before designing shots", async ({
                 transform: {
                   location: { x: 260, y: -140, z: 92 },
                   rotation: { pitch: 0, yaw: 90, roll: 0 },
+                  scale: { x: 1, y: 1, z: 1 },
+                },
+              },
+              {
+                modelIndex: 2,
+                componentName: "ChildActorComponent_2_GEN_VARIABLE",
+                componentGuid: "background-guid",
+                modelClassPath:
+                  "/Game/Seria/NPC/N115_Finance_Female/BP_N115_Finance_Female.BP_N115_Finance_Female_C",
+                transform: {
+                  location: { x: 520, y: 230, z: 92 },
+                  rotation: { pitch: 0, yaw: 180, roll: 0 },
                   scale: { x: 1, y: 1, z: 1 },
                 },
               },
@@ -2766,6 +2790,7 @@ test("offers the detected Blueprint formation before designing shots", async ({
         "##id,名称,介绍,资源",
         "1,玩家,玩家,",
         "101968,商会安保,守卫,200135",
+        "101892,西维尔,背景职员,200528",
       ].join("\n"),
     },
     {
@@ -2774,6 +2799,7 @@ test("offers the detected Blueprint formation before designing shots", async ({
         "##&Model.id,,Model.path",
         "##id,配置填写在此列，Model.path保存时自动生成，由程序调用,生成路径",
         "200135,/Game/Seria/NPC/M63_Cityguard/BP_M63_Cityguard_NPC,/Game/Seria/NPC/M63_Cityguard/BP_M63_Cityguard_NPC.BP_M63_Cityguard_NPC_C",
+        "200528,/Game/Seria/NPC/N115_Finance_Female/BP_N115_Finance_Female,/Game/Seria/NPC/N115_Finance_Female/BP_N115_Finance_Female.BP_N115_Finance_Female_C",
       ].join("\n"),
       },
     ],
@@ -2800,9 +2826,13 @@ test("offers the detected Blueprint formation before designing shots", async ({
     page.getByText("LOCAL CAMERA WORKSPACE / 01"),
   ).toBeHidden();
   await expect(dialog.getByText("BP 角色槽")).toBeVisible();
+  await expect(dialog.locator(".formation-compare-metrics")).toContainText(
+    "对白 / 背景2 / 1",
+  );
+  await expect(dialog.getByText(/背景 NPC 只参与构图/)).toBeVisible();
   await expect(
     dialog.locator(".actor-label").filter({ hasText: "玩家" }).first(),
-  ).toHaveAttribute("data-facing-target", "-0.700,0.000,2.800");
+  ).toHaveAttribute("data-facing-target", "-1.500,0.000,4.600");
   await dialog.screenshot({
     path: testInfo.outputPath("blueprint-formation-choice.png"),
   });
@@ -2919,10 +2949,13 @@ test("offers the detected Blueprint formation before designing shots", async ({
   await expect(formationStatus).toContainText("BP_735000");
   await expect(page.getByText("已忽略 1 个关闭 UI 节点", { exact: false }))
     .toBeVisible();
-  await expect(page.locator(".cast-row")).toHaveCount(2);
+  await expect(page.locator(".cast-row")).toHaveCount(3);
   await expect(
     page.locator(".cast-row", { hasText: "玩家" }),
-  ).toContainText("BP 0 · 初始朝向 -90°");
+  ).toContainText("对白角色 · BP 0 · 初始朝向 -90°");
+  await expect(
+    page.locator(".cast-row", { hasText: "西维尔" }),
+  ).toContainText("背景 NPC · BP 2 · 初始朝向 -180°");
   await page.getByRole("tab", { name: "导演" }).click();
   await expect(page.getByText("演员动作", { exact: true })).toBeVisible();
   await expect(page.getByText("右转 45°", { exact: true })).toHaveCount(2);
@@ -2952,7 +2985,7 @@ test("offers the detected Blueprint formation before designing shots", async ({
     dialogueId: "7350",
     startId: "735000",
     dialogueIds: ["735001", "735002"],
-    participantModelIndexes: [0, 1],
+    participantModelIndexes: [0, 1, 2],
     usesBlueprintFormation: true,
     soundEffects: [
       {

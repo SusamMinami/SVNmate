@@ -5,6 +5,7 @@ import type {
   DirectorProviderResult,
   ShotDirectorProvider,
 } from "./contracts";
+import { directorDialogueParticipants } from "./contracts";
 import type { ParticipantSlot, ShotPlan } from "../types";
 import {
   createDefaultBlocking,
@@ -69,10 +70,11 @@ function visualAnchorFor(
   slot: ParticipantSlot,
   input: DirectorInput,
 ): DirectorDecision["visual_anchor"] {
-  const speakerIndex = input.participants.findIndex(
+  const participants = directorDialogueParticipants(input);
+  const speakerIndex = participants.findIndex(
     (participant) => participant.slot === slot,
   );
-  const midpoint = (input.participants.length - 1) / 2;
+  const midpoint = (participants.length - 1) / 2;
   if (Math.abs(speakerIndex - midpoint) < 0.1) {
     return "center";
   }
@@ -125,7 +127,7 @@ function activeParticipantsAt(
   input: DirectorInput,
   attendance: AttendanceContext,
 ): DirectorInput["participants"] {
-  return input.participants.filter((participant) => {
+  return directorDialogueParticipants(input).filter((participant) => {
     const entryIndex =
       attendance.entryIndexBySlot.get(participant.slot) ??
       Number.POSITIVE_INFINITY;
@@ -224,7 +226,7 @@ function decisionFor(
 ): DirectorDecision {
   const screenPosition = visualAnchorFor(row.speaker, input);
   const activeParticipants = activeParticipantsAt(index, input, attendance);
-  const hasEntrance = input.participants.some(
+  const hasEntrance = directorDialogueParticipants(input).some(
     (participant) =>
       attendance.entryIndexBySlot.get(participant.slot) === index &&
       index > 0,
@@ -345,15 +347,17 @@ function decisionFor(
   return {
     dialogue_ids: [row.dialogue_id],
     template:
-      input.participants.length > 2
+      activeParticipants.length > 2
         ? "speaker_group_medium"
-        : "reverse_medium",
+        : activeParticipants.length === 2
+          ? "reverse_medium"
+          : "close_up",
     subject: row.speaker,
     look_target: lookTarget,
-    lens_mm: input.participants.length > 2 ? 42 : 50,
-    end_lens_mm: input.participants.length > 2 ? 42 : 50,
+    lens_mm: activeParticipants.length > 2 ? 42 : 50,
+    end_lens_mm: activeParticipants.length > 2 ? 42 : 50,
     lens_intent:
-      input.participants.length > 2
+      activeParticipants.length > 2
         ? "natural_perspective"
         : "subject_isolation",
     depth_of_field: "moderate",
@@ -361,7 +365,7 @@ function decisionFor(
     movement_intensity: "none",
     camera_roll_degrees: 0,
     composition_mode:
-      input.participants.length > 2 ? "layered_depth" : "rule_of_thirds",
+      activeParticipants.length > 2 ? "layered_depth" : "rule_of_thirds",
     visual_anchor: screenPosition,
     negative_space: "look_room",
     composition_transition:
@@ -369,14 +373,16 @@ function decisionFor(
         ? "mirror_reverse"
         : "match_eye_trace",
     coverage_intent:
-      input.participants.length > 2
+      activeParticipants.length > 2
         ? "relationship"
         : "individual_perspective",
     camera_height: "eye",
     intent:
-      input.participants.length > 2
+      activeParticipants.length > 2
         ? "在突出当前说话者的同时保留邻近角色轮廓，维持多人场面的空间连续。"
-        : "保持在轴线同一侧，用相反视线方向完成稳定正反打。",
+        : activeParticipants.length === 2
+          ? "保持在轴线同一侧，用相反视线方向完成稳定正反打。"
+          : "围绕唯一对白主体保持稳定视线，不与背景 NPC 建立叙事关系。",
   };
 }
 
@@ -397,7 +403,7 @@ export class RuleDirectorProvider implements ShotDirectorProvider {
 export function createRuleAnalysis(
   input: DirectorInput,
 ): NonNullable<DirectorProviderResult["analysis"]> {
-  const isGroupDialogue = input.participants.length > 2;
+  const isGroupDialogue = directorDialogueParticipants(input).length > 2;
   return {
     dramaticGoal: "规则导演未进行深层剧情推理",
     emotionalProgression: "根据句长、停顿、标点和说话人切换判断节奏",
@@ -413,6 +419,10 @@ export function createRuleDecisions(
 ): DirectorDecision[] {
   let previousSpeaker: ParticipantSlot | null = null;
   const attendance = createAttendanceContext(input, blocking);
+  const dialogueParticipants = directorDialogueParticipants(input);
+  const dialogueParticipantSlots = new Set(
+    dialogueParticipants.map((participant) => participant.slot),
+  );
   const rawDecisions = input.dialogue.map((row, index) => {
     const decision = decisionFor(
       row,
@@ -425,12 +435,16 @@ export function createRuleDecisions(
     return decision;
   });
   const entryDialogueIds = new Set(
-    [...attendance.entryIndexBySlot.values()]
+    [...attendance.entryIndexBySlot.entries()]
+      .filter(([slot]) => dialogueParticipantSlots.has(slot))
+      .map(([, index]) => index)
       .filter(Number.isFinite)
       .map((index) => input.dialogue[index].dialogue_id),
   );
   const exitDialogueIds = new Set(
-    [...attendance.exitIndexBySlot.values()]
+    [...attendance.exitIndexBySlot.entries()]
+      .filter(([slot]) => dialogueParticipantSlots.has(slot))
+      .map(([, index]) => index)
       .filter((index): index is number => index !== null)
       .map((index) => input.dialogue[index].dialogue_id),
   );
@@ -543,14 +557,14 @@ export function createRuleDecisions(
       const segmentSpeakers = new Set(
         segmentRows.map((row) => row.speaker),
       );
-      const hasEntranceAtStart = input.participants.some(
+      const hasEntranceAtStart = dialogueParticipants.some(
         (participant) =>
           attendance.entryIndexBySlot.get(participant.slot) === startIndex &&
           startIndex > 0,
       );
       const hasExitBeforeStart =
         startIndex > 0 &&
-        input.participants.some(
+        dialogueParticipants.some(
           (participant) =>
             attendance.exitIndexBySlot.get(participant.slot) ===
             startIndex - 1,
@@ -592,7 +606,7 @@ export function createRuleDecisions(
               subject: activeAlternative.slot,
               look_target: previousSubject,
               template:
-                input.participants.length > 2
+                activeParticipants.length > 2
                   ? "speaker_group_medium"
                   : selected.template === "reaction_closeup"
                     ? "reaction_closeup"
@@ -600,19 +614,19 @@ export function createRuleDecisions(
               lens_mm:
                 selected.template === "reaction_closeup"
                   ? selected.lens_mm
-                  : input.participants.length > 2
+                  : activeParticipants.length > 2
                     ? 42
                     : 50,
               end_lens_mm:
                 selected.template === "reaction_closeup"
                   ? selected.end_lens_mm
-                  : input.participants.length > 2
+                  : activeParticipants.length > 2
                     ? 42
                     : 50,
               lens_intent:
                 selected.template === "reaction_closeup"
                   ? selected.lens_intent
-                  : input.participants.length > 2
+                  : activeParticipants.length > 2
                     ? "natural_perspective"
                     : "subject_isolation",
               depth_of_field:
@@ -624,7 +638,7 @@ export function createRuleDecisions(
                 input,
               ),
               coverage_intent:
-                input.participants.length > 2
+                activeParticipants.length > 2
                   ? "shared_reaction"
                   : selected.coverage_intent,
               intent: `${selected.intent} 保留另一位在场角色的反应，避免连续镜头重复同一主体。`,

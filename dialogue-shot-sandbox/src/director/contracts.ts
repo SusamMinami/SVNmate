@@ -351,6 +351,7 @@ export const DirectorInputSchema = z.object({
         model_index: z.number().int().nonnegative().nullable().optional(),
         name: z.string().min(1),
         background: z.string(),
+        role: z.enum(["dialogue", "background"]).default("dialogue"),
         initial_position: z.tuple([z.number(), z.number(), z.number()]).optional(),
         initial_facing_target: z
           .tuple([z.number(), z.number(), z.number()])
@@ -476,6 +477,7 @@ export interface DirectorInput {
     model_index?: number | null;
     name: string;
     background: string;
+    role: "dialogue" | "background";
     initial_position?: Vec3;
     initial_facing_target?: Vec3;
     initial_yaw_degrees?: number;
@@ -554,6 +556,14 @@ export interface DirectorSceneAnalysis {
   visualStrategy: string;
 }
 
+export function directorDialogueParticipants(
+  input: Pick<DirectorInput, "participants">,
+): DirectorInput["participants"] {
+  return input.participants.filter(
+    (participant) => participant.role === "dialogue",
+  );
+}
+
 export interface DirectorSoundEffectRecommendation {
   dialogueId: string;
   assetName: string;
@@ -609,6 +619,16 @@ export function createDirectorInput(
       participantById.set(participant.id, participant);
     }
   }
+  const dialogueParticipantSlots = new Set(
+    sequence.rows.flatMap((row) => {
+      const participant =
+        (row.speakerSlot
+          ? participantBySlot.get(row.speakerSlot)
+          : undefined) ??
+        (row.npcId === null ? undefined : participantById.get(row.npcId));
+      return participant ? [participant.slot] : [];
+    }),
+  );
   return {
     request_id: requestId,
     schema_version: "shot-plan.v5",
@@ -623,6 +643,9 @@ export function createDirectorInput(
       name: participant.name,
       background:
         participant.introduction || participant.note || "暂无补充角色背景",
+      role: dialogueParticipantSlots.has(participant.slot)
+        ? "dialogue"
+        : "background",
       initial_position: participant.position,
       initial_facing_target: participant.facingTarget,
       initial_yaw_degrees: participantFacingYawDegrees(participant),

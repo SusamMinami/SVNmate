@@ -36,6 +36,36 @@ describe("buildDirectorPrompt", () => {
     expect(prompt).toContain("目录中没有足够匹配");
   });
 
+  it("separates silent scene actors from dialogue subjects", () => {
+    const sequence = findDialogueSequence(demoDatabase, "2048");
+    const backgroundParticipant = {
+      ...sequence.participants[1],
+      id: 999_001,
+      instanceId: "bp:background:2",
+      slot: "C" as const,
+      name: "背景守卫",
+      modelIndex: 2,
+    };
+    const input = createDirectorInput(
+      {
+        ...sequence,
+        participants: [...sequence.participants, backgroundParticipant],
+      },
+      "background-prompt-request",
+    );
+    const prompt = buildDirectorPrompt(input, "Mira AI 导演");
+
+    expect(input.participants.map((participant) => participant.role)).toEqual([
+      "dialogue",
+      "dialogue",
+      "background",
+    ]);
+    expect(prompt).toContain("2 位对白角色");
+    expect(prompt).toContain("1 位背景 NPC");
+    expect(prompt).toContain("背景 NPC 不计入双人主体");
+    expect(prompt).toContain("允许的 subject：A, B, both");
+  });
+
   it("includes focused projection feedback for a model revision", () => {
     const sequence = findDialogueSequence(demoDatabase, "2048");
     const input = createDirectorInput(sequence, "projection-retry-request");

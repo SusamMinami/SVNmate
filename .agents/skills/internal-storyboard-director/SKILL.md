@@ -20,7 +20,9 @@ description: "Designs UE4 dialogue storyboards through the local storyboard MCP 
 2. 如果 `found=false`，明确回复当前没有待处理任务并结束。
 3. 阅读返回的完整 `request`：
    - `outline`：场景梗概
-   - `participants`：2-12 名角色、槽位及背景
+   - `participants`：2-12 名场景角色、槽位及背景资料
+   - `participants[].role`：`dialogue` 为对白角色，`background` 为
+     Formation BP 中保留的背景 NPC
    - `participants[].initial_position` / `initial_yaw_degrees`：Formation
      BP 中的真实初始位置与朝向
    - `participants[].can_turn`：该角色是否允许规划转身动作
@@ -59,23 +61,26 @@ description: "Designs UE4 dialogue storyboards through the local storyboard MCP 
 - 覆盖每一个 `dialogue_id`，每个 ID 只能出现一次。
 - 可以让一个镜头覆盖连续多句台词，但不能改变台词顺序。
 - 只使用 `constraints.supported_templates` 中的模板。
-- 单人主体只使用 `participants` 中实际存在的槽位（`A-L`）。
-- 当前镜头恰有两位角色在场时，同框主体可使用 `both`，并搭配
+- `blocking.placements` 必须保留全部场景角色；`role=background` 的 NPC
+  参与遮挡、画面重量、前中后景和安全区判断，但不得成为 `subject`、
+  `look_target` 或关系轴端点，也不为其设计表演与关系变化。
+- 单人主体只使用 `role=dialogue` 的实际对白角色槽位（`A-L`）。
+- 当前镜头恰有两位对白角色在场时，同框主体可使用 `both`，并搭配
   `master_two_shot` 或 `profile_two_shot`。
-- 当前镜头至少有三位角色在场时，全体主体使用 `group`，并搭配
+- 当前镜头至少有三位对白角色在场时，全体主体使用 `group`，并搭配
   `master_group_shot`。
 - 多人任务中需要突出当前说话者并保留关系背景时，使用
   `speaker_group_medium` 和该说话者的槽位。
 - 每个 shot 必须设置 `coverage_intent`，说明该镜头为何选择单人、双人、
   带群或群像，不能仅因说话人变化自动切成单人。
-- 前三个镜头中必须至少有一个交代当前在场角色关系和站位的全景：
-  两人在场时使用 `master_two_shot`，三人及以上使用
+- 前三个镜头中必须至少有一个交代当前在场对白角色关系和站位的全景：
+  两位对白角色在场时使用 `master_two_shot`，三位及以上使用
   `master_group_shot`。
-- 新角色进入后，或角色离场后的下一镜，只要仍有至少两人在场，都必须
+- 新对白角色进入后，或对白角色离场后的下一镜，只要仍有至少两位对白角色在场，都必须
   使用双人或群像全景重新建立人物位置、视线和关系。
 - 双人镜头用于冲突、连接、谈判、共同利益、共同反应和身体语言；当一个
   镜头覆盖双方连续台词且没有重大个人转折时，优先保留双方同框。
-- 三人以上的普通互动优先用 `speaker_group_medium` 保留主体与关系背景；
+- 三位以上对白角色的普通互动优先用 `speaker_group_medium` 保留主体与关系背景；
   群像全景用于社会结构、阵营、集体反应和空间变化。
 - 单人镜头用于个人视角、重要台词、决定、隐瞒、脆弱、孤立或关键反应；
   `close_up` 和 `reaction_closeup` 不作为普通对话的默认覆盖。
@@ -200,7 +205,8 @@ description: "Designs UE4 dialogue storyboards through the local storyboard MCP 
 - 每个角色必须使用不同的 `position`，不能让角色面向自己。
 - `facing` 只能使用实际角色槽位或 `group_center`。
 - 每个 shot 必须设置 `look_target`。单人和带群镜头填写当前主体交流或
-  注视的实际角色槽位；双人和群像建立镜头填写 `group_center`。
+  注视的实际对白角色槽位；只有一位对白角色时填写 `group_center`；
+  双人和群像建立镜头填写 `group_center`。
 - 站位必须服务于关系和事件：主导者、被孤立者、防守者、行动目标和
   对峙分组应在阵型中清晰可读。
 - 不要为了变化而频繁切镜头。镜头变化必须对应叙事节点。

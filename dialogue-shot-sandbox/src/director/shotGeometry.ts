@@ -90,6 +90,7 @@ interface SingleCameraRequest {
   subject: DialogueParticipant;
   lookTarget?: DialogueParticipant;
   participants: DialogueParticipant[];
+  primaryParticipantSlots?: readonly ParticipantSlot[];
   lensMm: number;
   cameraHeight: number;
   composition: ShotComposition;
@@ -388,6 +389,9 @@ export function assessProjection(
   composition: ShotComposition,
   lookTarget?: DialogueParticipant,
   cameraRollDegrees = 0,
+  primaryParticipantSlots: readonly ParticipantSlot[] = participants.map(
+    (participant) => participant.slot,
+  ),
 ): ProjectionAssessment {
   const camera = cameraFor(
     geometry.position,
@@ -401,6 +405,10 @@ export function assessProjection(
   const visibleParticipantSlots = projected
     .filter((participant) => participant.areaRatio >= SIGNIFICANT_ACTOR_AREA)
     .map((participant) => participant.slot);
+  const primaryParticipantSlotSet = new Set(primaryParticipantSlots);
+  const visiblePrimaryParticipantSlots = visibleParticipantSlots.filter(
+    (slot) => primaryParticipantSlotSet.has(slot),
+  );
   const subjectDistance = Math.hypot(
     geometry.position[0] - subject.position[0],
     geometry.position[1] - 1.1,
@@ -442,6 +450,9 @@ export function assessProjection(
   const targetAnchor = anchorForComposition(composition, coverage);
   const significantProjected = projected.filter(
     (participant) => participant.areaRatio >= SIGNIFICANT_ACTOR_AREA,
+  );
+  const significantPrimaryProjected = significantProjected.filter(
+    (participant) => primaryParticipantSlotSet.has(participant.slot),
   );
   const totalVisualWeight = significantProjected.reduce(
     (sum, participant) => sum + participant.areaRatio,
@@ -499,7 +510,7 @@ export function assessProjection(
     cameraDepths.length > 1
       ? Math.max(...cameraDepths) - Math.min(...cameraDepths)
       : 0;
-  const triangleArea = projectedTriangleArea(significantProjected);
+  const triangleArea = projectedTriangleArea(significantPrimaryProjected);
   const facing = subjectFacing(subject, participants, lookTarget);
   const cameraDirection = normalize({
     x: geometry.position[0] - subject.position[0],
@@ -531,17 +542,26 @@ export function assessProjection(
   }
   if (
     coverage === "single" &&
-    visibleParticipantSlots.some((slot) => slot !== subject.slot)
+    visiblePrimaryParticipantSlots.some((slot) => slot !== subject.slot)
   ) {
     warnings.push("单人镜头包含其他主要可见角色");
   }
-  if (coverage === "two-shot" && visibleParticipantSlots.length !== 2) {
+  if (
+    coverage === "two-shot" &&
+    visiblePrimaryParticipantSlots.length !== 2
+  ) {
     warnings.push("双人镜头的主要可见角色数量不是 2");
   }
-  if (coverage === "group" && visibleParticipantSlots.length < participants.length) {
+  if (
+    coverage === "group" &&
+    visiblePrimaryParticipantSlots.length < primaryParticipantSlotSet.size
+  ) {
     warnings.push("群像建立镜头未覆盖全部在场角色");
   }
-  if (coverage === "group-medium" && visibleParticipantSlots.length < 2) {
+  if (
+    coverage === "group-medium" &&
+    visiblePrimaryParticipantSlots.length < 2
+  ) {
     warnings.push("带群中景未保留关系角色");
   }
   if (coverage === "single" && subjectFaceAngle > 45.1) {
@@ -718,6 +738,10 @@ export function solveSingleCamera(
   const preferredAngle = request.preferredFaceAngle ?? 28;
   const angleCandidates = [...new Set([preferredAngle, 18, 38, 8, 45])];
   const distanceScales = [1, 0.94, 1.06, 0.86, 1.16, 1.28];
+  const primaryParticipantSlotSet = new Set(
+    request.primaryParticipantSlots ??
+      request.participants.map((participant) => participant.slot),
+  );
   const oppositeVisualAnchor: DirectorDecision["visual_anchor"] =
     request.composition.visualAnchor === "left_third"
       ? "right_third"
@@ -788,12 +812,17 @@ export function solveSingleCamera(
           { ...request.composition, visualAnchor },
           request.lookTarget,
           request.cameraRollDegrees,
+          request.primaryParticipantSlots,
         );
         const resolvedComposition = {
           ...request.composition,
           visualAnchor,
         };
-        const otherVisibleCount = assessment.visibleParticipantSlots.filter(
+        const visiblePrimaryParticipantSlots =
+          assessment.visibleParticipantSlots.filter((slot) =>
+            primaryParticipantSlotSet.has(slot),
+          );
+        const otherVisibleCount = visiblePrimaryParticipantSlots.filter(
           (slot) => slot !== request.subject.slot,
         ).length;
         const sizeDelta = Math.abs(
@@ -835,7 +864,7 @@ export function solveSingleCamera(
           sizeDelta * 500 +
           (request.coverage === "single" ? otherVisibleCount * 800 : 0) +
           (request.coverage === "group-medium" &&
-          assessment.visibleParticipantSlots.length < 2
+          visiblePrimaryParticipantSlots.length < 2
             ? 800
             : 0) +
           (!assessment.visibleParticipantSlots.includes(request.subject.slot)

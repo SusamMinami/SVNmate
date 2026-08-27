@@ -11,6 +11,7 @@ import {
 } from "node:fs/promises";
 import { join } from "node:path";
 import {
+  directorDialogueParticipants,
   DirectorInputSchema,
   MiraDirectorResponseSchema,
   type DirectorInput,
@@ -58,7 +59,7 @@ const TASK_LOCK_TIMEOUT_MS = 5_000;
 const TASK_LOCK_STALE_MS = 30_000;
 const QUEUE_LOCK_NAME = ".queue.lock";
 export const STORYBOARD_CACHE_POLICY =
-  "shot-plan.v5:camera-language-v4-sound-effects-v2";
+  "shot-plan.v5:camera-language-v5-background-roles-sound-effects-v2";
 
 function taskDirectory(): string {
   return join(storyboardRuntimeRoot(), ".storyboard-data", "tasks");
@@ -410,6 +411,11 @@ export async function completeStoryboardTask(
       (participant) => participant.slot,
     );
     const participantSlots = new Set(expectedSlots);
+    const dialogueParticipantSlots = new Set(
+      directorDialogueParticipants(task.input).map(
+        (participant) => participant.slot,
+      ),
+    );
     const actualSlots = result.blocking.placements.map(
       (placement) => placement.subject,
     );
@@ -524,6 +530,15 @@ export async function completeStoryboardTask(
           `镜头 ${index + 1} 使用了不在任务中的角色槽位 ${shot.subject}`,
         );
       }
+      if (
+        shot.subject !== "both" &&
+        shot.subject !== "group" &&
+        !dialogueParticipantSlots.has(shot.subject)
+      ) {
+        throw new Error(
+          `镜头 ${index + 1} 使用了背景 NPC ${shot.subject} 作为主体`,
+        );
+      }
       const shotDialogueIndexes = shot.dialogue_ids.map((dialogueId) => {
         const dialogueIndex = dialogueIndexById.get(dialogueId);
         if (dialogueIndex === undefined) {
@@ -536,6 +551,9 @@ export async function completeStoryboardTask(
       const shotStartIndex = Math.min(...shotDialogueIndexes);
       const shotEndIndex = Math.max(...shotDialogueIndexes);
       const attendanceChange = expectedSlots.find((slot) => {
+        if (!dialogueParticipantSlots.has(slot)) {
+          return false;
+        }
         const entryIndex =
           entryIndexBySlot.get(slot) ?? Number.POSITIVE_INFINITY;
         const exitIndex = exitIndexBySlot.get(slot);
@@ -561,18 +579,21 @@ export async function completeStoryboardTask(
             (exitIndex !== undefined && exitIndex >= shotEndIndex))
         );
       });
-      const activeCount = activeSlots.length;
+      const activeDialogueSlots = activeSlots.filter((slot) =>
+        dialogueParticipantSlots.has(slot),
+      );
+      const activeCount = activeDialogueSlots.length;
       const isRelationshipWide =
         shot.template === "master_two_shot" ||
         shot.template === "master_group_shot";
       const hasEntranceAtStart =
         shotStartIndex > 0 &&
-        expectedSlots.some(
+        [...dialogueParticipantSlots].some(
           (slot) => entryIndexBySlot.get(slot) === shotStartIndex,
         );
       const hasExitBeforeStart =
         shotStartIndex > 0 &&
-        expectedSlots.some(
+        [...dialogueParticipantSlots].some(
           (slot) => exitIndexBySlot.get(slot) === shotStartIndex - 1,
         );
       if (
@@ -609,7 +630,7 @@ export async function completeStoryboardTask(
       if (
         shot.subject !== "both" &&
         shot.subject !== "group" &&
-        !activeSlots.includes(shot.subject)
+        !activeDialogueSlots.includes(shot.subject)
       ) {
         throw new Error(
           `镜头 ${index + 1} 的主体 ${shot.subject} 尚未登场或已经离场`,
@@ -629,9 +650,18 @@ export async function completeStoryboardTask(
       }
       if (
         !groupSubject &&
+        shot.look_target !== "group_center" &&
+        !dialogueParticipantSlots.has(shot.look_target)
+      ) {
+        throw new Error(
+          `镜头 ${index + 1} 不能使用背景 NPC ${shot.look_target} 建立关系轴`,
+        );
+      }
+      if (
+        !groupSubject &&
         activeCount > 1 &&
         (shot.look_target === "group_center" ||
-          !activeSlots.includes(shot.look_target))
+          !activeDialogueSlots.includes(shot.look_target))
       ) {
         throw new Error(
           `镜头 ${index + 1} 的关系轴目标 ${shot.look_target} 无效`,

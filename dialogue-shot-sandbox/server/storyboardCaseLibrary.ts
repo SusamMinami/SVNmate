@@ -1,11 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
-import type {
-  DirectorDecision,
-  DirectorInput,
-  DirectorRevisionReflection,
-  ReadyDirectorResponse,
+import {
+  directorDialogueParticipants,
+  type DirectorDecision,
+  type DirectorInput,
+  type DirectorRevisionReflection,
+  type ReadyDirectorResponse,
 } from "../src/director/contracts";
 import type { DirectorProjectionFailure } from "../src/director/orchestrator";
 import {
@@ -294,7 +295,7 @@ function scoreRecord(
   if (selectedValue(record.站位来源) === expectedPositionSource) {
     score += 2;
   }
-  if (record.角色数 === input.participants.length) {
+  if (record.角色数 === directorDialogueParticipants(input).length) {
     score += 2;
   }
   return score;
@@ -446,7 +447,7 @@ function caseFields(
     站位来源: [
       input.constraints.preserve_input_formation ? "BP" : "自动",
     ],
-    角色数: input.participants.length,
+    角色数: directorDialogueParticipants(input).length,
     规则集版本: STORYBOARD_CACHE_POLICY,
     软件版本: SOFTWARE_VERSION,
     来源: [source],

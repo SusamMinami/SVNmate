@@ -2,6 +2,7 @@ import * as THREE from "three";
 import type {
   DialogueParticipant,
   DialogueSequence,
+  ParticipantSlot,
   ShotAxis,
   ShotComposition,
   ShotCoverage,
@@ -277,12 +278,15 @@ function geometryFor(
   participant: DialogueParticipant,
   lookTarget: DialogueParticipant | null,
   participants: DialogueParticipant[],
+  primaryParticipants: DialogueParticipant[],
   previousGeometry?: CameraGeometry,
 ): Geometry {
   const groupSubject =
     decision.subject === "both" || decision.subject === "group";
   const groupLabel =
-    participants.length === 2 ? "双人" : `${participants.length}人群像`;
+    primaryParticipants.length === 2
+      ? "双人"
+      : `${primaryParticipants.length}人群像`;
   const subjectLabel = groupSubject ? groupLabel : participant.slot;
   const framingLabels: Record<
     DirectorDecision["composition_mode"],
@@ -313,7 +317,7 @@ function geometryFor(
     assessment: ProjectionAssessment;
   } => {
     const geometry = solveGroupCamera({
-      participants,
+      participants: primaryParticipants,
       lensMm: decision.lens_mm,
       cameraHeight: cameraHeight(decision.camera_height, 1.72),
       shotSize,
@@ -331,6 +335,7 @@ function geometryFor(
         compositionPlan,
         undefined,
         decision.camera_roll_degrees,
+        primaryParticipants.map((candidate) => candidate.slot),
       ),
     };
   };
@@ -343,6 +348,9 @@ function geometryFor(
       subject: participant,
       lookTarget: lookTarget ?? undefined,
       participants,
+      primaryParticipantSlots: primaryParticipants.map(
+        (candidate) => candidate.slot,
+      ),
       lensMm: decision.lens_mm,
       cameraHeight: cameraHeight(decision.camera_height, fallbackHeight),
       composition: compositionPlan,
@@ -392,10 +400,10 @@ function geometryFor(
       const result = groupGeometry("full", "group");
       const label =
         decision.coverage_intent === "reestablish_geography"
-          ? `${participants.length}人群像重建全景`
+          ? `${primaryParticipants.length}人群像重建全景`
           : decision.coverage_intent === "establish_geography"
-            ? `${participants.length}人群像建立镜头`
-            : `${participants.length}人群像关系全景`;
+            ? `${primaryParticipants.length}人群像建立镜头`
+            : `${primaryParticipants.length}人群像关系全景`;
       return {
         kind: "master",
         label,
@@ -512,6 +520,17 @@ export function resolveShotDecisions(
   const participantsBySlot = new Map(
     sequence.participants.map((participant) => [participant.slot, participant]),
   );
+  const dialogueParticipantSlots = new Set<ParticipantSlot>();
+  for (const row of sequence.rows) {
+    const participant =
+      (row.speakerSlot
+        ? participantsBySlot.get(row.speakerSlot)
+        : undefined) ??
+      (row.npcId === null ? undefined : participantsById.get(row.npcId));
+    if (participant) {
+      dialogueParticipantSlots.add(participant.slot);
+    }
+  }
   const coveredIds = new Set<string>();
   let previousGeometry: CameraGeometry | undefined;
   let previousVisualSubjectSlot: DialogueParticipant["slot"] | null = null;
@@ -547,11 +566,12 @@ export function resolveShotDecisions(
     );
     const attendanceChange = sequence.participants.find(
       (participant) =>
-        (participant.entryIndex > dialogueStartIndex &&
+        dialogueParticipantSlots.has(participant.slot) &&
+        ((participant.entryIndex > dialogueStartIndex &&
           participant.entryIndex <= dialogueEndIndex) ||
-        (participant.exitIndex !== null &&
-          participant.exitIndex >= dialogueStartIndex &&
-          participant.exitIndex < dialogueEndIndex),
+          (participant.exitIndex !== null &&
+            participant.exitIndex >= dialogueStartIndex &&
+            participant.exitIndex < dialogueEndIndex)),
     );
     if (attendanceChange) {
       throw new Error(
@@ -571,29 +591,38 @@ export function resolveShotDecisions(
           currentFacingTargets.get(participant.slot) ??
           participant.facingTarget,
       }));
-    let activeParticipantsBySlot = new Map(
-      activeParticipants.map((participant) => [
+    let activeDialogueParticipants = activeParticipants.filter((participant) =>
+      dialogueParticipantSlots.has(participant.slot),
+    );
+    let activeDialogueParticipantsBySlot = new Map(
+      activeDialogueParticipants.map((participant) => [
         participant.slot,
         participant,
       ]),
     );
     const firstSpeaker =
       (firstRow.speakerSlot
-        ? activeParticipantsBySlot.get(firstRow.speakerSlot)
+        ? activeDialogueParticipantsBySlot.get(firstRow.speakerSlot)
         : undefined) ??
-      (firstRow.npcId === null ? undefined : participantsById.get(firstRow.npcId));
+      (firstRow.npcId === null
+        ? undefined
+        : activeDialogueParticipants.find(
+            (participant) => participant.id === firstRow.npcId,
+          ));
     const groupSubject =
       decision.subject === "both" || decision.subject === "group";
     let subject =
       decision.subject === "both" || decision.subject === "group"
         ? firstSpeaker
-        : activeParticipantsBySlot.get(decision.subject);
+        : activeDialogueParticipantsBySlot.get(decision.subject);
     let lookTarget: DialogueParticipant | null =
       decision.look_target === "group_center"
         ? null
-        : (activeParticipantsBySlot.get(decision.look_target) ?? null);
+        : (activeDialogueParticipantsBySlot.get(decision.look_target) ?? null);
     if (!firstSpeaker || !subject) {
-      throw new Error(`镜头 ${index + 1} 无法解析主体 ${decision.subject}`);
+      throw new Error(
+        `镜头 ${index + 1} 无法解析对白主体 ${decision.subject}，背景 NPC 不能作为镜头主体`,
+      );
     }
     const subjectSlot = subject.slot;
     if (
@@ -611,16 +640,25 @@ export function resolveShotDecisions(
     ) {
       throw new Error(`镜头 ${index + 1} 的群体镜头必须面向 group_center`);
     }
-    if (!groupSubject && activeParticipants.length > 1) {
+    if (
+      !groupSubject &&
+      decision.look_target !== "group_center" &&
+      !lookTarget
+    ) {
+      throw new Error(
+        `镜头 ${index + 1} 的关系轴目标 ${decision.look_target} 不是在场对白角色`,
+      );
+    }
+    if (!groupSubject && activeDialogueParticipants.length > 1) {
       const lookTargetIsActive =
         lookTarget &&
         lookTarget.slot !== subject.slot &&
-        activeParticipants.some(
+        activeDialogueParticipants.some(
           (participant) => participant.slot === lookTarget?.slot,
         );
       if (!lookTargetIsActive) {
         lookTarget =
-          activeParticipants.find(
+          activeDialogueParticipants.find(
             (participant) => participant.slot !== subjectSlot,
           ) ?? null;
       }
@@ -632,7 +670,6 @@ export function resolveShotDecisions(
     }
     if (
       !groupSubject &&
-      activeParticipants.length > 1 &&
       decision.look_target === subject.slot
     ) {
       throw new Error(
@@ -641,14 +678,14 @@ export function resolveShotDecisions(
     }
     if (
       decision.subject === "both" &&
-      activeParticipants.length !== 2
+      activeDialogueParticipants.length !== 2
     ) {
       throw new Error(`镜头 ${index + 1} 的双人主体只能用于两位角色`);
     }
     if (
       decision.subject === "group" &&
       (decision.template !== "master_group_shot" ||
-        activeParticipants.length < 3)
+        activeDialogueParticipants.length < 3)
     ) {
       throw new Error(
         `镜头 ${index + 1} 的群像主体需要至少三位在场角色和群像建立镜头模板`,
@@ -674,14 +711,14 @@ export function resolveShotDecisions(
     }
     if (
       decision.template === "speaker_group_medium" &&
-      (groupSubject || activeParticipants.length < 2)
+      (groupSubject || activeDialogueParticipants.length < 2)
     ) {
       throw new Error(
         `镜头 ${index + 1} 的带群中景需要至少两位在场角色并指定单个主体`,
       );
     }
     const actorActionPlan = planActorTurns(
-      activeParticipants,
+      activeDialogueParticipants,
       groupSubject
         ? { kind: "group" }
         : {
@@ -690,9 +727,19 @@ export function resolveShotDecisions(
             lookTargetSlot: lookTarget?.slot ?? null,
           },
     );
-    activeParticipants = actorActionPlan.participants;
-    activeParticipantsBySlot = new Map(
-      activeParticipants.map((participant) => [
+    const directedParticipantBySlot = new Map(
+      actorActionPlan.participants.map((participant) => [
+        participant.slot,
+        participant,
+      ]),
+    );
+    activeParticipants = activeParticipants.map(
+      (participant) =>
+        directedParticipantBySlot.get(participant.slot) ?? participant,
+    );
+    activeDialogueParticipants = actorActionPlan.participants;
+    activeDialogueParticipantsBySlot = new Map(
+      activeDialogueParticipants.map((participant) => [
         participant.slot,
         participant,
       ]),
@@ -703,15 +750,16 @@ export function resolveShotDecisions(
         participant.facingTarget,
       );
     }
-    subject = activeParticipantsBySlot.get(subject.slot) ?? subject;
+    subject = activeDialogueParticipantsBySlot.get(subject.slot) ?? subject;
     lookTarget = lookTarget
-      ? activeParticipantsBySlot.get(lookTarget.slot) ?? lookTarget
+      ? activeDialogueParticipantsBySlot.get(lookTarget.slot) ?? lookTarget
       : null;
     const geometry = geometryFor(
       decision,
       subject,
       lookTarget,
       activeParticipants,
+      activeDialogueParticipants,
       previousGeometry,
     );
     const motionGeometry = resolveMotionGeometry(
@@ -721,13 +769,13 @@ export function resolveShotDecisions(
       lookTarget,
     );
     const axis = createShotAxis(
-      activeParticipants,
+      activeDialogueParticipants,
       subject,
       groupSubject ? null : lookTarget,
       geometry.position,
     );
     const motionEndAxis = createShotAxis(
-      activeParticipants,
+      activeDialogueParticipants,
       subject,
       groupSubject ? null : lookTarget,
       motionGeometry.endPosition,
@@ -745,16 +793,22 @@ export function resolveShotDecisions(
     const additionalVisibleSlots =
       geometry.coverage === "single"
         ? geometry.assessment.visibleParticipantSlots.filter(
-            (slot) => slot !== subject.slot,
+            (slot) =>
+              slot !== subject.slot &&
+              dialogueParticipantSlots.has(slot),
           )
         : [];
+    const foregroundDialogueSlots =
+      geometry.assessment.foregroundParticipantSlots.filter((slot) =>
+        dialogueParticipantSlots.has(slot),
+      );
     const resolvedCoverage: ShotCoverage =
       additionalVisibleSlots.length === 0
         ? geometry.coverage
-        : geometry.assessment.foregroundParticipantSlots.length === 1 &&
+        : foregroundDialogueSlots.length === 1 &&
             additionalVisibleSlots.length === 1 &&
             (geometry.assessment.participantAreaRatios[
-              geometry.assessment.foregroundParticipantSlots[0]
+              foregroundDialogueSlots[0]
             ] ?? 1) <= 0.33
           ? "over-the-shoulder"
           : "group-medium";
@@ -790,6 +844,7 @@ export function resolveShotDecisions(
         geometry.compositionPlan,
         lookTarget ?? undefined,
         decision.camera_roll_degrees,
+        activeDialogueParticipants.map((participant) => participant.slot),
       );
       if (
         decision.camera_movement !== "pan" &&
@@ -908,9 +963,9 @@ export function resolveShotDecisions(
       speakerId: groupSubject ? firstSpeaker.id : subject.id,
       speakerSlot: groupSubject ? firstSpeaker.slot : subject.slot,
       speakerName: groupSubject
-        ? activeParticipants.length === 2
+        ? activeDialogueParticipants.length === 2
           ? "双人"
-          : `${activeParticipants.length}人群像`
+          : `${activeDialogueParticipants.length}人群像`
         : subject.name,
       content,
       kind: formsReversePair ? "reverse-shot" : geometry.kind,

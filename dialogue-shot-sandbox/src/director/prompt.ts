@@ -1,5 +1,6 @@
 import {
   BLOCKING_POSITIONS,
+  directorDialogueParticipants,
   type DirectorInput,
   type ReadyDirectorResponse,
 } from "./contracts";
@@ -28,13 +29,19 @@ export function buildDirectorPrompt(
   providerName: string,
   revision?: DirectorProjectionRevision,
 ): string {
-  const participantSlots = input.participants.map(
+  const dialogueParticipants = directorDialogueParticipants(input);
+  const backgroundParticipants = input.participants.filter(
+    (participant) => participant.role === "background",
+  );
+  const participantSlots = dialogueParticipants.map(
     (participant) => participant.slot,
   );
   const subjectOptions =
-    input.participants.length === 2
-      ? [...participantSlots, "both"]
-      : [...participantSlots, "both", "group"];
+    dialogueParticipants.length === 1
+      ? participantSlots
+      : dialogueParticipants.length === 2
+        ? [...participantSlots, "both"]
+        : [...participantSlots, "both", "group"];
   const examplePositions =
     input.participants.length === 2
       ? (["front_left", "front_right"] as const)
@@ -60,6 +67,7 @@ export function buildDirectorPrompt(
       input.constraints.preserve_input_formation
         ? "角色站位和初始朝向来自 UE Blueprint，不得修改或假设 blocking.position 会改变实际坐标；需要改变视线时只能规划支持的离散转身动作。"
         : "可以调整 blocking，但所有角色位置必须唯一，并保持进出场节点有效。",
+      "role=background 的 NPC 只能作为构图、遮挡和空间层次参考，不得成为 shot.subject、shot.look_target 或关系轴端点；只允许 role=dialogue 的角色参与分镜叙事。",
       "继续遵守 16:9 主构图、21:9 安全区域、关系轴同侧、视线空间、角色不重叠、运镜起止画面可读和相邻镜头至少 30 度变化等约束。",
       revision.referenceCases?.length
         ? `已审核历史案例（仅作经验参考，不得照抄与当前站位冲突的参数）：${JSON.stringify(revision.referenceCases)}`
@@ -71,7 +79,7 @@ export function buildDirectorPrompt(
   }
   return [
     `你是 ${providerName}，负责游戏过场动画的分镜设计。`,
-    `请分析 ${input.participants.length} 人对话的戏剧目标、情绪推进、权力变化和视觉节奏。`,
+    `请分析 ${dialogueParticipants.length} 位对白角色的戏剧目标、情绪推进、权力变化和视觉节奏；场景另有 ${backgroundParticipants.length} 位背景 NPC。`,
     "生成前请在内部依次判断：当前叙事变化是什么、观众该看谁、需要多大空间信息、角度与焦段如何改变感受、镜头运动是否确有必要。最终只输出结论，不输出思考过程。",
     "把每个镜头视为景别、角度、画面人数、运动、焦段、焦点层次和构图的组合。每个参数应共同服务一个主要叙事目标，不能为了技巧数量而堆叠互相竞争的效果。",
     "只允许输出一个 JSON 对象，不要 Markdown 代码块，不要解释文字。",
@@ -83,10 +91,11 @@ export function buildDirectorPrompt(
     input.constraints.preserve_input_formation
       ? "输入角色包含从 UE Blueprint 读取的 initial_position、initial_facing_target 和 initial_yaw_degrees。必须以这些现有站位与朝向分析遮挡、关系轴和镜头，不得假设 blocking.position 会改变实际坐标。"
       : "角色初始坐标由软件根据 blocking.position 的语义站位确定。",
+    "participants 中 role=dialogue 表示实际说话、参与分镜叙事的角色；role=background 表示从 BP 导入的背景 NPC。背景 NPC 必须保留在场景与 blocking 中，并参与遮挡、画面重量、前中后景和安全区域判断，但不得成为 shot.subject、shot.look_target 或关系轴端点。",
     `演员只能使用离散转身 ${input.constraints.supported_actor_turn_degrees?.join("、") ?? "-180、-90、-45、45、90、180"} 度；can_turn=false 的角色不得转身。镜头沙盘会根据每镜 subject/look_target 生成必要转身动作，不能假设角色已经精确朝向对话对象。`,
-    "blocking 必须覆盖所有参与角色，每个角色只能出现一次，position 不能重复。",
+    "blocking 必须覆盖所有场景角色，每个角色只能出现一次，position 不能重复；背景 NPC 保持整场在场，不为其设计表演或关系变化。",
     "facing 可以是另一个实际角色槽位或 group_center；不要让角色面向自己。",
-    "每个 shot 必须设置 look_target。单人和带群镜头填写当前主体正在交流或注视的实际角色槽位；双人、群像建立镜头填写 group_center。",
+    "每个 shot 必须设置 look_target。单人和带群镜头只能填写当前主体正在交流或注视的对白角色槽位；只有一位对白角色时填写 group_center；双人、群像建立镜头填写 group_center。",
     "轴线按当前互动关系动态建立：单人镜头的关系轴连接 subject 与 look_target，不得把多人场面简化为一条永远不变的全场轴线。",
     "同一角色对的连续镜头必须保持在该关系轴同一侧。切换到新的角色对时，优先让前后两条轴共享一个角色作为转折点；不共享角色时，先用群像、轴上中性镜头或可见运动重建空间。",
     "每个 placement 必须给出 entry_dialogue_id。它可以早于角色的 first_dialogue_id，但不能晚于首次发言。",
@@ -100,7 +109,7 @@ export function buildDirectorPrompt(
     "若目录中没有足够匹配的现有资产，sound_effects 必须返回空数组；相似但包含明显多余事件的资产不应推荐。",
     "所有镜头以 16:9 为主构图，同时检查叠加 21:9 画框后的安全区域。",
     "关键角色的眼睛、表情、手势和叙事动作应尽量保留在 21:9 中央区域，避免被上下裁切。",
-    "按当前站位预判镜头投影，不能让两个重要角色在画面中重叠成一人；必要时调整语义站位、主体景别或左右构图。",
+    "按当前站位预判镜头投影，不能让对白角色与背景 NPC 在画面中重叠成一人；背景 NPC 可以作为前景、后景或环境层次，但不能抢占对白主体的视觉重心。",
     "普通对话的单人镜头优先呈现主体正面或四分之三正面；侧面角度只用于明确的对峙、疏离、隐藏或观察意图。",
     "camera_height=eye 是中性、平等和客观的默认角度；low 用于权力、威胁或从弱者视点仰望，high 用于脆弱、受困、规模或环境压倒人物。不要把高低机位机械等同于强弱，必须结合剧情语境。",
     "camera_roll_degrees 默认必须为 0。只有失衡、混乱、心理异常、梦境或明确不安时才使用 Dutch angle，通常取正负 15-25 度；更陡角度仅用于强烈失序，不能把轻微歪斜当装饰。",
@@ -129,17 +138,19 @@ export function buildDirectorPrompt(
     "上下镜 composition_transition：正反打优先 mirror_reverse；希望观众视线停留在相近屏幕区域时使用 match_eye_trace；收紧情绪时使用 progressive_shift；重新建立空间时使用 recenter；有意制造冲击时才使用 contrast。",
     "构图连续性优先匹配主体眼睛或主要视觉重心，而不是机械保持完全相同画面；连续多镜也要避免所有主体始终落在同一侧造成单调。",
     "每个 shot 必须设置 coverage_intent，明确该镜为何选择单人、双人、带群或群像，而不是只按当前说话者机械切换。",
-    "前三个镜头中必须至少有一个交代当前在场角色关系和站位的全景：恰有两人在场时使用 master_two_shot，至少三人在场时使用 master_group_shot。",
-    "任何角色进入后，或角色离场后的下一镜，只要仍有至少两人在场，都必须使用双人或群像全景重新建立位置与关系。",
+    "前三个镜头中必须至少有一个交代当前在场对白角色关系和站位的全景：恰有两位对白角色时使用 master_two_shot，至少三位时使用 master_group_shot；背景 NPC 不计入关系人数。",
+    "任何对白角色进入后，或对白角色离场后的下一镜，只要仍有至少两位对白角色在场，都必须使用双人或群像全景重新建立位置与关系。",
     "双人镜头用于关系、共同反应、身体语言、距离和共同利益；当一个镜头覆盖双方连续台词且没有重大个人情绪转折时，优先保留双方同框，避免机械正反打。",
     "三人以上的普通互动优先使用 speaker_group_medium 保留主体和关系背景；群像全景用于社会结构、阵营、集体反应和空间变化。",
     "单人镜头用于个人视角、重要台词、决定、隐瞒、脆弱、孤立或关键反应；close_up 和 reaction_closeup 不应成为普通对话的默认覆盖。",
     "连续三个紧景后，若下一个节点不是必须保持紧景的重大情绪点，应回到双人或群像全景重建空间。",
     "正面群像中避免同时选择同侧且前后相邻的位置组合（如 mid_right + back_right）；优先用左右错列或对角站位分离轮廓。",
     "群像镜头应形成前后层次和横向间距；单人镜头不必强行容纳所有角色。",
-    input.participants.length > 2
-      ? "按 entry_dialogue_id 和 exit_dialogue_id 判断每个镜头的实际在场人数：恰有两人在场时可使用双人模板 + both；至少三人在场时才使用 master_group_shot + group；需要保留关系背景时使用 speaker_group_medium + 单个角色槽位。"
-      : "双人同框使用 master_two_shot 或 profile_two_shot + both。",
+    dialogueParticipants.length > 2
+      ? "按 entry_dialogue_id 和 exit_dialogue_id 判断每个镜头实际在场的对白角色人数：恰有两位时可使用双人模板 + both；至少三位时才使用 master_group_shot + group；需要保留关系背景时使用 speaker_group_medium + 单个对白角色槽位。"
+      : dialogueParticipants.length === 2
+        ? "两位对白角色同框使用 master_two_shot 或 profile_two_shot + both；背景 NPC 不计入双人主体。"
+        : "当前只有一位对白角色，只能为该角色设计单人镜头；背景 NPC 不得用于凑成双人关系。",
     "如果信息不足，返回 status=need_context，并只使用允许的 required_context。",
     "ready 格式：",
     JSON.stringify(
@@ -169,10 +180,17 @@ export function buildDirectorPrompt(
           {
             dialogue_ids: ["台词节点ID"],
             template:
-              input.participants.length > 2
+              dialogueParticipants.length > 2
                 ? "master_group_shot"
-                : "master_two_shot",
-            subject: input.participants.length > 2 ? "group" : "both",
+                : dialogueParticipants.length === 2
+                  ? "master_two_shot"
+                  : "close_up",
+            subject:
+              dialogueParticipants.length > 2
+                ? "group"
+                : dialogueParticipants.length === 2
+                  ? "both"
+                  : dialogueParticipants[0]?.slot,
             look_target: "group_center",
             lens_mm: 35,
             end_lens_mm: 35,
@@ -182,7 +200,11 @@ export function buildDirectorPrompt(
             movement_intensity: "none",
             camera_roll_degrees: 0,
             composition_mode:
-              input.participants.length > 2 ? "triangular" : "symmetry",
+              dialogueParticipants.length > 2
+                ? "triangular"
+                : dialogueParticipants.length === 2
+                  ? "symmetry"
+                  : "rule_of_thirds",
             visual_anchor: "balanced",
             negative_space: "balanced",
             composition_transition: "recenter",

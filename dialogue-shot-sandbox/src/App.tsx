@@ -57,6 +57,7 @@ import {
 } from "./data/csvLoader";
 import { applyBlueprintFormation } from "./data/blueprintFormation";
 import { demoDatabase } from "./data/demo";
+import { splitDialogueParticipants } from "./data/dialogueRoles";
 import {
   bundledSoundEffectCatalog,
   type SoundEffectCatalogSnapshot,
@@ -1200,6 +1201,17 @@ export default function App() {
         ]),
       ),
     [sequence.participants],
+  );
+  const participantRoles = useMemo(
+    () => splitDialogueParticipants(sequence.participants, sequence.rows),
+    [sequence.participants, sequence.rows],
+  );
+  const dialogueParticipantSlotSet = useMemo(
+    () =>
+      new Set(
+        participantRoles.dialogue.map((participant) => participant.slot),
+      ),
+    [participantRoles],
   );
   const dialogueTextEditorItems = useMemo<DialogueTextEditorItem[]>(() => {
     if (!contentSearch) {
@@ -2682,6 +2694,9 @@ export default function App() {
                   <div>
                     <strong>{participant.name}</strong>
                     <small>
+                      {dialogueParticipantSlotSet.has(participant.slot)
+                        ? "对白角色 · "
+                        : "背景 NPC · "}
                       {participant.positionSource === "blueprint"
                         ? `BP ${participant.modelIndex ?? "?"} · 初始朝向 ${participantFacingYawDegrees(participant).toFixed(0)}° · `
                         : `NPC ${participant.id} · `}
@@ -3179,7 +3194,12 @@ export default function App() {
               )}
               <footer className="inspector-footer">
                 <Users size={15} />
-                <span>{sequence.participants.length} 位对话参与者</span>
+                <span>
+                  {participantRoles.dialogue.length} 位对白角色
+                  {participantRoles.background.length > 0
+                    ? ` · ${participantRoles.background.length} 位背景 NPC`
+                    : ""}
+                </span>
               </footer>
             </>
           )}

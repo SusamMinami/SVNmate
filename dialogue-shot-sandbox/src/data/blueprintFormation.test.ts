@@ -153,7 +153,7 @@ describe("applyBlueprintFormation", () => {
     ).toBe(true);
   });
 
-  it("uses every registered BP slot even when only one NPC speaks", () => {
+  it("keeps silent BP slots as background while directing only the speaker", () => {
     const database = parseDialogueDatabase(
       dialogues,
       starts,
@@ -226,6 +226,28 @@ describe("applyBlueprintFormation", () => {
     expect(applied.sequence.rows.every((row) => row.speakerSlot === "C")).toBe(
       true,
     );
+    const input = createDirectorInput(applied.sequence, "background-role-test");
+    expect(
+      input.participants.map((participant) => [
+        participant.slot,
+        participant.role,
+      ]),
+    ).toEqual([
+      ["A", "background"],
+      ["B", "background"],
+      ["C", "dialogue"],
+    ]);
+
+    const preview = createShotPreview(applied.sequence, {
+      preserveInputPositions: true,
+    });
+    expect(
+      preview.shots.every((shot) => shot.visualSubjectSlot === "C"),
+    ).toBe(true);
+    expect(preview.shots.every((shot) => shot.axis.id === "C-look")).toBe(
+      true,
+    );
+    expect(preview.sequence.participants).toHaveLength(3);
   });
 
 });

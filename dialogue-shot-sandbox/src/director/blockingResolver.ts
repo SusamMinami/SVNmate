@@ -3,9 +3,10 @@ import type {
   ParticipantSlot,
   Vec3,
 } from "../types";
-import type {
-  DirectorBlocking,
-  DirectorInput,
+import {
+  directorDialogueParticipants,
+  type DirectorBlocking,
+  type DirectorInput,
 } from "./contracts";
 
 const POSITION_COORDINATES = {
@@ -121,6 +122,13 @@ const POSITION_SETS = {
 export function createDefaultBlocking(
   input: DirectorInput,
 ): DirectorBlocking {
+  const dialogueParticipants = directorDialogueParticipants(input);
+  const dialogueParticipantSlots = new Set(
+    dialogueParticipants.map((participant) => participant.slot),
+  );
+  const leadDialogueSlot = dialogueParticipants[0]?.slot;
+  const backgroundCount =
+    input.participants.length - dialogueParticipants.length;
   const positions =
     POSITION_SETS[
       input.participants.length as keyof typeof POSITION_SETS
@@ -128,9 +136,11 @@ export function createDefaultBlocking(
   return {
     formation: input.participants.length === 3 ? "triangle" : "arc",
     intent:
-      input.participants.length === 2
-        ? "两位角色保持清晰对景关系与稳定视线轴。"
-        : "角色沿浅弧展开，保证群像层次、相互视线和主要行动区域清晰。",
+      dialogueParticipants.length === 1
+        ? `围绕单一对白主体建立清晰构图，${backgroundCount} 位背景 NPC 仅提供环境层次。`
+        : dialogueParticipants.length === 2
+          ? "两位角色保持清晰对景关系与稳定视线轴。"
+          : "对白角色沿浅弧展开，保证群像层次、相互视线和主要行动区域清晰；背景 NPC 只作为构图元素。",
     placements: input.participants.map((participant, index) => ({
       subject: participant.slot,
       position: positions[index],
@@ -140,9 +150,11 @@ export function createDefaultBlocking(
         defaultEntryDialogueId(input, participant.first_dialogue_id),
       exit_dialogue_id: participant.exit_dialogue_id ?? null,
       intent:
-        index === 0
-          ? "主导角色占据易读位置，便于建立场面。"
-          : "与其他角色保持可读间距和群体视线关系。",
+        !dialogueParticipantSlots.has(participant.slot)
+          ? "背景 NPC 保持环境站位，只参与遮挡与画面层次判断。"
+          : participant.slot === leadDialogueSlot
+            ? "主导角色占据易读位置，便于建立场面。"
+            : "与其他角色保持可读间距和群体视线关系。",
     })),
   };
 }

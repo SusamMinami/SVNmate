@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import {
+  directorDialogueParticipants,
   DirectorInputSchema,
   MiraReadyResponseSchema,
   type DirectorInput,
@@ -210,7 +211,7 @@ function sharedRecordFields(
     任务ID: input.request_id,
     镜头数: plan.shots.length,
     台词数: input.dialogue.length,
-    角色数: input.participants.length,
+    角色数: directorDialogueParticipants(input).length,
     平均镜头时长: Number(averageDuration.toFixed(1)),
     平均每镜台词数: Number(
       (input.dialogue.length / plan.shots.length).toFixed(1),
