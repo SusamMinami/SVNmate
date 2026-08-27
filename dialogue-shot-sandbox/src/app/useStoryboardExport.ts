@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from "react";
 import type { DirectorSoundEffectRecommendation } from "../director/contracts";
 import type {
+  DialogueParticipant,
   DialogueSequence,
   DialogueStoryboardExportPreview,
   ShotPlan,
@@ -20,6 +21,60 @@ interface UseStoryboardExportOptions {
   activeShot?: ShotPlan;
 }
 
+export interface StoryboardExportAvailability {
+  canExport: boolean;
+  buttonLabel: string;
+  unavailableReason: string;
+}
+
+export function getStoryboardExportAvailability(
+  shotCount: number,
+  participants: readonly Pick<
+    DialogueParticipant,
+    "name" | "positionSource" | "modelIndex"
+  >[],
+): StoryboardExportAvailability {
+  if (shotCount === 0) {
+    return {
+      canExport: false,
+      buttonLabel: "请先生成分镜",
+      unavailableReason: "当前没有可导出的镜头",
+    };
+  }
+  if (participants.length < 2) {
+    return {
+      canExport: false,
+      buttonLabel: "至少需要 2 位角色",
+      unavailableReason: `当前只有 ${participants.length} 位角色，UE 镜头导出至少需要 2 位角色`,
+    };
+  }
+  const unboundParticipants = participants.filter(
+    (participant) => participant.positionSource !== "blueprint",
+  );
+  if (unboundParticipants.length > 0) {
+    return {
+      canExport: false,
+      buttonLabel: "需绑定 BP 站位",
+      unavailableReason: `${unboundParticipants.map((participant) => participant.name).join("、")} 未绑定 UE Blueprint 站位`,
+    };
+  }
+  const missingModelIndexes = participants.filter(
+    (participant) => participant.modelIndex === null,
+  );
+  if (missingModelIndexes.length > 0) {
+    return {
+      canExport: false,
+      buttonLabel: "BP 角色槽不完整",
+      unavailableReason: `${missingModelIndexes.map((participant) => participant.name).join("、")} 缺少 UE Blueprint 模型槽编号`,
+    };
+  }
+  return {
+    canExport: true,
+    buttonLabel: "导出到 UE",
+    unavailableReason: "",
+  };
+}
+
 export function useStoryboardExport({
   sequence,
   shots,
@@ -35,17 +90,12 @@ export function useStoryboardExport({
   const [error, setError] = useState("");
   const [result, setResult] = useState("");
 
-  const canExport = useMemo(
+  const availability = useMemo(
     () =>
-      shots.length > 0 &&
-      sequence.participants.length >= 2 &&
-      sequence.participants.every(
-        (participant) =>
-          participant.positionSource === "blueprint" &&
-          participant.modelIndex !== null,
-      ),
+      getStoryboardExportAvailability(shots.length, sequence.participants),
     [sequence.participants, shots.length],
   );
+  const { canExport } = availability;
 
   const buildRequest = useCallback(
     (
@@ -262,6 +312,8 @@ export function useStoryboardExport({
     error,
     result,
     canExport,
+    exportButtonLabel: availability.buttonLabel,
+    exportUnavailableReason: availability.unavailableReason,
     previewCurrent,
     previewCurrentSoundEffects,
     previewAll,

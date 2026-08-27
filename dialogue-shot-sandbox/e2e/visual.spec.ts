@@ -335,7 +335,10 @@ test("renders every participant in a multi-character dialogue", async ({
   for (const name of ["玩家", "岑队长", "洛安", "弥莎", "赫克"]) {
     await expect(page.getByText(name).first()).toBeVisible();
   }
-  await expect(page.getByText(/支持 2-12 人动态进出场/)).toBeVisible();
+  await expect(page.getByText(/未绑定 UE Blueprint 站位/)).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "需绑定 BP 站位" }),
+  ).toBeDisabled();
   await expect(page.locator(".cast-row")).toHaveCount(5);
   await expect(page.locator(".axis-status")).toContainText("群像总轴");
   await expect(
@@ -2493,6 +2496,10 @@ test("offers the detected Blueprint formation before designing shots", async ({
   const formationGate = new Promise<void>((resolve) => {
     releaseFormation = resolve;
   });
+  let releaseDirector!: () => void;
+  const directorGate = new Promise<void>((resolve) => {
+    releaseDirector = resolve;
+  });
   await page.route("**/api/trae/status", async (route) => {
     await route.fulfill({
       status: 200,
@@ -2520,6 +2527,7 @@ test("offers the detected Blueprint formation before designing shots", async ({
       dialogue: Array<{ dialogue_id: string }>;
       participants: Array<{ slot: "A" | "B" }>;
     };
+    await directorGate;
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -2821,8 +2829,11 @@ test("offers the detected Blueprint formation before designing shots", async ({
   await switchDialog.getByRole("button", { name: "使用此占位" }).click();
   await expect(formationStatus).toContainText("规则导演占位");
   await expect(
-    page.getByRole("button", { name: "导出到 UE" }),
+    page.getByRole("button", { name: "需绑定 BP 站位" }),
   ).toBeDisabled();
+  await expect(
+    page.getByText(/未绑定 UE Blueprint 站位/),
+  ).toBeVisible();
   await page.getByRole("button", { name: "切换占位方案" }).click();
   await page
     .getByRole("dialog", { name: "切换占位方案" })
@@ -2846,6 +2857,23 @@ test("offers the detected Blueprint formation before designing shots", async ({
     .getByRole("button", { name: "关闭占位方案切换" })
     .click();
   await page.getByRole("button", { name: "TRAE 协作" }).click();
+  await expect(
+    page.getByText("AI 后台生成中，可导出当前方案"),
+  ).toBeVisible();
+  const backgroundExportButton = page.getByRole("button", {
+    name: "导出到 UE",
+  });
+  await expect(backgroundExportButton).toBeEnabled();
+  await backgroundExportButton.click();
+  const backgroundExportDialog = page.getByRole("dialog", {
+    name: "导出当前镜头 01",
+  });
+  await expect(backgroundExportDialog).toBeVisible();
+  await backgroundExportDialog
+    .getByRole("button", { name: "关闭导出预检" })
+    .click();
+  inspectedExportRequests.length = 0;
+  releaseDirector();
   const aiReviewDialog = page.getByRole("dialog", {
     name: "对比 AI 与当前占位",
   });
@@ -2877,7 +2905,7 @@ test("offers the detected Blueprint formation before designing shots", async ({
     .click();
   await expect(formationStatus).toContainText("内部 TRAE 占位");
   await expect(
-    page.getByRole("button", { name: "导出到 UE" }),
+    page.getByRole("button", { name: "需绑定 BP 站位" }),
   ).toBeDisabled();
   await page.getByRole("button", { name: "切换占位方案" }).click();
   await page

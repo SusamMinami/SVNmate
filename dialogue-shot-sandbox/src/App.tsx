@@ -526,6 +526,9 @@ interface ShotInspectorProps {
   canExport: boolean;
   exportBusy: boolean;
   exportError: string;
+  exportButtonLabel: string;
+  exportUnavailableReason: string;
+  backgroundGenerationActive: boolean;
   onMove: (offset: number) => void;
   onTabChange: (tab: InspectorTab) => void;
   onExport: () => void;
@@ -545,6 +548,9 @@ function ShotInspector({
   canExport,
   exportBusy,
   exportError,
+  exportButtonLabel,
+  exportUnavailableReason,
+  backgroundGenerationActive,
   onMove,
   onTabChange,
   onExport,
@@ -954,27 +960,41 @@ function ShotInspector({
 
       <footer className="inspector-footer inspector-footer--export">
         <div>
-          {exportError ? <AlertTriangle size={15} /> : <Users size={15} />}
+          {exportError || exportUnavailableReason ? (
+            <AlertTriangle size={15} />
+          ) : (
+            <Users size={15} />
+          )}
           <span>
-            {exportError ||
-              (canExport
-                ? `${shotCount} 镜已绑定 BP 站位`
-                : "支持 2-12 人动态进出场；完成 BP 站位绑定后可导出")}
+            {exportUnavailableReason ||
+              exportError ||
+              `${shotCount} 镜已绑定 BP 站位${
+                backgroundGenerationActive
+                  ? " · AI 后台生成中，可导出当前方案"
+                  : ""
+              }`}
           </span>
         </div>
         <button
           className="button button--primary"
           type="button"
-          title="预检并导出当前分镜到 UE Dialog Graph"
+          title={
+            exportUnavailableReason ||
+            (exportBusy
+              ? "正在预检当前分镜"
+              : "预检并导出当前分镜到 UE Dialog Graph")
+          }
           disabled={!canExport || exportBusy}
           onClick={onExport}
         >
           {exportBusy ? (
             <LoaderCircle className="spin" size={16} />
+          ) : exportUnavailableReason ? (
+            <AlertTriangle size={16} />
           ) : (
             <Upload size={16} />
           )}
-          {exportBusy ? "正在检查..." : "导出到 UE"}
+          {exportBusy ? "正在检查 UE" : exportButtonLabel}
         </button>
       </footer>
     </>
@@ -1126,6 +1146,8 @@ export default function App() {
     error: storyboardExportError,
     result: storyboardExportResult,
     canExport: canExportStoryboard,
+    exportButtonLabel: storyboardExportButtonLabel,
+    exportUnavailableReason: storyboardExportUnavailableReason,
     previewCurrent: previewStoryboardExport,
     previewCurrentSoundEffects: previewCurrentSoundEffectExport,
     previewAll: previewAllStoryboardExport,
@@ -3117,10 +3139,11 @@ export default function App() {
             shotCount={shots.length}
             tab={inspectorTab}
             canExport={canExportStoryboard}
-            exportBusy={
-              storyboardExportBusy || directorLoading || formationChecking
-            }
+            exportBusy={storyboardExportBusy || formationChecking}
             exportError={storyboardExportError}
+            exportButtonLabel={storyboardExportButtonLabel}
+            exportUnavailableReason={storyboardExportUnavailableReason}
+            backgroundGenerationActive={directorLoading}
             onMove={moveShot}
             onTabChange={setInspectorTab}
             onExport={() => void previewStoryboardExport()}
@@ -3299,6 +3322,8 @@ export default function App() {
         {pendingDirectorResult?.result.analysis &&
           pendingDirectorResult.reviewFormation !== false &&
           !sharedComparison &&
+          !storyboardExportBusy &&
+          !storyboardExportPreview &&
           !formationChoiceMode && (
             <LazyBlueprintFormationModal
               current={{ sequence, shots }}
