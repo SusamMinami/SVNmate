@@ -158,6 +158,12 @@ export function loadMissionTargetPreview(
   return postUe("/api/ue/mission-targets/load", { plan, mapMode }, false);
 }
 
+export function refreshMissionTargetPlan(
+  taskId: string,
+): Promise<MissionTargetPreviewPlan> {
+  return postUe("/api/ue/mission-targets/resolve", { taskId }, false);
+}
+
 export function inspectMissionTargetMap(
   mapAssetPath: string,
 ): Promise<MissionTargetMapStatus> {

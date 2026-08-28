@@ -644,10 +644,6 @@ function SceneCastRoster({
 }) {
   return (
     <section className="stage-cast" aria-label="场景角色">
-      <div className="stage-cast__heading">
-        <span>场景角色</span>
-        <small>{participants.length}</small>
-      </div>
       <div className="stage-cast__list" role="list">
         {participants.map((participant) => {
           const presence =
@@ -677,17 +673,18 @@ function SceneCastRoster({
               data-presence={presence}
               key={participant.instanceId}
               role="listitem"
-              title={`${roleLabel} · ${source} · 登场 ${participant.entryDialogueId} · 离场 ${participant.exitDialogueId ?? "本场结束"}`}
+              aria-label={
+                `${participant.name} · ${roleLabel} · ${presenceLabel} · ` +
+                `${source} · 登场 ${participant.entryDialogueId} · ` +
+                `离场 ${participant.exitDialogueId ?? "本场结束"}`
+              }
+              tabIndex={0}
+              title={`${roleLabel} · ${presenceLabel} · ${source} · 登场 ${participant.entryDialogueId} · 离场 ${participant.exitDialogueId ?? "本场结束"}`}
             >
               <span style={{ backgroundColor: participant.color }}>
                 {participant.slot}
               </span>
-              <div>
-                <strong>{participant.name}</strong>
-                <small>
-                  {role} · {presenceLabel}
-                </small>
-              </div>
+              <strong>{participant.name}</strong>
             </div>
           );
         })}

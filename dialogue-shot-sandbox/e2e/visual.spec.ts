@@ -352,6 +352,7 @@ test("renders nonblank shot and blocking canvases without horizontal overflow", 
   expect(cameraFrame!.width / cameraFrame!.height).toBeCloseTo(16 / 9, 1);
   await expect(page.getByRole("region", { name: "场景角色" })).toBeVisible();
   await expect(page.locator(".stage-cast__item")).toHaveCount(2);
+  await expect(page.locator(".stage-cast__heading")).toHaveCount(0);
   await expect(page.locator(".left-panel .cast-section")).toHaveCount(0);
   await expect(page.locator(".ultrawide-frame").first()).toBeVisible();
   await expect(page.getByText("21:9")).toBeVisible();
@@ -420,6 +421,17 @@ test("renders every participant in a multi-character dialogue", async ({
     page.getByRole("button", { name: "需绑定 BP 站位" }),
   ).toBeDisabled();
   await expect(page.locator(".stage-cast__item")).toHaveCount(5);
+  const firstCastItem = page.locator(".stage-cast__item").first();
+  await expect(firstCastItem).toHaveAttribute("tabindex", "0");
+  await expect(firstCastItem).toHaveAttribute(
+    "aria-label",
+    /玩家 · 背景 NPC · 在场/,
+  );
+  const castList = page.locator(".stage-cast__list");
+  await castList.evaluate((element) => {
+    element.scrollLeft = element.scrollWidth;
+  });
+  await expect(page.locator(".stage-cast__item").last()).toBeInViewport();
   await expect(page.locator(".axis-status")).toContainText("关系轴 B-C");
   await expect(
     page.locator(".actor-label--on-body:not(.actor-label--below)"),
@@ -3479,10 +3491,10 @@ test("offers the detected Blueprint formation before designing shots", async ({
   await expect(page.locator(".stage-cast__item")).toHaveCount(3);
   await expect(
     page.locator(".stage-cast__item", { hasText: "玩家" }),
-  ).toHaveAttribute("title", /对白角色 · BP 0 · 初始朝向 -90°/);
+  ).toHaveAttribute("title", /对白角色 · 在场 · BP 0 · 初始朝向 -90°/);
   await expect(
     page.locator(".stage-cast__item", { hasText: "西维尔" }),
-  ).toHaveAttribute("title", /背景 NPC · BP 2 · 初始朝向 -180°/);
+  ).toHaveAttribute("title", /背景 NPC · 在场 · BP 2 · 初始朝向 -180°/);
   await page.getByRole("tab", { name: "导演" }).click();
   await expect(page.getByText("演员动作", { exact: true })).toBeVisible();
   await expect(page.getByText("右转 45°", { exact: true })).toHaveCount(2);
@@ -3784,6 +3796,26 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
   let loadedTargetIds: string[] = [];
   let loadedMapMode = "";
   let mapStatusMatches = false;
+  let refreshedTaskRequests = 0;
+  await page.route(
+    "**/api/ue/mission-targets/resolve",
+    async (route) => {
+      refreshedTaskRequests += 1;
+      const request = route.request().postDataJSON();
+      expect(request.taskId).toBe("900002");
+      await route.fulfill({
+        status: 400,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: false,
+          error: {
+            message:
+              "任务节点 900002 的目标物 MapID 不一致（500001:1204、500003:1205），请检查配置后重试",
+          },
+        }),
+      });
+    },
+  );
   await page.route("**/api/ue/formation/read", async (route) => {
     formationRequests += 1;
     await route.fulfill({
@@ -4232,6 +4264,16 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
   await expect(dialog.getByText("上城区 · 1204")).toBeVisible();
   await expect(dialog.locator(".mission-target-table tbody tr")).toHaveCount(2);
   await expect(dialog.getByText("0°, 90°, 0°")).toBeVisible();
+  const firstTargetModelCell = dialog
+    .locator(".mission-target-table tbody tr")
+    .first()
+    .locator("td")
+    .nth(4);
+  await expect(firstTargetModelCell).toHaveText("200135 · BP_Guard");
+  await expect(firstTargetModelCell).toHaveAttribute(
+    "title",
+    "/Game/Seria/NPC/Guard/BP_Guard.BP_Guard_C",
+  );
   const selectionResult = dialog.getByRole("region", {
     name: "UE 当前选择识别结果",
   });
@@ -4353,6 +4395,9 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
   await dialog.getByLabel("任务节点 ID").fill("900002");
   await dialog.getByRole("button", { name: "解析任务目标物" }).click();
   await expect(dialog.getByText(/目标物 MapID 不一致/)).toBeVisible();
+  expect(refreshedTaskRequests).toBe(0);
+  await dialog.getByRole("button", { name: "解析任务目标物" }).click();
+  await expect.poll(() => refreshedTaskRequests).toBe(1);
   await expect(
     dialog.getByRole("button", { name: "加载到 UE" }),
   ).toBeDisabled();
@@ -4461,6 +4506,10 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
 test("applies one MapID to selected actors and writes reusable NPCs as targets only", async ({
   page,
 }, testInfo) => {
+  await page.context().grantPermissions([
+    "clipboard-read",
+    "clipboard-write",
+  ]);
   let writeRequest: {
     scope: string;
     items: Array<{
@@ -4611,6 +4660,36 @@ test("applies one MapID to selected actors and writes reusable NPCs as targets o
   await expect(
     registration.getByText(/批量守卫 B → 500011/),
   ).toBeVisible();
+  const actorRows = registration.locator(
+    ".npc-registration-write-table tbody tr",
+  );
+  await expect(
+    actorRows.nth(0).getByText("目标物 ID 500010", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    actorRows.nth(1).getByText("目标物 ID 500011", { exact: true }),
+  ).toBeVisible();
+  await expect(registration.getByText("已写入 500010")).toBeVisible();
+  await expect(registration.getByText("已写入 500011")).toBeVisible();
+  const copyTargetIds = registration.getByRole("button", {
+    name: "复制目标物 ID",
+  });
+  await expect(copyTargetIds).toBeVisible();
+  await copyTargetIds.click();
+  await expect(
+    registration.getByText(
+      "已复制 2 个目标物 ID，可直接粘贴到任务节点",
+    ),
+  ).toBeVisible();
+  await expect(
+    registration.getByRole("button", { name: "复制目标物 ID" }),
+  ).toHaveText("已复制");
+  expect(
+    await page.evaluate(() => navigator.clipboard.readText()),
+  ).toBe("500010,500011");
+  await registration.screenshot({
+    path: testInfo.outputPath("npc-registration-copy-target-ids.png"),
+  });
   expect(writeRequest).toMatchObject({
     scope: "target_only",
     items: [
@@ -4789,6 +4868,71 @@ test("offers bidirectional position sync for a registered Blueprint", async ({
   let backgroundDialogueRequest: Record<string, unknown> | null = null;
   const backgroundInspectRequests: Record<string, unknown>[] = [];
   let backgroundInspectCount = 0;
+  let refreshedTaskRequests = 0;
+  await page.route(
+    "**/api/ue/mission-targets/resolve",
+    async (route) => {
+      refreshedTaskRequests += 1;
+      const request = route.request().postDataJSON();
+      expect(request.taskId).toBe("900001");
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          data: {
+            taskId: "900001",
+            taskName: "同步任务",
+            taskSource: "任务表",
+            mapId: "1204",
+            mapName: "测试地图",
+            mapAssetPath: "/Game/Test/Maps/TestMap",
+            targets: [
+              {
+                targetId: "500001",
+                type: 1,
+                description: "守卫",
+                npcId: 700001,
+                npcName: "守卫",
+                modelId: 200777,
+                modelClassPath:
+                  "/Game/Seria/NPC/Guard/BP_Guard.BP_Guard_C",
+                itemId: 0,
+                blueprintModelId: null,
+                mapId: "1204",
+                previewKind: "asset",
+                transform: {
+                  location: { x: 110, y: 220, z: 330 },
+                  rotation: { pitch: 0, yaw: 90, roll: 0 },
+                  scale: { x: 1, y: 1, z: 1 },
+                },
+              },
+              {
+                targetId: "500002",
+                type: 1,
+                description: "新增角色",
+                npcId: 700002,
+                npcName: "新增角色",
+                modelId: 200778,
+                modelClassPath:
+                  "/Game/Seria/NPC/Added/BP_Added.BP_Added_C",
+                itemId: 0,
+                blueprintModelId: null,
+                mapId: "1204",
+                previewKind: "asset",
+                transform: {
+                  location: { x: 150, y: 260, z: 350 },
+                  rotation: { pitch: 0, yaw: 45, roll: 0 },
+                  scale: { x: 1, y: 1, z: 1 },
+                },
+              },
+            ],
+            warnings: [],
+          },
+        }),
+      });
+    },
+  );
   await page.route("**/api/ue/formation/read", async (route) => {
     await route.fulfill({
       status: 200,
@@ -5246,6 +5390,9 @@ test("offers bidirectional position sync for a registered Blueprint", async ({
   await expect(
     dialog.getByRole("button", { name: "目标物 → BP" }),
   ).toBeEnabled();
+  expect(refreshedTaskRequests).toBe(0);
+  await dialog.getByRole("button", { name: "解析任务目标物" }).click();
+  await expect.poll(() => refreshedTaskRequests).toBe(1);
   const reverseButton = dialog.getByRole("button", {
     name: "BP → 目标物",
   });

@@ -411,6 +411,30 @@ function Format-Rotator($value) {
   return "(Pitch=$(Format-Number $value.pitch),Yaw=$(Format-Number $value.yaw),Roll=$(Format-Number $value.roll))"
 }
 
+function Normalize-TransformText(
+  [string]$value,
+  [string[]]$fields
+) {
+  $numbers = @{}
+  foreach ($match in [regex]::Matches(
+    $value,
+    "([A-Za-z]+)\s*=\s*(-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)"
+  )) {
+    $numbers[$match.Groups[1].Value.ToLowerInvariant()] =
+      [double]::Parse(
+        $match.Groups[2].Value,
+        [Globalization.CultureInfo]::InvariantCulture
+      )
+  }
+  if ($fields | Where-Object { -not $numbers.ContainsKey($_.ToLowerInvariant()) }) {
+    return $value.Trim()
+  }
+  $parts = $fields | ForEach-Object {
+    "$_=$(Format-Number $numbers[$_.ToLowerInvariant()])"
+  }
+  return "($([string]::Join(',', $parts)))"
+}
+
 function Get-ConfiguredPath([string]$classPath) {
   $normalized = $classPath.Replace("\", "/")
   if ($normalized -match "^(.+)\.[^\.]+_C$") {
@@ -431,7 +455,14 @@ function Get-TargetTransformKey(
   [string]$position,
   [string]$rotation
 ) {
-  return [string]::Join([char]31, @($mapId, $position, $rotation))
+  $normalizedPosition =
+    Normalize-TransformText $position @("X", "Y", "Z")
+  $normalizedRotation =
+    Normalize-TransformText $rotation @("Pitch", "Yaw", "Roll")
+  return [string]::Join(
+    [char]31,
+    @($mapId.Trim(), $normalizedPosition, $normalizedRotation)
+  )
 }
 
 $createdModels = [Collections.ArrayList]::new()
@@ -643,11 +674,16 @@ try {
       $rotation = Format-Rotator $item.transform.rotation
       $targetKey =
         Get-TargetTransformKey ([string]$item.mapId) $position $rotation
-      $existingTargets = @($targetIdsByTransform[$targetKey])
+      $existingTargets =
+        if ($targetIdsByTransform.ContainsKey($targetKey)) {
+          @($targetIdsByTransform[$targetKey])
+        } else {
+          @()
+        }
       if ($existingTargets.Count -gt 1) {
         throw "Actor $($item.label) 在 MapID $($item.mapId) 中匹配到多个目标物"
       }
-      if ($existingTargets.Count -eq 1 -and $existingTargets[0] -ne "") {
+      if ($existingTargets.Count -eq 1) {
         $existingTargetByActor[$item.actorRef] = [string]$existingTargets[0]
       }
     }
@@ -1272,20 +1308,42 @@ export function validateNpcRegistrationWriteResult(
   result: NpcRegistrationWriteResult,
 ): void {
   if (scope === "npc_only") {
+    const missing = items.filter(
+      (item) =>
+        item.existingNpcId === null &&
+        !result.createdNpcs.some(
+          (confirmation) =>
+            confirmation.actorRef === item.actorRef &&
+            /^\d+$/.test(String(confirmation.id)) &&
+            Number(confirmation.id) > 0,
+        ),
+    );
+    if (missing.length > 0) {
+      throw new Error(
+        `Excel 未返回有效 NPC ID：${missing
+          .map((item) => item.label)
+          .join("、")}。请先检查 NPC 表，勿立即重复写入`,
+      );
+    }
     return;
   }
-  const confirmedActorRefs = new Set([
-    ...result.createdTargets.map((item) => item.actorRef),
-    ...result.reusedTargets.map((item) => item.actorRef),
-  ]);
+  const confirmations = [
+    ...result.createdTargets,
+    ...result.reusedTargets,
+  ];
   const missing = items.filter(
     (item) =>
       item.existingTargetId === null &&
-      !confirmedActorRefs.has(item.actorRef),
+      !confirmations.some(
+        (confirmation) =>
+          confirmation.actorRef === item.actorRef &&
+          /^\d+$/.test(String(confirmation.id)) &&
+          Number(confirmation.id) > 0,
+      ),
   );
   if (missing.length > 0) {
     throw new Error(
-      `Excel 未确认目标物写入结果：${missing
+      `Excel 未返回有效目标物 ID：${missing
         .map((item) => item.label)
         .join("、")}。请先检查目标物表，勿立即重复写入`,
     );

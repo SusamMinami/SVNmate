@@ -2,7 +2,10 @@ import {
   updateMissionTargetTransforms as updateMissionTargetTransformsInExcel,
   writeNpcRegistrationDraft as writeNpcRegistrationDraftToExcel,
 } from "../excelRegistration";
-import { getConfigTablePaths } from "../configRepository";
+import {
+  getConfigTablePaths,
+  readConfiguredMissionTargetPlan,
+} from "../configRepository";
 import {
   inspectSoundEffectPreview,
   prepareSoundEffectPreview,
@@ -48,6 +51,7 @@ export const ueServices = {
   prepareSoundEffectPreview,
   readBlueprintFormation,
   readDialogueCharacterActions,
+  readConfiguredMissionTargetPlan,
   readSelectedLevelActors,
   registerBlueprintDialogueModels,
   scanSelectedNpcRegistration,

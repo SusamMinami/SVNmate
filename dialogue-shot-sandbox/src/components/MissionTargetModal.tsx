@@ -20,9 +20,12 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useRef, useState } from "react";
 import { NpcRegistrationModal } from "./NpcRegistrationModal";
-import { resolveMissionTargets } from "../data/missionTargetResolver";
+import {
+  resolveMissionTargets,
+  sortMissionTargetsByDialogueFrequency,
+} from "../data/missionTargetResolver";
 import {
   classifyMissionTargetSelection,
   type MissionTargetSelectionClassification,
@@ -49,6 +52,7 @@ import {
   inspectBackgroundPropImport,
   loadMissionTargetPreview,
   readSelectedLevelActors,
+  refreshMissionTargetPlan,
   registerBlueprintDialogueModels,
   updateMissionTargetBlueprintPositions,
   updateMissionTargetsFromBlueprint,
@@ -87,6 +91,11 @@ function typeLabel(type: number | null): string {
     return "蓝图";
   }
   return type === null ? "未配置" : `类型 ${type}`;
+}
+
+function modelAssetName(classPath: string): string {
+  const leaf = classPath.replaceAll("\\", "/").split("/").at(-1) ?? "";
+  return leaf.split(".")[0] || leaf;
 }
 
 function loadSummary(
@@ -194,6 +203,7 @@ export function MissionTargetModal({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
+  const lastTaskSearchIdRef = useRef("");
   const selectedCount =
     plan?.targets.filter((target) => selectedTargetIds.has(target.targetId))
       .length ?? 0;
@@ -230,6 +240,14 @@ export function MissionTargetModal({
         target.previewKind === "asset" &&
         Boolean(target.modelClassPath),
     ) ?? [];
+  const blueprintCreationTargets =
+    blueprintInspection?.blueprintState === "empty"
+      ? sortMissionTargetsByDialogueFrequency(
+          database,
+          blueprintInspection.dialogueId,
+          selectedAssetTargets,
+        )
+      : selectedAssetTargets;
   const selectedAppendTargets =
     blueprintInspection?.blueprintState === "populated"
       ? selectedAssetTargets.filter(
@@ -331,25 +349,37 @@ export function MissionTargetModal({
 
   async function inspectTask(event: FormEvent) {
     event.preventDefault();
+    const normalizedTaskId = taskId.trim();
+    const shouldRefresh =
+      lastTaskSearchIdRef.current === normalizedTaskId;
+    lastTaskSearchIdRef.current = normalizedTaskId;
     setError("");
     setStatus("");
     setUeTargetSelectionReview(null);
+    setBusy(shouldRefresh || Boolean(blueprintName.trim()));
     try {
-      const nextPlan = resolveMissionTargets(database, taskId);
+      const nextPlan = shouldRefresh
+        ? await refreshMissionTargetPlan(normalizedTaskId)
+        : resolveMissionTargets(database, normalizedTaskId);
       setPlan(nextPlan);
       setSelectedTargetIds(
         new Set(nextPlan.targets.map((target) => target.targetId)),
       );
       setBlueprintInspection(null);
       if (blueprintName.trim()) {
-        setBusy(true);
         const inspection = await inspectMissionTargetBlueprint(
           blueprintName.trim(),
           nextPlan,
-          nextPlan.taskId,
+          shouldRefresh ? nextPlan.taskId : undefined,
           targetOverrideItems,
         );
         applyBlueprintInspection(inspection);
+      } else {
+        setStatus(
+          shouldRefresh
+            ? "已刷新配置并解析任务目标物"
+            : "已从缓存解析任务目标物；再次搜索可刷新配置",
+        );
       }
     } catch (resolutionError) {
       setPlan(null);
@@ -800,7 +830,7 @@ export function MissionTargetModal({
     ) {
       return;
     }
-    const selectedAssetTargetIds = selectedAssetTargets.map(
+    const selectedAssetTargetIds = blueprintCreationTargets.map(
       (target) => target.targetId,
     );
     setBusy(true);
@@ -1340,7 +1370,11 @@ export function MissionTargetModal({
               aria-label="解析任务目标物"
               disabled={busy || !taskId}
             >
-              <Search size={18} />
+              {busy ? (
+                <LoaderCircle className="spin" size={18} />
+              ) : (
+                <Search size={18} />
+              )}
             </button>
           </div>
           <label htmlFor="mission-blueprint-name">BP 文件名</label>
@@ -1736,7 +1770,7 @@ export function MissionTargetModal({
                                ) +
                                1
                              : undefined
-                           : selectedAssetTargets.findIndex(
+                           : blueprintCreationTargets.findIndex(
                                  (item) =>
                                    item.targetId === target.targetId,
                                ) + 1;
@@ -1811,7 +1845,7 @@ export function MissionTargetModal({
                              </td>
                              <td title={target.modelClassPath}>
                                {target.modelId
-                                 ? `${target.modelId} · ${target.modelClassPath.split("/").at(-1)}`
+                                 ? `${target.modelId} · ${modelAssetName(target.modelClassPath)}`
                                  : "N/A"}
                              </td>
                              <td>

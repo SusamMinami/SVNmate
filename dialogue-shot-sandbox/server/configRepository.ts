@@ -3,7 +3,10 @@ import { dirname, join } from "node:path";
 import type { MissionTargetPreviewPlan } from "../src/types";
 import { parseMissionTargetDatabase } from "../src/data/csv";
 import { resolveMissionTargets } from "../src/data/missionTargetResolver";
-import { normalizeConfigCsvDirectory } from "./configDirectory";
+import {
+  isConfigCsvDirectoryReady,
+  normalizeConfigCsvDirectory,
+} from "./configDirectory";
 
 let configCsvDirectory = "";
 
@@ -20,6 +23,48 @@ export function getConfigCsvDirectory(): string {
 
 export function getOptionalConfigCsvDirectory(): string | null {
   return configCsvDirectory || null;
+}
+
+export async function restoreDevelopmentConfigCsvDirectory(
+  options: {
+    environmentDirectory?: string;
+    appDataDirectory?: string;
+  } = {},
+): Promise<string | null> {
+  const candidates: string[] = [];
+  if (options.environmentDirectory?.trim()) {
+    candidates.push(options.environmentDirectory);
+  }
+  if (options.appDataDirectory?.trim()) {
+    try {
+      const state = JSON.parse(
+        await readFile(
+          join(
+            options.appDataDirectory,
+            "Shot Sandbox",
+            "desktop-state.json",
+          ),
+          "utf8",
+        ),
+      ) as { dataCsvDirectory?: unknown };
+      if (
+        typeof state.dataCsvDirectory === "string" &&
+        state.dataCsvDirectory.trim()
+      ) {
+        candidates.push(state.dataCsvDirectory);
+      }
+    } catch {
+      // A development server can still run without persisted desktop state.
+    }
+  }
+  for (const candidate of candidates) {
+    const normalized = normalizeConfigCsvDirectory(candidate);
+    if (await isConfigCsvDirectoryReady(normalized)) {
+      configureConfigCsvDirectory(normalized);
+      return normalized;
+    }
+  }
+  return null;
 }
 
 export function getConfigCsvPaths() {

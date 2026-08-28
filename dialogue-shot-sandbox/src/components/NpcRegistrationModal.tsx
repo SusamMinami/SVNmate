@@ -2,6 +2,8 @@ import {
   AlertTriangle,
   ArrowLeft,
   CheckCircle2,
+  Check,
+  Copy,
   FilePenLine,
   FileSpreadsheet,
   ListChecks,
@@ -105,23 +107,44 @@ function npcReuseLabel(npc: NpcProfile): string {
     .join(" · ");
 }
 
-function confirmedTargetActorRefs(
+function confirmedTargetAssignments(
   items: readonly NpcRegistrationWriteItem[],
   result: NpcRegistrationWriteResult,
-): string[] {
-  const confirmed = new Set([
-    ...result.createdTargets.map((target) => target.actorRef),
-    ...result.reusedTargets.map((target) => target.actorRef),
-  ]);
-  const missing = items.filter((item) => !confirmed.has(item.actorRef));
-  if (missing.length > 0) {
+): Array<{ actorRef: string; id: string }> {
+  const confirmations = [
+    ...result.createdTargets.map((target) => ({
+      actorRef: target.actorRef,
+      id: String(target.id),
+    })),
+    ...result.reusedTargets.map((target) => ({
+      actorRef: target.actorRef,
+      id: String(target.id),
+    })),
+  ];
+  const assignments = items.flatMap((item) => {
+    const matches = confirmations.filter(
+      (confirmation) => confirmation.actorRef === item.actorRef,
+    );
+    return matches.length === 1 &&
+      /^\d+$/.test(matches[0].id) &&
+      Number(matches[0].id) > 0
+      ? [matches[0]]
+      : [];
+  });
+  if (assignments.length !== items.length) {
+    const assignedActorRefs = new Set(
+      assignments.map((assignment) => assignment.actorRef),
+    );
+    const missing = items.filter(
+      (item) => !assignedActorRefs.has(item.actorRef),
+    );
     throw new Error(
-      `Excel 未确认以下 Actor 的目标物写入结果：${missing
+      `Excel 未返回以下 Actor 的有效目标物 ID：${missing
         .map((item) => item.label)
         .join("、")}。请先检查目标物表，勿立即重复写入`,
     );
   }
-  return items.map((item) => item.actorRef);
+  return assignments;
 }
 
 export function NpcRegistrationModal({
@@ -147,11 +170,10 @@ export function NpcRegistrationModal({
     Record<string, NewNpcDraft>
   >({});
   const [mapChoices, setMapChoices] = useState<Record<string, string>>({});
-  const [writtenTargetActorRefs, setWrittenTargetActorRefs] = useState<
-    Set<string>
-  >(
-    new Set(),
-  );
+  const [writtenTargetIdsByActor, setWrittenTargetIdsByActor] = useState<
+    Record<string, string>
+  >({});
+  const [targetIdsCopied, setTargetIdsCopied] = useState(false);
   const [registeredNpcIds, setRegisteredNpcIds] = useState<
     Record<string, number>
   >({});
@@ -194,8 +216,13 @@ export function NpcRegistrationModal({
   const newTargetCount = selectedCandidates.filter(
     (candidate) =>
       candidate.targetMatches.length === 0 &&
-      !writtenTargetActorRefs.has(candidate.actor.actorRef),
+      writtenTargetIdsByActor[candidate.actor.actorRef] === undefined,
   ).length;
+  const writtenTargetIdList = candidates.flatMap((candidate) => {
+    const targetId = writtenTargetIdsByActor[candidate.actor.actorRef];
+    return targetId === undefined ? [] : [targetId];
+  });
+  const writtenTargetIdText = writtenTargetIdList.join(",");
   const parsedEditItems =
     editRequest?.targets.map((target) => {
       const draft = editDrafts[target.targetId];
@@ -313,7 +340,8 @@ export function NpcRegistrationModal({
       setNpcChoices(nextChoices);
       setNewNpcDrafts(nextDrafts);
       setMapChoices(nextMapChoices);
-      setWrittenTargetActorRefs(new Set());
+      setWrittenTargetIdsByActor({});
+      setTargetIdsCopied(false);
       setRegisteredNpcIds({});
       setStatus(
         result.selection.actors.length > 0
@@ -667,7 +695,7 @@ export function NpcRegistrationModal({
     const pendingCandidates = selectedCandidates.filter(
       (candidate) =>
         candidate.targetMatches.length === 0 &&
-        !writtenTargetActorRefs.has(candidate.actor.actorRef),
+        writtenTargetIdsByActor[candidate.actor.actorRef] === undefined,
     );
     if (pendingCandidates.length === 0) {
       setStatus("没有需要新增的目标物");
@@ -724,18 +752,24 @@ export function NpcRegistrationModal({
         targetItems,
         "target_only",
       );
-      const confirmedActorRefs = confirmedTargetActorRefs(
+      const assignments = confirmedTargetAssignments(
         targetItems,
         result,
       );
-      setWrittenTargetActorRefs((current) => new Set([
+      setWrittenTargetIdsByActor((current) => ({
         ...current,
-        ...confirmedActorRefs,
-      ]));
+        ...Object.fromEntries(
+          assignments.map((assignment) => [
+            assignment.actorRef,
+            assignment.id,
+          ]),
+        ),
+      }));
+      setTargetIdsCopied(false);
       const actorLabels = new Map(
         targetItems.map((item) => [item.actorRef, item.label]),
       );
-      const assignments = [
+      const statusAssignments = [
         ...result.createdTargets.map(
           (target) =>
             `${actorLabels.get(target.actorRef) ?? target.actorRef} → ${target.id}`,
@@ -746,7 +780,7 @@ export function NpcRegistrationModal({
         ),
       ];
       setStatus(
-        `已写入未保存目标物草稿：${assignments.join("，")}`,
+        `已写入未保存目标物草稿：${statusAssignments.join("，")}`,
       );
     } catch (writeError) {
       setError(
@@ -763,7 +797,7 @@ export function NpcRegistrationModal({
     const pendingCandidates = selectedCandidates.filter(
       (candidate) =>
         candidate.targetMatches.length === 0 &&
-        !writtenTargetActorRefs.has(candidate.actor.actorRef),
+        writtenTargetIdsByActor[candidate.actor.actorRef] === undefined,
     );
     if (pendingCandidates.length === 0) {
       return;
@@ -816,15 +850,21 @@ export function NpcRegistrationModal({
     setStatus("");
     try {
       const result = await writeNpcRegistrationDraft(requestItems, scope);
-      const confirmedActorRefs = confirmedTargetActorRefs(
+      const assignments = confirmedTargetAssignments(
         requestItems,
         result,
       );
       rememberCreatedNpcs(result.createdNpcs);
-      setWrittenTargetActorRefs((current) => new Set([
+      setWrittenTargetIdsByActor((current) => ({
         ...current,
-        ...confirmedActorRefs,
-      ]));
+        ...Object.fromEntries(
+          assignments.map((assignment) => [
+            assignment.actorRef,
+            assignment.id,
+          ]),
+        ),
+      }));
+      setTargetIdsCopied(false);
       const actorLabels = new Map(
         requestItems.map((item) => [item.actorRef, item.label]),
       );
@@ -851,6 +891,23 @@ export function NpcRegistrationModal({
       );
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function copyWrittenTargetIds() {
+    if (!writtenTargetIdText) {
+      return;
+    }
+    setError("");
+    try {
+      await navigator.clipboard.writeText(writtenTargetIdText);
+      setTargetIdsCopied(true);
+      setStatus(
+        `已复制 ${writtenTargetIdList.length} 个目标物 ID，可直接粘贴到任务节点`,
+      );
+    } catch {
+      setTargetIdsCopied(false);
+      setError("复制目标物 ID 失败，请检查系统剪贴板权限");
     }
   }
 
@@ -932,6 +989,28 @@ export function NpcRegistrationModal({
               <div className="workspace-subview-title">
                 <small>任务目标物 / POSITION EDIT</small>
                 <strong>修改目标物位置</strong>
+              </div>
+            )}
+            {!editMode && writtenTargetIdList.length > 0 && (
+              <div className="workspace-registration-copy">
+                <button
+                  className="button"
+                  type="button"
+                  title={`复制 ${writtenTargetIdText}`}
+                  aria-label="复制目标物 ID"
+                  onClick={() => void copyWrittenTargetIds()}
+                  disabled={busy}
+                >
+                  {targetIdsCopied ? (
+                    <Check size={15} />
+                  ) : (
+                    <Copy size={15} />
+                  )}
+                  {targetIdsCopied ? "已复制" : "复制目标物 ID"}
+                </button>
+                <code title={writtenTargetIdText}>
+                  {writtenTargetIdText}
+                </code>
               </div>
             )}
             <div className="workspace-floating-actions">
@@ -1169,8 +1248,8 @@ export function NpcRegistrationModal({
                   };
                   const registeredNpcId =
                     registeredNpcIds[actor.actorRef];
-                  const isWritten =
-                    writtenTargetActorRefs.has(actor.actorRef);
+                  const writtenTargetId =
+                    writtenTargetIdsByActor[actor.actorRef];
                   const selected = selectedActorRefs.has(actor.actorRef);
                   return (
                     <tr
@@ -1188,7 +1267,17 @@ export function NpcRegistrationModal({
                       </td>
                       <td title={actor.classPath}>
                         <strong>{actor.label}</strong>
-                        <small>{actorClassName(actor.classPath)}</small>
+                        <small
+                          className={
+                            writtenTargetId !== undefined
+                              ? "npc-registration-actor-target-id"
+                              : undefined
+                          }
+                        >
+                          {writtenTargetId !== undefined
+                            ? `目标物 ID ${writtenTargetId}`
+                            : actorClassName(actor.classPath)}
+                        </small>
                       </td>
                       <td
                         className={
@@ -1390,9 +1479,9 @@ export function NpcRegistrationModal({
                           <span className="registration-state is-existing">
                             已有 {targetMatches.map((target) => target.id).join(" / ")}
                           </span>
-                        ) : isWritten ? (
+                        ) : writtenTargetId !== undefined ? (
                           <span className="registration-state is-existing">
-                            已写入待保存
+                            已写入 {writtenTargetId}
                           </span>
                         ) : (
                           <span className="registration-state is-new">

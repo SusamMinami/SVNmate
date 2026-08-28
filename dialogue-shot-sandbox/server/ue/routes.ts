@@ -147,6 +147,15 @@ export async function routeUeRequest(
       });
       return true;
     }
+    if (url.pathname === "/api/ue/mission-targets/resolve") {
+      sendJson(response, 200, {
+        ok: true,
+        data: await services.readConfiguredMissionTargetPlan(
+          String(body.taskId ?? ""),
+        ),
+      });
+      return true;
+    }
     if (url.pathname === "/api/ue/mission-targets/map-status") {
       sendJson(response, 200, {
         ok: true,

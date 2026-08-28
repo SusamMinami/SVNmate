@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { parseDialogueDatabase } from "./csv";
-import { resolveMissionTargets } from "./missionTargetResolver";
+import {
+  resolveMissionTargets,
+  sortMissionTargetsByDialogueFrequency,
+} from "./missionTargetResolver";
 
 const dialogues = `##&Dialog.id,Dialog.NPCID,Dialog.Content,Dialog.NextID,Dialog.End
 ##对话ID,人物,内容,下一ID,结束
@@ -115,5 +118,62 @@ describe("resolveMissionTargets", () => {
     expect(() => resolveMissionTargets(broken, "900001")).toThrow(
       "引用了不存在的目标物 500002500003",
     );
+  });
+
+  it("orders BP targets by visible dialogue frequency and keeps ties stable", () => {
+    const source = database();
+    const row = source.dialogueRows[0];
+    source.starts = [{ ...source.starts[0], id: "735000" }];
+    source.dialogueRows = [
+      {
+        ...row,
+        id: "735000",
+        npcId: 1002,
+        nextId: "735001",
+        isEnd: false,
+      },
+      {
+        ...row,
+        id: "735001",
+        npcId: 1003,
+        nextId: "735002",
+        isEnd: false,
+      },
+      {
+        ...row,
+        id: "735002",
+        npcId: 1002,
+        nextId: "735003",
+        isEnd: false,
+      },
+      {
+        ...row,
+        id: "735003",
+        npcId: 1001,
+        nextId: null,
+        isEnd: true,
+        state: 4,
+      },
+    ];
+    const plan = resolveMissionTargets(source, "900001");
+    const guard = plan.targets[0];
+    const item = plan.targets[1];
+    const targets = [
+      item,
+      { ...guard, targetId: "500011", npcId: 1003 },
+      { ...guard, targetId: "500010", npcId: 1002 },
+      { ...guard, targetId: "500012", npcId: 1001 },
+    ];
+
+    expect(
+      sortMissionTargetsByDialogueFrequency(
+        source,
+        "735000",
+        targets,
+      ).map((target) => target.targetId),
+    ).toEqual(["500010", "500011", "500002", "500012"]);
+    expect(
+      sortMissionTargetsByDialogueFrequency(source, null, targets),
+    ).toEqual(targets);
   });
 });

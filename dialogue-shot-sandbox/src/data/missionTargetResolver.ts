@@ -2,9 +2,65 @@ import type {
   DialogueDatabase,
   MissionPositionRow,
   MissionTargetPreviewPlan,
+  MissionTargetPreviewTarget,
   UnrealTransform,
 } from "../types";
 import { getDialogueDatabaseIndex } from "./databaseIndex";
+
+export function sortMissionTargetsByDialogueFrequency(
+  database: DialogueDatabase,
+  dialogueId: string | null | undefined,
+  targets: readonly MissionTargetPreviewTarget[],
+): MissionTargetPreviewTarget[] {
+  const normalizedDialogueId = dialogueId?.trim() ?? "";
+  if (!/^\d{4,}$/.test(normalizedDialogueId)) {
+    return [...targets];
+  }
+
+  const index = getDialogueDatabaseIndex(database);
+  if (!index.dialogueRowsById.has(normalizedDialogueId)) {
+    return [...targets];
+  }
+
+  const speechCountByNpcId = new Map<number, number>();
+  const visited = new Set<string>();
+  let currentId: string | null = normalizedDialogueId;
+  while (currentId && !visited.has(currentId)) {
+    visited.add(currentId);
+    const row = index.dialogueRowsById.get(currentId);
+    if (!row) {
+      break;
+    }
+    if (
+      row.state !== 4 &&
+      row.content &&
+      row.npcId !== null &&
+      row.npcId > 0
+    ) {
+      speechCountByNpcId.set(
+        row.npcId,
+        (speechCountByNpcId.get(row.npcId) ?? 0) + 1,
+      );
+    }
+    currentId = row.isEnd ? null : row.nextId;
+  }
+
+  return targets
+    .map((target, index) => ({
+      target,
+      index,
+      speechCount:
+        target.npcId !== null && target.npcId > 0
+          ? (speechCountByNpcId.get(target.npcId) ?? 0)
+          : 0,
+    }))
+    .sort(
+      (left, right) =>
+        right.speechCount - left.speechCount ||
+        left.index - right.index,
+    )
+    .map(({ target }) => target);
+}
 
 function parseTargetIds(taskId: string, rawValue: string): string[] {
   const rawIds = rawValue.split(",");

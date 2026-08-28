@@ -13,6 +13,7 @@ import {
   getOptionalConfigCsvDirectory,
   getConfigTablePaths,
   readConfiguredMissionTargetPlan,
+  restoreDevelopmentConfigCsvDirectory,
 } from "./configRepository";
 import { scanSelectedNpcRegistration } from "./ueBridge";
 import type { UnrealInvoker } from "./ue/transport";
@@ -89,6 +90,36 @@ describe("config data directory", () => {
       writeFile(join(csvDirectory, "对话表_开始节点.csv"), "", "utf8"),
     ]);
     expect(await isConfigCsvDirectoryReady(csvDirectory)).toBe(true);
+  });
+
+  it("restores the development server directory from desktop state", async () => {
+    temporaryRoot = await mkdtemp(join(tmpdir(), "shot-sandbox-state-"));
+    const docDirectory = join(temporaryRoot, "project", "doc");
+    const csvDirectory = join(docDirectory, "csvdir");
+    const appDataDirectory = join(temporaryRoot, "app-data");
+    await Promise.all([
+      mkdir(csvDirectory, { recursive: true }),
+      mkdir(join(appDataDirectory, "Shot Sandbox"), {
+        recursive: true,
+      }),
+    ]);
+    await Promise.all([
+      ...["对话表.csv", "对话表_开始节点.csv", "NPC表.csv"].map(
+        (filename) => writeFile(join(csvDirectory, filename), "", "utf8"),
+      ),
+      writeFile(
+        join(appDataDirectory, "Shot Sandbox", "desktop-state.json"),
+        JSON.stringify({ dataCsvDirectory: docDirectory }),
+        "utf8",
+      ),
+    ]);
+
+    expect(
+      await restoreDevelopmentConfigCsvDirectory({
+        appDataDirectory,
+      }),
+    ).toBe(csvDirectory);
+    expect(getConfigCsvDirectory()).toBe(csvDirectory);
   });
 
   it("scans NPC registration data from the selected doc directory", async () => {

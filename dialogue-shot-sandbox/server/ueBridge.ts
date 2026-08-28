@@ -678,11 +678,11 @@ function rounded(value: number): number {
 
 export function buildMissionTargetBlueprintComponents(
   targets: MissionTargetPreviewTarget[],
+  anchor = targets[0]?.transform.location,
 ): MissionTargetBlueprintComponentPlan[] {
-  if (targets.length === 0) {
+  if (targets.length === 0 || !anchor) {
     throw new Error("至少选择一个具有模型资源的目标物");
   }
-  const anchor = targets[0].transform.location;
   const playerTransform: UnrealTransform = {
     location: { x: 0, y: 0, z: 100 },
     rotation: { pitch: 0, yaw: 0, roll: 0 },
@@ -1041,6 +1041,30 @@ function modelToken(value: string): string {
     .replace(/_C$/i, "")
     .replace(/^BP_/i, "")
     .toLowerCase();
+}
+
+function missionTargetsInRequestedOrder(
+  plan: MissionTargetPreviewPlan,
+  selectedTargetIds?: string[],
+): MissionTargetPreviewTarget[] {
+  const requestedIds =
+    selectedTargetIds ??
+    plan.targets.map((target) => target.targetId);
+  if (new Set(requestedIds).size !== requestedIds.length) {
+    throw new Error("所选目标物中存在重复 ID");
+  }
+  const targetById = new Map(
+    plan.targets.map((target) => [target.targetId, target]),
+  );
+  const unknownTargetIds = requestedIds.filter(
+    (targetId) => !targetById.has(targetId),
+  );
+  if (unknownTargetIds.length > 0) {
+    throw new Error(
+      `所选目标物不属于当前任务：${unknownTargetIds.join("、")}`,
+    );
+  }
+  return requestedIds.map((targetId) => targetById.get(targetId)!);
 }
 
 export function compareDialogueModelOrder(
@@ -3288,6 +3312,15 @@ export function buildDialogueModelRegistrationSlots(
       const exactName = candidateModelNames.find(
         (name) => modelToken(name) === modelToken(source.modelClassPath),
       );
+      const npcAliasToken = modelToken(source.modelClassPath).replace(
+        /_npc$/i,
+        "",
+      );
+      const npcAliasNames = candidateModelNames.filter(
+        (name) => modelToken(name) === npcAliasToken,
+      );
+      const npcAliasName =
+        npcAliasNames.length === 1 ? npcAliasNames[0] : null;
       const existingRegistryEntry = registry.find(
         (entry) =>
           entry.name.toLowerCase() === existingModelName.toLowerCase(),
@@ -3302,6 +3335,7 @@ export function buildDialogueModelRegistrationSlots(
         registrationMatchesModel
           ? existingModelName
           : exactName ??
+            npcAliasName ??
             (candidateModelNames.length === 1
               ? candidateModelNames[0]
               : null);
@@ -4870,21 +4904,9 @@ export async function inspectMissionTargetBlueprintCompatibility(
       throw new Error(`BP 文件不存在：${request.blueprintName}`);
     }
     const dialogueId = dialogueIdFromBlueprintPath(resolved.assetPath);
-    const selectedTargetIds = new Set(
-      request.selectedTargetIds ??
-        request.plan.targets.map((target) => target.targetId),
-    );
-    const unknownTargetIds = Array.from(selectedTargetIds).filter(
-      (targetId) =>
-        !request.plan.targets.some((target) => target.targetId === targetId),
-    );
-    if (unknownTargetIds.length > 0) {
-      throw new Error(
-        `所选目标物不属于当前任务：${unknownTargetIds.join("、")}`,
-      );
-    }
-    const selectedTargets = request.plan.targets.filter((target) =>
-      selectedTargetIds.has(target.targetId),
+    const selectedTargets = missionTargetsInRequestedOrder(
+      request.plan,
+      request.selectedTargetIds,
     );
     if (
       selectedTargets.some(
@@ -5160,19 +5182,9 @@ export async function populateMissionTargetBlueprint(
     selectedTargetIds?: string[];
     registerDialogue?: boolean;
   };
-  const selectedTargetIds = new Set(
-    request.selectedTargetIds ??
-      request.plan.targets.map((target) => target.targetId),
-  );
-  const unknownTargetIds = Array.from(selectedTargetIds).filter(
-    (targetId) =>
-      !request.plan.targets.some((target) => target.targetId === targetId),
-  );
-  if (unknownTargetIds.length > 0) {
-    throw new Error(`所选目标物不属于当前任务：${unknownTargetIds.join("、")}`);
-  }
-  const selectedTargets = request.plan.targets.filter((target) =>
-    selectedTargetIds.has(target.targetId),
+  const selectedTargets = missionTargetsInRequestedOrder(
+    request.plan,
+    request.selectedTargetIds,
   );
   if (
     selectedTargets.some(
@@ -5182,11 +5194,23 @@ export async function populateMissionTargetBlueprint(
   ) {
     throw new Error("所选目标物中存在没有模型资源的对象，无法创建 BP 组件");
   }
+  const selectedTargetIdSet = new Set(
+    selectedTargets.map((target) => target.targetId),
+  );
+  const anchorTarget = request.plan.targets.find((target) =>
+    selectedTargetIdSet.has(target.targetId),
+  );
+  if (!anchorTarget) {
+    throw new Error("至少选择一个具有模型资源的目标物");
+  }
   const selectedEntries = selectedTargets.map((target, index) => ({
     target,
     modelIndex: index + 1,
   }));
-  const components = buildMissionTargetBlueprintComponents(selectedTargets);
+  const components = buildMissionTargetBlueprintComponents(
+    selectedTargets,
+    anchorTarget.transform.location,
+  );
   const connection = connectionFactory();
   await connectUnreal(connection);
   let mutationStarted = false;
@@ -5334,7 +5358,7 @@ export async function populateMissionTargetBlueprint(
           {
             mapAssetPath: request.plan.mapAssetPath,
             rootTransform: missionTargetBlueprintRootForCreation(
-              selectedEntries[0].target,
+              anchorTarget,
             ),
           },
         )

@@ -1104,7 +1104,7 @@ describe("mission target Blueprint creation", () => {
     expect(connection.closed).toBe(true);
   });
 
-  it("writes only selected targets and assigns contiguous BP slots", async () => {
+  it("writes selected targets in request order without changing the task anchor", async () => {
     const plan = previewPlan();
     const unselectedTarget = {
       ...plan.targets[0],
@@ -1117,6 +1117,10 @@ describe("mission target Blueprint creation", () => {
       targetId: "500005",
       modelClassPath:
         "/Game/Seria/NPC/Selected/BP_Selected.BP_Selected_C",
+      transform: {
+        ...plan.targets[0].transform,
+        location: { x: 40, y: 55, z: 10 },
+      },
     };
     plan.targets = [plan.targets[0], unselectedTarget, selectedTarget];
     const connection = new FakeBlueprintPopulateConnection();
@@ -1125,7 +1129,7 @@ describe("mission target Blueprint creation", () => {
       {
         blueprintName: "BP_Test",
         plan,
-        selectedTargetIds: ["500001", "500005"],
+        selectedTargetIds: ["500005", "500001"],
       },
       () => connection,
     );
@@ -1135,17 +1139,58 @@ describe("mission target Blueprint creation", () => {
       componentNames: ["0", "1", "2", "c1"],
     });
     expect(connection.components.get("1")?.childActorClass).toBe(
-      plan.targets[0].modelClassPath,
-    );
-    expect(connection.components.get("2")?.childActorClass).toBe(
       selectedTarget.modelClassPath,
     );
+    expect(connection.components.get("2")?.childActorClass).toBe(
+      plan.targets[0].modelClassPath,
+    );
+    expect(
+      connection.calls.find(
+        (call) =>
+          call.action === "bp.set_component_property" &&
+          call.args.ComponentName === "1" &&
+          call.args.PropertyName === "RelativeLocation",
+      )?.args.Value,
+    ).toBe("(X=30,Y=35,Z=80)");
+    expect(
+      connection.calls.find(
+        (call) =>
+          call.action === "bp.set_component_property" &&
+          call.args.ComponentName === "2" &&
+          call.args.PropertyName === "RelativeLocation",
+      )?.args.Value,
+    ).toBe("(X=0,Y=0,Z=100)");
+    expect(
+      connection.calls.find(
+        (call) =>
+          call.action === "bp.set_component_property" &&
+          call.args.ComponentName === "1" &&
+          call.args.PropertyName === "RelativeLocation",
+      ),
+    ).toBeDefined();
     expect(
       Array.from(connection.components.values()).some(
         (component) =>
           component.childActorClass === unselectedTarget.modelClassPath,
       ),
     ).toBe(false);
+  });
+
+  it("rejects duplicate selected target IDs", async () => {
+    const plan = previewPlan();
+    const connection = new FakeBlueprintPopulateConnection();
+
+    await expect(
+      populateMissionTargetBlueprint(
+        {
+          blueprintName: "BP_Test",
+          plan,
+          selectedTargetIds: ["500001", "500001"],
+        },
+        () => connection,
+      ),
+    ).rejects.toThrow("所选目标物中存在重复 ID");
+    expect(connection.connected).toBe(false);
   });
 
   it("omits unselected targets from both the BP and DialogModels", async () => {
@@ -1277,6 +1322,37 @@ describe("dialogue model registration", () => {
     ).toEqual({
       dialogueModels: ["player", "One_Sit", "None", "None"],
       unresolvedIndexes: [3],
+    });
+  });
+
+  it("maps an _Npc Blueprint to its unique base DialogNPCTable row name", () => {
+    const classPath =
+      "/Game/Seria/NPC/N07_Elly/BP_N07_Elly_Npc.BP_N07_Elly_Npc_C";
+    const [slot] = buildDialogueModelRegistrationSlots(
+      [
+        {
+          modelIndex: 1,
+          targetId: "500001",
+          modelClassPath: classPath,
+        },
+      ],
+      ["player", "None"],
+      [
+        {
+          name: "N07_Elly",
+          characterClassPath: classPath,
+        },
+        {
+          name: "TransportShip",
+          characterClassPath: classPath,
+        },
+      ],
+    );
+
+    expect(slot).toMatchObject({
+      status: "available",
+      suggestedModelName: "N07_Elly",
+      candidateModelNames: ["N07_Elly", "TransportShip"],
     });
   });
 

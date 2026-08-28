@@ -4986,6 +4986,12 @@ textarea:focus-visible {
   text-overflow: ellipsis;
 }
 
+.npc-registration-table small.npc-registration-actor-target-id {
+  color: #16825c;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-weight: 750;
+}
+
 .npc-registration-table code {
   font-family: "Cascadia Code", Consolas, monospace;
   font-size: 9px;
@@ -6092,51 +6098,43 @@ textarea:focus-visible {
   position: absolute;
   z-index: 5;
   top: 14px;
-  right: 260px;
+  right: auto;
   left: 136px;
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: start;
+  width: max-content;
+  max-width: calc(100% - 410px);
   min-width: 0;
-  gap: 8px;
   color: #f2f2f0;
   pointer-events: none;
 }
 
-.stage-cast__heading {
-  display: grid;
-  min-width: 38px;
-  padding-top: 4px;
-}
-
-.stage-cast__heading span {
-  color: #aeb1aa;
-  font-size: 8px;
-  font-weight: 750;
-}
-
-.stage-cast__heading small {
-  margin-top: 3px;
-  color: var(--signal);
-  font: 700 9px/1 "Cascadia Code", Consolas, monospace;
-}
-
 .stage-cast__list {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(72px, 1fr));
+  display: flex;
+  width: max-content;
+  max-width: 100%;
   min-width: 0;
-  overflow: hidden;
-  background: rgba(25, 25, 25, 0.78);
-  border-left: 1px solid rgba(255, 250, 0, 0.72);
+  gap: 5px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  pointer-events: auto;
+  scrollbar-width: thin;
 }
 
 .stage-cast__item {
-  display: grid;
-  grid-template-columns: 20px minmax(0, 1fr);
+  display: inline-grid;
+  flex: 0 0 auto;
+  grid-template-columns: 20px minmax(0, auto);
   align-items: center;
   min-width: 0;
-  min-height: 34px;
-  border-right: 1px solid rgba(255, 255, 255, 0.12);
+  max-width: 108px;
+  min-height: 28px;
+  overflow: hidden;
+  background: rgba(25, 25, 25, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+}
+
+.stage-cast__item:focus-visible {
+  outline: 2px solid var(--ark-cyan);
+  outline-offset: 1px;
 }
 
 .stage-cast__item[data-presence="pending"],
@@ -6152,28 +6150,14 @@ textarea:focus-visible {
   place-items: center;
 }
 
-.stage-cast__item > div {
-  display: grid;
+.stage-cast__item > strong {
   min-width: 0;
-  gap: 2px;
-  padding: 4px 5px;
-}
-
-.stage-cast__item strong,
-.stage-cast__item small {
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.stage-cast__item strong {
+  padding: 0 7px;
   color: #f2f2f0;
   font-size: 9px;
-}
-
-.stage-cast__item small {
-  color: #aeb1aa;
-  font-size: 7px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .stage-sequence {
@@ -7051,6 +7035,30 @@ textarea:focus-visible {
   font-size: 15px;
 }
 
+.workspace-registration-copy {
+  position: absolute;
+  z-index: 7;
+  top: 12px;
+  left: 18px;
+  display: flex;
+  align-items: center;
+  max-width: calc(100% - 310px);
+  gap: 10px;
+}
+
+.workspace-registration-copy .button {
+  flex: 0 0 auto;
+  box-shadow: 0 5px 16px rgba(25, 25, 25, 0.12);
+}
+
+.workspace-registration-copy code {
+  overflow: hidden;
+  color: #686a65;
+  font: 9px/32px "Cascadia Code", Consolas, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .tool-workspace__embedded
   > :is(.mission-target-modal, .npc-registration-modal)
   > header {
@@ -7752,18 +7760,18 @@ textarea:focus-visible {
   }
 
   .stage-cast {
-    right: 230px;
+    max-width: calc(100% - 150px);
+  }
+
+  .top-view {
+    top: 62px;
   }
 }
 
 @media (max-width: 680px) {
   .stage-cast {
-    right: 14px;
     left: 130px;
-  }
-
-  .top-view {
-    top: 62px;
+    max-width: calc(100% - 144px);
   }
 }
 

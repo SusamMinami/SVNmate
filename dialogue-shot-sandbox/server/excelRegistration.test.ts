@@ -156,6 +156,21 @@ describe("Excel PowerShell errors", () => {
     );
   });
 
+  it("does not treat a missing transform lookup as a reusable target", () => {
+    expect(EXCEL_REGISTRATION_SCRIPT).toContain(
+      "if ($targetIdsByTransform.ContainsKey($targetKey))",
+    );
+    expect(EXCEL_REGISTRATION_SCRIPT).toContain(
+      'Normalize-TransformText $position @("X", "Y", "Z")',
+    );
+    expect(EXCEL_REGISTRATION_SCRIPT).toContain(
+      'Normalize-TransformText $rotation @("Pitch", "Yaw", "Roll")',
+    );
+    expect(EXCEL_REGISTRATION_SCRIPT).not.toContain(
+      '$existingTargets.Count -eq 1 -and $existingTargets[0] -ne ""',
+    );
+  });
+
   it("accepts target-only writes with existing model and NPC IDs", () => {
     const request = parseNpcRegistrationWriteRequest({
       scope: "target_only",
@@ -223,7 +238,17 @@ describe("Excel PowerShell errors", () => {
         reusedTargets: [],
         openedWorkbooks: [TEST_REGISTRATION_PATHS.missionTarget],
       }),
-    ).toThrow("Excel 未确认目标物写入结果：守卫新增");
+    ).toThrow("Excel 未返回有效目标物 ID：守卫新增");
+
+    expect(() =>
+      validateNpcRegistrationWriteResult([item], "target_only", {
+        createdModels: [],
+        createdNpcs: [],
+        createdTargets: [],
+        reusedTargets: [{ actorRef: item.actorRef, id: "" }],
+        openedWorkbooks: [TEST_REGISTRATION_PATHS.missionTarget],
+      }),
+    ).toThrow("Excel 未返回有效目标物 ID：守卫新增");
 
     expect(() =>
       validateNpcRegistrationWriteResult([item], "target_only", {
@@ -232,6 +257,50 @@ describe("Excel PowerShell errors", () => {
         createdTargets: [{ actorRef: item.actorRef, id: 500001 }],
         reusedTargets: [],
         openedWorkbooks: [TEST_REGISTRATION_PATHS.missionTarget],
+      }),
+    ).not.toThrow();
+  });
+
+  it("rejects an NPC-only response without a valid NPC ID", () => {
+    const item = parseNpcRegistrationWriteRequest({
+      scope: "npc_only",
+      paths: TEST_REGISTRATION_PATHS,
+      items: [
+        {
+          actorRef: "BP_Guard_C_1",
+          label: "守卫新增",
+          classPath: "/Game/Test/BP_Guard.BP_Guard_C",
+          transform: {
+            location: { x: 1, y: 2, z: 3 },
+            rotation: { pitch: 0, yaw: 90, roll: 0 },
+            scale: { x: 1, y: 1, z: 1 },
+          },
+          mapId: "",
+          existingModelId: 200135,
+          existingNpcId: null,
+          existingTargetId: null,
+          canTurn: true,
+          newNpc: { name: "新增守卫", title: "", canTurn: true },
+        },
+      ],
+    }).items[0];
+
+    expect(() =>
+      validateNpcRegistrationWriteResult([item], "npc_only", {
+        createdModels: [],
+        createdNpcs: [],
+        createdTargets: [],
+        reusedTargets: [],
+        openedWorkbooks: [TEST_REGISTRATION_PATHS.npc],
+      }),
+    ).toThrow("Excel 未返回有效 NPC ID：守卫新增");
+    expect(() =>
+      validateNpcRegistrationWriteResult([item], "npc_only", {
+        createdModels: [],
+        createdNpcs: [{ actorRef: item.actorRef, id: 101999 }],
+        createdTargets: [],
+        reusedTargets: [],
+        openedWorkbooks: [TEST_REGISTRATION_PATHS.npc],
       }),
     ).not.toThrow();
   });
