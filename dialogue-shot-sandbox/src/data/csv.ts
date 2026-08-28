@@ -96,16 +96,23 @@ function forEachCsvDataRow<TContext>(
     skipEmptyLines: "greedy",
     chunkSize: CSV_PARSE_CHUNK_SIZE,
     chunk(result: Papa.ParseResult<string[]>, parser: Papa.Parser) {
-      if (result.errors.length > 0) {
-        const first = result.errors[0];
+      const fatalError = result.errors.find(
+        (error) => error.code !== "InvalidQuotes",
+      );
+      if (fatalError) {
         failure = new Error(
-          `${filename} 第 ${(first.row ?? parsedRowCount) + 1} 行解析失败：${first.message}`,
+          `${filename} 第 ${parsedRowCount + (fatalError.row ?? 0) + 1} 行解析失败：${fatalError.message}`,
         );
         parser.abort();
         return;
       }
+      const malformedQuoteRows = new Map(
+        result.errors
+          .filter((error) => error.code === "InvalidQuotes")
+          .map((error) => [error.row ?? 0, error]),
+      );
 
-      for (const data of result.data) {
+      for (const [chunkRowIndex, data] of result.data.entries()) {
         parsedRowCount += 1;
         const row = data.map((cell: string) => String(cell ?? ""));
         try {
@@ -121,6 +128,15 @@ function forEachCsvDataRow<TContext>(
             };
             context = createContext(headers);
             continue;
+          }
+          const malformedQuote = malformedQuoteRows.get(chunkRowIndex);
+          if (
+            malformedQuote &&
+            row.length !== memberHeader!.length
+          ) {
+            throw new Error(
+              `${filename} 第 ${parsedRowCount} 行解析失败：${malformedQuote.message}`,
+            );
           }
           visit(row, parsedRowCount, headers!, context!);
         } catch (error) {
