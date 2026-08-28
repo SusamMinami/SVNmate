@@ -4129,6 +4129,116 @@ textarea:focus-visible {
   white-space: nowrap;
 }
 
+.mission-target-ue-selection {
+  padding: 0 18px 12px;
+  background: #f4fafc;
+  border-bottom: 1px solid #c9dfe8;
+}
+
+.mission-target-ue-selection.is-warning {
+  background: #fff9ed;
+  border-bottom-color: #ead7ad;
+}
+
+.mission-target-ue-selection > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 34px;
+  gap: 12px;
+}
+
+.mission-target-ue-selection > header > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #315d70;
+  font-size: 10px;
+}
+
+.mission-target-ue-selection.is-warning > header > span {
+  color: #78501e;
+}
+
+.mission-target-ue-selection > header small {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mission-target-ue-selection__list {
+  display: grid;
+  gap: 1px;
+  overflow: hidden;
+  background: #dbe7eb;
+  border: 1px solid #dbe7eb;
+  border-radius: 5px;
+}
+
+.mission-target-ue-selection__list > p {
+  margin: 0;
+  padding: 10px 12px;
+  color: var(--text-muted);
+  background: #ffffff;
+  font-size: 10px;
+}
+
+.mission-target-ue-selection__item {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) 18px minmax(180px, 1fr) auto;
+  align-items: center;
+  min-height: 46px;
+  gap: 10px;
+  padding: 7px 10px;
+  background: #ffffff;
+}
+
+.mission-target-ue-selection__item > span {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.mission-target-ue-selection__item > svg {
+  color: #6b8997;
+}
+
+.mission-target-ue-selection__item strong,
+.mission-target-ue-selection__item small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mission-target-ue-selection__item strong {
+  color: #26313a;
+  font-size: 10px;
+}
+
+.mission-target-ue-selection__item small {
+  color: var(--text-muted);
+  font-size: 9px;
+}
+
+.mission-target-ue-selection__item.is-unmatched {
+  background: #fffdf8;
+}
+
+.mission-target-ue-selection__item.is-unmatched > svg,
+.mission-target-ue-selection__item.is-unmatched > span:last-child strong {
+  color: #9a5e24;
+}
+
+.mission-target-ue-selection__method {
+  padding: 3px 6px;
+  color: #32657a !important;
+  background: #e5f2f7;
+  border-radius: 3px;
+  font-weight: 700;
+}
+
 .mission-target-warnings {
   padding: 8px 18px;
   color: #78501e;
@@ -4314,6 +4424,34 @@ textarea:focus-visible {
   display: block;
   margin-top: 4px;
   color: #49715e;
+}
+
+.mission-target-row--ue-selected td {
+  background: #edf8fc;
+  border-bottom-color: #c7e0e9;
+}
+
+.mission-target-row--ue-selected td:first-child {
+  box-shadow: inset 3px 0 0 #2e819f;
+}
+
+.mission-target-id {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.mission-target-id > span {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 3px;
+  padding: 2px 5px;
+  color: #2d6b82;
+  background: #dceff6;
+  border-radius: 3px;
+  font-size: 8px;
+  font-weight: 750;
 }
 
 .mission-target-table td strong {
@@ -4789,7 +4927,7 @@ textarea:focus-visible {
 }
 
 .npc-registration-write-table {
-  min-width: 1284px;
+  min-width: 1334px;
 }
 
 .npc-registration-write-table th:nth-child(1) {
@@ -4809,7 +4947,7 @@ textarea:focus-visible {
 }
 
 .npc-registration-write-table th:nth-child(5) {
-  width: 110px;
+  width: 160px;
 }
 
 .npc-registration-write-table th:nth-child(6),
@@ -4863,6 +5001,42 @@ textarea:focus-visible {
   border: 1px solid var(--border-strong);
   border-radius: 4px;
   font-size: 9px;
+}
+
+.npc-registration-map-choice {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 5px;
+}
+
+.npc-registration-map-choice > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 30px;
+  gap: 3px;
+  padding: 0 6px;
+  color: #315d70;
+  background: #edf6f9;
+  border: 1px solid #bfd6df;
+  border-radius: 3px;
+  font-size: 8px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.npc-registration-map-choice > button:hover:not(:disabled) {
+  color: #ffffff;
+  background: #315d70;
+  border-color: #315d70;
+}
+
+.npc-registration-map-choice > button:disabled {
+  color: #9aa2a7;
+  background: #f3f4f3;
+  border-color: #d9dcdd;
+  cursor: default;
 }
 
 .npc-target-edit-table {
@@ -5363,6 +5537,7 @@ textarea:focus-visible {
   .top-view {
     width: 205px;
   }
+
 }
 
 @media (max-width: 960px) {
@@ -5587,6 +5762,14 @@ textarea:focus-visible {
 
   .mission-target-summary dl {
     grid-template-columns: 1fr 1fr;
+  }
+
+  .mission-target-ue-selection__item {
+    grid-template-columns: minmax(140px, 1fr) 18px minmax(140px, 1fr);
+  }
+
+  .mission-target-ue-selection__method {
+    display: none;
   }
 
   .mission-target-table {
@@ -5896,12 +6079,101 @@ textarea:focus-visible {
   background: #171816;
 }
 
-.stage-instrumentation {
+.stage-instrumentation,
+.stage-frame-instrumentation {
   position: absolute;
   z-index: 3;
   inset: 0;
   overflow: hidden;
   pointer-events: none;
+}
+
+.stage-cast {
+  position: absolute;
+  z-index: 5;
+  top: 14px;
+  right: 260px;
+  left: 136px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  min-width: 0;
+  gap: 8px;
+  color: #f2f2f0;
+  pointer-events: none;
+}
+
+.stage-cast__heading {
+  display: grid;
+  min-width: 38px;
+  padding-top: 4px;
+}
+
+.stage-cast__heading span {
+  color: #aeb1aa;
+  font-size: 8px;
+  font-weight: 750;
+}
+
+.stage-cast__heading small {
+  margin-top: 3px;
+  color: var(--signal);
+  font: 700 9px/1 "Cascadia Code", Consolas, monospace;
+}
+
+.stage-cast__list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(72px, 1fr));
+  min-width: 0;
+  overflow: hidden;
+  background: rgba(25, 25, 25, 0.78);
+  border-left: 1px solid rgba(255, 250, 0, 0.72);
+}
+
+.stage-cast__item {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-items: center;
+  min-width: 0;
+  min-height: 34px;
+  border-right: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.stage-cast__item[data-presence="pending"],
+.stage-cast__item[data-presence="exited"] {
+  opacity: 0.48;
+}
+
+.stage-cast__item > span {
+  display: grid;
+  align-self: stretch;
+  color: #ffffff;
+  font: 800 9px/1 "Cascadia Code", Consolas, monospace;
+  place-items: center;
+}
+
+.stage-cast__item > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+  padding: 4px 5px;
+}
+
+.stage-cast__item strong,
+.stage-cast__item small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stage-cast__item strong {
+  color: #f2f2f0;
+  font-size: 9px;
+}
+
+.stage-cast__item small {
+  color: #aeb1aa;
+  font-size: 7px;
 }
 
 .stage-sequence {
@@ -7477,6 +7749,21 @@ textarea:focus-visible {
   .app-rail__brand,
   .app-rail__button {
     grid-template-columns: 49px 140px;
+  }
+
+  .stage-cast {
+    right: 230px;
+  }
+}
+
+@media (max-width: 680px) {
+  .stage-cast {
+    right: 14px;
+    left: 130px;
+  }
+
+  .top-view {
+    top: 62px;
   }
 }
 

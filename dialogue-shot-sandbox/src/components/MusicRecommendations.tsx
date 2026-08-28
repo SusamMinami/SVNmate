@@ -1,21 +1,33 @@
 import { Music2, Pause, Play } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import {
+  activeMusicRecommendationForDialogueIds,
   musicPreviewUrl,
   type MusicRecommendation,
 } from "../data/musicCatalog";
 
 export function MusicRecommendations({
   recommendations,
+  dialogueOrder,
   currentDialogueIds,
 }: {
   recommendations: MusicRecommendation[];
+  dialogueOrder: string[];
   currentDialogueIds: string[];
 }) {
   const currentIds = new Set(currentDialogueIds);
   const current = recommendations.filter((item) =>
     currentIds.has(item.dialogueId),
   );
+  const activeRecommendation = activeMusicRecommendationForDialogueIds(
+    recommendations,
+    dialogueOrder,
+    currentDialogueIds,
+  );
+  const isContinuing = current.length === 0 && activeRecommendation !== null;
+  const visibleRecommendations = isContinuing
+    ? [activeRecommendation]
+    : current;
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [playing, setPlaying] = useState<string | null>(null);
   const [playbackError, setPlaybackError] = useState("");
@@ -81,21 +93,26 @@ export function MusicRecommendations({
     <section className="inspector-section music-recommendations">
       <div className="section-label">
         <span>配乐建议</span>
-        <small>{current.length} 项</small>
+        <small>{isContinuing ? "沿用中" : `${current.length} 项`}</small>
       </div>
-      {current.length === 0 ? (
-        <p>当前分镜没有需要开始或切换的配乐。</p>
+      {visibleRecommendations.length === 0 ? (
+        <p>尚未生成整段配乐建议，请检查音乐资料库同步状态。</p>
       ) : (
         <div className="music-recommendation-list">
-          {current.map((item) => (
+          {visibleRecommendations.map((item) => (
             <div key={`${item.dialogueId}-${item.stateId}`}>
               <Music2 size={15} />
               <div>
                 <strong>{item.musicName}</strong>
                 <span>
-                  节点 {item.dialogueId} · {item.stateName}
+                  {isContinuing ? `沿用自节点 ${item.dialogueId}` : `节点 ${item.dialogueId}`} ·{" "}
+                  {item.stateName}
                 </span>
-                <p>{item.reason}</p>
+                <p>
+                  {isContinuing
+                    ? "本镜延续当前配乐，无需在此处重新切换。"
+                    : item.reason}
+                </p>
                 {item.audioSummary && (
                   <small className="music-recommendation-analysis">
                     {item.audioSummary}

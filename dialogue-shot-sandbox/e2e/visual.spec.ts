@@ -350,6 +350,9 @@ test("renders nonblank shot and blocking canvases without horizontal overflow", 
   const cameraFrame = await page.locator(".stage-main__frame").boundingBox();
   expect(cameraFrame).not.toBeNull();
   expect(cameraFrame!.width / cameraFrame!.height).toBeCloseTo(16 / 9, 1);
+  await expect(page.getByRole("region", { name: "场景角色" })).toBeVisible();
+  await expect(page.locator(".stage-cast__item")).toHaveCount(2);
+  await expect(page.locator(".left-panel .cast-section")).toHaveCount(0);
   await expect(page.locator(".ultrawide-frame").first()).toBeVisible();
   await expect(page.getByText("21:9")).toBeVisible();
   await expect(page.locator(".golden")).toHaveCount(4);
@@ -416,7 +419,7 @@ test("renders every participant in a multi-character dialogue", async ({
   await expect(
     page.getByRole("button", { name: "需绑定 BP 站位" }),
   ).toBeDisabled();
-  await expect(page.locator(".cast-row")).toHaveCount(5);
+  await expect(page.locator(".stage-cast__item")).toHaveCount(5);
   await expect(page.locator(".axis-status")).toContainText("关系轴 B-C");
   await expect(
     page.locator(".actor-label--on-body:not(.actor-label--below)"),
@@ -647,16 +650,26 @@ test("removes a character after the AI-directed exit node", async ({
 
 test("switches the main canvas between shot and blocking views", async ({
   page,
-}) => {
+}, testInfo) => {
   await page.goto("/");
 
   const blockingPreview = page.getByRole("button", {
     name: "切换到俯视调度",
   });
   const viewModeButton = page.locator(".top-view");
+  const shotIndicatorBefore = await page.locator(".stage-sequence").boundingBox();
+  const stageStatusBefore = await page.locator(".shot-hud").boundingBox();
   await expect(blockingPreview).toBeVisible();
   await blockingPreview.click();
   await expect(viewModeButton).toHaveAttribute("aria-pressed", "true");
+  const shotIndicatorAfter = await page.locator(".stage-sequence").boundingBox();
+  const stageStatusAfter = await page.locator(".shot-hud").boundingBox();
+  expect(shotIndicatorBefore).not.toBeNull();
+  expect(stageStatusBefore).not.toBeNull();
+  expect(shotIndicatorAfter!.x).toBeCloseTo(shotIndicatorBefore!.x, 1);
+  expect(shotIndicatorAfter!.y).toBeCloseTo(shotIndicatorBefore!.y, 1);
+  expect(stageStatusAfter!.x).toBeCloseTo(stageStatusBefore!.x, 1);
+  expect(stageStatusAfter!.y).toBeCloseTo(stageStatusBefore!.y, 1);
 
   const shotPreview = page.getByRole("button", {
     name: "切换到镜头示意",
@@ -695,6 +708,10 @@ test("switches the main canvas between shot and blocking views", async ({
     expect(metrics.luminanceSpan).toBeGreaterThan(24);
     expect(metrics.sampledColors).toBeGreaterThan(18);
   }
+  await page.screenshot({
+    path: testInfo.outputPath("blocking-view-unified-hud.png"),
+    fullPage: true,
+  });
   await page.locator(".shot-row").first().click();
   await shotPreview.click();
 
@@ -1094,6 +1111,12 @@ test("shows local content immediately and compares AI blocking before applying i
   );
   await page.getByRole("button", { name: "试听配乐 情绪-真诚" }).click();
   await expect.poll(() => musicPreviewRequests).toBe(1);
+  await page.locator(".shot-row").nth(1).click();
+  await expect(page.locator(".music-recommendations")).toContainText("沿用中");
+  await expect(page.locator(".music-recommendation-list")).toContainText(
+    "沿用自节点 204801",
+  );
+  await page.locator(".shot-row").first().click();
   await page.locator(".right-panel").screenshot({
     path: testInfo.outputPath("director-sound-effect-recommendations.png"),
   });
@@ -3453,13 +3476,13 @@ test("offers the detected Blueprint formation before designing shots", async ({
   await expect(formationStatus).toContainText("BP_735000");
   await expect(page.getByText("已忽略 1 个关闭 UI 节点", { exact: false }))
     .toBeVisible();
-  await expect(page.locator(".cast-row")).toHaveCount(3);
+  await expect(page.locator(".stage-cast__item")).toHaveCount(3);
   await expect(
-    page.locator(".cast-row", { hasText: "玩家" }),
-  ).toContainText("对白角色 · BP 0 · 初始朝向 -90°");
+    page.locator(".stage-cast__item", { hasText: "玩家" }),
+  ).toHaveAttribute("title", /对白角色 · BP 0 · 初始朝向 -90°/);
   await expect(
-    page.locator(".cast-row", { hasText: "西维尔" }),
-  ).toContainText("背景 NPC · BP 2 · 初始朝向 -180°");
+    page.locator(".stage-cast__item", { hasText: "西维尔" }),
+  ).toHaveAttribute("title", /背景 NPC · BP 2 · 初始朝向 -180°/);
   await page.getByRole("tab", { name: "导演" }).click();
   await expect(page.getByText("演员动作", { exact: true })).toBeVisible();
   await expect(page.getByText("右转 45°", { exact: true })).toHaveCount(2);
@@ -3470,6 +3493,15 @@ test("offers the detected Blueprint formation before designing shots", async ({
   });
   await page.getByRole("tab", { name: "UE" }).click();
   await expect(page.getByText(/已读取 3 个 BP、15 个动作/)).toBeVisible();
+  const firstActionNode = page.locator(".character-action-node__toggle").first();
+  await expect(firstActionNode).toHaveAttribute("aria-expanded", "true");
+  await firstActionNode.click();
+  await expect(
+    page.locator('.character-action-node__toggle[aria-expanded="true"]'),
+  ).toHaveCount(0);
+  await expect(page.locator(".character-action-node__body")).toHaveCount(0);
+  await firstActionNode.click();
+  await expect(firstActionNode).toHaveAttribute("aria-expanded", "true");
   const guardActions = page
     .locator(".character-action-track")
     .filter({ hasText: "商会安保" });
@@ -3878,6 +3910,8 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
       note: "",
       introduction: "",
       resourceId: 200135,
+      hasDialogue: true,
+      hasAvatar: true,
     };
     const target = {
       id: "500001",
@@ -4189,12 +4223,30 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
   });
 
   await dialog.getByLabel("任务节点 ID").fill("900001");
-  await dialog.getByRole("button", { name: "解析任务目标物" }).click();
+  const readSelectionButton = dialog.getByRole("button", {
+    name: "读取 UE 选择",
+  });
+  await expect(readSelectionButton).toBeEnabled();
+  await readSelectionButton.click();
   await expect(dialog.getByText("同地图任务")).toBeVisible();
   await expect(dialog.getByText("上城区 · 1204")).toBeVisible();
   await expect(dialog.locator(".mission-target-table tbody tr")).toHaveCount(2);
   await expect(dialog.getByText("0°, 90°, 0°")).toBeVisible();
-  await dialog.getByLabel("选择目标物 500002").uncheck();
+  const selectionResult = dialog.getByRole("region", {
+    name: "UE 当前选择识别结果",
+  });
+  await expect(selectionResult).toContainText(
+    "ShotSandboxMissionTargetPreview_900001_500001",
+  );
+  await expect(selectionResult).toContainText("目标物 500001");
+  await expect(selectionResult).toContainText("商会安保 · NPC 101968");
+  await expect(dialog.getByLabel("选择目标物 500001")).toBeChecked();
+  await expect(dialog.getByLabel("选择目标物 500002")).not.toBeChecked();
+  await expect(
+    dialog
+      .locator(".mission-target-row--ue-selected")
+      .getByText("UE 已选"),
+  ).toBeVisible();
   await expect(dialog.getByText(/已选择 1 \/ 2 个目标物/)).toBeVisible();
   await dialog.getByLabel("BP 文件名").fill("BP_Test");
   await dialog.getByRole("button", { name: "检查 BP 与对话模型" }).click();
@@ -4320,6 +4372,11 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
     registration.getByLabel("守卫预览 NPC 复用方式"),
   ).toHaveValue("101968");
   await expect(
+    registration
+      .getByLabel("守卫预览 NPC 复用方式")
+      .locator('option[value="101968"]'),
+  ).toHaveText(/有对白 · 有头像/);
+  await expect(
     registration.getByLabel("选择待注册 Actor 守卫预览"),
   ).toBeChecked();
   const newActorCheckbox = registration.getByLabel(
@@ -4369,12 +4426,11 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
     }),
   ]);
   page.once("dialog", async (confirmation) => {
-    expect(confirmation.message()).toContain(
-      "不写入模型资源表或 NPC 表",
-    );
+    expect(confirmation.message()).toContain("只向目标物表新增 1 行");
+    expect(confirmation.message()).toContain("不打开另外两张表");
     await confirmation.accept();
   });
-  await registration.getByRole("button", { name: "目标物表" }).click();
+  await registration.getByRole("button", { name: "写入新增项" }).click();
   await expect(
     registration.getByText(/守卫新增 → 500005/),
   ).toBeVisible();
@@ -4400,6 +4456,180 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
   await expect(
     registration.getByText(/守卫新增 → 500005/),
   ).toBeVisible();
+});
+
+test("applies one MapID to selected actors and writes reusable NPCs as targets only", async ({
+  page,
+}, testInfo) => {
+  let writeRequest: {
+    scope: string;
+    items: Array<{
+      actorRef: string;
+      mapId: string;
+      existingModelId: number | null;
+      existingNpcId: number | null;
+      newNpc: unknown;
+    }>;
+  } | null = null;
+  await page.route("**/api/ue/formation/read", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: { status: "not_found", message: "未找到测试 BP" },
+      }),
+    });
+  });
+  const model = {
+    id: 200135,
+    configuredPath: "/Game/Test/BP_Guard",
+    generatedClassPath: "/Game/Test/BP_Guard.BP_Guard_C",
+    rowNumber: 3,
+  };
+  const npc = {
+    id: 101968,
+    name: "批量守卫",
+    note: "",
+    introduction: "",
+    resourceId: 200135,
+    title: "安保",
+    canTurn: true,
+    hasDialogue: true,
+    hasAvatar: true,
+  };
+  const mapOptions = [
+    {
+      id: "1204",
+      name: "上城区 A",
+      resourceId: "100128",
+      assetPath: "/Game/Test/Maps/TestMap",
+      rowNumber: 3,
+    },
+    {
+      id: "1209",
+      name: "上城区 B",
+      resourceId: "100129",
+      assetPath: "/Game/Test/Maps/TestMap",
+      rowNumber: 4,
+    },
+  ];
+  const actors = ["A", "B"].map((suffix, index) => ({
+    actorRef: `BP_Guard_C_${index}`,
+    label: `批量守卫 ${suffix}`,
+    classPath: "/Game/Test/BP_Guard.BP_Guard_C",
+    transform: {
+      location: { x: 100 + index * 100, y: 200, z: 300 },
+      rotation: { pitch: 0, yaw: 90, roll: 0 },
+      scale: { x: 1, y: 1, z: 1 },
+    },
+  }));
+  await page.route("**/api/ue/selection/registration", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          selection: {
+            mapAssetPath: "/Game/Test/Maps/TestMap",
+            actors,
+          },
+          candidates: actors.map((actor) => ({
+            actor,
+            modelOptions: [model],
+            npcOptions: [npc],
+            positionMatches: [],
+            targetMatches: [],
+            mapOptions,
+            mapId: null,
+            mapName: "上城区",
+          })),
+        },
+      }),
+    });
+  });
+  await page.route("**/api/ue/config-registration/write", async (route) => {
+    writeRequest = route.request().postDataJSON();
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          createdModels: [],
+          createdNpcs: [],
+          createdTargets: actors.map((actor, index) => ({
+            actorRef: actor.actorRef,
+            id: 500010 + index,
+          })),
+          reusedTargets: [],
+          openedWorkbooks: [
+            "C:\\trunk\\doc\\xlsdir\\r任务剧情\\m目标物表.xlsm",
+          ],
+        },
+      }),
+    });
+  });
+
+  await page.goto("/");
+  await expect(page.locator(".launch-screen")).toHaveCount(0, {
+    timeout: 3_000,
+  });
+  await page.getByRole("button", { name: "注册 NPC" }).click();
+  const registration = page.getByRole("region", {
+    name: "注册 NPC",
+    exact: true,
+  });
+  await registration.getByRole("button", { name: "读取 UE 选择" }).click();
+  const firstMap = registration.getByLabel("批量守卫 A MapID");
+  const secondMap = registration.getByLabel("批量守卫 B MapID");
+  await firstMap.selectOption("1209");
+  await expect(secondMap).toHaveValue("");
+  await registration
+    .getByRole("button", {
+      name: "将 批量守卫 A 的 MapID 应用到全部已选 Actor",
+    })
+    .click();
+  await expect(secondMap).toHaveValue("1209");
+  await expect(
+    registration.getByText(/已将 MapID 1209 应用到 2 个已选 Actor/),
+  ).toBeVisible();
+  await registration.screenshot({
+    path: testInfo.outputPath("npc-registration-bulk-map.png"),
+  });
+
+  page.once("dialog", async (confirmation) => {
+    expect(confirmation.message()).toContain("只向目标物表新增 2 行");
+    expect(confirmation.message()).toContain("不打开另外两张表");
+    await confirmation.accept();
+  });
+  await registration.getByRole("button", { name: "写入新增项" }).click();
+  await expect(
+    registration.getByText(/批量守卫 A → 500010/),
+  ).toBeVisible();
+  await expect(
+    registration.getByText(/批量守卫 B → 500011/),
+  ).toBeVisible();
+  expect(writeRequest).toMatchObject({
+    scope: "target_only",
+    items: [
+      {
+        actorRef: "BP_Guard_C_0",
+        mapId: "1209",
+        existingModelId: 200135,
+        existingNpcId: 101968,
+        newNpc: null,
+      },
+      {
+        actorRef: "BP_Guard_C_1",
+        mapId: "1209",
+        existingModelId: 200135,
+        existingNpcId: 101968,
+        newNpc: null,
+      },
+    ],
+  });
 });
 
 test("locks and registers every existing numeric Blueprint slot", async ({

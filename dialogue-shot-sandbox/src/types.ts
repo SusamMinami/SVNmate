@@ -49,6 +49,8 @@ export interface NpcProfile {
   resourceId: number | null;
   title?: string;
   canTurn?: boolean | null;
+  hasDialogue?: boolean;
+  hasAvatar?: boolean;
 }
 
 export interface ModelResource {

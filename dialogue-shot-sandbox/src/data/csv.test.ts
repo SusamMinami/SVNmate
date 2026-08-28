@@ -80,4 +80,34 @@ describe("dialogue CSV parsing", () => {
       ),
     ).toThrow("对话表.csv 第 803 行解析失败");
   });
+
+  it("detects reusable NPC dialogue and avatar configuration", () => {
+    const dialogueText = [
+      "##&Dialog.id,Dialog.NPCID,Dialog.Content,Dialog.NextID,Dialog.End",
+      "##id,NPC,内容,下一节点,结束",
+      "735200,101968,测试对白,,true",
+    ].join("\n");
+    const richNpcText = [
+      "##&NPC.id,NPC.name,NPC.resource_id,NPC.avatarpath,NPC.headicon,NPC.title,NPC.npcintroduce,NPC.npcchat2,NPC.npcchat3,NPC.ifturn",
+      "##id,名称,资源,半身像,头像,头衔,介绍,复杂闲话,冒泡对白,转身",
+      "101968,商会安保,200135,144,0,安保,测试 NPC,704000,,TRUE",
+      "101969,普通守卫,200135,0,,守卫,测试 NPC,,,FALSE",
+    ].join("\n");
+
+    const database = parseDialogueDatabase(
+      dialogueText,
+      startText,
+      richNpcText,
+      "test",
+    );
+
+    expect(database.npcs.get(101968)).toMatchObject({
+      hasDialogue: true,
+      hasAvatar: true,
+    });
+    expect(database.npcs.get(101969)).toMatchObject({
+      hasDialogue: false,
+      hasAvatar: false,
+    });
+  });
 });

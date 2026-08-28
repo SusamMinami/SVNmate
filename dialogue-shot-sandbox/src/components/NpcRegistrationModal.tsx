@@ -4,6 +4,7 @@ import {
   CheckCircle2,
   FilePenLine,
   FileSpreadsheet,
+  ListChecks,
   LoaderCircle,
   PencilLine,
   RefreshCw,
@@ -16,13 +17,16 @@ import {
   formatUnrealVector,
   parseUnrealRotatorText,
   parseUnrealVectorText,
+  registrationWriteScope,
 } from "../data/npcRegistration";
 import type {
   MissionTargetEditRequest,
   MissionTargetTransform,
   MissionTargetUpdateItem,
+  NpcProfile,
   NpcRegistrationCandidate,
   NpcRegistrationWriteItem,
+  NpcRegistrationWriteResult,
   SelectedLevelActorsResult,
 } from "../types";
 import {
@@ -86,6 +90,38 @@ function turnLabel(canTurn: boolean | null | undefined): string {
     return "不可转身";
   }
   return "转身未配置";
+}
+
+function npcReuseLabel(npc: NpcProfile): string {
+  return [
+    npc.id,
+    npc.name,
+    npc.title || "无头衔",
+    turnLabel(npc.canTurn),
+    npc.hasDialogue ? "有对白" : null,
+    npc.hasAvatar ? "有头像" : null,
+  ]
+    .filter((value) => value !== null)
+    .join(" · ");
+}
+
+function confirmedTargetActorRefs(
+  items: readonly NpcRegistrationWriteItem[],
+  result: NpcRegistrationWriteResult,
+): string[] {
+  const confirmed = new Set([
+    ...result.createdTargets.map((target) => target.actorRef),
+    ...result.reusedTargets.map((target) => target.actorRef),
+  ]);
+  const missing = items.filter((item) => !confirmed.has(item.actorRef));
+  if (missing.length > 0) {
+    throw new Error(
+      `Excel 未确认以下 Actor 的目标物写入结果：${missing
+        .map((item) => item.label)
+        .join("、")}。请先检查目标物表，勿立即重复写入`,
+    );
+  }
+  return items.map((item) => item.actorRef);
 }
 
 export function NpcRegistrationModal({
@@ -322,6 +358,32 @@ export function NpcRegistrationModal({
     );
   }
 
+  function applyMapToSelected(source: NpcRegistrationCandidate) {
+    const mapId = mapChoices[source.actor.actorRef] ?? "";
+    if (!mapId) {
+      return;
+    }
+    const applicableCandidates = selectedCandidates.filter((candidate) =>
+      candidate.mapOptions.some((map) => map.id === mapId),
+    );
+    setMapChoices((current) => ({
+      ...current,
+      ...Object.fromEntries(
+        applicableCandidates.map((candidate) => [
+          candidate.actor.actorRef,
+          mapId,
+        ]),
+      ),
+    }));
+    const skippedCount = selectedCandidateCount - applicableCandidates.length;
+    setError("");
+    setStatus(
+      `已将 MapID ${mapId} 应用到 ${applicableCandidates.length} 个已选 Actor${
+        skippedCount > 0 ? `，${skippedCount} 个 Actor 不支持该地图` : ""
+      }`,
+    );
+  }
+
   function updateEditDraft(
     targetId: string,
     changes: Partial<TargetTransformDraft>,
@@ -509,7 +571,8 @@ export function NpcRegistrationModal({
       classPath: candidate.actor.classPath,
       transform: candidate.actor.transform,
       mapId,
-      existingModelId: candidate.modelOptions[0]?.id ?? null,
+      existingModelId:
+        existingNpc?.resourceId ?? candidate.modelOptions[0]?.id ?? null,
       existingNpcId: registeredNpcId ?? existingNpc?.id ?? null,
       existingTargetId: null,
       canTurn: existingNpc?.canTurn ?? draft.canTurn,
@@ -661,9 +724,13 @@ export function NpcRegistrationModal({
         targetItems,
         "target_only",
       );
+      const confirmedActorRefs = confirmedTargetActorRefs(
+        targetItems,
+        result,
+      );
       setWrittenTargetActorRefs((current) => new Set([
         ...current,
-        ...targetItems.map((item) => item.actorRef),
+        ...confirmedActorRefs,
       ]));
       const actorLabels = new Map(
         targetItems.map((item) => [item.actorRef, item.label]),
@@ -723,11 +790,22 @@ export function NpcRegistrationModal({
           mapChoices[candidate.actor.actorRef],
         ),
     );
+    const scope = registrationWriteScope(items);
+    const requestItems =
+      scope === "target_only"
+        ? items.map((item) => ({ ...item, newNpc: null }))
+        : items;
+    const newModelCount = requestItems.filter(
+      (item) => item.existingModelId === null,
+    ).length;
+    const pendingNpcCount = requestItems.filter(
+      (item) => item.existingNpcId === null,
+    ).length;
     if (
       !window.confirm(
-        `将向 Excel 源表写入 ${items.length} 个目标物，并按需新增 ${
-          items.filter((item) => item.existingModelId === null).length
-        } 个模型、${items.filter((item) => item.newNpc !== null).length} 个 NPC。\n\n新增单元格会标红，工作簿保持未保存状态，是否继续？`,
+        scope === "target_only"
+          ? `将只向目标物表新增 ${requestItems.length} 行；模型与 NPC ID 全部复用，不打开另外两张表。\n\n新增单元格会标红，工作簿保持未保存状态，是否继续？`
+          : `将向 Excel 源表写入 ${requestItems.length} 个目标物，并按需新增 ${newModelCount} 个模型、${pendingNpcCount} 个 NPC；没有新增内容的表不会打开。\n\n新增单元格会标红，工作簿保持未保存状态，是否继续？`,
       )
     ) {
       setStatus("已取消写入 Excel");
@@ -737,14 +815,18 @@ export function NpcRegistrationModal({
     setError("");
     setStatus("");
     try {
-      const result = await writeNpcRegistrationDraft(items, "all");
+      const result = await writeNpcRegistrationDraft(requestItems, scope);
+      const confirmedActorRefs = confirmedTargetActorRefs(
+        requestItems,
+        result,
+      );
       rememberCreatedNpcs(result.createdNpcs);
       setWrittenTargetActorRefs((current) => new Set([
         ...current,
-        ...items.map((item) => item.actorRef),
+        ...confirmedActorRefs,
       ]));
       const actorLabels = new Map(
-        items.map((item) => [item.actorRef, item.label]),
+        requestItems.map((item) => [item.actorRef, item.label]),
       );
       const targetAssignments = [
         ...result.createdTargets.map((target) =>
@@ -1156,9 +1238,7 @@ export function NpcRegistrationModal({
                             )}
                             {npcOptions.map((npc) => (
                               <option key={npc.id} value={npc.id}>
-                                {npc.id} · {npc.name} ·{" "}
-                                {npc.title || "无头衔"} ·{" "}
-                                {turnLabel(npc.canTurn)}
+                                {npcReuseLabel(npc)}
                               </option>
                             ))}
                           </select>
@@ -1217,24 +1297,49 @@ export function NpcRegistrationModal({
                       </td>
                       <td>
                         {candidate.mapOptions.length > 1 ? (
-                          <select
-                            value={mapChoices[actor.actorRef] ?? ""}
-                            disabled={busy || !selected}
-                            onChange={(event) =>
-                              setMapChoices((current) => ({
-                                ...current,
-                                [actor.actorRef]: event.target.value,
-                              }))
-                            }
-                            aria-label={`${actor.label} MapID`}
-                          >
-                            <option value="">选择 MapID</option>
-                            {candidate.mapOptions.map((map) => (
-                              <option key={map.id} value={map.id}>
-                                {map.id} · {map.name}
-                              </option>
-                            ))}
-                          </select>
+                          <div className="npc-registration-map-choice">
+                            <select
+                              value={mapChoices[actor.actorRef] ?? ""}
+                              disabled={busy || !selected}
+                              onChange={(event) =>
+                                setMapChoices((current) => ({
+                                  ...current,
+                                  [actor.actorRef]: event.target.value,
+                                }))
+                              }
+                              aria-label={`${actor.label} MapID`}
+                            >
+                              <option value="">选择 MapID</option>
+                              {candidate.mapOptions.map((map) => (
+                                <option key={map.id} value={map.id}>
+                                  {map.id} · {map.name}
+                                </option>
+                              ))}
+                            </select>
+                            <button
+                              type="button"
+                              onClick={() => applyMapToSelected(candidate)}
+                              disabled={
+                                busy ||
+                                !selected ||
+                                !mapChoices[actor.actorRef] ||
+                                selectedCandidateCount < 2
+                              }
+                              title={
+                                !selected
+                                  ? "请先勾选当前 Actor"
+                                  : selectedCandidateCount < 2
+                                    ? "请至少勾选两个 Actor"
+                                    : mapChoices[actor.actorRef]
+                                      ? `将 MapID ${mapChoices[actor.actorRef]} 应用到全部已选 Actor`
+                                      : "请先选择 MapID"
+                              }
+                              aria-label={`将 ${actor.label} 的 MapID 应用到全部已选 Actor`}
+                            >
+                              <ListChecks size={12} />
+                              全选
+                            </button>
+                          </div>
                         ) : candidate.mapId ? (
                           <>
                             <strong>{candidate.mapId}</strong>

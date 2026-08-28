@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import { demoDatabase } from "./demo";
 import { findDialogueSequence } from "./dialogueRepository";
 import {
+  activeMusicRecommendationForDialogueIds,
   recommendMusic,
   type MusicAudioAnalysis,
   type MusicCatalogEntry,
+  type MusicRecommendation,
 } from "./musicCatalog";
 
 function audioAnalysis(
@@ -166,5 +168,95 @@ describe("recommendMusic", () => {
       stateId: 202,
       audioSummary: "慢速、低能量、音色偏暗",
     });
+  });
+
+  it("uses the complete dialogue to choose music from the opening node", () => {
+    const sequence = findDialogueSequence(demoDatabase, "2048");
+    sequence.outline = "";
+    sequence.rows.forEach((row) => {
+      row.content = "继续交流。";
+    });
+    sequence.rows[5].content = "这个秘密的源头仍然未知。";
+
+    expect(recommendMusic(sequence, catalog)[0]).toMatchObject({
+      dialogueId: "204801",
+      stateId: 15,
+      reason: expect.stringContaining("完整对白"),
+    });
+  });
+
+  it("falls back to restrained everyday music when no mood signal matches", () => {
+    const sequence = findDialogueSequence(demoDatabase, "2048");
+    sequence.outline = "双方核对了一份清单。";
+    sequence.rows.forEach((row) => {
+      row.content = "下一项。";
+    });
+    const neutralMusic: MusicCatalogEntry = {
+      recordId: "recNeutral",
+      name: "情绪-日常01",
+      stateName: "Common_01",
+      stateId: 19,
+      tags: ["日常轻松"],
+      notes: "温和舒缓",
+      fileToken: "neutral",
+      fileName: "neutral.wav",
+    };
+
+    expect(recommendMusic(sequence, [neutralMusic])).toEqual([
+      expect.objectContaining({
+        dialogueId: "204801",
+        stateId: 19,
+        reason: expect.stringContaining("未识别到明确的强情绪"),
+      }),
+    ]);
+  });
+
+  it("resolves the music being carried by a later shot", () => {
+    const recommendations: MusicRecommendation[] = [
+      {
+        dialogueId: "204801",
+        stateId: 15,
+        stateName: "Hidden_Crisis",
+        musicName: "危机四伏",
+        reason: "开场配乐",
+        fileToken: "f3",
+        fileName: "suspense.wav",
+        recordId: "rec3",
+        audioSummary: null,
+      },
+      {
+        dialogueId: "204804",
+        stateId: 18,
+        stateName: "Sincere",
+        musicName: "真诚",
+        reason: "转折配乐",
+        fileToken: "f2",
+        fileName: "sincere.wav",
+        recordId: "rec2",
+        audioSummary: null,
+      },
+    ];
+    const order = [
+      "204801",
+      "204802",
+      "204803",
+      "204804",
+      "204805",
+    ];
+
+    expect(
+      activeMusicRecommendationForDialogueIds(
+        recommendations,
+        order,
+        ["204803"],
+      )?.stateName,
+    ).toBe("Hidden_Crisis");
+    expect(
+      activeMusicRecommendationForDialogueIds(
+        recommendations,
+        order,
+        ["204805"],
+      )?.stateName,
+    ).toBe("Sincere");
   });
 });

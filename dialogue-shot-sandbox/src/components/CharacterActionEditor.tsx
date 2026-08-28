@@ -92,7 +92,10 @@ export function CharacterActionEditor({
   });
 
   useEffect(() => {
-    if (!dialogueIds.includes(expandedDialogueId)) {
+    if (
+      expandedDialogueId &&
+      !dialogueIds.includes(expandedDialogueId)
+    ) {
       setExpandedDialogueId(dialogueIds[0] ?? "");
     }
   }, [dialogueIds, expandedDialogueId]);

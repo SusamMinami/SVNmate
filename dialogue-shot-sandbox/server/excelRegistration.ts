@@ -255,9 +255,13 @@ foreach ($item in $request.items) {
     } elseif ($scope -eq "target_only") {
       [void]$requiredPaths.Add($paths.missionTarget)
     } else {
-      [void]$requiredPaths.Add($paths.npc)
-      [void]$requiredPaths.Add($paths.model)
       [void]$requiredPaths.Add($paths.missionTarget)
+      if ($null -eq $item.existingModelId) {
+        [void]$requiredPaths.Add($paths.model)
+      }
+      if ($null -eq $item.existingNpcId) {
+        [void]$requiredPaths.Add($paths.npc)
+      }
     }
   }
 }
@@ -593,31 +597,35 @@ try {
     if ($scope -eq "all") {
       $configuredPath = Get-ConfiguredPath $item.classPath
       if ($null -ne $item.existingModelId) {
-        $modelEntries =
-          @($modelEntriesById[[string]$item.existingModelId])
-        if ($modelEntries.Count -ne 1) {
-          throw "模型 ID $($item.existingModelId) 在模型资源表中不存在或不唯一"
-        }
-        $existingPath = [string]$modelEntries[0].path
-        if (-not [string]::Equals(
-          $existingPath.Replace("\", "/"),
-          $configuredPath,
-          [StringComparison]::OrdinalIgnoreCase
-        )) {
-          throw "模型 ID $($item.existingModelId) 与 Actor $($item.label) 的资源路径不一致"
+        if ($null -ne $modelSheet) {
+          $modelEntries =
+            @($modelEntriesById[[string]$item.existingModelId])
+          if ($modelEntries.Count -ne 1) {
+            throw "模型 ID $($item.existingModelId) 在模型资源表中不存在或不唯一"
+          }
+          $existingPath = [string]$modelEntries[0].path
+          if (-not [string]::Equals(
+            $existingPath.Replace("\", "/"),
+            $configuredPath,
+            [StringComparison]::OrdinalIgnoreCase
+          )) {
+            throw "模型 ID $($item.existingModelId) 与 Actor $($item.label) 的资源路径不一致"
+          }
         }
       }
       if ($null -ne $item.existingNpcId) {
         if ($null -eq $item.existingModelId) {
           throw "NPC ID $($item.existingNpcId) 缺少可验证的模型 ID"
         }
-        $npcEntries = @($npcEntriesById[[string]$item.existingNpcId])
-        if ($npcEntries.Count -ne 1) {
-          throw "NPC ID $($item.existingNpcId) 在 NPC 表中不存在或不唯一"
-        }
-        $npcModelId = [string]$npcEntries[0].modelId
-        if ($npcModelId -ne [string]$item.existingModelId) {
-          throw "NPC ID $($item.existingNpcId) 引用的模型与 Actor $($item.label) 不一致"
+        if ($null -ne $npcSheet) {
+          $npcEntries = @($npcEntriesById[[string]$item.existingNpcId])
+          if ($npcEntries.Count -ne 1) {
+            throw "NPC ID $($item.existingNpcId) 在 NPC 表中不存在或不唯一"
+          }
+          $npcModelId = [string]$npcEntries[0].modelId
+          if ($npcModelId -ne [string]$item.existingModelId) {
+            throw "NPC ID $($item.existingNpcId) 引用的模型与 Actor $($item.label) 不一致"
+          }
         }
       } elseif ($null -eq $item.newNpc) {
         throw "Actor $($item.label) 没有可复用 NPC，也没有填写新 NPC"
@@ -708,18 +716,20 @@ try {
     }
     $configuredPath = Get-ConfiguredPath $item.classPath
     if ($null -ne $item.existingModelId) {
-      $modelEntries =
-        @($modelEntriesById[[string]$item.existingModelId])
-      if ($modelEntries.Count -ne 1) {
-        throw "模型 ID $($item.existingModelId) 在模型资源表中不存在或不唯一"
-      }
-      $existingPath = [string]$modelEntries[0].path
-      if (-not [string]::Equals(
-        $existingPath.Replace("\", "/"),
-        $configuredPath,
-        [StringComparison]::OrdinalIgnoreCase
-      )) {
-        throw "模型 ID $($item.existingModelId) 与 Actor $($item.label) 的资源路径不一致"
+      if ($null -ne $modelSheet) {
+        $modelEntries =
+          @($modelEntriesById[[string]$item.existingModelId])
+        if ($modelEntries.Count -ne 1) {
+          throw "模型 ID $($item.existingModelId) 在模型资源表中不存在或不唯一"
+        }
+        $existingPath = [string]$modelEntries[0].path
+        if (-not [string]::Equals(
+          $existingPath.Replace("\", "/"),
+          $configuredPath,
+          [StringComparison]::OrdinalIgnoreCase
+        )) {
+          throw "模型 ID $($item.existingModelId) 与 Actor $($item.label) 的资源路径不一致"
+        }
       }
       $modelByActor[$item.actorRef] = [int]$item.existingModelId
       continue
@@ -1249,6 +1259,39 @@ interface ExcelTargetUpdateResponse extends MissionTargetUpdateResult {
   message?: string;
 }
 
+function resultArray<T>(value: T[] | T | null | undefined): T[] {
+  if (Array.isArray(value)) {
+    return value;
+  }
+  return value === null || value === undefined ? [] : [value];
+}
+
+export function validateNpcRegistrationWriteResult(
+  items: readonly NpcRegistrationWriteItem[],
+  scope: NpcRegistrationWriteScope,
+  result: NpcRegistrationWriteResult,
+): void {
+  if (scope === "npc_only") {
+    return;
+  }
+  const confirmedActorRefs = new Set([
+    ...result.createdTargets.map((item) => item.actorRef),
+    ...result.reusedTargets.map((item) => item.actorRef),
+  ]);
+  const missing = items.filter(
+    (item) =>
+      item.existingTargetId === null &&
+      !confirmedActorRefs.has(item.actorRef),
+  );
+  if (missing.length > 0) {
+    throw new Error(
+      `Excel 未确认目标物写入结果：${missing
+        .map((item) => item.label)
+        .join("、")}。请先检查目标物表，勿立即重复写入`,
+    );
+  }
+}
+
 export function readablePowerShellError(value: string): string {
   if (/800AC472|80010001/i.test(value)) {
     return "Excel 当前正忙或处于单元格编辑状态。请在 Excel 中按 Enter 或 Esc 退出编辑，关闭弹窗后重试";
@@ -1413,13 +1456,19 @@ export async function writeNpcRegistrationDraft(
   const result = await withExcelRegistrationLock(() =>
     runExcelRegistration(request.items, request.scope, request.paths),
   );
-  return {
-    createdModels: result.createdModels,
-    createdNpcs: result.createdNpcs,
-    createdTargets: result.createdTargets,
-    reusedTargets: result.reusedTargets,
-    openedWorkbooks: result.openedWorkbooks,
+  const normalizedResult: NpcRegistrationWriteResult = {
+    createdModels: resultArray(result.createdModels),
+    createdNpcs: resultArray(result.createdNpcs),
+    createdTargets: resultArray(result.createdTargets),
+    reusedTargets: resultArray(result.reusedTargets),
+    openedWorkbooks: resultArray(result.openedWorkbooks),
   };
+  validateNpcRegistrationWriteResult(
+    request.items,
+    request.scope,
+    normalizedResult,
+  );
+  return normalizedResult;
 }
 
 export function parseNpcRegistrationWriteRequest(

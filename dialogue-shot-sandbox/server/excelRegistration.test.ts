@@ -5,6 +5,7 @@ import {
   parseNpcRegistrationWriteRequest,
   powerShellFileArguments,
   readablePowerShellError,
+  validateNpcRegistrationWriteResult,
 } from "./excelRegistration";
 
 const TEST_REGISTRATION_PATHS = {
@@ -140,6 +141,21 @@ describe("Excel PowerShell errors", () => {
     );
   });
 
+  it("opens full-registration workbooks only when that table needs additions", () => {
+    expect(EXCEL_REGISTRATION_SCRIPT).toContain(
+      "if ($null -eq $item.existingModelId)",
+    );
+    expect(EXCEL_REGISTRATION_SCRIPT).toContain(
+      "[void]$requiredPaths.Add($paths.model)",
+    );
+    expect(EXCEL_REGISTRATION_SCRIPT).toContain(
+      "if ($null -eq $item.existingNpcId)",
+    );
+    expect(EXCEL_REGISTRATION_SCRIPT).toContain(
+      "[void]$requiredPaths.Add($paths.npc)",
+    );
+  });
+
   it("accepts target-only writes with existing model and NPC IDs", () => {
     const request = parseNpcRegistrationWriteRequest({
       scope: "target_only",
@@ -173,5 +189,50 @@ describe("Excel PowerShell errors", () => {
     expect(request.paths.npc).toBe(
       "D:\\Project\\doc\\xlsdir\\NPC表.xlsm",
     );
+  });
+
+  it("rejects a successful response that did not confirm every target", () => {
+    const item = parseNpcRegistrationWriteRequest({
+      scope: "target_only",
+      paths: TEST_REGISTRATION_PATHS,
+      items: [
+        {
+          actorRef: "BP_Guard_C_1",
+          label: "守卫新增",
+          classPath: "/Game/Test/BP_Guard.BP_Guard_C",
+          transform: {
+            location: { x: 1, y: 2, z: 3 },
+            rotation: { pitch: 0, yaw: 90, roll: 0 },
+            scale: { x: 1, y: 1, z: 1 },
+          },
+          mapId: "1204",
+          existingModelId: 200135,
+          existingNpcId: 101999,
+          existingTargetId: null,
+          canTurn: true,
+          newNpc: null,
+        },
+      ],
+    }).items[0];
+
+    expect(() =>
+      validateNpcRegistrationWriteResult([item], "target_only", {
+        createdModels: [],
+        createdNpcs: [],
+        createdTargets: [],
+        reusedTargets: [],
+        openedWorkbooks: [TEST_REGISTRATION_PATHS.missionTarget],
+      }),
+    ).toThrow("Excel 未确认目标物写入结果：守卫新增");
+
+    expect(() =>
+      validateNpcRegistrationWriteResult([item], "target_only", {
+        createdModels: [],
+        createdNpcs: [],
+        createdTargets: [{ actorRef: item.actorRef, id: 500001 }],
+        reusedTargets: [],
+        openedWorkbooks: [TEST_REGISTRATION_PATHS.missionTarget],
+      }),
+    ).not.toThrow();
   });
 });

@@ -1,4 +1,4 @@
-# 镜头沙盘 v0.22.0
+# 镜头沙盘 v0.22.3
 
 面向 UE4 镜头对话制作的 Three.js 原型。输入四位数对话 ID 或对白文字，工具从
 `doc\csvdir` 读取真实对话链，通过规则导演、内部 TRAE 协作或 Mira AI
@@ -51,6 +51,8 @@ npm run dev
 7. 点击右上角俯视/镜头预览，可交换主视窗和预览视窗；未登场角色会在
    俯视图中以透明站位预排，登场后恢复实体显示。俯视画布在切镜时保持
    固定，只更新机位、朝向和运动路径。
+8. 已生成分镜时，场景角色集中显示在中央视口顶部遮幅区；SHOT 编号和
+   左下状态在镜头示意与俯视调度之间保持同一位置，左栏专注于镜头列表。
 
 投影验收不会中止整组镜头生成。规则导演会针对首轮失败镜头自动返修一次；
 Mira 和内部 TRAE 会收到失败镜头、台词节点和验收原因后重新设计一次。返修
@@ -139,7 +141,8 @@ NPC。`0` 号槽固定为玩家；没有发言的玩家或 NPC 仍参与群像�
 台词节点可逐项展开，为同一节点添加多个角色和多个动作，设置 `StartTime`
 延迟并拖拽排序。动作在统一导出弹窗中独立勾选后写入对应节点的
 `CharacterBehaviours`；已有动作只读显示且始终保留。新增 `AM_Turn*` 动作
-自动写为 `ERotate`，沙盘中的对应角色同步预览名称所描述的转向角度。
+自动写为 `ERotate`，沙盘中的对应角色同步预览名称所描述的转向角度。动作节点
+允许全部收起，切换镜头后不会强制重新展开。
 
 工作台左侧的“占位方案”只显示 BP 文件名，例如 `BP_736300`。右侧切换按钮可
 随时重新打开预览，在 BP、规则导演和已完成的 AI 占位方案之间切换，无需再次
@@ -155,6 +158,8 @@ BP 占位时，可点击左侧的 BP 文件名重新读取 UE 中的位置和朝
 任务目标物页右上角的“读取 UE 选择”会优先匹配当前任务目标物，只勾选匹配项
 并取消其他可追加项；混合选择中只有未匹配 Actor 才进入背景资源审核。预览
 Actor 按任务与目标物 ID 精确识别，普通 Actor 按模型类路径和世界坐标消歧。
+只输入任务节点也可直接读取 UE 当前选择，不要求先填写 BP；匹配结果会逐项显示
+`UE Actor -> 目标物 ID -> NPC`，并在目标物列表中标记“UE 已选”。
 背景审核可将 Blueprint Actor、Skeletal Mesh 或 Static Mesh 直接写入 BP，
 跳过 NPC 与目标物配表。组件使用资产原名且不进入 DialogModels，并保留关卡中
 的位置、旋转和缩放；缺少 Formation、Preview Level 或主角 Transform 时可先
@@ -165,17 +170,21 @@ Actor 按任务与目标物 ID 精确识别，普通 Actor 按模型类路径和
 在 UE 关卡视口或 World Outliner 中选中 Actor 后，从左侧工具轨道进入
 “注册 NPC”即可读取所选实例的 Generated Class、世界 Transform 和当前地图。
 工具会匹配可复用的模型 ID，并列出使用相同模型的 NPC ID、名称、头衔和
-转身配置供选择。候选 Actor 默认全选，可通过表头或逐行复选框排除本次不注册
-的对象。
+转身配置供选择；`npcchat2/3` 已配置时显示“有对白”，`avatarpath/headicon`
+已配置时显示“有头像”。候选 Actor 默认全选，可通过表头或逐行复选框排除
+本次不注册的对象。同一关卡存在多个 MapID 时，可在任意已选 Actor 旁选择一次
+地图，再用“全选”应用到其余已选 Actor。
 桌面端会保存用户选择的 `doc\csvdir` 绝对路径，注册扫描和 Excel 写入均从
 同一个 doc 根目录读取，不要求项目位于 `C:\trunk`。
 
 模型尚未注册时会明确提示先处理模型资源表；没有合适 NPC 时可选择“新建
 NPC”，名字和头衔允许留空。只需要新 NPC ID 时可点击“NPC 表”；已有模型和
-NPC ID 时可点击“目标物表”仅新增目标物；点击“写入新增项”则执行完整注册。
-各范围不会打开无关工作簿，新增单元格会标红，`.xlsm` 工作簿保持未保存，
-最终检查和保存由用户完成；不会修改导出 CSV。写入时会复用同一 Excel 实例，
-批量读取校验范围并重试短暂的 COM 忙状态，避免大表逐单元格扫描导致超时。
+NPC ID 时可点击“目标物表”仅新增目标物；“写入新增项”会按本批次实际缺失内容
+自动选择写入范围，模型与 NPC 均可复用时只打开目标物表。混合批次也只打开
+确实需要新增内容的工作簿。新增单元格会标红，`.xlsm` 工作簿保持未保存，
+最终检查和保存由用户完成；不会修改导出 CSV。每个目标物必须返回新建或复用 ID
+才会在界面标记成功。写入时会复用同一 Excel 实例，批量读取校验范围并重试
+短暂的 COM 忙状态，避免大表逐单元格扫描导致超时。
 详细边界见
 [`docs/npc-registration.md`](docs/npc-registration.md)。
 
@@ -222,7 +231,7 @@ powershell -ExecutionPolicy Bypass -File scripts\publish-update.ps1
 - **Mira AI**：前端调用本地 Vite/Node 桥，桥接服务通过 `lark-cli` 搜索 Mira、发送严格 JSON 请求并轮询回复。
 - **自动降级**：飞书未授权、回复非 JSON、Schema 错误、台词遗漏或重复时，自动使用规则导演，并在界面显示原因。TRAE 等待达到上限时仅结束本次界面等待，后台任务继续保留。
 - **已有音效推荐**：三种导演都会结合整段对话、场景、脚步和明确动作推荐已有资产，并绑定具体台词节点。音频页只显示当前分镜内容命中的建议，并提供试听与独立“写入本镜音效”入口。试听优先读取[音效资产表](https://bytedance.larkoffice.com/wiki/Tby3w6y0EiLTdfktBeecuvminbd?table=tblky7jbQIOlk44n&view=vewNcXGzda)中的 WAV 附件；远端缺失时从当前 UE 项目的 `WwiseAudio/Windows` 解析 WEM，使用内置 vgmstream 转码并回传远端。未生成媒体的资产会禁用播放按钮并说明原因。“导出到 UE”弹窗中也可与镜头分开批量勾选音效并写入 `SoundEffect`，节点原有 `DelayTime` 保持不变。目录可在设置中手动从[游戏音效资产编目](https://bytedance.larkoffice.com/docx/THMEdPSFfocRLgxh4qkcY6cin8g)同步；没有足够匹配时不强行推荐。
-- **对话配乐推荐**：应用将整段对白、剧情梗概和导演情绪走向与[音乐资料库](https://bytedance.larkoffice.com/wiki/Tby3w6y0EiLTdfktBeecuvminbd?table=tblXRZRyNviXeFSr&view=vew8FeUzEf)中的标签、备注和资源标识匹配，在开场和必要的情绪转折节点推荐配乐。音频页只显示当前分镜覆盖的建议并支持试听；附件首次试听时按需下载到本地缓存，不在目录同步时批量拉取。导出弹窗可独立勾选镜头、音效和音乐，音乐写入 `BackgroundMusic.CurrentUint32`，原有 `DelayBackgroundMusicTime` 保持不变。
+- **对话配乐推荐**：应用将完整对白、剧情梗概和导演情绪走向与[音乐资料库](https://bytedance.larkoffice.com/wiki/Tby3w6y0EiLTdfktBeecuvminbd?table=tblXRZRyNviXeFSr&view=vew8FeUzEf)中的标签、备注和资源标识加权匹配，从开场建立主配乐，只在足够明确且间隔合理的情绪转折节点建议切换；没有强情绪信号时使用克制的日常音乐。音频页显示当前镜头开始或沿用中的配乐并支持试听；附件首次试听时按需下载到本地缓存，不在目录同步时批量拉取。导出弹窗可独立勾选镜头、音效和音乐，音乐写入 `BackgroundMusic.CurrentUint32`，原有 `DelayBackgroundMusicTime` 保持不变。
 
 ### 音乐音频分析
 

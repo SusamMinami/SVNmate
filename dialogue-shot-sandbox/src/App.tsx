@@ -973,6 +973,7 @@ function ShotInspector({
             />
             <MusicRecommendations
               recommendations={musicRecommendations}
+              dialogueOrder={sequence.rows.map((row) => row.id)}
               currentDialogueIds={shot.dialogueIds}
             />
           </>
@@ -2858,37 +2859,39 @@ export default function App() {
             )}
           </section>
 
-          <section className="panel-section cast-section">
-            <div className="section-label">
-              <span>场景角色</span>
-              <small>{sequence.participants.length} 位</small>
-            </div>
-            <div className="cast-list">
-              {sequence.participants.map((participant) => (
-                <div className="cast-row" key={participant.instanceId}>
-                  <span
-                    className="cast-row__slot"
-                    style={{ backgroundColor: participant.color }}
-                  >
-                    {participant.slot}
-                  </span>
-                  <div>
-                    <strong>{participant.name}</strong>
-                    <small>
-                      {dialogueParticipantSlotSet.has(participant.slot)
-                        ? "对白角色 · "
-                        : "背景 NPC · "}
-                      {participant.positionSource === "blueprint"
-                        ? `BP ${participant.modelIndex ?? "?"} · 初始朝向 ${participantFacingYawDegrees(participant).toFixed(0)}° · `
-                        : `NPC ${participant.id} · `}
-                      登场 {participant.entryDialogueId} · 离场{" "}
-                      {participant.exitDialogueId ?? "本场结束"}
-                    </small>
+          {!activeShot && (
+            <section className="panel-section cast-section">
+              <div className="section-label">
+                <span>场景角色</span>
+                <small>{sequence.participants.length} 位</small>
+              </div>
+              <div className="cast-list">
+                {sequence.participants.map((participant) => (
+                  <div className="cast-row" key={participant.instanceId}>
+                    <span
+                      className="cast-row__slot"
+                      style={{ backgroundColor: participant.color }}
+                    >
+                      {participant.slot}
+                    </span>
+                    <div>
+                      <strong>{participant.name}</strong>
+                      <small>
+                        {dialogueParticipantSlotSet.has(participant.slot)
+                          ? "对白角色 · "
+                          : "背景 NPC · "}
+                        {participant.positionSource === "blueprint"
+                          ? `BP ${participant.modelIndex ?? "?"} · 初始朝向 ${participantFacingYawDegrees(participant).toFixed(0)}° · `
+                          : `NPC ${participant.id} · `}
+                        登场 {participant.entryDialogueId} · 离场{" "}
+                        {participant.exitDialogueId ?? "本场结束"}
+                      </small>
+                    </div>
                   </div>
-                </div>
-              ))}
-            </div>
-          </section>
+                ))}
+              </div>
+            </section>
+          )}
 
           <section
             className={`shot-list-section ${
@@ -3131,6 +3134,8 @@ export default function App() {
               </div>
               <StageView
                 participants={sequence.participants}
+                dialogueParticipantSlots={dialogueParticipantSlotSet}
+                showCastRoster
                 shot={stageShot ?? activeShot}
                 shotIndex={activeIndex}
                 shotCount={shots.length}

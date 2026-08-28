@@ -175,6 +175,16 @@ function optionalBoolean(value: string): boolean | null {
   return null;
 }
 
+function hasConfiguredValue(value: string): boolean {
+  const normalized = value.trim();
+  return Boolean(normalized) && !/^0(?:\.0+)?$/.test(normalized);
+}
+
+function hasPositiveInteger(value: string): boolean {
+  const parsed = optionalInteger(value);
+  return parsed !== null && parsed > 0;
+}
+
 function firstReference(value: string): string | null {
   return value.match(/(?<!\d)\d+(?!\d)/)?.[0] ?? null;
 }
@@ -288,12 +298,24 @@ function parseNpcs(text: string): Map<number, NpcProfile> {
       resourceIndex: optionalIndex(members, "NPC.resource_id"),
       titleIndex: optionalIndex(members, "NPC.title"),
       canTurnIndex: optionalIndex(members, "NPC.ifturn"),
+      chat2Index: optionalIndex(members, "NPC.npcchat2"),
+      chat3Index: optionalIndex(members, "NPC.npcchat3"),
+      avatarPathIndex: optionalIndex(members, "NPC.avatarpath"),
+      headIconIndex: optionalIndex(members, "NPC.headicon"),
     }),
     (
       row,
       _rowNumber,
       { indexes },
-      { resourceIndex, titleIndex, canTurnIndex },
+      {
+        resourceIndex,
+        titleIndex,
+        canTurnIndex,
+        chat2Index,
+        chat3Index,
+        avatarPathIndex,
+        headIconIndex,
+      },
     ) => {
       const id = optionalInteger(valueAt(row, indexes, "NPC.id"));
       if (id === null || id <= 0) {
@@ -307,6 +329,12 @@ function parseNpcs(text: string): Map<number, NpcProfile> {
         resourceId: optionalInteger(optionalValueAt(row, resourceIndex)),
         title: optionalValueAt(row, titleIndex),
         canTurn: optionalBoolean(optionalValueAt(row, canTurnIndex)),
+        hasDialogue:
+          hasConfiguredValue(optionalValueAt(row, chat2Index)) ||
+          hasConfiguredValue(optionalValueAt(row, chat3Index)),
+        hasAvatar:
+          hasPositiveInteger(optionalValueAt(row, avatarPathIndex)) ||
+          hasPositiveInteger(optionalValueAt(row, headIconIndex)),
       });
     },
   );

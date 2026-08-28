@@ -15,8 +15,10 @@ import {
   useState,
 } from "react";
 import * as THREE from "three";
+import { participantFacingYawDegrees } from "../director/actorActionPlanner";
 import type {
   DialogueParticipant,
+  ParticipantSlot,
   ShotPlan,
   Vec3,
 } from "../types";
@@ -28,6 +30,8 @@ interface StageViewProps {
   shotCount?: number;
   active?: boolean;
   applyShotFacingOverrides?: boolean;
+  dialogueParticipantSlots?: ReadonlySet<ParticipantSlot>;
+  showCastRoster?: boolean;
 }
 
 interface CharacterProps {
@@ -38,6 +42,8 @@ interface CharacterProps {
   showDirectionIndicator?: boolean;
   presence?: "present" | "pending";
 }
+
+const EMPTY_PARTICIPANT_SLOTS: ReadonlySet<ParticipantSlot> = new Set();
 
 function DirectionIndicator({
   color,
@@ -627,6 +633,69 @@ function CameraFrameGuides({
   );
 }
 
+function SceneCastRoster({
+  participants,
+  dialogueParticipantSlots,
+  dialogueEndIndex,
+}: {
+  participants: DialogueParticipant[];
+  dialogueParticipantSlots: ReadonlySet<ParticipantSlot>;
+  dialogueEndIndex: number;
+}) {
+  return (
+    <section className="stage-cast" aria-label="场景角色">
+      <div className="stage-cast__heading">
+        <span>场景角色</span>
+        <small>{participants.length}</small>
+      </div>
+      <div className="stage-cast__list" role="list">
+        {participants.map((participant) => {
+          const presence =
+            participant.entryIndex > dialogueEndIndex
+              ? "pending"
+              : participant.exitIndex !== null &&
+                  participant.exitIndex < dialogueEndIndex
+                ? "exited"
+                : "present";
+          const role = dialogueParticipantSlots.has(participant.slot)
+            ? "对白"
+            : "背景";
+          const roleLabel = role === "对白" ? "对白角色" : "背景 NPC";
+          const source =
+            participant.positionSource === "blueprint"
+              ? `BP ${participant.modelIndex ?? "?"} · 初始朝向 ${participantFacingYawDegrees(participant).toFixed(0)}°`
+              : `NPC ${participant.id}`;
+          const presenceLabel =
+            presence === "pending"
+              ? "未登场"
+              : presence === "exited"
+                ? "已离场"
+                : "在场";
+          return (
+            <div
+              className="stage-cast__item"
+              data-presence={presence}
+              key={participant.instanceId}
+              role="listitem"
+              title={`${roleLabel} · ${source} · 登场 ${participant.entryDialogueId} · 离场 ${participant.exitDialogueId ?? "本场结束"}`}
+            >
+              <span style={{ backgroundColor: participant.color }}>
+                {participant.slot}
+              </span>
+              <div>
+                <strong>{participant.name}</strong>
+                <small>
+                  {role} · {presenceLabel}
+                </small>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 function StageViewComponent({
   participants,
   shot,
@@ -634,6 +703,8 @@ function StageViewComponent({
   shotCount = 1,
   active = true,
   applyShotFacingOverrides = true,
+  dialogueParticipantSlots = EMPTY_PARTICIPANT_SLOTS,
+  showCastRoster = false,
 }: StageViewProps) {
   const [viewMode, setViewMode] = useState<"shot" | "blocking">("shot");
   const pointerProbeRef = useRef<HTMLDivElement>(null);
@@ -725,13 +796,14 @@ function StageViewComponent({
     <div className={`stage-view stage-view--${viewMode}`}>
       <div
         className="stage-main"
-        onPointerMove={updatePointerProbe}
         onPointerLeave={hidePointerProbe}
       >
         <div
           className={`stage-main__frame ${
             showingShot ? "" : "stage-main__frame--blocking"
           }`}
+          onPointerMove={updatePointerProbe}
+          onPointerLeave={hidePointerProbe}
         >
           {showingShot ? (
             <Canvas
@@ -766,20 +838,7 @@ function StageViewComponent({
 
           {showingShot && <CameraFrameGuides shot={shot} />}
 
-          <div
-            className="stage-transition"
-            key={`${shot.id}-${viewMode}`}
-            aria-hidden="true"
-          >
-            <i />
-          </div>
-
-          <div className="stage-instrumentation" aria-hidden="true">
-            <div className="stage-sequence">
-              <span>SHOT</span>
-              <strong>{String(shotIndex + 1).padStart(2, "0")}</strong>
-              <small>/{String(Math.max(shotCount, 1)).padStart(2, "0")}</small>
-            </div>
+          <div className="stage-frame-instrumentation" aria-hidden="true">
             <i className="stage-ruler stage-ruler--top" />
             <i className="stage-ruler stage-ruler--left" />
             <i className="stage-corner stage-corner--top-left" />
@@ -808,19 +867,43 @@ function StageViewComponent({
               </>
             )}
           </div>
+        </div>
 
-          <div className="shot-hud">
-            <span>{showingShot ? shot.label : "俯视调度"}</span>
-            <strong>
-              {showingShot
-                ? shot.endFocalLength === shot.focalLength
-                  ? `${shot.focalLength} mm`
-                  : `${shot.focalLength}-${shot.endFocalLength} mm`
-                : pendingCount > 0
-                  ? `${stagedPresentParticipants.length} 人在场 · ${pendingCount} 人未登场`
-                  : `${stagedPresentParticipants.length} 人均已登场`}
-            </strong>
+        <div
+          className="stage-transition"
+          key={`${shot.id}-${viewMode}`}
+          aria-hidden="true"
+        >
+          <i />
+        </div>
+
+        <div className="stage-instrumentation" aria-hidden="true">
+          <div className="stage-sequence">
+            <span>SHOT</span>
+            <strong>{String(shotIndex + 1).padStart(2, "0")}</strong>
+            <small>/{String(Math.max(shotCount, 1)).padStart(2, "0")}</small>
           </div>
+        </div>
+
+        {showCastRoster && (
+          <SceneCastRoster
+            participants={participants}
+            dialogueParticipantSlots={dialogueParticipantSlots}
+            dialogueEndIndex={shot.dialogueEndIndex}
+          />
+        )}
+
+        <div className="shot-hud">
+          <span>{showingShot ? shot.label : "俯视调度"}</span>
+          <strong>
+            {showingShot
+              ? shot.endFocalLength === shot.focalLength
+                ? `${shot.focalLength} mm`
+                : `${shot.focalLength}-${shot.endFocalLength} mm`
+              : pendingCount > 0
+                ? `${stagedPresentParticipants.length} 人在场 · ${pendingCount} 人未登场`
+                : `${stagedPresentParticipants.length} 人均已登场`}
+          </strong>
         </div>
       </div>
 

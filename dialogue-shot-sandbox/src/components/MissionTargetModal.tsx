@@ -1,11 +1,13 @@
 import {
   AlertTriangle,
   ArrowLeft,
+  ArrowRight,
   ArrowRightLeft,
   Boxes,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
+  Crosshair,
   FileSearch,
   Link2,
   LoaderCircle,
@@ -21,7 +23,10 @@ import {
 import { type FormEvent, useState } from "react";
 import { NpcRegistrationModal } from "./NpcRegistrationModal";
 import { resolveMissionTargets } from "../data/missionTargetResolver";
-import { classifyMissionTargetSelection } from "../data/missionTargetSelection";
+import {
+  classifyMissionTargetSelection,
+  type MissionTargetSelectionClassification,
+} from "../data/missionTargetSelection";
 import type {
   BackgroundPropImportPreview,
   DialogueModelRegistrationSlot,
@@ -31,6 +36,7 @@ import type {
   MissionTargetPreviewLoadResult,
   MissionTargetPreviewPlan,
   MissionTargetUpdateItem,
+  SelectedLevelActorsResult,
 } from "../types";
 import {
   appendMissionTargetBlueprint,
@@ -59,6 +65,12 @@ interface MapLoadDecision {
   currentMapAssetPath: string;
   phase: "choose" | "manual";
   error: string;
+}
+
+interface UeTargetSelectionReview {
+  taskId: string;
+  selection: SelectedLevelActorsResult;
+  classification: MissionTargetSelectionClassification;
 }
 
 function typeLabel(type: number | null): string {
@@ -173,6 +185,8 @@ export function MissionTargetModal({
   const [backgroundMatchedTargetIds, setBackgroundMatchedTargetIds] = useState<
     string[]
   >([]);
+  const [ueTargetSelectionReview, setUeTargetSelectionReview] =
+    useState<UeTargetSelectionReview | null>(null);
   const [existingSlotsExpanded, setExistingSlotsExpanded] = useState(false);
   const [backgroundPropError, setBackgroundPropError] = useState("");
   const [mapLoadDecision, setMapLoadDecision] =
@@ -262,6 +276,15 @@ export function MissionTargetModal({
         reason.startsWith("对话尚未配置") ||
         reason.startsWith("对话尚未启用虚拟场景"),
     ) ?? [];
+  const activeUeTargetSelectionReview =
+    plan && ueTargetSelectionReview?.taskId === plan.taskId
+      ? ueTargetSelectionReview
+      : null;
+  const ueSelectedTargetIds = new Set(
+    activeUeTargetSelectionReview?.classification.matches.map(
+      (match) => match.targetId,
+    ) ?? [],
+  );
 
   function applyBlueprintInspection(
     inspection: MissionTargetBlueprintInspection,
@@ -310,6 +333,7 @@ export function MissionTargetModal({
     event.preventDefault();
     setError("");
     setStatus("");
+    setUeTargetSelectionReview(null);
     try {
       const nextPlan = resolveMissionTargets(database, taskId);
       setPlan(nextPlan);
@@ -558,7 +582,7 @@ export function MissionTargetModal({
   }
 
   async function inspectBackgroundProps() {
-    if (!blueprintName.trim()) {
+    if (!blueprintName.trim() && !taskId.trim()) {
       return;
     }
     setBusy(true);
@@ -566,13 +590,34 @@ export function MissionTargetModal({
     setStatus("");
     setBackgroundPropError("");
     try {
+      let activePlan = plan;
+      if (
+        taskId.trim() &&
+        (!activePlan || activePlan.taskId !== taskId.trim())
+      ) {
+        activePlan = resolveMissionTargets(database, taskId);
+        setPlan(activePlan);
+        setSelectedTargetIds(
+          new Set(activePlan.targets.map((target) => target.targetId)),
+        );
+        setBlueprintInspection(null);
+      }
       const selection = await readSelectedLevelActors();
       const classification =
-        plan && selection.actors.length > 0
-          ? classifyMissionTargetSelection(plan, selection)
+        activePlan
+          ? classifyMissionTargetSelection(activePlan, selection)
           : null;
       const matchedTargetIds = classification?.matchedTargetIds ?? [];
       const unmatchedActorRefs = classification?.unmatchedActorRefs ?? [];
+      setUeTargetSelectionReview(
+        activePlan && classification
+          ? {
+              taskId: activePlan.taskId,
+              selection,
+              classification,
+            }
+          : null,
+      );
       if (matchedTargetIds.length > 0) {
         setSelectedTargetIds(
           new Set([...existingTargetIds, ...matchedTargetIds]),
@@ -587,6 +632,27 @@ export function MissionTargetModal({
               : ""
           }`,
         );
+      }
+      if (!blueprintName.trim()) {
+        setBackgroundPropPreview(null);
+        setSelectedBackgroundActorRefs(new Set());
+        setBackgroundMatchedTargetIds([]);
+        if (selection.actors.length === 0) {
+          setStatus("UE 编辑器中没有选中 Actor");
+        } else if (classification && !classification.mapMatches) {
+          setStatus(
+            `UE 当前地图与任务 ${activePlan?.taskId} 的目标地图不一致，未匹配目标物`,
+          );
+        } else if (matchedTargetIds.length === 0) {
+          setStatus(
+            `UE 当前选择未匹配任务 ${activePlan?.taskId} 的目标物`,
+          );
+        } else if (unmatchedActorRefs.length > 0) {
+          setStatus(
+            `已识别任务目标物 ${matchedTargetIds.join("、")}；另有 ${unmatchedActorRefs.length} 个 Actor 未匹配`,
+          );
+        }
+        return;
       }
       if (
         matchedTargetIds.length > 0 &&
@@ -613,6 +679,7 @@ export function MissionTargetModal({
         ),
       );
     } catch (previewError) {
+      setUeTargetSelectionReview(null);
       setBackgroundMatchedTargetIds([]);
       setError(
         previewError instanceof Error
@@ -1154,6 +1221,7 @@ export function MissionTargetModal({
           }
         : current,
     );
+    setUeTargetSelectionReview(null);
     setStatus(`已修改 ${items.length} 个目标物的位置或旋转（Excel 未保存）`);
   }
 
@@ -1185,13 +1253,17 @@ export function MissionTargetModal({
       className={embedded ? "button workspace-floating-command" : "button"}
       type="button"
       onClick={() => void inspectBackgroundProps()}
-      disabled={busy || !blueprintName.trim()}
+      disabled={busy || (!taskId.trim() && !blueprintName.trim())}
       title={
-        blueprintName.trim()
+        taskId.trim()
           ? plan
-            ? "读取 UE 当前选择，匹配任务目标物并审核未匹配资源"
-            : "读取 UE 当前选择，审核后直接写入当前 BP"
-          : "请先填写 BP 文件名"
+            ? blueprintName.trim()
+              ? "读取 UE 当前选择，匹配任务目标物并审核未匹配资源"
+              : "读取 UE 当前选择并识别任务目标物"
+            : "解析任务节点并识别 UE 当前选择"
+          : blueprintName.trim()
+            ? "读取 UE 当前选择，审核后直接写入当前 BP"
+            : "请先输入任务节点或填写 BP 文件名"
       }
     >
       {busy ? (
@@ -1254,6 +1326,7 @@ export function MissionTargetModal({
                 setSelectedTargetIds(new Set());
                 setTargetOverrides(new Map());
                 setBlueprintInspection(null);
+                setUeTargetSelectionReview(null);
                 setError("");
                 setStatus("");
               }}
@@ -1460,6 +1533,100 @@ export function MissionTargetModal({
                 <code title={plan.mapAssetPath}>{plan.mapAssetPath}</code>
               </section>
 
+              {activeUeTargetSelectionReview && (
+                <section
+                  className={`mission-target-ue-selection ${
+                    activeUeTargetSelectionReview.classification.mapMatches
+                      ? ""
+                      : "is-warning"
+                  }`}
+                  aria-label="UE 当前选择识别结果"
+                >
+                  <header>
+                    <span>
+                      <Crosshair size={15} />
+                      <strong>UE 当前选择</strong>
+                    </span>
+                    <small title={activeUeTargetSelectionReview.selection.mapAssetPath}>
+                      {activeUeTargetSelectionReview.classification.mapMatches
+                        ? `${activeUeTargetSelectionReview.classification.matches.length} / ${activeUeTargetSelectionReview.selection.actors.length} 已匹配`
+                        : "地图不一致"}
+                    </small>
+                  </header>
+                  <div className="mission-target-ue-selection__list">
+                    {activeUeTargetSelectionReview.selection.actors.length ===
+                    0 ? (
+                      <p>UE 编辑器中没有选中 Actor</p>
+                    ) : (
+                      activeUeTargetSelectionReview.selection.actors.map(
+                        (actor) => {
+                          const match =
+                            activeUeTargetSelectionReview.classification.matches.find(
+                              (candidate) =>
+                                candidate.actorRef === actor.actorRef,
+                            );
+                          const target = match
+                            ? plan.targets.find(
+                                (candidate) =>
+                                  candidate.targetId === match.targetId,
+                              )
+                            : null;
+                          return (
+                            <div
+                              className={`mission-target-ue-selection__item ${
+                                target ? "" : "is-unmatched"
+                              }`}
+                              key={actor.actorRef}
+                            >
+                              <span title={actor.actorRef}>
+                                <strong>{actor.label}</strong>
+                                <small>
+                                  {actor.classPath.split("/").at(-1)}
+                                </small>
+                              </span>
+                              <ArrowRight size={14} />
+                              {target ? (
+                                <>
+                                  <span>
+                                    <strong>目标物 {target.targetId}</strong>
+                                    <small>
+                                      {target.type === 1
+                                        ? `${target.npcName || target.description || "未知 NPC"}${
+                                            target.npcId
+                                              ? ` · NPC ${target.npcId}`
+                                              : ""
+                                          }`
+                                        : `${typeLabel(target.type)} · ${
+                                            target.description || "未填写描述"
+                                          }`}
+                                    </small>
+                                  </span>
+                                  <small className="mission-target-ue-selection__method">
+                                    {match?.method === "preview_identity"
+                                      ? "预览标识"
+                                      : "模型与位置"}
+                                  </small>
+                                </>
+                              ) : (
+                                <span>
+                                  <strong>未匹配</strong>
+                                  <small>
+                                    {activeUeTargetSelectionReview
+                                      .classification.mapMatches
+                                      ? "不属于当前任务目标物"
+                                      : "当前 UE 地图与任务地图不一致"}
+                                  </small>
+                                </span>
+                              )}
+                            </div>
+                          );
+                        },
+                      )
+                    )}
+                  </div>
+                </section>
+              )}
+
               {plan.warnings.length > 0 && (
                 <section className="mission-target-warnings">
                   {plan.warnings.map((warning) => (
@@ -1600,7 +1767,14 @@ export function MissionTargetModal({
                                    }
                            : dialogueModelLabel(slot, selected, true);
                          return (
-                           <tr key={target.targetId}>
+                          <tr
+                            className={
+                              ueSelectedTargetIds.has(target.targetId)
+                                ? "mission-target-row--ue-selected"
+                                : undefined
+                            }
+                            key={target.targetId}
+                          >
                              <td className="mission-target-select">
                                <input
                                  type="checkbox"
@@ -1616,7 +1790,15 @@ export function MissionTargetModal({
                                />
                              </td>
                              <td>
-                               <strong>{target.targetId}</strong>
+                               <span className="mission-target-id">
+                                 <strong>{target.targetId}</strong>
+                                 {ueSelectedTargetIds.has(target.targetId) && (
+                                   <span>
+                                     <Crosshair size={10} />
+                                     UE 已选
+                                   </span>
+                                 )}
+                               </span>
                                <small>
                                  {target.description || "未填写描述"}
                                </small>

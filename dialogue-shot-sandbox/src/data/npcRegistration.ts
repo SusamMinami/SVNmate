@@ -2,6 +2,8 @@ import type {
   DialogueDatabase,
   MissionPositionRow,
   NpcRegistrationCandidate,
+  NpcRegistrationWriteItem,
+  NpcRegistrationWriteScope,
   SelectedLevelActor,
   SelectedLevelActorsResult,
 } from "../types";
@@ -97,6 +99,19 @@ export function formatUnrealRotator(value: {
   roll: number;
 }): string {
   return `(Pitch=${formatNumber(value.pitch)},Yaw=${formatNumber(value.yaw)},Roll=${formatNumber(value.roll)})`;
+}
+
+export function registrationWriteScope(
+  items: readonly NpcRegistrationWriteItem[],
+): NpcRegistrationWriteScope {
+  return items.every(
+    (item) =>
+      item.existingModelId !== null &&
+      item.existingNpcId !== null &&
+      item.newNpc === null,
+  )
+    ? "target_only"
+    : "all";
 }
 
 function angleDistance(left: number, right: number): number {

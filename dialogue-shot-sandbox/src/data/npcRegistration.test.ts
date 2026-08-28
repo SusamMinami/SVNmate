@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
-import type { DialogueDatabase, SelectedLevelActorsResult } from "../types";
+import type {
+  DialogueDatabase,
+  NpcRegistrationWriteItem,
+  SelectedLevelActorsResult,
+} from "../types";
 import {
   buildNpcRegistrationCandidates,
   formatUnrealRotator,
   formatUnrealVector,
   parseUnrealRotatorText,
   parseUnrealVectorText,
+  registrationWriteScope,
 } from "./npcRegistration";
 
 function database(): DialogueDatabase {
@@ -198,5 +203,42 @@ describe("UE transform clipboard parsing", () => {
     expect(parseUnrealVectorText("X=1,Y=2")).toBeNull();
     expect(parseUnrealRotatorText("Pitch=0,Yaw=90")).toBeNull();
     expect(parseUnrealRotatorText("X=0,Y=0,Z=0")).toBeNull();
+  });
+});
+
+describe("registrationWriteScope", () => {
+  const reusableItem: NpcRegistrationWriteItem = {
+    actorRef: "BP_Guard_C_1",
+    label: "守卫",
+    classPath: "/Game/Test/BP_Guard.BP_Guard_C",
+    transform: {
+      location: { x: 1, y: 2, z: 3 },
+      rotation: { pitch: 0, yaw: 90, roll: 0 },
+      scale: { x: 1, y: 1, z: 1 },
+    },
+    mapId: "1204",
+    existingModelId: 200135,
+    existingNpcId: 101968,
+    existingTargetId: null,
+    canTurn: true,
+    newNpc: null,
+  };
+
+  it("uses target-only registration when every model and NPC is reusable", () => {
+    expect(registrationWriteScope([reusableItem])).toBe("target_only");
+  });
+
+  it("keeps full registration when any NPC or model must be created", () => {
+    expect(
+      registrationWriteScope([
+        reusableItem,
+        {
+          ...reusableItem,
+          actorRef: "BP_New_C_1",
+          existingNpcId: null,
+          newNpc: { name: "新角色", title: "", canTurn: true },
+        },
+      ]),
+    ).toBe("all");
   });
 });
