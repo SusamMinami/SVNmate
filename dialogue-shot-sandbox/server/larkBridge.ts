@@ -1,11 +1,16 @@
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, rm } from "node:fs/promises";
+import { mkdir, readFile, rm, stat } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { promisify } from "node:util";
 import type { Plugin, ViteDevServer, PreviewServer } from "vite";
 import { SOUND_EFFECT_CATALOG_SOURCE } from "../src/data/soundEffectCatalog";
+import {
+  MUSIC_ANALYSIS_TABLE_ID,
+  MUSIC_BASE_TOKEN,
+  MUSIC_TABLE_ID,
+} from "../src/data/musicCatalog";
 import {
   DirectorInputSchema,
   MiraDirectorResponseSchema,
@@ -22,6 +27,15 @@ import {
   loadSoundEffectCatalog,
   syncSoundEffectCatalog,
 } from "./soundEffectCatalogStore";
+import { refreshSoundEffectLibrary } from "./soundEffectLibraryStore";
+import { streamAudioFile } from "./audioStream";
+import {
+  ensureMusicDirectories,
+  loadMusicCatalog,
+  musicAnalysisRecordPath,
+  musicAttachmentPath,
+  musicCatalogRecordPath,
+} from "./musicCatalogStore";
 
 const execFileAsync = promisify(execFile);
 
@@ -702,10 +716,141 @@ export async function routeLarkRequest(
       request.method === "POST" &&
       url.pathname === "/api/lark/sound-effects/sync"
     ) {
+      const catalog = await syncSoundEffectCatalog(fetchSoundEffectDocument);
+      await refreshSoundEffectLibrary().catch((error) => {
+        console.error("[sound-effect-library] remote cache sync failed", error);
+      });
       sendJson(response, 200, {
         ok: true,
-        data: await syncSoundEffectCatalog(fetchSoundEffectDocument),
+        data: catalog,
       });
+      return true;
+    }
+    if (
+      request.method === "GET" &&
+      url.pathname === "/api/lark/music/catalog"
+    ) {
+      sendJson(response, 200, { ok: true, data: await loadMusicCatalog() });
+      return true;
+    }
+    if (
+      request.method === "POST" &&
+      url.pathname === "/api/lark/music/sync"
+    ) {
+      await ensureMusicDirectories();
+      const recordPath = musicCatalogRecordPath();
+      const analysisPath = musicAnalysisRecordPath();
+      const projectRoot = dirname(dirname(recordPath));
+      const relativeRecordPath = `./${relative(projectRoot, recordPath).replaceAll("\\", "/")}`;
+      const relativeAnalysisPath =
+        `./${relative(projectRoot, analysisPath).replaceAll("\\", "/")}`;
+      const result = unwrapData<Record<string, unknown>>(
+        await runLark(
+          [
+            "base",
+            "+record-list",
+            "--base-token",
+            MUSIC_BASE_TOKEN,
+            "--table-id",
+            MUSIC_TABLE_ID,
+            "--format",
+            "ndjson",
+            "--output",
+            relativeRecordPath,
+            "--overwrite",
+            "--as",
+            "user",
+          ],
+          120_000,
+          projectRoot,
+        ),
+      );
+      if (result.has_more === true) {
+        throw new Error("音乐资料库超过 2000 条，请缩小同步范围");
+      }
+      const analysisResult = unwrapData<Record<string, unknown>>(
+        await runLark(
+          [
+            "base",
+            "+record-list",
+            "--base-token",
+            MUSIC_BASE_TOKEN,
+            "--table-id",
+            MUSIC_ANALYSIS_TABLE_ID,
+            "--format",
+            "ndjson",
+            "--output",
+            relativeAnalysisPath,
+            "--overwrite",
+            "--as",
+            "user",
+          ],
+          120_000,
+          projectRoot,
+        ),
+      );
+      if (analysisResult.has_more === true) {
+        throw new Error("音乐分析表超过 2000 条，请缩小同步范围");
+      }
+      const snapshot = await loadMusicCatalog(Number(result.rev ?? 0));
+      if (snapshot.entries.length === 0) {
+        throw new Error("音乐资料库没有可用于 UE 状态映射的记录");
+      }
+      sendJson(response, 200, {
+        ok: true,
+        data: snapshot,
+      });
+      return true;
+    }
+    if (
+      request.method === "GET" &&
+      url.pathname === "/api/lark/music/file"
+    ) {
+      const recordId = url.searchParams.get("recordId") ?? "";
+      const fileToken = url.searchParams.get("fileToken") ?? "";
+      const fileName = url.searchParams.get("fileName") ?? "music.wav";
+      if (
+        !/^rec[A-Za-z0-9]+$/.test(recordId) ||
+        !/^[A-Za-z0-9_-]{8,}$/.test(fileToken)
+      ) {
+        throw new Error("音乐附件参数无效");
+      }
+      await ensureMusicDirectories();
+      const path = musicAttachmentPath(fileToken, fileName);
+      const projectRoot = dirname(dirname(dirname(path)));
+      const relativeAttachmentPath =
+        `./${relative(projectRoot, path).replaceAll("\\", "/")}`;
+      try {
+        const cached = await stat(path);
+        if (cached.size === 0) {
+          throw new Error("cached attachment is empty");
+        }
+      } catch {
+        unwrapData(
+          await runLark(
+            [
+              "base",
+              "+record-download-attachment",
+              "--base-token",
+              MUSIC_BASE_TOKEN,
+              "--table-id",
+              MUSIC_TABLE_ID,
+              "--record-id",
+              recordId,
+              "--file-token",
+              fileToken,
+              "--output",
+              relativeAttachmentPath,
+              "--overwrite",
+              "--as",
+              "user",
+            ],
+            180_000,
+            projectRoot,
+          ),
+        );
+      }
+      await streamAudioFile(request, response, path, fileName);
       return true;
     }
     if (request.method === "GET" && url.pathname === "/api/lark/mira/discover") {

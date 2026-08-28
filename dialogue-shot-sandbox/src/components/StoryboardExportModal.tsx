@@ -3,6 +3,7 @@ import {
   CheckCircle2,
   Layers3,
   LoaderCircle,
+  Music2,
   Upload,
   Volume2,
   X,
@@ -22,6 +23,7 @@ interface StoryboardExportModalProps {
   onConfirm: (
     selectedShotIndexes: number[],
     selectedSoundEffectIndexes: number[],
+    selectedMusicIndexes: number[],
   ) => void;
 }
 
@@ -68,6 +70,17 @@ export function StoryboardExportModal({
     );
   const selectedShots = new Set(selectedShotIndexes);
   const selectedSoundEffects = new Set(selectedSoundEffectIndexes);
+  const previewMusic = preview.music ?? [];
+  const [selectedMusicIndexes, setSelectedMusicIndexes] = useState<number[]>(
+    () => previewMusic.map((item) => item.musicIndex),
+  );
+  const selectedMusic = new Set(selectedMusicIndexes);
+  const selectedMusicRows = previewMusic.filter((item) =>
+    selectedMusic.has(item.musicIndex),
+  );
+  const changedMusic = selectedMusicRows.filter(
+    (item) => item.action !== "unchanged",
+  );
   const selectedNodes = preview.nodes.filter((node) =>
     selectedShots.has(node.shotIndex),
   );
@@ -114,8 +127,13 @@ export function StoryboardExportModal({
   const allSoundEffectsSelected =
     previewSoundEffects.length > 0 &&
     selectedSoundEffectIndexes.length === previewSoundEffects.length;
+  const allMusicSelected =
+    previewMusic.length > 0 &&
+    selectedMusicIndexes.length === previewMusic.length;
   const hasSelection =
-    selectedShotIndexes.length > 0 || selectedSoundEffectIndexes.length > 0;
+    selectedShotIndexes.length > 0 ||
+    selectedSoundEffectIndexes.length > 0 ||
+    selectedMusicIndexes.length > 0;
 
   useEffect(() => {
     setSelectedShotIndexes(
@@ -126,6 +144,7 @@ export function StoryboardExportModal({
         (soundEffect) => soundEffect.soundEffectIndex,
       ),
     );
+    setSelectedMusicIndexes(previewMusic.map((item) => item.musicIndex));
     setConfirmed(false);
   }, [preview.reviewToken]);
 
@@ -163,6 +182,22 @@ export function StoryboardExportModal({
       checked
         ? [...current, soundEffectIndex].sort((left, right) => left - right)
         : current.filter((index) => index !== soundEffectIndex),
+    );
+    setConfirmed(false);
+  }
+
+  function selectMusic(musicIndex: number, checked: boolean) {
+    setSelectedMusicIndexes((current) =>
+      checked
+        ? [...current, musicIndex].sort((a, b) => a - b)
+        : current.filter((index) => index !== musicIndex),
+    );
+    setConfirmed(false);
+  }
+
+  function selectAllMusic(checked: boolean) {
+    setSelectedMusicIndexes(
+      checked ? previewMusic.map((item) => item.musicIndex) : [],
     );
     setConfirmed(false);
   }
@@ -246,6 +281,10 @@ export function StoryboardExportModal({
                 {selectedSoundEffectIndexes.length} /{" "}
                 {previewSoundEffects.length}
               </dd>
+            </div>
+            <div>
+              <dt>音乐</dt>
+              <dd>{selectedMusicIndexes.length} / {previewMusic.length}</dd>
             </div>
             <div>
               <dt>启用相机</dt>
@@ -462,6 +501,62 @@ export function StoryboardExportModal({
               </table>
             </section>
           )}
+          {previewMusic.length > 0 && (
+            <section className="storyboard-export-table-section">
+              <div className="storyboard-export-table-section__title">
+                <Music2 size={14} />
+                <strong>音乐建议</strong>
+                <small>{selectedMusicIndexes.length} 项已选</small>
+              </div>
+              <table className="storyboard-export-table">
+                <thead>
+                  <tr>
+                    <th className="storyboard-export-table__select">
+                      <input
+                        type="checkbox"
+                        aria-label="选择全部音乐"
+                        title="选择全部音乐"
+                        checked={allMusicSelected}
+                        disabled={busy || Boolean(result)}
+                        onChange={(event) =>
+                          selectAllMusic(event.target.checked)
+                        }
+                      />
+                    </th>
+                    <th>台词节点</th>
+                    <th>推荐音乐</th>
+                    <th>当前状态</th>
+                    <th>目标状态</th>
+                    <th>处理</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {previewMusic.map((item) => (
+                    <tr
+                      key={`${item.dialogueId}-${item.stateId}`}
+                      data-action={item.action}
+                      data-selected={selectedMusic.has(item.musicIndex)}
+                    >
+                      <td className="storyboard-export-table__select">
+                        <input
+                          type="checkbox"
+                          aria-label={`选择音乐 ${item.musicName}`}
+                          checked={selectedMusic.has(item.musicIndex)}
+                          disabled={busy || Boolean(result)}
+                          onChange={(event) => selectMusic(item.musicIndex, event.target.checked)}
+                        />
+                      </td>
+                      <td><code>{item.dialogueId}</code></td>
+                      <td>{item.musicName}</td>
+                      <td><code>{item.existingStateId}</code></td>
+                      <td><code>{item.stateName}</code></td>
+                      <td><span className={`export-action export-action--${item.action}`}>{SOUND_EFFECT_ACTION_LABELS[item.action]}</span></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </section>
+          )}
         </div>
 
         <footer>
@@ -478,8 +573,9 @@ export function StoryboardExportModal({
               onChange={(event) => setConfirmed(event.target.checked)}
             />
             <span>
-              已核对 {changedNodes.length} 个镜头节点和{" "}
-              {changedSoundEffects.length} 个音效，并确认写入后保存 UE 对话资产
+              已核对 {changedNodes.length} 个镜头节点、{" "}
+              {changedSoundEffects.length} 个音效和 {changedMusic.length} 首音乐，
+              并确认写入后保存 UE 对话资产
             </span>
           </label>
           <div>
@@ -505,6 +601,7 @@ export function StoryboardExportModal({
                 onConfirm(
                   selectedShotIndexes,
                   selectedSoundEffectIndexes,
+                  selectedMusicIndexes,
                 )
               }
             >

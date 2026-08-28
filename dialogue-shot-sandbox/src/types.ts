@@ -371,6 +371,12 @@ export interface StoryboardExportRequest {
     dialogueId: string;
     assetName: string;
   }>;
+  music?: Array<{
+    dialogueId: string;
+    stateId: number;
+    stateName: string;
+    musicName: string;
+  }>;
 }
 
 export interface StoryboardExportNodePreview {
@@ -401,6 +407,29 @@ export interface StoryboardExportSoundEffectPreview {
   action: "add" | "replace" | "unchanged";
 }
 
+export interface SoundEffectPreviewInfo {
+  assetName: string;
+  available: boolean;
+  reason: string;
+  durationSeconds: number | null;
+  mediaCount: number;
+}
+
+export interface SoundEffectPreviewPrepared extends SoundEffectPreviewInfo {
+  available: true;
+  url: string;
+}
+
+export interface StoryboardExportMusicPreview {
+  musicIndex: number;
+  dialogueId: string;
+  stateId: number;
+  stateName: string;
+  musicName: string;
+  existingStateId: number;
+  action: "add" | "replace" | "unchanged";
+}
+
 export interface DialogueStoryboardExportPreview {
   reviewToken: string;
   dialogueId: string;
@@ -422,6 +451,10 @@ export interface DialogueStoryboardExportPreview {
   shots: StoryboardExportShotPreview[];
   nodes: StoryboardExportNodePreview[];
   soundEffects?: StoryboardExportSoundEffectPreview[];
+  music?: StoryboardExportMusicPreview[];
+  musicCount?: number;
+  changedMusicCount?: number;
+  replacedMusicCount?: number;
 }
 
 export interface DialogueStoryboardExportResult {
@@ -431,6 +464,7 @@ export interface DialogueStoryboardExportResult {
   dialogueAssetPath: string;
   changedNodeCount: number;
   changedSoundEffectCount?: number;
+  changedMusicCount?: number;
   saved: boolean;
 }
 

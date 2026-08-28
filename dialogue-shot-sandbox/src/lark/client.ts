@@ -1,4 +1,5 @@
 import type { SoundEffectCatalogSnapshot } from "../data/soundEffectCatalog";
+import type { MusicCatalogSnapshot } from "../data/musicCatalog";
 
 export interface MiraBotInfo {
   openId: string;
@@ -95,6 +96,16 @@ export function getSoundEffectCatalog(): Promise<SoundEffectCatalogSnapshot> {
 
 export function syncSoundEffectCatalog(): Promise<SoundEffectCatalogSnapshot> {
   return api<SoundEffectCatalogSnapshot>("/api/lark/sound-effects/sync", {
+    method: "POST",
+  });
+}
+
+export function getMusicCatalog(): Promise<MusicCatalogSnapshot> {
+  return api<MusicCatalogSnapshot>("/api/lark/music/catalog");
+}
+
+export function syncMusicCatalog(): Promise<MusicCatalogSnapshot> {
+  return api<MusicCatalogSnapshot>("/api/lark/music/sync", {
     method: "POST",
   });
 }

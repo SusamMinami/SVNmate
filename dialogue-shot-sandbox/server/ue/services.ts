@@ -4,6 +4,10 @@ import {
 } from "../excelRegistration";
 import { getConfigTablePaths } from "../configRepository";
 import {
+  inspectSoundEffectPreview,
+  prepareSoundEffectPreview,
+} from "../soundEffectPreview";
+import {
   appendMissionTargetBlueprint,
   applyBackgroundPropImport,
   clearMissionTargetPreview,
@@ -36,9 +40,11 @@ export const ueServices = {
   inspectMissionTargetBlueprint,
   inspectMissionTargetBlueprintCompatibility,
   inspectMissionTargetMap,
+  inspectSoundEffectPreview,
   loadMissionTargetPreview,
   openConfigTable,
   populateMissionTargetBlueprint,
+  prepareSoundEffectPreview,
   readBlueprintFormation,
   readSelectedLevelActors,
   registerBlueprintDialogueModels,

@@ -25,6 +25,8 @@ import type {
   NpcRegistrationWriteResult,
   NpcRegistrationWriteScope,
   SelectedLevelActorsResult,
+  SoundEffectPreviewInfo,
+  SoundEffectPreviewPrepared,
   StoryboardExportRequest,
 } from "../types";
 
@@ -295,6 +297,22 @@ export function inspectDialogueStoryboardExport(
   request: StoryboardExportRequest,
 ): Promise<DialogueStoryboardExportPreview> {
   return postUe("/api/ue/storyboard/inspect", request);
+}
+
+export function inspectSoundEffectPreview(
+  assetName: string,
+): Promise<SoundEffectPreviewInfo> {
+  return postUe("/api/ue/sound-effects/preview-info", { assetName });
+}
+
+export function prepareSoundEffectPreview(
+  assetName: string,
+): Promise<SoundEffectPreviewPrepared> {
+  return postUe(
+    "/api/ue/sound-effects/preview-prepare",
+    { assetName },
+    false,
+  );
 }
 
 export function exportDialogueStoryboard(

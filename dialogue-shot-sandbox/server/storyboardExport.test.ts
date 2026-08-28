@@ -39,6 +39,14 @@ function commonProperties(
       Alias: "SoundEffect",
       CurrentPath: "",
     },
+    {
+      Alias: "BackgroundMusic",
+      CurrentUint32: 1,
+    },
+    {
+      Alias: "DelayBackgroundMusicTime",
+      CurrentFloat: 2.5,
+    },
   ];
 }
 
@@ -569,8 +577,8 @@ describe("dialogue storyboard export", () => {
   });
 });
 
-describe("storyboard sound effect export", () => {
-  it("previews and writes selected sound effects without changing DelayTime", async () => {
+describe("storyboard sound and music export", () => {
+  it("previews and writes selected sound and music without changing delays", async () => {
     const connection = new FakeStoryboardExportConnection();
     const request = {
       ...exportRequest(),
@@ -578,6 +586,14 @@ describe("storyboard sound effect export", () => {
         {
           dialogueId: "735201",
           assetName: "A_SFX_Dialog_516918",
+        },
+      ],
+      music: [
+        {
+          dialogueId: "735201",
+          stateId: 13,
+          stateName: "Crisis_Breakout",
+          musicName: "情绪-危机爆发",
         },
       ],
     };
@@ -590,11 +606,24 @@ describe("storyboard sound effect export", () => {
       soundEffectCount: 1,
       changedSoundEffectCount: 1,
       replacedSoundEffectCount: 0,
+      musicCount: 1,
+      changedMusicCount: 1,
+      replacedMusicCount: 0,
       soundEffects: [
         {
           soundEffectIndex: 0,
           dialogueId: "735201",
           assetName: "A_SFX_Dialog_516918",
+          action: "add",
+        },
+      ],
+      music: [
+        {
+          musicIndex: 0,
+          dialogueId: "735201",
+          stateId: 13,
+          stateName: "Crisis_Breakout",
+          existingStateId: 1,
           action: "add",
         },
       ],
@@ -606,6 +635,7 @@ describe("storyboard sound effect export", () => {
     );
 
     expect(result.changedSoundEffectCount).toBe(1);
+    expect(result.changedMusicCount).toBe(1);
     const written = connection.commonByData.get("ActionData1") ?? [];
     expect(
       written.find((property) => property.Alias === "SoundEffect")
@@ -618,6 +648,15 @@ describe("storyboard sound effect export", () => {
         ?.CurrentFloat,
     ).toBe(0);
     expect(written[1].CurrentString).toBe("c1");
+    expect(
+      written.find((property) => property.Alias === "BackgroundMusic")
+        ?.CurrentUint32,
+    ).toBe(13);
+    expect(
+      written.find(
+        (property) => property.Alias === "DelayBackgroundMusicTime",
+      )?.CurrentFloat,
+    ).toBe(2.5);
   });
 
   it("allows exporting only selected sound effects", async () => {
@@ -654,6 +693,71 @@ describe("storyboard sound effect export", () => {
         (call) => call.action === "bp.get_blueprint_by_path",
       ),
     ).toBe(false);
+  });
+
+  it("allows exporting only selected music", async () => {
+    const connection = new FakeStoryboardExportConnection();
+    const request: StoryboardExportRequest = {
+      ...exportRequest(),
+      dialogueIds: [],
+      shots: [],
+      music: [
+        {
+          dialogueId: "735203",
+          stateId: 18,
+          stateName: "Sincere",
+          musicName: "情绪-真诚",
+        },
+      ],
+    };
+    const preview = await inspectDialogueStoryboardExport(
+      request,
+      () => connection,
+    );
+    const result = await exportDialogueStoryboard(
+      { ...request, reviewToken: preview.reviewToken },
+      () => connection,
+    );
+
+    expect(preview).toMatchObject({
+      cameraName: "",
+      nodes: [],
+      musicCount: 1,
+      changedMusicCount: 1,
+    });
+    expect(result).toMatchObject({
+      changedNodeCount: 0,
+      changedSoundEffectCount: 0,
+      changedMusicCount: 1,
+      saved: true,
+    });
+    expect(
+      connection.commonByData
+        .get("ActionData3")
+        ?.find((property) => property.Alias === "BackgroundMusic")
+        ?.CurrentUint32,
+    ).toBe(18);
+  });
+
+  it("rejects music nodes outside the current dialogue", async () => {
+    const connection = new FakeStoryboardExportConnection();
+    const request: StoryboardExportRequest = {
+      ...exportRequest(),
+      dialogueIds: [],
+      shots: [],
+      music: [
+        {
+          dialogueId: "999901",
+          stateId: 18,
+          stateName: "Sincere",
+          musicName: "情绪-真诚",
+        },
+      ],
+    };
+
+    await expect(
+      inspectDialogueStoryboardExport(request, () => connection),
+    ).rejects.toThrow("音乐节点 999901 不属于对话 7352");
   });
 });
 

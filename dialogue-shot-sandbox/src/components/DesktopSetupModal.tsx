@@ -7,12 +7,14 @@ import {
   FolderCog,
   LoaderCircle,
   LogIn,
+  Music2,
   PlugZap,
   RefreshCw,
   X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { SoundEffectCatalogSnapshot } from "../data/soundEffectCatalog";
+import type { MusicCatalogSnapshot } from "../data/musicCatalog";
 import type { LarkStatus } from "../lark/client";
 
 interface DesktopSetupModalProps {
@@ -23,9 +25,11 @@ interface DesktopSetupModalProps {
   larkStatus: LarkStatus | null;
   larkError: string;
   soundEffectCatalog: SoundEffectCatalogSnapshot;
+  musicCatalog: MusicCatalogSnapshot;
   onAuthorize: () => void;
   onRefreshLark: () => void;
   onSyncSoundEffectCatalog: () => Promise<SoundEffectCatalogSnapshot>;
+  onSyncMusicCatalog: () => Promise<MusicCatalogSnapshot>;
 }
 
 function updateLabel(snapshot: DesktopUpdateSnapshot): string {
@@ -55,9 +59,11 @@ export function DesktopSetupModal({
   larkStatus,
   larkError,
   soundEffectCatalog: initialSoundEffectCatalog,
+  musicCatalog: initialMusicCatalog,
   onAuthorize,
   onRefreshLark,
   onSyncSoundEffectCatalog,
+  onSyncMusicCatalog,
 }: DesktopSetupModalProps) {
   const desktop = window.shotSandboxDesktop;
   const [status, setStatus] = useState(initialStatus);
@@ -70,6 +76,7 @@ export function DesktopSetupModal({
   const [soundEffectCatalog, setSoundEffectCatalog] = useState(
     initialSoundEffectCatalog,
   );
+  const [musicCatalog, setMusicCatalog] = useState(initialMusicCatalog);
   const [catalogBusy, setCatalogBusy] = useState(false);
   const [catalogStatus, setCatalogStatus] = useState("");
   const [catalogError, setCatalogError] = useState("");
@@ -94,6 +101,10 @@ export function DesktopSetupModal({
   useEffect(() => {
     setSoundEffectCatalog(initialSoundEffectCatalog);
   }, [initialSoundEffectCatalog]);
+
+  useEffect(() => {
+    setMusicCatalog(initialMusicCatalog);
+  }, [initialMusicCatalog]);
 
   async function installIntegration() {
     if (!desktop) {
@@ -175,6 +186,20 @@ export function DesktopSetupModal({
           ? catalogSyncError.message
           : "音效资料库同步失败",
       );
+    } finally {
+      setCatalogBusy(false);
+    }
+  }
+
+  async function updateMusicCatalog() {
+    setCatalogBusy(true);
+    setCatalogError("");
+    try {
+      const snapshot = await onSyncMusicCatalog();
+      setMusicCatalog(snapshot);
+      setCatalogStatus(`已同步 ${snapshot.entries.length} 首音乐`);
+    } catch (error) {
+      setCatalogError(error instanceof Error ? error.message : "音乐资料库同步失败");
     } finally {
       setCatalogBusy(false);
     }
@@ -304,6 +329,38 @@ export function DesktopSetupModal({
                   <LogIn size={14} />
                 )}
                 {docsReady ? "同步" : "授权"}
+              </button>
+            </div>
+            <div className={larkReady ? "" : "is-warning"}>
+              <Music2 size={17} />
+              <span>
+                <strong>音乐资料库</strong>
+                <small>
+                  {musicCatalog.entries.length > 0
+                    ? `${musicCatalog.entries.length} 首${
+                        musicCatalog.analyzedCount > 0
+                          ? ` · ${musicCatalog.analyzedCount} 首已分析`
+                          : ""
+                      } · 版本 ${musicCatalog.revision}`
+                    : "尚未同步"}
+                  {musicCatalog.unmappedCount > 0
+                    ? ` · ${musicCatalog.unmappedCount} 条未映射`
+                    : ""}
+                </small>
+              </span>
+              <button
+                type="button"
+                aria-label="从飞书同步音乐资料库"
+                title={
+                  larkReady
+                    ? "从飞书多维表格同步音乐资料库"
+                    : "需先完成飞书多维表格授权"
+                }
+                disabled={catalogBusy || !larkReady}
+                onClick={() => void updateMusicCatalog()}
+              >
+                <RefreshCw size={14} />
+                同步
               </button>
             </div>
             <div className={status.traeDetected ? "" : "is-warning"}>

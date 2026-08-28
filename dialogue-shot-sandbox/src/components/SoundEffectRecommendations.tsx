@@ -1,6 +1,17 @@
-import { AudioLines, LoaderCircle, Upload } from "lucide-react";
+import {
+  AudioLines,
+  LoaderCircle,
+  Pause,
+  Play,
+  Upload,
+} from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import type { DirectorSoundEffectRecommendation } from "../director/contracts";
 import type { DialogueRow } from "../types";
+import {
+  inspectSoundEffectPreview,
+  prepareSoundEffectPreview,
+} from "../ue/client";
 
 interface SoundEffectRecommendationsProps {
   recommendations: DirectorSoundEffectRecommendation[];
@@ -30,6 +41,13 @@ function categoryLabel(
   }[category];
 }
 
+interface PreviewState {
+  available: boolean;
+  checking: boolean;
+  reason: string;
+  mediaCount: number;
+}
+
 export function SoundEffectRecommendations({
   recommendations,
   dialogueRows,
@@ -42,6 +60,139 @@ export function SoundEffectRecommendations({
   const currentRecommendations = recommendations.filter((recommendation) =>
     currentIds.has(recommendation.dialogueId),
   );
+  const [previewByAsset, setPreviewByAsset] = useState<
+    Record<string, PreviewState>
+  >({});
+  const [playing, setPlaying] = useState<string | null>(null);
+  const [preparing, setPreparing] = useState<string | null>(null);
+  const [playbackError, setPlaybackError] = useState("");
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const prepareRequestRef = useRef(0);
+  const previewScope = `${currentDialogueIds.join("|")}::${currentRecommendations
+    .map((recommendation) => recommendation.assetName)
+    .sort()
+    .join("|")}`;
+
+  useEffect(() => {
+    prepareRequestRef.current += 1;
+    audioRef.current?.pause();
+    audioRef.current = null;
+    setPlaying(null);
+    setPreparing(null);
+    setPlaybackError("");
+    const assetNames = Array.from(
+      new Set(
+        currentRecommendations.map(
+          (recommendation) => recommendation.assetName,
+        ),
+      ),
+    );
+    setPreviewByAsset(
+      Object.fromEntries(
+        assetNames.map((assetName) => [
+          assetName,
+          {
+            available: false,
+            checking: true,
+            reason: "正在检查 UE/Wwise 试听资源",
+            mediaCount: 0,
+          },
+        ]),
+      ),
+    );
+    let cancelled = false;
+    void Promise.all(
+      assetNames.map(async (assetName) => {
+        try {
+          const info = await inspectSoundEffectPreview(assetName);
+          return [assetName, { ...info, checking: false }] as const;
+        } catch (error) {
+          return [
+            assetName,
+            {
+              available: false,
+              checking: false,
+              reason:
+                error instanceof Error
+                  ? error.message
+                  : "无法检查 UE/Wwise 试听资源",
+              mediaCount: 0,
+            },
+          ] as const;
+        }
+      }),
+    ).then((entries) => {
+      if (!cancelled) {
+        setPreviewByAsset(Object.fromEntries(entries));
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [previewScope]);
+
+  useEffect(
+    () => () => {
+      prepareRequestRef.current += 1;
+      audioRef.current?.pause();
+      audioRef.current = null;
+    },
+    [],
+  );
+
+  async function togglePreview(
+    recommendation: DirectorSoundEffectRecommendation,
+  ) {
+    const key = soundEffectRecommendationKey(recommendation);
+    if (playing === key) {
+      audioRef.current?.pause();
+      setPlaying(null);
+      return;
+    }
+    audioRef.current?.pause();
+    setPlaying(null);
+    setPreparing(key);
+    setPlaybackError("");
+    const requestId = ++prepareRequestRef.current;
+    try {
+      const preview = await prepareSoundEffectPreview(
+        recommendation.assetName,
+      );
+      if (prepareRequestRef.current !== requestId) {
+        return;
+      }
+      const audio = new Audio(preview.url);
+      audio.preload = "auto";
+      audioRef.current = audio;
+      audio.onended = () => {
+        if (audioRef.current === audio) {
+          setPlaying(null);
+        }
+      };
+      audio.onerror = () => {
+        if (audioRef.current === audio) {
+          setPlaying(null);
+          setPlaybackError(`${recommendation.assetName} 试听加载失败`);
+        }
+      };
+      await audio.play();
+      if (audioRef.current === audio) {
+        setPlaying(key);
+      }
+    } catch (error) {
+      if (prepareRequestRef.current === requestId) {
+        setPlaybackError(
+          error instanceof Error
+            ? error.message
+            : `${recommendation.assetName} 无法播放`,
+        );
+      }
+    } finally {
+      if (prepareRequestRef.current === requestId) {
+        setPreparing(null);
+      }
+    }
+  }
 
   return (
     <section className="inspector-section sound-effect-analysis">
@@ -68,8 +219,23 @@ export function SoundEffectRecommendations({
         <div className="sound-effect-list">
           {currentRecommendations.map((recommendation) => {
             const row = dialogueById.get(recommendation.dialogueId);
+            const recommendationKey =
+              soundEffectRecommendationKey(recommendation);
+            const preview = previewByAsset[recommendation.assetName];
+            const isPreparing = preparing === recommendationKey;
+            const previewDisabled =
+              !preview || preview.checking || !preview.available;
+            const previewTitle = isPreparing
+              ? "正在从 UE/Wwise 提取试听缓存"
+              : preview?.checking
+              ? "正在检查 UE/Wwise 试听资源"
+              : preview?.available
+                ? preview.mediaCount > 1
+                  ? preview.reason
+                  : "试听音效"
+                : preview?.reason ?? "UE/Wwise 试听资源不可用";
             return (
-              <div key={soundEffectRecommendationKey(recommendation)}>
+              <div key={recommendationKey}>
                 <AudioLines size={15} />
                 <div>
                   <strong>{recommendation.assetName}</strong>
@@ -81,12 +247,39 @@ export function SoundEffectRecommendations({
                   <p>{recommendation.reason}</p>
                   <small>{recommendation.description}</small>
                 </div>
+                <button
+                  className="icon-button"
+                  type="button"
+                  title={previewTitle}
+                  aria-label={
+                    playing === recommendationKey
+                      ? `暂停音效 ${recommendation.assetName}`
+                      : `试听音效 ${recommendation.assetName}`
+                  }
+                  disabled={
+                    previewDisabled || isPreparing
+                  }
+                  onClick={() => void togglePreview(recommendation)}
+                >
+                  {isPreparing ? (
+                    <LoaderCircle className="spin" size={15} />
+                  ) : playing === recommendationKey ? (
+                    <Pause size={15} />
+                  ) : (
+                    <Play size={15} />
+                  )}
+                </button>
               </div>
             );
           })}
         </div>
       ) : (
         <p>当前分镜内容没有与现有目录充分匹配的音效。</p>
+      )}
+      {playbackError && (
+        <p className="sound-effect-playback-error" role="alert">
+          {playbackError}
+        </p>
       )}
     </section>
   );

@@ -34,6 +34,7 @@ import type {
   SelectedLevelActorsResult,
   StoryboardExportNodePreview,
   StoryboardExportRequest,
+  StoryboardExportMusicPreview,
   StoryboardExportSoundEffectPreview,
   UnrealTransform,
 } from "../src/types";
@@ -328,6 +329,18 @@ const StoryboardExportRequestSchema = z.object({
       }),
     )
     .max(100)
+    .optional()
+    .default([]),
+  music: z
+    .array(
+      z.object({
+        dialogueId: z.string().regex(/^\d+$/),
+        stateId: z.number().int().positive(),
+        stateName: z.string().min(1),
+        musicName: z.string().min(1),
+      }),
+    )
+    .max(32)
     .optional()
     .default([]),
 });
@@ -1026,6 +1039,7 @@ interface StoryboardDialogueNodeContext extends DialogueNodeContext {
 interface StoryboardExportNodeChange {
   preview: StoryboardExportNodePreview | null;
   soundEffectPreview: StoryboardExportSoundEffectPreview | null;
+  musicPreview: StoryboardExportMusicPreview | null;
   nodeDataPath: string;
   originalCommonProperties: ReflectedProperty[];
   desiredCommonProperties: ReflectedProperty[];
@@ -1033,6 +1047,7 @@ interface StoryboardExportNodeChange {
   desiredMoveCameras: unknown[];
   writeCameraProperties: boolean;
   writeSoundEffect: boolean;
+  writeMusic: boolean;
   writeCommonProperties: boolean;
   writeMoveCameras: boolean;
 }
@@ -1258,8 +1273,13 @@ export function buildStoryboardCameraMove(
 
 function validateStoryboardCoverage(request: StoryboardExportRequest): void {
   const soundEffects = request.soundEffects ?? [];
-  if (request.shots.length === 0 && soundEffects.length === 0) {
-    throw new Error("至少选择一个镜头或音效");
+  const music = request.music ?? [];
+  if (
+    request.shots.length === 0 &&
+    soundEffects.length === 0 &&
+    music.length === 0
+  ) {
+    throw new Error("至少选择一个镜头、音效或音乐");
   }
   if (
     request.shots.length > 0 &&
@@ -1303,6 +1323,18 @@ function validateStoryboardCoverage(request: StoryboardExportRequest): void {
   if (invalidSoundEffectNode) {
     throw new Error(
       `音效节点 ${invalidSoundEffectNode} 不属于对话 ${request.dialogueId}`,
+    );
+  }
+  const musicIds = music.map((item) => item.dialogueId);
+  if (new Set(musicIds).size !== musicIds.length) {
+    throw new Error("同一台词节点只能导出一首音乐");
+  }
+  const invalidMusicNode = musicIds.find(
+    (dialogueId) => !dialogueId.startsWith(request.dialogueId),
+  );
+  if (invalidMusicNode) {
+    throw new Error(
+      `音乐节点 ${invalidMusicNode} 不属于对话 ${request.dialogueId}`,
     );
   }
 }
@@ -1607,6 +1639,7 @@ async function prepareStoryboardExport(
 ): Promise<PreparedStoryboardExport> {
   validateStoryboardCoverage(request);
   const requestedSoundEffects = request.soundEffects ?? [];
+  const requestedMusic = request.music ?? [];
   const dialogueAssets = await findDialogueAssetPath(
     connection,
     request.startId,
@@ -1644,6 +1677,7 @@ async function prepareStoryboardExport(
     new Set([
       ...request.dialogueIds,
       ...requestedSoundEffects.map((soundEffect) => soundEffect.dialogueId),
+      ...requestedMusic.map((music) => music.dialogueId),
     ]),
   );
   const dialogueNodes = await readStoryboardDialogueNodes(
@@ -1680,9 +1714,16 @@ async function prepareStoryboardExport(
       soundEffect,
     ]),
   );
+  const musicByDialogueId = new Map(
+    requestedMusic.map((music, musicIndex) => [
+      music.dialogueId,
+      { ...music, musicIndex },
+    ]),
+  );
   const changes = dialogueNodes.map((node) => {
     const shotEntry = shotByDialogueId.get(node.dialogueId);
     const soundEffect = soundEffectByDialogueId.get(node.dialogueId);
+    const music = musicByDialogueId.get(node.dialogueId);
     const desiredCommonProperties = clonedValue(node.commonProperties);
     let preview: StoryboardExportNodePreview | null = null;
     let desiredMoveCameras = node.existingMoveCameras;
@@ -1760,9 +1801,42 @@ async function prepareStoryboardExport(
           : "unchanged",
       };
     }
+    let musicPreview: StoryboardExportMusicPreview | null = null;
+    let writeMusic = false;
+    if (music) {
+      const propertyIndex = node.commonProperties.findIndex(
+        (property) =>
+          String(property.Alias).toLowerCase() === "backgroundmusic",
+      );
+      if (propertyIndex < 0) {
+        throw new Error(
+          `台词节点 ${node.dialogueId} 缺少 BackgroundMusic 属性`,
+        );
+      }
+      const existingStateId = Number(
+        node.commonProperties[propertyIndex].CurrentUint32 ?? 1,
+      );
+      if (!Number.isSafeInteger(existingStateId) || existingStateId < 0) {
+        throw new Error(
+          `台词节点 ${node.dialogueId} 的 BackgroundMusic 状态无效`,
+        );
+      }
+      writeMusic = existingStateId !== music.stateId;
+      desiredCommonProperties[propertyIndex].CurrentUint32 = music.stateId;
+      musicPreview = {
+        ...music,
+        existingStateId,
+        action: writeMusic
+          ? existingStateId > 1
+            ? "replace"
+            : "add"
+          : "unchanged",
+      };
+    }
     return {
       preview,
       soundEffectPreview,
+      musicPreview,
       nodeDataPath: node.nodeDataPath,
       originalCommonProperties: node.commonProperties,
       desiredCommonProperties,
@@ -1770,7 +1844,9 @@ async function prepareStoryboardExport(
       desiredMoveCameras,
       writeCameraProperties,
       writeSoundEffect,
-      writeCommonProperties: writeCameraProperties || writeSoundEffect,
+      writeMusic,
+      writeCommonProperties:
+        writeCameraProperties || writeSoundEffect || writeMusic,
       writeMoveCameras,
     };
   });
@@ -1820,7 +1896,8 @@ async function prepareStoryboardExport(
         nodes: changes.map((change) => ({
           dialogueId:
             change.preview?.dialogueId ??
-            change.soundEffectPreview?.dialogueId,
+            change.soundEffectPreview?.dialogueId ??
+            change.musicPreview?.dialogueId,
           originalCommonProperties: change.originalCommonProperties,
           originalMoveCameras: change.originalMoveCameras,
           desiredCommonProperties: change.desiredCommonProperties,
@@ -1836,6 +1913,9 @@ async function prepareStoryboardExport(
   );
   const soundEffectPreviews = changes.flatMap((change) =>
     change.soundEffectPreview ? [change.soundEffectPreview] : [],
+  );
+  const musicPreviews = changes.flatMap((change) =>
+    change.musicPreview ? [change.musicPreview] : [],
   );
   return {
     preview: {
@@ -1872,6 +1952,16 @@ async function prepareStoryboardExport(
         (left, right) =>
           left.soundEffectIndex - right.soundEffectIndex,
       ),
+      musicCount: musicPreviews.length,
+      changedMusicCount: musicPreviews.filter(
+        (music) => music.action !== "unchanged",
+      ).length,
+      replacedMusicCount: musicPreviews.filter(
+        (music) => music.action === "replace",
+      ).length,
+      music: musicPreviews.sort(
+        (left, right) => left.musicIndex - right.musicIndex,
+      ),
     },
     dialogueAsset: String(dialogueAsset),
     changes,
@@ -1907,7 +1997,7 @@ export async function exportDialogueStoryboard(
     const prepared = await prepareStoryboardExport(connection, request);
     if (prepared.preview.reviewToken !== reviewToken) {
       throw new Error(
-        "UE 中的对话镜头或音效配置已发生变化，请重新检查后再导出",
+        "UE 中的镜头、音效或音乐配置已发生变化，请重新检查后再导出",
       );
     }
     if (prepared.preview.blockedReasons.length > 0) {
@@ -1925,6 +2015,7 @@ export async function exportDialogueStoryboard(
         dialogueAssetPath: prepared.preview.dialogueAssetPath,
         changedNodeCount: 0,
         changedSoundEffectCount: 0,
+        changedMusicCount: 0,
         saved: false,
       };
     }
@@ -1987,7 +2078,7 @@ export async function exportDialogueStoryboard(
         }
         if (mismatches.length > 0) {
           throw new Error(
-            `台词节点 ${change.preview?.dialogueId ?? change.soundEffectPreview?.dialogueId} 写入后的回读结果不一致：${mismatches.join("；")}`,
+            `台词节点 ${change.preview?.dialogueId ?? change.soundEffectPreview?.dialogueId ?? change.musicPreview?.dialogueId} 写入后的回读结果不一致：${mismatches.join("；")}`,
           );
         }
       }
@@ -2100,6 +2191,7 @@ export async function exportDialogueStoryboard(
       changedNodeCount: prepared.preview.changedNodeCount,
       changedSoundEffectCount:
         prepared.preview.changedSoundEffectCount,
+      changedMusicCount: prepared.preview.changedMusicCount ?? 0,
       saved: true,
     };
   } finally {
@@ -5880,6 +5972,48 @@ async function deletePreviewActors(
   await connection.invoke("world.delete_actors", { Actors: actors });
 }
 
+async function selectMissionPreviewActors(
+  connection: UnrealInvoker,
+  actors: string[],
+): Promise<void> {
+  const actorPaths = JSON.stringify(Array.from(new Set(actors)));
+  await connection.invoke("script.eval_python_expression", {
+    Expression:
+      `(lambda paths: unreal.EditorLevelLibrary.set_selected_level_actors(` +
+      `[actor for actor in unreal.EditorLevelLibrary.get_all_level_actors() ` +
+      `if actor.get_path_name() in paths]))(${actorPaths})`,
+  });
+}
+
+async function selectAndDeleteMissionPreviewActors(
+  connection: UnrealInvoker,
+  actors: string[],
+): Promise<void> {
+  if (actors.length === 0) {
+    return;
+  }
+  const actorPaths = JSON.stringify(Array.from(new Set(actors)));
+  const value = await connection.invoke("script.eval_python_expression", {
+    Expression:
+      `(lambda paths: (lambda selected: (` +
+      `unreal.EditorLevelLibrary.set_selected_level_actors(selected), ` +
+      `__import__('json').dumps([unreal.EditorLevelLibrary.destroy_actor(actor) ` +
+      `for actor in selected]))[1])(` +
+      `[actor for actor in unreal.EditorLevelLibrary.get_all_level_actors() ` +
+      `if actor.get_path_name() in paths]))(${actorPaths})`,
+  });
+  const parsed = parsePythonJson(
+    value,
+    "UE 编辑器未返回有效的目标物预览删除结果",
+  );
+  if (
+    !Array.isArray(parsed) ||
+    !parsed.every((result) => typeof result === "boolean")
+  ) {
+    throw new Error("UE 编辑器返回了无效的目标物预览删除结果");
+  }
+}
+
 async function findMissionPreviewActors(
   connection: UnrealInvoker,
 ): Promise<string[]> {
@@ -5905,7 +6039,7 @@ async function deleteMissionPreviewActorsAndWait(
   connection: UnrealInvoker,
   actors: string[],
 ): Promise<void> {
-  await deletePreviewActors(connection, actors);
+  await selectAndDeleteMissionPreviewActors(connection, actors);
   let remaining = actors;
   for (const delayMs of PREVIEW_DELETE_RETRY_DELAYS_MS) {
     await new Promise((resolvePromise) => setTimeout(resolvePromise, delayMs));
@@ -5914,8 +6048,19 @@ async function deleteMissionPreviewActorsAndWait(
       return;
     }
   }
+  let selectedInEditor = false;
+  try {
+    await selectMissionPreviewActors(connection, remaining);
+    selectedInEditor = true;
+  } catch {
+    // Preserve the deletion failure when editor selection is unavailable.
+  }
   throw new Error(
-    `仍有 ${remaining.length} 个目标物预览对象未能删除；UE 可能仍在处理销毁，或对象已被关卡锁定`,
+    `仍有 ${remaining.length} 个目标物预览对象未能删除；${
+      selectedInEditor
+        ? "残留对象已在 UE 编辑器中选中，请检查关卡锁定后直接删除"
+        : "请在 UE World Outliner 中检查关卡锁定"
+    }`,
   );
 }
 

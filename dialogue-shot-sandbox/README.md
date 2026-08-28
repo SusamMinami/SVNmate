@@ -1,4 +1,4 @@
-# 镜头沙盘 v0.21.1
+# 镜头沙盘 v0.22.0
 
 面向 UE4 镜头对话制作的 Three.js 原型。输入四位数对话 ID 或对白文字，工具从
 `doc\csvdir` 读取真实对话链，通过规则导演、内部 TRAE 协作或 Mira AI
@@ -214,7 +214,35 @@ powershell -ExecutionPolicy Bypass -File scripts\publish-update.ps1
 - **内部 TRAE 协作**：软件创建本地待处理任务，当前已登录的内部 TRAE 通过 MCP 领取并提交 `shot-plan.v5`。
 - **Mira AI**：前端调用本地 Vite/Node 桥，桥接服务通过 `lark-cli` 搜索 Mira、发送严格 JSON 请求并轮询回复。
 - **自动降级**：飞书未授权、回复非 JSON、Schema 错误、台词遗漏或重复时，自动使用规则导演，并在界面显示原因。TRAE 等待达到上限时仅结束本次界面等待，后台任务继续保留。
-- **已有音效推荐**：三种导演都会结合整段对话、场景、脚步和明确动作推荐已有资产，并绑定具体台词节点。导演页只显示当前分镜内容命中的建议，并提供独立“写入本镜音效”入口；“导出到 UE”弹窗中也可与镜头分开批量勾选音效并写入 `SoundEffect`，节点原有 `DelayTime` 保持不变。目录可在设置中手动从[游戏音效资产编目](https://bytedance.larkoffice.com/docx/THMEdPSFfocRLgxh4qkcY6cin8g)同步；没有足够匹配时不强行推荐。
+- **已有音效推荐**：三种导演都会结合整段对话、场景、脚步和明确动作推荐已有资产，并绑定具体台词节点。导演页只显示当前分镜内容命中的建议，并提供试听与独立“写入本镜音效”入口。试听优先读取[音效资产表](https://bytedance.larkoffice.com/wiki/Tby3w6y0EiLTdfktBeecuvminbd?table=tblky7jbQIOlk44n&view=vewNcXGzda)中的 WAV 附件；远端缺失时从当前 UE 项目的 `WwiseAudio/Windows` 解析 WEM，使用内置 vgmstream 转码并回传远端。未生成媒体的资产会禁用播放按钮并说明原因。“导出到 UE”弹窗中也可与镜头分开批量勾选音效并写入 `SoundEffect`，节点原有 `DelayTime` 保持不变。目录可在设置中手动从[游戏音效资产编目](https://bytedance.larkoffice.com/docx/THMEdPSFfocRLgxh4qkcY6cin8g)同步；没有足够匹配时不强行推荐。
+- **对话配乐推荐**：应用将整段对白、剧情梗概和导演情绪走向与[音乐资料库](https://bytedance.larkoffice.com/wiki/Tby3w6y0EiLTdfktBeecuvminbd?table=tblXRZRyNviXeFSr&view=vew8FeUzEf)中的标签、备注和资源标识匹配，在开场和必要的情绪转折节点推荐配乐。导演页只显示当前分镜覆盖的建议并支持试听；附件首次试听时按需下载到本地缓存，不在目录同步时批量拉取。导出弹窗可独立勾选镜头、音效和音乐，音乐写入 `BackgroundMusic.CurrentUint32`，原有 `DelayBackgroundMusicTime` 保持不变。
+
+### 音乐音频分析
+
+项目提供增量分析命令：
+
+```powershell
+npm run analyze:music
+```
+
+它使用 FFmpeg/FFprobe 和 NumPy 缓存音乐附件，提取 BPM、响度、动态范围、频谱
+重心及低/中/高频占比，并按资源标识更新同一 Base 内的
+[音乐音频分析表](https://bytedance.larkoffice.com/wiki/Tby3w6y0EiLTdfktBeecuvminbd?table=tblyINACQE4xtUGx&view=vewtmWJM1D)。
+应用同步音乐目录时也会读取该表，让分析结果参与同类音乐的推荐排序。字段口径和
+缓存规则见 [`docs/music-analysis.md`](docs/music-analysis.md)。
+
+### 音效附件同步
+
+首次发布或 UE/Wwise 资源更新后可显式运行：
+
+```powershell
+npm run sync:sound-effect-previews
+```
+
+命令按资产名增量补齐音效资产表：已有附件不重复上传；本地可提取资产转为 WAV
+后上传；生成数据缺失项保留并标记原因。当前远端有 97 个唯一资产，其中 85 个
+带试听附件、12 个标记为引擎缺失。详细链路见
+[`docs/sound-effect-preview.md`](docs/sound-effect-preview.md)。
 
 ### 内部 TRAE 协作初始化
 
@@ -320,8 +348,10 @@ dialogue-shot-sandbox/trae-integration/mcp.json
 - `docx:document:readonly`
 
 授权由本机 `lark-cli` 持久化并自动刷新，因此完成一次登录后，后续启动通常
-不需要再次扫码。共享方案、案例库和音效目录始终显式使用当前飞书用户身份
-访问。音效目录只在设置中手动点击同步时访问飞书，不做后台定时刷新。
+不需要再次扫码。共享方案、案例库、音效目录和音乐目录始终显式使用当前飞书
+用户身份访问。音效与音乐目录只在设置中手动点击同步时访问飞书，不做后台定时
+刷新。音乐资源标识通过本机
+`C:\trunk\doc\csvdir\d对话音乐状态映射表.csv` 映射为 UE 状态 ID。
 
 如自动搜索出现多个 Mira 候选，可在启动前设置：
 
@@ -346,6 +376,8 @@ npm run dev
 - 将当前四位 ID 的前一段与后一段对话作为只读剧情上下文发送给 AI
 - 将版本化的已有音效目录发送给 AI，返回结果只能引用真实资产名、分类和当前
   台词节点；目录外资产会被 Schema 拒绝
+- 从音乐多维表格和 `d对话音乐状态映射表.csv` 建立可写入状态目录，按对话
+  情绪及转折生成最多四个配乐节点；WAV/MP3 附件按需缓存并支持分段试听
 - AI 使用阵型、语义位置和朝向分析角色关系，程序再确定性求解 Three.js 坐标
 - 依据 BP 初始朝向规划左右 45°、90°、180° 离散转身，并在导演页显示演员动作
 - 单人机位基于角色局部朝向求解，普通对话优先正面或四分之三正面
@@ -378,6 +410,6 @@ npm run dev
 
 自动站位坐标仍只用于构图参考。采用 UE Blueprint 站位生成的方案可在逐节点
 差异确认后，将镜头局部坐标、旋转和 FOV 写回对应 Dialog Graph 台词节点。
-点击“导出到 UE”默认只预检并导出当前激活镜头；弹窗右上角“全部导出”切换到
-全量页面后，可逐镜头勾选导出范围。未勾选镜头及其台词节点保持原状，底部二次
-确认和保存操作始终固定显示。
+点击“导出到 UE”默认预检当前激活镜头及其音效、音乐建议；弹窗右上角“全部
+导出”切换到全量页面后，可分别勾选镜头、音效和音乐。未勾选项目保持原状，
+底部二次确认和保存操作始终固定显示。

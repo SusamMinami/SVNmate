@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Plugin, PreviewServer, ViteDevServer } from "vite";
+import { streamAudioFile } from "../audioStream";
 import { ueServices, type UeServices } from "./services";
 
 function sendJson(
@@ -30,6 +31,30 @@ export async function routeUeRequest(
   const url = new URL(request.url || "/", "http://127.0.0.1");
   if (!url.pathname.startsWith("/api/ue/")) {
     return false;
+  }
+  if (
+    request.method === "GET" &&
+    url.pathname === "/api/ue/sound-effects/preview-file"
+  ) {
+    try {
+      const assetName = url.searchParams.get("assetName") ?? "";
+      const preview = await services.prepareSoundEffectPreview(assetName);
+      await streamAudioFile(
+        request,
+        response,
+        preview.filePath,
+        `${preview.assetName}.wav`,
+      );
+    } catch (error) {
+      sendJson(response, 400, {
+        ok: false,
+        error: {
+          message:
+            error instanceof Error ? error.message : "音效试听文件读取失败",
+        },
+      });
+    }
+    return true;
   }
   if (request.method !== "POST") {
     sendJson(response, 404, {
@@ -61,6 +86,32 @@ export async function routeUeRequest(
       return true;
     }
     const body = (await readJson(request)) as Record<string, unknown>;
+    if (url.pathname === "/api/ue/sound-effects/preview-info") {
+      sendJson(response, 200, {
+        ok: true,
+        data: await services.inspectSoundEffectPreview(
+          String(body.assetName ?? ""),
+        ),
+      });
+      return true;
+    }
+    if (url.pathname === "/api/ue/sound-effects/preview-prepare") {
+      const preview = await services.prepareSoundEffectPreview(
+        String(body.assetName ?? ""),
+      );
+      sendJson(response, 200, {
+        ok: true,
+        data: {
+          assetName: preview.assetName,
+          available: preview.available,
+          reason: preview.reason,
+          durationSeconds: preview.durationSeconds,
+          mediaCount: preview.mediaCount,
+          url: preview.url,
+        },
+      });
+      return true;
+    }
     if (url.pathname === "/api/ue/storyboard/inspect") {
       sendJson(response, 200, {
         ok: true,

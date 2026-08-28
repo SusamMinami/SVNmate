@@ -74,9 +74,27 @@ class FakeUnrealConnection implements UnrealInvoker {
       return this.currentMaps.shift() ?? "/Game/Seria/Maps/Test/Test";
     }
     if (action === "script.eval_python_expression") {
+      const expression = String(args.Expression ?? "");
       if (
-        String(args.Expression ?? "").includes("get_all_level_actors")
+        expression.includes("set_selected_level_actors") &&
+        expression.includes("destroy_actor")
       ) {
+        const results = this.previewActors.map(() => true);
+        const deleted = new Set(this.previewActors);
+        if (this.deleteVisibilityLagReads > 0) {
+          this.pendingDeletedActors = deleted;
+        } else {
+          this.previewActors = [];
+        }
+        return {
+          bSuccess: true,
+          Result: `'${JSON.stringify(results)}'`,
+        };
+      }
+      if (expression.includes("set_selected_level_actors")) {
+        return true;
+      }
+      if (expression.includes("get_all_level_actors")) {
         if (this.pendingDeletedActors.size > 0) {
           if (this.deleteVisibilityLagReads > 0) {
             this.deleteVisibilityLagReads -= 1;
@@ -712,15 +730,24 @@ describe("mission target UE preview", () => {
       clearMissionTargetPreview(() => connection),
     ).resolves.toEqual({ clearedCount: 2 });
     expect(
-      connection.calls.find((call) => call.action === "world.delete_actors")
-        ?.args,
-    ).toEqual({ Actors: actors });
+      connection.calls.some(
+        (call) =>
+          call.action === "script.eval_python_expression" &&
+          String(call.args.Expression).includes(
+            "set_selected_level_actors(selected)",
+          ) &&
+          String(call.args.Expression).includes("destroy_actor(actor)"),
+      ),
+    ).toBe(true);
+    expect(
+      connection.calls.some((call) => call.action === "world.delete_actors"),
+    ).toBe(false);
     expect(connection.previewActors).toEqual([]);
     expect(
       connection.calls.filter(
         (call) =>
           call.action === "script.eval_python_expression" &&
-          String(call.args.Expression).includes("get_all_level_actors"),
+          String(call.args.Expression).includes("[a.get_path_name()"),
       ),
     ).toHaveLength(2);
   });
@@ -741,7 +768,7 @@ describe("mission target UE preview", () => {
       connection.calls.filter(
         (call) =>
           call.action === "script.eval_python_expression" &&
-          String(call.args.Expression).includes("get_all_level_actors"),
+          String(call.args.Expression).includes("[a.get_path_name()"),
       ),
     ).toHaveLength(4);
   });
@@ -856,15 +883,16 @@ describe("mission target UE preview", () => {
       () => connection,
     );
 
-    expect(
-      connection.calls.find((call) => call.action === "world.delete_actors")
-        ?.args,
-    ).toEqual({ Actors: [staleActor] });
-    expect(
-      connection.calls.findIndex(
-        (call) => call.action === "world.delete_actors",
-      ),
-    ).toBeLessThan(
+    const deletionCallIndex = connection.calls.findIndex(
+      (call) =>
+        call.action === "script.eval_python_expression" &&
+        String(call.args.Expression).includes(
+          "set_selected_level_actors(selected)",
+        ) &&
+        String(call.args.Expression).includes("destroy_actor(actor)"),
+    );
+    expect(deletionCallIndex).toBeGreaterThan(-1);
+    expect(deletionCallIndex).toBeLessThan(
       connection.calls.findIndex(
         (call) => call.action === "world.spawn_actor",
       ),

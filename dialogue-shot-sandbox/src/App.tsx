@@ -47,6 +47,7 @@ import { DirectorControl } from "./components/DirectorControl";
 import { LaunchScreen } from "./components/LaunchScreen";
 import { MissionTargetModal } from "./components/MissionTargetModal";
 import { NpcRegistrationModal } from "./components/NpcRegistrationModal";
+import { MusicRecommendations } from "./components/MusicRecommendations";
 import { SoundEffectRecommendations } from "./components/SoundEffectRecommendations";
 import { StageView } from "./components/StageView";
 import { WorkspaceStatusHub } from "./components/WorkspaceStatusHub";
@@ -62,6 +63,11 @@ import {
   bundledSoundEffectCatalog,
   type SoundEffectCatalogSnapshot,
 } from "./data/soundEffectCatalog";
+import {
+  recommendMusic,
+  type MusicCatalogSnapshot,
+  type MusicRecommendation,
+} from "./data/musicCatalog";
 import {
   findDialogueSequence,
   searchDialogueContent,
@@ -81,7 +87,9 @@ import { participantFacingYawDegrees } from "./director/actorActionPlanner";
 import { createShotPreview } from "./director/shotPlanner";
 import { estimateShotDuration } from "./director/shotTiming";
 import {
+  getMusicCatalog,
   getSoundEffectCatalog,
+  syncMusicCatalog,
   syncSoundEffectCatalog,
 } from "./lark/client";
 import {
@@ -519,6 +527,7 @@ interface ShotInspectorProps {
   sequence: DialogueSequence;
   directorAnalysis: DirectorSceneAnalysis | undefined;
   soundEffects: DirectorSoundEffectRecommendation[];
+  musicRecommendations: MusicRecommendation[];
   directorBlocking: DirectorBlocking;
   appliedDirector: DirectorMode;
   activeIndex: number;
@@ -541,6 +550,7 @@ function ShotInspector({
   sequence,
   directorAnalysis,
   soundEffects,
+  musicRecommendations,
   directorBlocking,
   appliedDirector,
   activeIndex,
@@ -806,6 +816,10 @@ function ShotInspector({
               busy={exportBusy}
               onWrite={onExportSoundEffects}
             />
+            <MusicRecommendations
+              recommendations={musicRecommendations}
+              currentDialogueIds={shot.dialogueIds}
+            />
             <section className="inspector-section actor-actions">
               <div className="section-label">
                 <span>演员动作</span>
@@ -1029,6 +1043,14 @@ export default function App() {
   const [soundEffects, setSoundEffects] = useState<
     DirectorSoundEffectRecommendation[]
   >(initial.soundEffects);
+  const [musicCatalog, setMusicCatalog] = useState<MusicCatalogSnapshot>({
+    entries: [],
+    revision: 0,
+    syncedAt: null,
+    unmappedCount: 0,
+    missingAttachmentCount: 0,
+    analyzedCount: 0,
+  });
   const [directorBlocking, setDirectorBlocking] =
     useState<DirectorBlocking>(initial.blocking);
   const [pendingDirectorResult, setPendingDirectorResult] =
@@ -1138,6 +1160,15 @@ export default function App() {
   soundEffectCatalogRef.current = soundEffectCatalog;
 
   const activeShot: ShotPlan | undefined = shots[activeIndex] ?? shots[0];
+  const musicRecommendations = useMemo(
+    () =>
+      recommendMusic(
+        sequence,
+        musicCatalog.entries,
+        directorAnalysis?.emotionalProgression,
+      ),
+    [directorAnalysis?.emotionalProgression, musicCatalog.entries, sequence],
+  );
   const {
     preview: storyboardExportPreview,
     request: storyboardExportRequest,
@@ -1158,6 +1189,7 @@ export default function App() {
     sequence,
     shots,
     soundEffects,
+    musicRecommendations,
     activeShot,
   });
   const activeDialogueId =
@@ -1320,6 +1352,7 @@ export default function App() {
   useEffect(() => {
     void refreshTraeConnection();
     void refreshLarkConnection(false);
+    void getMusicCatalog().then(setMusicCatalog).catch(() => undefined);
     const catalogRequest = getSoundEffectCatalog();
     soundEffectCatalogLoadRef.current = catalogRequest;
     void catalogRequest
@@ -1433,6 +1466,12 @@ export default function App() {
     setDesignedStoryboards(new Map());
     replaceSoundEffectRecommendations([]);
     await refreshLarkConnection(false);
+    return snapshot;
+  }
+
+  async function refreshMusicCatalogFromLark() {
+    const snapshot = await syncMusicCatalog();
+    setMusicCatalog(snapshot);
     return snapshot;
   }
 
@@ -3148,6 +3187,7 @@ export default function App() {
             sequence={sequence}
             directorAnalysis={directorAnalysis}
             soundEffects={soundEffects}
+            musicRecommendations={musicRecommendations}
             directorBlocking={directorBlocking}
             appliedDirector={appliedDirector}
             activeIndex={activeIndex}
@@ -3283,10 +3323,11 @@ export default function App() {
             result={storyboardExportResult}
             onClose={closeStoryboardExport}
             onShowAll={() => void previewAllStoryboardExport()}
-            onConfirm={(selectedShotIndexes, selectedSoundEffectIndexes) =>
+            onConfirm={(selectedShotIndexes, selectedSoundEffectIndexes, selectedMusicIndexes) =>
               void confirmStoryboardExport(
                 selectedShotIndexes,
                 selectedSoundEffectIndexes,
+                selectedMusicIndexes,
               )
             }
           />
@@ -3381,9 +3422,11 @@ export default function App() {
             larkStatus={larkStatus}
             larkError={larkError}
             soundEffectCatalog={soundEffectCatalog}
+            musicCatalog={musicCatalog}
             onAuthorize={() => void beginAuthorization()}
             onRefreshLark={() => void refreshLarkConnection(false)}
             onSyncSoundEffectCatalog={refreshSoundEffectCatalogFromLark}
+            onSyncMusicCatalog={refreshMusicCatalogFromLark}
           />
         )}
 

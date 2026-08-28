@@ -65,6 +65,68 @@ async function writeDirectoryFixture(
   return directory;
 }
 
+function silentWavBuffer(durationMs = 400): Buffer {
+  const sampleRate = 8_000;
+  const sampleCount = Math.ceil((sampleRate * durationMs) / 1_000);
+  const dataSize = sampleCount * 2;
+  const buffer = Buffer.alloc(44 + dataSize);
+  buffer.write("RIFF", 0);
+  buffer.writeUInt32LE(36 + dataSize, 4);
+  buffer.write("WAVEfmt ", 8);
+  buffer.writeUInt32LE(16, 16);
+  buffer.writeUInt16LE(1, 20);
+  buffer.writeUInt16LE(1, 22);
+  buffer.writeUInt32LE(sampleRate, 24);
+  buffer.writeUInt32LE(sampleRate * 2, 28);
+  buffer.writeUInt16LE(2, 32);
+  buffer.writeUInt16LE(16, 34);
+  buffer.write("data", 36);
+  buffer.writeUInt32LE(dataSize, 40);
+  return buffer;
+}
+
+test.beforeEach(async ({ page }) => {
+  await page.route("**/api/lark/music/catalog", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          entries: [],
+          revision: 0,
+          syncedAt: null,
+          unmappedCount: 0,
+          missingAttachmentCount: 0,
+          analyzedCount: 0,
+        },
+      }),
+    });
+  });
+  await page.route(
+    "**/api/ue/sound-effects/preview-info",
+    async (route) => {
+      const request = route.request().postDataJSON() as {
+        assetName: string;
+      };
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          data: {
+            assetName: request.assetName,
+            available: false,
+            reason: "测试环境未配置 Wwise 试听资源",
+            durationSeconds: null,
+            mediaCount: 0,
+          },
+        }),
+      });
+    },
+  );
+});
+
 test("shows the launch screen once per window session", async ({
   page,
 }, testInfo) => {
@@ -331,7 +393,7 @@ test("renders every participant in a multi-character dialogue", async ({
   await page.getByLabel("四位数对话 ID").fill("3099");
   await page.getByRole("button", { name: "分析对话与站位" }).click();
 
-  await expect(page.getByText("3人群像建立镜头").first()).toBeVisible();
+  await expect(page.locator(".shot-row")).toHaveCount(3);
   for (const name of ["玩家", "岑队长", "洛安", "弥莎", "赫克"]) {
     await expect(page.getByText(name).first()).toBeVisible();
   }
@@ -340,20 +402,20 @@ test("renders every participant in a multi-character dialogue", async ({
     page.getByRole("button", { name: "需绑定 BP 站位" }),
   ).toBeDisabled();
   await expect(page.locator(".cast-row")).toHaveCount(5);
-  await expect(page.locator(".axis-status")).toContainText("群像总轴");
+  await expect(page.locator(".axis-status")).toContainText("关系轴 B-C");
   await expect(
     page.locator(".actor-label--on-body:not(.actor-label--below)"),
   ).toHaveCount(3);
 
   await page
-    .getByRole("button", { name: /D 4人群像重建全景/ })
+    .getByRole("button", { name: /D 3人群像重建全景/ })
     .click();
   await expect(page.locator(".axis-status")).toContainText("群像总轴");
   await expect(
     page.locator(".actor-label--on-body:not(.actor-label--below)"),
   ).toHaveCount(4);
   await page
-    .getByRole("button", { name: /E 5人群像重建全景/ })
+    .getByRole("button", { name: /E 4人群像重建全景/ })
     .click();
   await expect(page.locator(".axis-status")).toContainText("群像总轴");
   await expect(
@@ -396,7 +458,7 @@ test("previews future entrants as transparent blocking markers", async ({
   );
 
   await page
-    .getByRole("button", { name: /D 4人群像重建全景/ })
+    .getByRole("button", { name: /D 3人群像重建全景/ })
     .click();
   await expect(page.locator(".stage-main .actor-label--pending")).toHaveCount(
     1,
@@ -406,7 +468,7 @@ test("previews future entrants as transparent blocking markers", async ({
   );
 
   await page
-    .getByRole("button", { name: /E 5人群像重建全景/ })
+    .getByRole("button", { name: /E 4人群像重建全景/ })
     .click();
   await expect(page.locator(".stage-main .actor-label--pending")).toHaveCount(
     0,
@@ -491,7 +553,7 @@ test("removes a character after the AI-directed exit node", async ({
             dialogue_ids: [line.dialogue_id],
             template:
               index === 0
-                ? "master_group_shot"
+                ? "master_two_shot"
                 : index === 1
                   ? "reverse_medium"
                   : index === 2 || index === 3
@@ -499,16 +561,16 @@ test("removes a character after the AI-directed exit node", async ({
                     : "speaker_group_medium",
             subject:
               index === 0
-                ? "group"
+                ? "both"
                 : index === 2 || index === 3
                   ? "group"
                   : line.speaker,
             look_target:
               index === 0 || index === 2 || index === 3
                 ? "group_center"
-                : line.speaker === "A"
-                  ? "B"
-                  : "A",
+                : line.speaker === "B"
+                  ? "C"
+                  : "B",
             lens_mm: index === 0 ? 35 : 50,
             end_lens_mm: index === 0 ? 35 : 50,
             lens_intent: "natural_perspective",
@@ -545,7 +607,7 @@ test("removes a character after the AI-directed exit node", async ({
     .click();
 
   await page
-    .getByRole("button", { name: /03 D 4人群像重建全景/ })
+    .getByRole("button", { name: /03 D 3人群像重建全景/ })
     .click();
   await expect(
     page.locator(".stage-main .actor-label", { hasText: "弥莎" }),
@@ -555,7 +617,7 @@ test("removes a character after the AI-directed exit node", async ({
   ).toHaveCount(0);
 
   await page
-    .getByRole("button", { name: /04 E 4人群像重建全景/ })
+    .getByRole("button", { name: /04 E 3人群像重建全景/ })
     .click();
   await expect(
     page.locator(".stage-main .actor-label", { hasText: "弥莎" }),
@@ -633,11 +695,124 @@ test("shows local content immediately and compares AI blocking before applying i
   let formationRequests = 0;
   let directorRequests = 0;
   let soundOnlyExportRequest: Record<string, unknown> | null = null;
+  let musicPreviewRequests = 0;
+  let soundPreviewRequests = 0;
   let releaseDirector!: () => void;
   const directorGate = new Promise<void>((resolve) => {
     releaseDirector = resolve;
   });
 
+  await page.unroute("**/api/lark/music/catalog");
+  await page.route("**/api/lark/music/catalog", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          entries: [
+            {
+              recordId: "recSincere",
+              name: "情绪-真诚",
+              stateName: "Sincere",
+              stateId: 18,
+              tags: ["日常轻松"],
+              notes: "温馨可爱，事件解决，圆满和平",
+              fileToken: "fileSincere",
+              fileName: "sincere.wav",
+              analysis: {
+                estimatedBpm: 78,
+                bpmSource: "音频估算",
+                tempoConfidence: 0.72,
+                integratedLufs: -22,
+                loudnessRangeLu: 7,
+                truePeakDbfs: -1,
+                dynamicRangeDb: 12,
+                spectralCentroidHz: 1_100,
+                lowFrequencyRatio: 0.3,
+                midFrequencyRatio: 0.5,
+                highFrequencyRatio: 0.2,
+                tempoLevel: "慢",
+                energyLevel: "低",
+                brightness: "偏暗",
+                summary: "慢速、低能量、音色偏暗",
+              },
+            },
+          ],
+          revision: 206,
+          syncedAt: "2026-08-27T16:00:00.000Z",
+          unmappedCount: 0,
+          missingAttachmentCount: 0,
+          analyzedCount: 1,
+        },
+      }),
+    });
+  });
+  await page.route("**/api/lark/music/file?**", async (route) => {
+    musicPreviewRequests += 1;
+    await route.fulfill({
+      status: 200,
+      contentType: "audio/wav",
+      body: silentWavBuffer(),
+    });
+  });
+  await page.unroute("**/api/ue/sound-effects/preview-info");
+  await page.route(
+    "**/api/ue/sound-effects/preview-info",
+    async (route) => {
+      const request = route.request().postDataJSON() as {
+        assetName: string;
+      };
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          data: {
+            assetName: request.assetName,
+            available: true,
+            reason: "已找到 UE/Wwise 试听媒体",
+            durationSeconds: 6.98,
+            mediaCount: 1,
+          },
+        }),
+      });
+    },
+  );
+  await page.route(
+    "**/api/ue/sound-effects/preview-prepare",
+    async (route) => {
+      const request = route.request().postDataJSON() as {
+        assetName: string;
+      };
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          data: {
+            assetName: request.assetName,
+            available: true,
+            reason: "已找到 UE/Wwise 试听媒体",
+            durationSeconds: 6.98,
+            mediaCount: 1,
+            url: `/api/ue/sound-effects/preview-file?assetName=${request.assetName}`,
+          },
+        }),
+      });
+    },
+  );
+  await page.route(
+    "**/api/ue/sound-effects/preview-file?**",
+    async (route) => {
+      soundPreviewRequests += 1;
+      await route.fulfill({
+        status: 200,
+        contentType: "audio/wav",
+        body: silentWavBuffer(),
+      });
+    },
+  );
   await page.route("**/api/trae/status", async (route) => {
     await route.fulfill({
       status: 200,
@@ -885,6 +1060,20 @@ test("shows local content immediately and compares AI blocking before applying i
   await expect(page.locator(".sound-effect-list")).toContainText(
     "画外系统警报预告封锁区危险升级。",
   );
+  const soundPreviewButton = page.getByRole("button", {
+    name: "试听音效 A_SFX_Dialog_516918",
+  });
+  await expect(soundPreviewButton).toBeEnabled();
+  await soundPreviewButton.click();
+  await expect.poll(() => soundPreviewRequests).toBe(1);
+  await expect(page.locator(".music-recommendation-list")).toContainText(
+    "情绪-真诚",
+  );
+  await expect(page.locator(".music-recommendation-list")).toContainText(
+    "慢速、低能量、音色偏暗",
+  );
+  await page.getByRole("button", { name: "试听配乐 情绪-真诚" }).click();
+  await expect.poll(() => musicPreviewRequests).toBe(1);
   await page.locator(".right-panel").screenshot({
     path: testInfo.outputPath("director-sound-effect-recommendations.png"),
   });
@@ -900,13 +1089,15 @@ test("shows local content immediately and compares AI blocking before applying i
   ).toBeChecked();
   await expect(soundExportDialog.getByText("镜头数据")).toHaveCount(0);
   await soundExportDialog
-    .getByLabel(/已核对 0 个镜头节点和 1 个音效/)
+    .getByLabel(/已核对 0 个镜头节点、 1 个音效和 0 首音乐/)
     .check();
   await soundExportDialog
     .getByRole("button", { name: "确认写入并保存" })
     .click();
   await expect(
-    soundExportDialog.getByText("已写入 0 个镜头节点和 1 个音效并保存"),
+    soundExportDialog.getByText(
+      "已写入 0 个镜头节点、1 个音效和 0 首音乐并保存",
+    ),
   ).toBeVisible();
   expect(soundOnlyExportRequest).toMatchObject({
     usesBlueprintFormation: false,
@@ -918,6 +1109,7 @@ test("shows local content immediately and compares AI blocking before applying i
         assetName: "A_SFX_Dialog_516918",
       },
     ],
+    music: [],
   });
   await soundExportDialog.getByRole("button", { name: "完成" }).click();
   await page.locator(".shot-row").nth(1).click();
@@ -1837,10 +2029,12 @@ test("guides an unsigned user to Feishu on first desktop launch", async ({
   ).toBeVisible();
 });
 
-test("manually syncs the sound effect catalog from settings", async ({
+test("manually syncs the sound and music catalogs from settings", async ({
   page,
 }, testInfo) => {
   let syncRequests = 0;
+  let musicSyncRequests = 0;
+  await page.unroute("**/api/lark/music/catalog");
   await page.route("**/api/lark/status", async (route) => {
     await route.fulfill({
       status: 200,
@@ -1916,6 +2110,61 @@ test("manually syncs the sound effect catalog from settings", async ({
       });
     },
   );
+  await page.route("**/api/lark/music/catalog", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          entries: Array.from({ length: 120 }, (_, index) => ({
+            recordId: `rec${index}`,
+            name: `测试音乐 ${index}`,
+            stateName: `Music_${index}`,
+            stateId: index + 4,
+            tags: ["日常轻松"],
+            notes: "",
+            fileToken: `fileToken${index}`,
+            fileName: `music-${index}.wav`,
+          })),
+          revision: 206,
+          syncedAt: "2026-08-27T16:00:00.000Z",
+          unmappedCount: 2,
+          missingAttachmentCount: 0,
+          analyzedCount: 119,
+        },
+      }),
+    });
+  });
+  await page.route("**/api/lark/music/sync", async (route) => {
+    musicSyncRequests += 1;
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          entries: [
+            {
+              recordId: "recSincere",
+              name: "情绪-真诚",
+              stateName: "Sincere",
+              stateId: 18,
+              tags: ["日常轻松"],
+              notes: "温馨",
+              fileToken: "fileSincere",
+              fileName: "sincere.wav",
+            },
+          ],
+          revision: 207,
+          syncedAt: "2026-08-27T17:00:00.000Z",
+          unmappedCount: 0,
+          missingAttachmentCount: 0,
+          analyzedCount: 1,
+        },
+      }),
+    });
+  });
   await page.addInitScript(() => {
     const status = {
       firstRun: true,
@@ -1972,8 +2221,16 @@ test("manually syncs the sound effect catalog from settings", async ({
     .click();
   await expect.poll(() => syncRequests).toBe(1);
   await expect(setup.getByText("已同步 1 项，文档版本 50")).toBeVisible();
+  await expect(setup.getByText("120 首 · 119 首已分析 · 版本 206 · 2 条未映射"))
+    .toBeVisible();
+  await setup
+    .getByRole("button", { name: "从飞书同步音乐资料库" })
+    .click();
+  await expect.poll(() => musicSyncRequests).toBe(1);
+  await expect(setup.getByText("1 首 · 1 首已分析 · 版本 207")).toBeVisible();
+  await expect(setup.getByText("已同步 1 首音乐")).toBeVisible();
   await setup.screenshot({
-    path: testInfo.outputPath("sound-effect-catalog-sync.png"),
+    path: testInfo.outputPath("media-catalog-sync.png"),
   });
 });
 
@@ -2500,6 +2757,34 @@ test("offers the detected Blueprint formation before designing shots", async ({
   const directorGate = new Promise<void>((resolve) => {
     releaseDirector = resolve;
   });
+  await page.unroute("**/api/lark/music/catalog");
+  await page.route("**/api/lark/music/catalog", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          entries: [
+            {
+              recordId: "recDanger",
+              name: "情绪-危机爆发",
+              stateName: "Crisis_Breakout",
+              stateId: 13,
+              tags: ["危险战斗"],
+              notes: "非常危险，已经在战斗",
+              fileToken: "fileDanger",
+              fileName: "danger.wav",
+            },
+          ],
+          revision: 206,
+          syncedAt: "2026-08-27T16:00:00.000Z",
+          unmappedCount: 0,
+          missingAttachmentCount: 0,
+        },
+      }),
+    });
+  });
   await page.route("**/api/trae/status", async (route) => {
     await route.fulfill({
       status: 200,
@@ -2677,6 +2962,22 @@ test("offers the detected Blueprint formation before designing shots", async ({
         action: "add",
       }),
     );
+    const music = (request.music ?? []).map(
+      (
+        item: {
+          dialogueId: string;
+          stateId: number;
+          stateName: string;
+          musicName: string;
+        },
+        musicIndex: number,
+      ) => ({
+        musicIndex,
+        ...item,
+        existingStateId: 1,
+        action: "add",
+      }),
+    );
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -2698,6 +2999,9 @@ test("offers the detected Blueprint formation before designing shots", async ({
           soundEffectCount: soundEffects.length,
           changedSoundEffectCount: soundEffects.length,
           replacedSoundEffectCount: 0,
+          musicCount: music.length,
+          changedMusicCount: music.length,
+          replacedMusicCount: 0,
           invalidShotCount: 1,
           globalBlockedReasons: [],
           blockedReasons: [],
@@ -2734,6 +3038,7 @@ test("offers the detected Blueprint formation before designing shots", async ({
             },
           ],
           soundEffects,
+          music,
         },
       }),
     });
@@ -2755,6 +3060,7 @@ test("offers the detected Blueprint formation before designing shots", async ({
             "/Game/Seria/Task/dialoggraph/Test/735000.735000",
           changedNodeCount: request.shots.length > 0 ? 2 : 0,
           changedSoundEffectCount: request.soundEffects.length,
+          changedMusicCount: request.music.length,
           saved: true,
         },
       }),
@@ -2780,7 +3086,7 @@ test("offers the detected Blueprint formation before designing shots", async ({
       content: [
         "##&DialogStart.id,DialogStart.Outline,DialogStart.Formation,DialogStart.Model",
         "##对话ID,剧情梗概,模板,模型",
-        "735000,测试 BP 站位,/Game/Seria/Task/Mod/MainQuest/Cha9/BP_735000.BP_735000_C,player;M63_Cityguard",
+        "735000,敌人逼近，双方在危险中对话,/Game/Seria/Task/Mod/MainQuest/Cha9/BP_735000.BP_735000_C,player;M63_Cityguard",
       ].join("\n"),
     },
     {
@@ -2958,6 +3264,9 @@ test("offers the detected Blueprint formation before designing shots", async ({
   ).toContainText("背景 NPC · BP 2 · 初始朝向 -180°");
   await page.getByRole("tab", { name: "导演" }).click();
   await expect(page.getByText("演员动作", { exact: true })).toBeVisible();
+  await expect(page.locator(".music-recommendation-list")).toContainText(
+    "情绪-危机爆发",
+  );
   await expect(page.getByText("右转 45°", { exact: true })).toHaveCount(2);
   await page.waitForTimeout(350);
   await page.screenshot({
@@ -2991,6 +3300,14 @@ test("offers the detected Blueprint formation before designing shots", async ({
       {
         dialogueId: "735002",
         assetName: "A_SFX_Dialog_729701",
+      },
+    ],
+    music: [
+      {
+        dialogueId: "735001",
+        stateId: 13,
+        stateName: "Crisis_Breakout",
+        musicName: "情绪-危机爆发",
       },
     ],
     shots: [
@@ -3041,6 +3358,11 @@ test("offers the detected Blueprint formation before designing shots", async ({
     name: "选择音效 A_SFX_Dialog_729701",
   });
   await expect(soundEffectCheckbox).toBeChecked();
+  const musicCheckbox = exportDialog.getByRole("checkbox", {
+    name: "选择音乐 情绪-危机爆发",
+  });
+  await expect(musicCheckbox).toBeChecked();
+  await soundEffectCheckbox.uncheck();
   await expect(confirmButton).toBeInViewport();
   await expect(
     exportDialog.getByRole("button", { name: "取消" }),
@@ -3056,21 +3378,24 @@ test("offers the detected Blueprint formation before designing shots", async ({
     path: testInfo.outputPath("storyboard-export-no-selection.png"),
   });
   await exportDialog
-    .getByLabel(/已核对 0 个镜头节点和 1 个音效/)
+    .getByLabel(/已核对 0 个镜头节点、 0 个音效和 1 首音乐/)
     .check();
   await expect(confirmButton).toBeEnabled();
   await confirmButton.click();
   await expect(
-    exportDialog.getByText("已写入 0 个镜头节点和 1 个音效并保存"),
+    exportDialog.getByText("已写入 0 个镜头节点、0 个音效和 1 首音乐并保存"),
   ).toBeVisible();
   expect(exportRequests).toBe(1);
   expect(exportedStoryboardRequest).toMatchObject({
     dialogueIds: [],
     shots: [],
-    soundEffects: [
+    soundEffects: [],
+    music: [
       {
-        dialogueId: "735002",
-        assetName: "A_SFX_Dialog_729701",
+        dialogueId: "735001",
+        stateId: 13,
+        stateName: "Crisis_Breakout",
+        musicName: "情绪-危机爆发",
       },
     ],
   });
