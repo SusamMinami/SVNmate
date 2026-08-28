@@ -9,8 +9,8 @@ Excel COM 将新增行写入 `.xlsm` 的当前编辑会话，但不执行保存�
 的 CSV。
 
 Windows 桌面端会记录所选 `csvdir` 的绝对路径，并从其父目录推导同一份
-`doc\xlsdir`。下次启动继续使用该目录；只有用户尚未选择时才回退到
-`C:\trunk\doc\csvdir`。
+`doc\xlsdir`。下次启动继续使用该目录；首次启动时由用户选择，不依赖固定
+盘符或 `trunk` 目录。
 
 选中范围来自：
 

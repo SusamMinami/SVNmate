@@ -1,7 +1,7 @@
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { MissionTargetPreviewPlan } from "../src/types";
 import { configureConfigCsvDirectory } from "./configRepository";
 import {
@@ -15,7 +15,6 @@ import {
 } from "./ueBridge";
 import type { UnrealInvoker } from "./ue/transport";
 
-const DEFAULT_CSV_DIRECTORY = "C:\\trunk\\doc\\csvdir";
 let temporaryRoot = "";
 
 function parseVector(value: string) {
@@ -657,8 +656,12 @@ function appendPlan(): MissionTargetPreviewPlan {
   };
 }
 
+beforeEach(() => {
+  configureConfigCsvDirectory("F:\\ProjectData\\doc");
+});
+
 afterEach(async () => {
-  configureConfigCsvDirectory(DEFAULT_CSV_DIRECTORY);
+  configureConfigCsvDirectory("");
   if (temporaryRoot) {
     await rm(temporaryRoot, { recursive: true, force: true });
     temporaryRoot = "";

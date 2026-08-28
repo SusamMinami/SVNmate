@@ -2,6 +2,7 @@ import type {
   BackgroundPropImportPreview,
   BackgroundPropImportResult,
   BlueprintFormationSnapshot,
+  DialogueCharacterActionSnapshot,
   DialogueContentBatchUpdateRequest,
   DialogueContentBatchUpdateResult,
   DialogueContentUpdateRequest,
@@ -297,6 +298,17 @@ export function inspectDialogueStoryboardExport(
   request: StoryboardExportRequest,
 ): Promise<DialogueStoryboardExportPreview> {
   return postUe("/api/ue/storyboard/inspect", request);
+}
+
+export function readDialogueCharacterActions(request: {
+  startId: string;
+  dialogueIds: string[];
+  models: Array<{
+    modelIndex: number;
+    blueprintClassPath: string;
+  }>;
+}): Promise<DialogueCharacterActionSnapshot> {
+  return postUe("/api/ue/npc-actions/read", request);
 }
 
 export function inspectSoundEffectPreview(

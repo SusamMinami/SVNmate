@@ -132,8 +132,14 @@ Transform。Yaw 被转换为角色朝向向量，镜头求解和正面偏角验�
 需要改变对话视线时，演员调度只从现有
 `AM_TurnLeft/Right45/90/180` 中选择离当前目标方向最近的离散动作，并让后续
 镜头继承转身后的朝向。`NPC.ifturn=false` 时不规划转身，而是保留 BP 朝向并
-调整机位；相机导出暂不改写 `CharacterBehaviours`，弹窗会提示用户按演员动作
-清单在 UE 中配置。后续可在读取每个 NPC 的可用 Montage 后替换当前通用动作集。
+调整机位。
+
+工作台 UE 页签会从每个数字槽 `ChildActorClass` 的类默认对象读取 `Montages`
+映射，并按当前分镜覆盖的台词节点编辑 `CharacterBehaviours`。数组索引继续对应
+Formation 模型槽；节点已有动作只读展示，本次动作按界面顺序追加。名称包含
+`AM_Turn` 的新增项写为 `ERotate` 并按名称中的左右方向和角度更新沙盘朝向，
+其他新增项写为 `ENone`。每项包含 Montage 名和 `StartTime` 延迟；同一槽位
+原有 `EWalk`、`ERotate`、`EStateMachineWalk`、`bStop` 和位置数据不会被覆盖。
 
 ## 通信
 
@@ -151,6 +157,7 @@ Electron 主进程中的 UE 传输服务默认通过 `127.0.0.1:12031` 连接项
 - `asset.asset_search`
 - `bp.get_blueprint_by_path`
 - `reflect.read_object_property`
+- `reflect.write_object_property`
 
 通信默认仅限本机。源码运行时仍可通过 `UE_MCP_HOST` 和 `UE_MCP_PORT`
 覆盖；桌面版会把用户确认的端口保存到
@@ -168,7 +175,8 @@ Electron 主进程中的 UE 传输服务默认通过 `127.0.0.1:12031` 连接项
 主角初始坐标、朝向和预览地图。
 分镜导出同样先回读并展示逐节点差异。默认只预检当前激活镜头；切换“全部导出”
 后可逐镜头勾选范围。确认后只更新所选镜头对应节点的 `CameraPosition` 与
-`MoveCameras`，未选镜头保持原状。
+`MoveCameras`，以及用户在动作编辑器中明确修改并勾选的
+`CharacterBehaviours` 槽位；未选镜头、节点和角色动作保持原状。
 
 ## 主要代码
 

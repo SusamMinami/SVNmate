@@ -119,6 +119,13 @@ export async function routeUeRequest(
       });
       return true;
     }
+    if (url.pathname === "/api/ue/npc-actions/read") {
+      sendJson(response, 200, {
+        ok: true,
+        data: await services.readDialogueCharacterActions(body),
+      });
+      return true;
+    }
     if (url.pathname === "/api/ue/storyboard/export") {
       sendJson(response, 200, {
         ok: true,

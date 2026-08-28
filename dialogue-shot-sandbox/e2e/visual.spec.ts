@@ -136,13 +136,13 @@ test("shows the launch screen once per window session", async ({
   await expect(launchScreen).toBeVisible();
   await expect(launchScreen.getByRole("heading", { name: "镜头 沙盘" }))
     .toBeVisible();
+  await expect(launchScreen.getByRole("status")).toHaveText("Loading");
   await page.waitForTimeout(700);
   await launchScreen.screenshot({
     path: testInfo.outputPath("launch-screen.png"),
   });
 
-  await launchScreen.getByRole("button", { name: "进入工作台" }).click();
-  await expect(launchScreen).toHaveCount(0);
+  await expect(launchScreen).toHaveCount(0, { timeout: 3_000 });
 
   await page.reload();
   await expect(page.locator(".launch-screen")).toHaveCount(0);
@@ -353,10 +353,27 @@ test("renders nonblank shot and blocking canvases without horizontal overflow", 
   await expect(page.locator(".ultrawide-frame").first()).toBeVisible();
   await expect(page.getByText("21:9")).toBeVisible();
   await expect(page.locator(".golden")).toHaveCount(4);
+  await expect(
+    page.locator(".left-panel").getByText("剧情梗概"),
+  ).toHaveCount(0);
+  await expect(page.getByRole("tab", { name: "摄影" })).toHaveCount(0);
+  await expect(page.getByRole("tab", { name: "构图" })).toHaveCount(0);
+  const storyOutline = page.getByRole("button", { name: /剧情梗概/ });
+  await expect(storyOutline).toHaveAttribute("aria-expanded", "false");
+  await expect(
+    page.getByText(/围绕失踪的钥匙互相试探/),
+  ).toHaveCount(0);
+  await storyOutline.click();
+  await expect(storyOutline).toHaveAttribute("aria-expanded", "true");
+  await expect(
+    page.getByText(/围绕失踪的钥匙互相试探/),
+  ).toBeVisible();
+  await page.getByRole("tab", { name: "镜头" }).click();
+  await expect(page.getByText("摄影参数", { exact: true })).toBeVisible();
+  await expect(page.getByText("构图策略", { exact: true })).toBeVisible();
   await expect(page.getByText("浅景深", { exact: true })).toBeVisible();
   await expect(page.getByText("推近 · 轻微", { exact: true })).toBeVisible();
   await expect(page.getByText("压缩亲密", { exact: true })).toBeVisible();
-  await page.getByRole("tab", { name: "构图" }).click();
   await expect(page.getByText("黄金分割", { exact: true })).toBeVisible();
   await expect(page.getByText("渐进转移", { exact: true })).toBeVisible();
   await expect(page.getByText("个人强调", { exact: true })).toBeVisible();
@@ -371,9 +388,7 @@ test("renders nonblank shot and blocking canvases without horizontal overflow", 
   expect(hasHorizontalOverflow).toBe(false);
 
   await page.locator(".shot-row").nth(2).click();
-  await page.getByRole("tab", { name: "摄影" }).click();
   await expect(page.getByText("固定机位", { exact: true })).toBeVisible();
-  await page.getByRole("tab", { name: "构图" }).click();
   await expect(page.getByText("0.39 / 0.17", { exact: true })).toBeVisible();
   await page.getByRole("tab", { name: "导演" }).click();
   await expect(
@@ -1015,7 +1030,9 @@ test("shows local content immediately and compares AI blocking before applying i
   await expect(page.locator(".section-label--sticky")).toContainText(
     "本地预览",
   );
-  await expect(page.getByText(/围绕失踪的钥匙互相试探/)).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: /剧情梗概/ }),
+  ).toHaveAttribute("aria-expanded", "false");
   expect(directorRequests).toBe(1);
   expect(formationRequests).toBe(0);
 
@@ -1054,6 +1071,9 @@ test("shows local content immediately and compares AI blocking before applying i
   await page.locator(".shot-row").first().click();
   await expect(page.getByText("A 单人近景").first()).toBeVisible();
   await page.getByRole("tab", { name: "导演" }).click();
+  await expect(page.locator(".sound-effect-list")).toHaveCount(0);
+  await expect(page.locator(".music-recommendation-list")).toHaveCount(0);
+  await page.getByRole("tab", { name: "音频" }).click();
   await expect(page.locator(".sound-effect-list")).toContainText(
     "A_SFX_Dialog_516918",
   );
@@ -1089,14 +1109,16 @@ test("shows local content immediately and compares AI blocking before applying i
   ).toBeChecked();
   await expect(soundExportDialog.getByText("镜头数据")).toHaveCount(0);
   await soundExportDialog
-    .getByLabel(/已核对 0 个镜头节点、 1 个音效和 0 首音乐/)
+    .getByLabel(
+      /已核对 0 个镜头节点、 0 组角色动作、 1 个音效和 0 首音乐/,
+    )
     .check();
   await soundExportDialog
     .getByRole("button", { name: "确认写入并保存" })
     .click();
   await expect(
     soundExportDialog.getByText(
-      "已写入 0 个镜头节点、1 个音效和 0 首音乐并保存",
+      "已写入 0 个镜头节点、0 组角色动作、1 个音效和 0 首音乐并保存",
     ),
   ).toBeVisible();
   expect(soundOnlyExportRequest).toMatchObject({
@@ -1916,9 +1938,9 @@ test("opens the incremental Feishu authorization dialog", async ({ page }) => {
   expect(finishRequests).toBe(1);
 });
 
-test("guides an unsigned user to Feishu on first desktop launch", async ({
+test("guides first desktop launch to select a doc directory", async ({
   page,
-}) => {
+}, testInfo) => {
   await page.route("**/api/lark/status", async (route) => {
     await route.fulfill({
       status: 200,
@@ -1969,7 +1991,7 @@ test("guides an unsigned user to Feishu on first desktop launch", async ({
     });
   });
   await page.addInitScript(() => {
-    const status = {
+    let status = {
       firstRun: true,
       setupCompleted: false,
       version: "0.17.2",
@@ -1983,8 +2005,8 @@ test("guides an unsigned user to Feishu on first desktop launch", async ({
       mcpConnected: false,
       mcpVersion: null,
       expectedMcpVersion: "test",
-      defaultDataReady: true,
-      dataCsvDirectory: "C:\\Test\\doc\\csvdir",
+      defaultDataReady: false,
+      dataCsvDirectory: "",
       ueConnected: false,
       ueMcpHost: "127.0.0.1",
       ueMcpPort: 12031,
@@ -1998,13 +2020,24 @@ test("guides an unsigned user to Feishu on first desktop launch", async ({
       openIntegrationFolder: async () => undefined,
       openTraeDownload: async () => undefined,
       setUeMcpPort: async () => status,
-      getPathForFile: () => "C:\\Test\\doc\\csvdir\\NPC表.csv",
-      setDataCsvDirectory: async () => status,
-      completeSetup: async () => ({
-        ...status,
-        firstRun: false,
-        setupCompleted: true,
-      }),
+      getPathForFile: () =>
+        "F:\\NarrativeData\\DialogueProject\\doc\\csvdir\\NPC表.csv",
+      setDataCsvDirectory: async (directoryPath: string) => {
+        status = {
+          ...status,
+          defaultDataReady: true,
+          dataCsvDirectory: directoryPath,
+        };
+        return status;
+      },
+      completeSetup: async () => {
+        status = {
+          ...status,
+          firstRun: false,
+          setupCompleted: true,
+        };
+        return status;
+      },
       checkForUpdates: async () => ({ state: "idle" }),
       getUpdateSnapshot: async () => ({ state: "idle" }),
       installUpdate: async () => undefined,
@@ -2013,20 +2046,59 @@ test("guides an unsigned user to Feishu on first desktop launch", async ({
     };
   });
 
+  const fixtureRoot = testInfo.outputPath("first-run-doc");
+  await writeDirectoryFixture(`${fixtureRoot}/csvdir`, [
+    {
+      name: "对话表.csv",
+      content: [
+        "##&Dialog.id,Dialog.NPCID,Dialog.Content,Dialog.NextID,Dialog.End",
+        "##对话ID,人物,内容,下一ID,结束",
+        "735000,,,735001,false",
+        "735001,1,首次启动测试。,,true",
+      ].join("\n"),
+    },
+    {
+      name: "对话表_开始节点.csv",
+      content: [
+        "##&DialogStart.id,DialogStart.Outline",
+        "##对话ID,剧情梗概",
+        "735000,首次启动目录",
+      ].join("\n"),
+    },
+    {
+      name: "NPC表.csv",
+      content: [
+        "##&NPC.id,NPC.name,NPC.npcintroduce,NPC.resource_id",
+        "##id,名称,介绍,资源",
+        "1,玩家,玩家,",
+      ].join("\n"),
+    },
+  ]);
+
   await page.goto("/");
 
   const setup = page.getByRole("dialog", {
-    name: "运行环境与数据协作",
+    name: "选择对话数据目录",
   });
   await expect(setup).toBeVisible();
+  const startButton = setup.getByRole("button", { name: "开始使用" });
+  await expect(startButton).toBeDisabled();
+  await expect(setup.getByText("尚未选择目录")).toBeVisible();
+  await setup.screenshot({
+    path: testInfo.outputPath("desktop-first-run.png"),
+  });
+
+  await page.locator('input[type="file"]').setInputFiles(fixtureRoot);
+  await expect(setup.getByText("对话数据已就绪")).toBeVisible();
   await expect(
-    setup.getByRole("heading", { name: "首次配置" }),
+    setup.getByText(
+      "F:\\NarrativeData\\DialogueProject\\doc\\csvdir",
+      { exact: true },
+    ),
   ).toBeVisible();
-  await expect(setup.getByText("首次使用请登录")).toBeVisible();
-  await setup.getByRole("button", { name: "登录" }).click();
-  await expect(
-    page.getByRole("dialog", { name: "连接飞书数据与 Mira" }),
-  ).toBeVisible();
+  await expect(startButton).toBeEnabled();
+  await startButton.click();
+  await expect(setup).toHaveCount(0);
 });
 
 test("manually syncs the sound and music catalogs from settings", async ({
@@ -2168,7 +2240,7 @@ test("manually syncs the sound and music catalogs from settings", async ({
   await page.addInitScript(() => {
     const status = {
       firstRun: true,
-      setupCompleted: false,
+      setupCompleted: true,
       version: "0.20.1",
       packaged: true,
       portable: false,
@@ -2357,6 +2429,17 @@ test("syncs the selected desktop doc path for registration data", async ({
       ].join("\n"),
     },
   ]);
+  const invalidFixtureRoot = testInfo.outputPath("invalid-doc");
+  await writeDirectoryFixture(`${invalidFixtureRoot}/csvdir`, [
+    {
+      name: "NPC表.csv",
+      content: [
+        "##&NPC.id,NPC.name,NPC.npcintroduce,NPC.resource_id",
+        "##id,名称,介绍,资源",
+        "1,玩家,玩家,",
+      ].join("\n"),
+    },
+  ]);
 
   await page.goto("/");
   const settingsButton = page.getByRole("button", {
@@ -2370,13 +2453,13 @@ test("syncs the selected desktop doc path for registration data", async ({
   });
   await expect(settingsDialog).toBeVisible();
   await expect(
-    settingsDialog.getByRole("heading", { name: "首次配置" }),
-  ).toHaveCount(0);
+    settingsDialog.getByRole("heading", { name: "TRAE 集成" }),
+  ).toBeVisible();
   await expect(
     settingsDialog.getByText(
       "应用每次启动都会同步内置 Skill；TRAE 已打开时请重载窗口。",
     ),
-  ).toHaveCount(0);
+  ).toBeVisible();
   await expect(
     settingsDialog.getByText(
       "C:\\Test\\Shot Sandbox\\trae-integration",
@@ -2386,10 +2469,19 @@ test("syncs the selected desktop doc path for registration data", async ({
   await expect(
     settingsDialog.getByRole("button", { name: "同步配置与 Skill" }),
   ).toBeVisible();
+  await page.locator('input[type="file"]').setInputFiles(invalidFixtureRoot);
+  await expect(settingsDialog.getByRole("alert")).toContainText(
+    "未找到 csvdir\\对话表.csv",
+  );
   await settingsDialog.getByRole("button", { name: "关闭桌面版设置" }).click();
 
   await page.locator('input[type="file"]').setInputFiles(fixtureRoot);
-
+  await expect(page.getByLabel("四位数对话 ID 或对白内容")).toHaveValue(
+    "7350",
+  );
+  const outlineToggle = page.getByRole("button", { name: /剧情梗概/ });
+  await expect(outlineToggle).toHaveAttribute("aria-expanded", "false");
+  await outlineToggle.click();
   await expect(page.getByText("自定义目录测试", { exact: true })).toBeVisible();
   await expect(
     page.locator(".source-status").getByText(
@@ -2947,9 +3039,102 @@ test("offers the detected Blueprint formation before designing shots", async ({
       }),
     });
   });
+  await page.route("**/api/ue/npc-actions/read", async (route) => {
+    const request = route.request().postDataJSON() as {
+      models: Array<{
+        modelIndex: number;
+        blueprintClassPath: string;
+      }>;
+    };
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          dialogueAssetPath:
+            "/Game/Seria/Task/dialoggraph/Test/735000.735000",
+          catalogs: request.models.map((model) => ({
+            ...model,
+            status: "loaded",
+            message: "已读取 5 个 Montage",
+            actions: [
+              {
+                name: "AM_Idle1",
+                assetPath: `${model.blueprintClassPath}/Animation/AM_Idle1`,
+              },
+              {
+                name: "AM_Talk",
+                assetPath: `${model.blueprintClassPath}/Animation/AM_Talk`,
+              },
+              {
+                name: "AM_TurnRight45",
+                assetPath: `${model.blueprintClassPath}/Animation/AM_TurnRight45`,
+              },
+              {
+                name: "AM_TurnRight90",
+                assetPath: `${model.blueprintClassPath}/Animation/AM_TurnRight90`,
+              },
+              {
+                name: "AM_Wave",
+                assetPath: `${model.blueprintClassPath}/Animation/AM_Wave`,
+              },
+            ],
+          })),
+          tracks: [
+            {
+              dialogueId: "735001",
+              modelIndex: 1,
+              actions: [
+                {
+                  montageName: "AM_Idle1",
+                  delaySeconds: 0,
+                  behaviourType: "ENone",
+                },
+              ],
+              preservedComplexActionCount: 1,
+            },
+          ],
+        },
+      }),
+    });
+  });
   await page.route("**/api/ue/storyboard/inspect", async (route) => {
     const request = route.request().postDataJSON();
     inspectedExportRequests.push(request);
+    const characterActions = (request.characterActions ?? []).map(
+      (
+        item: {
+          dialogueId: string;
+          modelIndex: number;
+          actions: Array<{
+            montageName: string;
+            delaySeconds: number;
+          }>;
+        },
+        characterActionIndex: number,
+      ) => ({
+        characterActionIndex,
+        ...item,
+        existingActions: [
+          {
+            montageName: "AM_Idle1",
+            delaySeconds: 0,
+            behaviourType: "ENone",
+          },
+        ],
+        desiredActions: [
+          {
+            montageName: "AM_Idle1",
+            delaySeconds: 0,
+            behaviourType: "ENone",
+          },
+          ...item.actions,
+        ],
+        preservedComplexActionCount: 1,
+        action: "add",
+      }),
+    );
     const soundEffects = (request.soundEffects ?? []).map(
       (
         soundEffect: { dialogueId: string; assetName: string },
@@ -2996,6 +3181,8 @@ test("offers the detected Blueprint formation before designing shots", async ({
           changedNodeCount: 2,
           overwrittenNodeCount: 1,
           clearedNodeCount: 1,
+          characterActionCount: characterActions.length,
+          changedCharacterActionCount: characterActions.length,
           soundEffectCount: soundEffects.length,
           changedSoundEffectCount: soundEffects.length,
           replacedSoundEffectCount: 0,
@@ -3004,7 +3191,16 @@ test("offers the detected Blueprint formation before designing shots", async ({
           replacedMusicCount: 0,
           invalidShotCount: 1,
           globalBlockedReasons: [],
-          blockedReasons: [],
+          characterActionBlockedReasons: [
+            {
+              modelIndex: 1,
+              reason:
+                "角色 BP /Game/Test/BP_Guard 存在未保存修改，请先在 UE 中保存或撤销",
+            },
+          ],
+          blockedReasons: [
+            "角色 BP /Game/Test/BP_Guard 存在未保存修改，请先在 UE 中保存或撤销",
+          ],
           warnings: ["1 个镜头的投影验收未通过，确认后仍可导出"],
           shots: [
             {
@@ -3037,6 +3233,7 @@ test("offers the detected Blueprint formation before designing shots", async ({
               desiredMovementCount: 0,
             },
           ],
+          characterActions,
           soundEffects,
           music,
         },
@@ -3059,6 +3256,7 @@ test("offers the detected Blueprint formation before designing shots", async ({
           dialogueAssetPath:
             "/Game/Seria/Task/dialoggraph/Test/735000.735000",
           changedNodeCount: request.shots.length > 0 ? 2 : 0,
+          changedCharacterActionCount: request.characterActions.length,
           changedSoundEffectCount: request.soundEffects.length,
           changedMusicCount: request.music.length,
           saved: true,
@@ -3264,15 +3462,96 @@ test("offers the detected Blueprint formation before designing shots", async ({
   ).toContainText("背景 NPC · BP 2 · 初始朝向 -180°");
   await page.getByRole("tab", { name: "导演" }).click();
   await expect(page.getByText("演员动作", { exact: true })).toBeVisible();
-  await expect(page.locator(".music-recommendation-list")).toContainText(
-    "情绪-危机爆发",
-  );
   await expect(page.getByText("右转 45°", { exact: true })).toHaveCount(2);
   await page.waitForTimeout(350);
   await page.screenshot({
     path: testInfo.outputPath("blueprint-facing-and-turn-plan.png"),
     fullPage: true,
   });
+  await page.getByRole("tab", { name: "UE" }).click();
+  await expect(page.getByText(/已读取 3 个 BP、15 个动作/)).toBeVisible();
+  const guardActions = page
+    .locator(".character-action-track")
+    .filter({ hasText: "商会安保" });
+  await expect(
+    guardActions.locator(".character-action-existing-row"),
+  ).toHaveCount(1);
+  await expect(
+    guardActions.locator(".character-action-existing-row"),
+  ).toContainText("AM_Idle1");
+  await expect(
+    guardActions.locator(".character-action-existing-row").getByRole(
+      "combobox",
+    ),
+  ).toHaveCount(0);
+  const guardFacingLabel = page
+    .locator(".actor-label")
+    .filter({ hasText: "商会安保" })
+    .first();
+  const facingBeforeTurn = await guardFacingLabel.getAttribute(
+    "data-facing-target",
+  );
+  await guardActions.getByRole("button", { name: "添加动作" }).click();
+  await guardActions
+    .locator(".character-action-row")
+    .first()
+    .getByRole("combobox")
+    .selectOption("AM_TurnRight90");
+  await page.waitForTimeout(500);
+  expect(
+    await guardFacingLabel.getAttribute("data-facing-target"),
+  ).not.toBe(
+    facingBeforeTurn,
+  );
+  await guardActions.getByRole("button", { name: "添加动作" }).click();
+  await guardActions
+    .locator(".character-action-row")
+    .nth(1)
+    .getByRole("combobox")
+    .selectOption("AM_Wave");
+  await guardActions
+    .locator(".character-action-row")
+    .nth(1)
+    .getByRole("spinbutton")
+    .fill("0.6");
+  await expect(guardActions.locator(".character-action-row")).toHaveCount(2);
+  await expect(guardActions).toContainText("另保留 1 个无 Montage 特殊动作");
+  await guardActions
+    .locator(".character-action-row")
+    .evaluateAll((rows) => {
+      const transfer = new DataTransfer();
+      rows[1].dispatchEvent(
+        new DragEvent("dragstart", {
+          bubbles: true,
+          dataTransfer: transfer,
+        }),
+      );
+      rows[0].dispatchEvent(
+        new DragEvent("dragover", {
+          bubbles: true,
+          cancelable: true,
+          dataTransfer: transfer,
+        }),
+      );
+      rows[0].dispatchEvent(
+        new DragEvent("drop", {
+          bubbles: true,
+          cancelable: true,
+          dataTransfer: transfer,
+        }),
+      );
+    });
+  await expect(
+    guardActions.locator(".character-action-row").first().getByRole("combobox"),
+  ).toHaveValue("AM_Wave");
+  await page.screenshot({
+    path: testInfo.outputPath("character-action-editor.png"),
+    fullPage: true,
+  });
+  await page.getByRole("tab", { name: "音频" }).click();
+  await expect(page.locator(".music-recommendation-list")).toContainText(
+    "情绪-危机爆发",
+  );
   await expect(page.locator(".shot-row.is-invalid")).toHaveCount(1);
   await expect(page.getByLabel("投影验收未通过")).toBeVisible();
   const exportButton = page.getByRole("button", { name: "导出到 UE" });
@@ -3296,6 +3575,16 @@ test("offers the detected Blueprint formation before designing shots", async ({
     dialogueIds: ["735001", "735002"],
     participantModelIndexes: [0, 1, 2],
     usesBlueprintFormation: true,
+    characterActions: [
+      {
+        dialogueId: "735001",
+        modelIndex: 1,
+        actions: [
+          { montageName: "AM_Wave", delaySeconds: 0.6 },
+          { montageName: "AM_TurnRight90", delaySeconds: 0 },
+        ],
+      },
+    ],
     soundEffects: [
       {
         dialogueId: "735002",
@@ -3326,8 +3615,13 @@ test("offers the detected Blueprint formation before designing shots", async ({
     ],
   });
   await expect(
-    exportDialog.getByText(/2 个演员转身动作.*当前导出只写相机/),
+    exportDialog.getByText(/2 个自动转身建议.*动作编辑器/),
   ).toBeVisible();
+  await expect(
+    exportDialog.getByRole("checkbox", {
+      name: "选择节点 735001 槽 1 的角色动作",
+    }),
+  ).toBeChecked();
   await expect(
     exportDialog.getByRole("checkbox", {
       name: "选择音效 A_SFX_Dialog_729701",
@@ -3358,10 +3652,21 @@ test("offers the detected Blueprint formation before designing shots", async ({
     name: "选择音效 A_SFX_Dialog_729701",
   });
   await expect(soundEffectCheckbox).toBeChecked();
+  const characterActionCheckbox = exportDialog.getByRole("checkbox", {
+    name: "选择节点 735001 槽 1 的角色动作",
+  });
+  await expect(characterActionCheckbox).toBeChecked();
+  await expect(
+    exportDialog.getByText(/角色 BP .*存在未保存修改/),
+  ).toBeVisible();
   const musicCheckbox = exportDialog.getByRole("checkbox", {
     name: "选择音乐 情绪-危机爆发",
   });
   await expect(musicCheckbox).toBeChecked();
+  await characterActionCheckbox.uncheck();
+  await expect(
+    exportDialog.getByText(/角色 BP .*存在未保存修改/),
+  ).toHaveCount(0);
   await soundEffectCheckbox.uncheck();
   await expect(confirmButton).toBeInViewport();
   await expect(
@@ -3378,17 +3683,22 @@ test("offers the detected Blueprint formation before designing shots", async ({
     path: testInfo.outputPath("storyboard-export-no-selection.png"),
   });
   await exportDialog
-    .getByLabel(/已核对 0 个镜头节点、 0 个音效和 1 首音乐/)
+    .getByLabel(
+      /已核对 0 个镜头节点、 0 组角色动作、 0 个音效和 1 首音乐/,
+    )
     .check();
   await expect(confirmButton).toBeEnabled();
   await confirmButton.click();
   await expect(
-    exportDialog.getByText("已写入 0 个镜头节点、0 个音效和 1 首音乐并保存"),
+    exportDialog.getByText(
+      "已写入 0 个镜头节点、0 组角色动作、0 个音效和 1 首音乐并保存",
+    ),
   ).toBeVisible();
   expect(exportRequests).toBe(1);
   expect(exportedStoryboardRequest).toMatchObject({
     dialogueIds: [],
     shots: [],
+    characterActions: [],
     soundEffects: [],
     music: [
       {
@@ -3859,6 +4169,12 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
 
   await page.goto("/");
   await page.locator('input[type="file"]').setInputFiles(fixtureDirectory);
+  await expect(page.getByLabel("四位数对话 ID 或对白内容")).toHaveValue(
+    "7350",
+  );
+  const outlineToggle = page.getByRole("button", { name: /剧情梗概/ });
+  await expect(outlineToggle).toHaveAttribute("aria-expanded", "false");
+  await outlineToggle.click();
   await expect(page.getByText("目标物测试", { exact: true })).toBeVisible();
   await expect(
     page.getByText(/未找到 BP_735000，已跳过 BP 并使用自动站位/),

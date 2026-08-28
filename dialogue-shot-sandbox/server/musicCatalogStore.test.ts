@@ -7,10 +7,12 @@ import {
   musicAttachmentPath,
   parseMusicStateMap,
 } from "./musicCatalogStore";
+import { configureConfigCsvDirectory } from "./configRepository";
 
 let temporaryRoot = "";
 
 afterEach(async () => {
+  configureConfigCsvDirectory("");
   if (temporaryRoot) {
     await rm(temporaryRoot, { recursive: true, force: true });
     temporaryRoot = "";
@@ -18,6 +20,20 @@ afterEach(async () => {
 });
 
 describe("music catalog store", () => {
+  it("rejects state-map loading until a doc directory is selected", async () => {
+    temporaryRoot = await mkdtemp(join(tmpdir(), "music-catalog-unset-"));
+    const recordsPath = join(temporaryRoot, "music-catalog.ndjson");
+    await writeFile(
+      recordsPath,
+      JSON.stringify({ record_id: "recTest", 资源标识: "Test" }),
+      "utf8",
+    );
+
+    await expect(
+      loadMusicCatalog(undefined, { records: recordsPath }),
+    ).rejects.toThrow("尚未选择 doc 文件夹");
+  });
+
   it("parses quoted CSV cells and maps Wwise state names to IDs", () => {
     const stateMap = parseMusicStateMap([
       "##&DialogMusicState.id,,DialogMusicState.Name,DialogMusicState.WwiseState",

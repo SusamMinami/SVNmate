@@ -105,6 +105,7 @@ export interface DialogueParticipant extends NpcProfile {
   position: Vec3;
   facingTarget: Vec3;
   modelIndex: number | null;
+  modelClassPath?: string;
   positionSource: "generated" | "blueprint";
   firstDialogueId: string;
   firstDialogueIndex: number;
@@ -182,6 +183,38 @@ export interface BlueprintFormationSnapshot {
   slots: BlueprintFormationSlot[];
   dialogueModels?: string[];
   warnings: string[];
+}
+
+export interface BlueprintMontageAction {
+  name: string;
+  assetPath: string;
+}
+
+export interface BlueprintMontageCatalog {
+  modelIndex: number;
+  blueprintClassPath: string;
+  status: "loaded" | "unsupported" | "missing" | "failed";
+  message: string;
+  actions: BlueprintMontageAction[];
+}
+
+export interface DialogueCharacterActionItem {
+  montageName: string;
+  delaySeconds: number;
+  behaviourType?: string;
+}
+
+export interface DialogueCharacterActionTrack {
+  dialogueId: string;
+  modelIndex: number;
+  actions: DialogueCharacterActionItem[];
+  preservedComplexActionCount: number;
+}
+
+export interface DialogueCharacterActionSnapshot {
+  dialogueAssetPath: string;
+  catalogs: BlueprintMontageCatalog[];
+  tracks: DialogueCharacterActionTrack[];
 }
 
 export interface MissionTargetPreviewTarget {
@@ -367,6 +400,11 @@ export interface StoryboardExportRequest {
   participantModelIndexes: number[];
   usesBlueprintFormation: boolean;
   shots: StoryboardExportShot[];
+  characterActions?: Array<{
+    dialogueId: string;
+    modelIndex: number;
+    actions: DialogueCharacterActionItem[];
+  }>;
   soundEffects?: Array<{
     dialogueId: string;
     assetName: string;
@@ -405,6 +443,21 @@ export interface StoryboardExportSoundEffectPreview {
   resolvedAssetPath: string;
   existingAssetPath: string;
   action: "add" | "replace" | "unchanged";
+}
+
+export interface StoryboardExportCharacterActionPreview {
+  characterActionIndex: number;
+  dialogueId: string;
+  modelIndex: number;
+  existingActions: DialogueCharacterActionItem[];
+  desiredActions: DialogueCharacterActionItem[];
+  preservedComplexActionCount: number;
+  action: "add" | "replace" | "clear" | "unchanged";
+}
+
+export interface StoryboardExportCharacterActionBlockedReason {
+  modelIndex: number;
+  reason: string;
 }
 
 export interface SoundEffectPreviewInfo {
@@ -450,6 +503,10 @@ export interface DialogueStoryboardExportPreview {
   warnings: string[];
   shots: StoryboardExportShotPreview[];
   nodes: StoryboardExportNodePreview[];
+  characterActions?: StoryboardExportCharacterActionPreview[];
+  characterActionBlockedReasons?: StoryboardExportCharacterActionBlockedReason[];
+  characterActionCount?: number;
+  changedCharacterActionCount?: number;
   soundEffects?: StoryboardExportSoundEffectPreview[];
   music?: StoryboardExportMusicPreview[];
   musicCount?: number;
@@ -463,6 +520,7 @@ export interface DialogueStoryboardExportResult {
   startId: string;
   dialogueAssetPath: string;
   changedNodeCount: number;
+  changedCharacterActionCount?: number;
   changedSoundEffectCount?: number;
   changedMusicCount?: number;
   saved: boolean;

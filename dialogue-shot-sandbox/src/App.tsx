@@ -1,6 +1,7 @@
 import {
   AlertTriangle,
   ArrowLeftRight,
+  AudioLines,
   Bot,
   Boxes,
   Camera,
@@ -35,6 +36,10 @@ import {
   useState,
 } from "react";
 import packageMetadata from "../package.json";
+import {
+  useCharacterActionEditor,
+  type CharacterActionEditorController,
+} from "./app/useCharacterActionEditor";
 import { useCollaborationConnections } from "./app/useCollaborationConnections";
 import { useStoryboardExport } from "./app/useStoryboardExport";
 import { useWorkspaceNavigation } from "./app/useWorkspaceNavigation";
@@ -43,6 +48,7 @@ import type {
   FormationSelectionId,
 } from "./components/BlueprintFormationModal";
 import type { DialogueTextEditorItem } from "./components/DialogueTextEditorModal";
+import { CharacterActionEditor } from "./components/CharacterActionEditor";
 import { DirectorControl } from "./components/DirectorControl";
 import { LaunchScreen } from "./components/LaunchScreen";
 import { MissionTargetModal } from "./components/MissionTargetModal";
@@ -108,6 +114,7 @@ import type {
   DialogueContentSearchContext,
   DialogueContentSearchResult,
   DialogueDatabase,
+  DialogueParticipant,
   DialogueRow,
   DialogueSequence,
   CompositionMode,
@@ -118,11 +125,17 @@ import type {
   ShotCoverage,
   ShotPlan,
   ShotSize,
+  Vec3,
 } from "./types";
 
 const LazyBlueprintFormationModal = lazy(() =>
   import("./components/BlueprintFormationModal").then((module) => ({
     default: module.BlueprintFormationModal,
+  })),
+);
+const LazyDesktopFirstRunModal = lazy(() =>
+  import("./components/DesktopFirstRunModal").then((module) => ({
+    default: module.DesktopFirstRunModal,
   })),
 );
 const LazyDesktopSetupModal = lazy(() =>
@@ -226,7 +239,7 @@ interface ApplySequenceOptions {
   applyResultImmediately?: boolean;
 }
 
-type InspectorTab = "camera" | "composition" | "direction" | "ue";
+type InspectorTab = "direction" | "shot" | "audio" | "ue";
 
 interface CachedStoryboard {
   sequence: DialogueSequence;
@@ -464,6 +477,23 @@ function actorTurnLabel(angleDegrees: number): string {
   return `${angleDegrees > 0 ? "右转" : "左转"} ${Math.abs(angleDegrees)}°`;
 }
 
+function facingTargetAfterTurn(
+  participant: Pick<
+    DialogueParticipant,
+    "position" | "facingTarget"
+  >,
+  turnDegrees: number,
+): Vec3 {
+  const yawDegrees =
+    participantFacingYawDegrees(participant) + turnDegrees;
+  const radians = (yawDegrees * Math.PI) / 180;
+  return [
+    participant.position[0] + Math.sin(radians) * 2,
+    participant.position[1],
+    participant.position[2] - Math.cos(radians) * 2,
+  ];
+}
+
 function lensIntentLabel(intent: LensIntent): string {
   const labels: Record<LensIntent, string> = {
     spatial_context: "空间交代",
@@ -539,6 +569,7 @@ interface ShotInspectorProps {
   exportButtonLabel: string;
   exportUnavailableReason: string;
   backgroundGenerationActive: boolean;
+  characterActionEditor: CharacterActionEditorController;
   onMove: (offset: number) => void;
   onTabChange: (tab: InspectorTab) => void;
   onExport: () => void;
@@ -562,19 +593,25 @@ function ShotInspector({
   exportButtonLabel,
   exportUnavailableReason,
   backgroundGenerationActive,
+  characterActionEditor,
   onMove,
   onTabChange,
   onExport,
   onExportSoundEffects,
 }: ShotInspectorProps) {
+  const [expandedOutlinePrefix, setExpandedOutlinePrefix] = useState<
+    string | null
+  >(null);
+  const storyOutlineExpanded = expandedOutlinePrefix === sequence.prefix;
+
   const tabs: Array<{
     id: InspectorTab;
     label: string;
     icon: typeof Camera;
   }> = [
-    { id: "camera", label: "摄影", icon: Camera },
-    { id: "composition", label: "构图", icon: LocateFixed },
     { id: "direction", label: "导演", icon: Clapperboard },
+    { id: "shot", label: "镜头", icon: Camera },
+    { id: "audio", label: "音频", icon: AudioLines },
     { id: "ue", label: "UE", icon: Boxes },
   ];
 
@@ -635,101 +672,101 @@ function ShotInspector({
         role="tabpanel"
         key={`${shot.id}-${tab}`}
       >
-        {tab === "camera" && (
-          <section className="inspector-section">
-            <div className="inspector-summary">
-              <div>
-                <small>FOCAL</small>
-                <strong>
-                  {shot.endFocalLength === shot.focalLength
-                    ? shot.focalLength
-                    : `${shot.focalLength}-${shot.endFocalLength}`}
-                  <span> mm</span>
-                </strong>
-              </div>
-              <div>
-                <small>DURATION</small>
-                <strong>
-                  {shot.duration}
-                  <span> s</span>
-                </strong>
-              </div>
-              <div>
-                <small>CHECK</small>
-                <strong
-                  className={
-                    shot.projection.valid
-                      ? "projection-status--valid"
-                      : "projection-status--invalid"
-                  }
-                >
-                  {shot.projection.valid ? "通过" : "未通过"}
-                </strong>
-              </div>
-            </div>
-            <dl className="parameter-grid parameter-grid--inspector">
-              <div>
-                <dt>镜头类型</dt>
-                <dd>{shot.label}</dd>
-              </div>
-              <div>
-                <dt>焦段意图</dt>
-                <dd>{lensIntentLabel(shot.lensIntent)}</dd>
-              </div>
-              <div>
-                <dt>景深</dt>
-                <dd>{depthOfFieldLabel(shot.depthOfField)}</dd>
-              </div>
-              <div>
-                <dt>镜内运动</dt>
-                <dd>
-                  {cameraMovementLabel(shot.cameraMovement)}
-                  {shot.movementIntensity === "none"
-                    ? ""
-                    : ` · ${movementIntensityLabel(shot.movementIntensity)}`}
-                </dd>
-              </div>
-              <div>
-                <dt>主体</dt>
-                <dd>{shot.speakerName}</dd>
-              </div>
-              <div>
-                <dt>对话对象</dt>
-                <dd>
-                  {shot.lookTargetSlot
-                    ? sequence.participants.find(
-                        (participant) =>
-                          participant.slot === shot.lookTargetSlot,
-                      )?.name ?? shot.lookTargetSlot
-                    : "群体中心"}
-                </dd>
-              </div>
-              <div>
-                <dt>当前轴线</dt>
-                <dd>{shot.axis.id}</dd>
-              </div>
-              <div>
-                <dt>横滚角</dt>
-                <dd>{shot.cameraRollDegrees.toFixed(0)}°</dd>
-              </div>
-              <div>
-                <dt>实测景别</dt>
-                <dd>{shotSizeLabel(shot.projection.measuredShotSize)}</dd>
-              </div>
-              <div>
-                <dt>正面偏角</dt>
-                <dd>
-                  {shot.projection.subjectFaceAngle === null
-                    ? "群像"
-                    : `${shot.projection.subjectFaceAngle.toFixed(1)}°`}
-                </dd>
-              </div>
-            </dl>
-          </section>
-        )}
-
-        {tab === "composition" && (
+        {tab === "shot" && (
           <>
+            <section className="inspector-section">
+              <div className="section-label">
+                <span>摄影参数</span>
+              </div>
+              <div className="inspector-summary">
+                <div>
+                  <small>FOCAL</small>
+                  <strong>
+                    {shot.endFocalLength === shot.focalLength
+                      ? shot.focalLength
+                      : `${shot.focalLength}-${shot.endFocalLength}`}
+                    <span> mm</span>
+                  </strong>
+                </div>
+                <div>
+                  <small>DURATION</small>
+                  <strong>
+                    {shot.duration}
+                    <span> s</span>
+                  </strong>
+                </div>
+                <div>
+                  <small>CHECK</small>
+                  <strong
+                    className={
+                      shot.projection.valid
+                        ? "projection-status--valid"
+                        : "projection-status--invalid"
+                    }
+                  >
+                    {shot.projection.valid ? "通过" : "未通过"}
+                  </strong>
+                </div>
+              </div>
+              <dl className="parameter-grid parameter-grid--inspector">
+                <div>
+                  <dt>镜头类型</dt>
+                  <dd>{shot.label}</dd>
+                </div>
+                <div>
+                  <dt>焦段意图</dt>
+                  <dd>{lensIntentLabel(shot.lensIntent)}</dd>
+                </div>
+                <div>
+                  <dt>景深</dt>
+                  <dd>{depthOfFieldLabel(shot.depthOfField)}</dd>
+                </div>
+                <div>
+                  <dt>镜内运动</dt>
+                  <dd>
+                    {cameraMovementLabel(shot.cameraMovement)}
+                    {shot.movementIntensity === "none"
+                      ? ""
+                      : ` · ${movementIntensityLabel(shot.movementIntensity)}`}
+                  </dd>
+                </div>
+                <div>
+                  <dt>主体</dt>
+                  <dd>{shot.speakerName}</dd>
+                </div>
+                <div>
+                  <dt>对话对象</dt>
+                  <dd>
+                    {shot.lookTargetSlot
+                      ? sequence.participants.find(
+                          (participant) =>
+                            participant.slot === shot.lookTargetSlot,
+                        )?.name ?? shot.lookTargetSlot
+                      : "群体中心"}
+                  </dd>
+                </div>
+                <div>
+                  <dt>当前轴线</dt>
+                  <dd>{shot.axis.id}</dd>
+                </div>
+                <div>
+                  <dt>横滚角</dt>
+                  <dd>{shot.cameraRollDegrees.toFixed(0)}°</dd>
+                </div>
+                <div>
+                  <dt>实测景别</dt>
+                  <dd>{shotSizeLabel(shot.projection.measuredShotSize)}</dd>
+                </div>
+                <div>
+                  <dt>正面偏角</dt>
+                  <dd>
+                    {shot.projection.subjectFaceAngle === null
+                      ? "群像"
+                      : `${shot.projection.subjectFaceAngle.toFixed(1)}°`}
+                  </dd>
+                </div>
+              </dl>
+            </section>
             <section className="inspector-section">
               <div className="section-label">
                 <span>构图策略</span>
@@ -809,17 +846,32 @@ function ShotInspector({
 
         {tab === "direction" && (
           <>
-            <SoundEffectRecommendations
-              recommendations={soundEffects}
-              dialogueRows={sequence.rows}
-              currentDialogueIds={shot.dialogueIds}
-              busy={exportBusy}
-              onWrite={onExportSoundEffects}
-            />
-            <MusicRecommendations
-              recommendations={musicRecommendations}
-              currentDialogueIds={shot.dialogueIds}
-            />
+            <section className="inspector-section story-outline">
+              <button
+                className="story-outline__toggle"
+                type="button"
+                aria-expanded={storyOutlineExpanded}
+                aria-controls="story-outline-content"
+                onClick={() =>
+                  setExpandedOutlinePrefix((expandedPrefix) =>
+                    expandedPrefix === sequence.prefix
+                      ? null
+                      : sequence.prefix,
+                  )
+                }
+              >
+                <span>
+                  <strong>剧情梗概</strong>
+                  <small>开始节点 {sequence.startId}</small>
+                </span>
+                <ChevronRight size={16} aria-hidden="true" />
+              </button>
+              {storyOutlineExpanded && (
+                <p id="story-outline-content">
+                  {sequence.outline || "该对话没有填写剧情梗概。"}
+                </p>
+              )}
+            </section>
             <section className="inspector-section actor-actions">
               <div className="section-label">
                 <span>演员动作</span>
@@ -910,8 +962,30 @@ function ShotInspector({
           </>
         )}
 
+        {tab === "audio" && (
+          <>
+            <SoundEffectRecommendations
+              recommendations={soundEffects}
+              dialogueRows={sequence.rows}
+              currentDialogueIds={shot.dialogueIds}
+              busy={exportBusy}
+              onWrite={onExportSoundEffects}
+            />
+            <MusicRecommendations
+              recommendations={musicRecommendations}
+              currentDialogueIds={shot.dialogueIds}
+            />
+          </>
+        )}
+
         {tab === "ue" && (
           <>
+            <CharacterActionEditor
+              controller={characterActionEditor}
+              sequence={sequence}
+              dialogueIds={shot.dialogueIds}
+              busy={exportBusy}
+            />
             <section className="inspector-section">
               <div className="section-label">
                 <span>UE4 参考</span>
@@ -1073,6 +1147,7 @@ export default function App() {
     useState<FormationOptionId>("generated");
   const [desktopSetup, setDesktopSetup] =
     useState<DesktopSetupStatus | null>(null);
+  const [showDesktopFirstRun, setShowDesktopFirstRun] = useState(false);
   const [showDesktopSetup, setShowDesktopSetup] = useState(false);
   const {
     activeWorkspace,
@@ -1139,7 +1214,8 @@ export default function App() {
   const [dialogueSaveStatus, setDialogueSaveStatus] = useState("");
   const [showDialogueTextEditor, setShowDialogueTextEditor] =
     useState(false);
-  const [inspectorTab, setInspectorTab] = useState<InspectorTab>("camera");
+  const [inspectorTab, setInspectorTab] =
+    useState<InspectorTab>("direction");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dialogueEditorRef = useRef<HTMLDivElement>(null);
   const directorRunRef = useRef(0);
@@ -1160,6 +1236,45 @@ export default function App() {
   soundEffectCatalogRef.current = soundEffectCatalog;
 
   const activeShot: ShotPlan | undefined = shots[activeIndex] ?? shots[0];
+  const characterActionEditor = useCharacterActionEditor({
+    sequence,
+    enabled:
+      activeWorkspace === "storyboard" &&
+      inspectorTab === "ue" &&
+      Boolean(activeShot),
+  });
+  const stageShot = useMemo(() => {
+    if (!activeShot) {
+      return undefined;
+    }
+    const turns = characterActionEditor.turnDegreesByModelIndex(
+      sequence.rows
+        .slice(0, activeShot.dialogueEndIndex + 1)
+        .map((row) => row.id),
+    );
+    if (turns.size === 0) {
+      return activeShot;
+    }
+    const facingOverrides = { ...activeShot.facingOverrides };
+    for (const participant of sequence.participants) {
+      if (participant.modelIndex === null) {
+        continue;
+      }
+      const turnDegrees = turns.get(participant.modelIndex);
+      if (turnDegrees === undefined) {
+        continue;
+      }
+      facingOverrides[participant.slot] = facingTargetAfterTurn(
+        participant,
+        turnDegrees,
+      );
+    }
+    return { ...activeShot, facingOverrides };
+  }, [
+    activeShot,
+    characterActionEditor.turnDegreesByModelIndex,
+    sequence.participants,
+  ]);
   const musicRecommendations = useMemo(
     () =>
       recommendMusic(
@@ -1188,9 +1303,11 @@ export default function App() {
   } = useStoryboardExport({
     sequence,
     shots,
+    characterActions: characterActionEditor.exportActions,
     soundEffects,
     musicRecommendations,
     activeShot,
+    onCharacterActionsExported: characterActionEditor.commitExported,
   });
   const activeDialogueId =
     activeShot
@@ -1375,8 +1492,11 @@ export default function App() {
       .catch(() => undefined);
     if (window.shotSandboxDesktop) {
       void window.shotSandboxDesktop.getSetupStatus().then((status) => {
+        const needsDataSetup =
+          !status.setupCompleted || !status.defaultDataReady;
         setDesktopSetup(status);
-        setShowDesktopSetup(status.firstRun);
+        setShowDesktopFirstRun(needsDataSetup);
+        setShowDesktopSetup(!needsDataSetup && status.firstRun);
       });
     }
   }, []);
@@ -2105,6 +2225,7 @@ export default function App() {
   }
 
   async function chooseDirectory() {
+    setError("");
     if (window.shotSandboxDesktop) {
       fileInputRef.current?.click();
       return;
@@ -2153,6 +2274,28 @@ export default function App() {
           ? setupError.message
           : "无法读取桌面版设置",
       );
+    }
+  }
+
+  async function completeDesktopFirstRun() {
+    const desktop = window.shotSandboxDesktop;
+    if (!desktop || !desktopSetup?.defaultDataReady) {
+      return;
+    }
+    setLoading(true);
+    setError("");
+    try {
+      const status = await desktop.completeSetup();
+      setDesktopSetup(status);
+      setShowDesktopFirstRun(false);
+    } catch (setupError) {
+      setError(
+        setupError instanceof Error
+          ? setupError.message
+          : "无法保存首次启动设置",
+      );
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -2715,12 +2858,11 @@ export default function App() {
             )}
           </section>
 
-          <section className="panel-section story-section">
+          <section className="panel-section cast-section">
             <div className="section-label">
-              <span>剧情梗概</span>
-              <small>开始节点 {sequence.startId}</small>
+              <span>场景角色</span>
+              <small>{sequence.participants.length} 位</small>
             </div>
-            <p>{sequence.outline || "该对话没有填写剧情梗概。"}</p>
             <div className="cast-list">
               {sequence.participants.map((participant) => (
                 <div className="cast-row" key={participant.instanceId}>
@@ -2989,7 +3131,7 @@ export default function App() {
               </div>
               <StageView
                 participants={sequence.participants}
-                shot={activeShot}
+                shot={stageShot ?? activeShot}
                 shotIndex={activeIndex}
                 shotCount={shots.length}
                 active={activeWorkspace === "storyboard"}
@@ -3199,6 +3341,7 @@ export default function App() {
             exportButtonLabel={storyboardExportButtonLabel}
             exportUnavailableReason={storyboardExportUnavailableReason}
             backgroundGenerationActive={directorLoading}
+            characterActionEditor={characterActionEditor}
             onMove={moveShot}
             onTabChange={setInspectorTab}
             onExport={() => void previewStoryboardExport()}
@@ -3323,9 +3466,15 @@ export default function App() {
             result={storyboardExportResult}
             onClose={closeStoryboardExport}
             onShowAll={() => void previewAllStoryboardExport()}
-            onConfirm={(selectedShotIndexes, selectedSoundEffectIndexes, selectedMusicIndexes) =>
+            onConfirm={(
+              selectedShotIndexes,
+              selectedCharacterActionIndexes,
+              selectedSoundEffectIndexes,
+              selectedMusicIndexes,
+            ) =>
               void confirmStoryboardExport(
                 selectedShotIndexes,
+                selectedCharacterActionIndexes,
                 selectedSoundEffectIndexes,
                 selectedMusicIndexes,
               )
@@ -3413,6 +3562,17 @@ export default function App() {
             />
           )}
 
+        {showDesktopFirstRun && desktopSetup && (
+          <LazyDesktopFirstRunModal
+            status={desktopSetup}
+            busy={loading}
+            error={error}
+            onChooseDirectory={() => void chooseDirectory()}
+            onComplete={() => void completeDesktopFirstRun()}
+            onSkip={() => setShowDesktopFirstRun(false)}
+          />
+        )}
+
         {showDesktopSetup && desktopSetup && (
           <LazyDesktopSetupModal
             initialStatus={desktopSetup}
@@ -3423,6 +3583,9 @@ export default function App() {
             larkError={larkError}
             soundEffectCatalog={soundEffectCatalog}
             musicCatalog={musicCatalog}
+            dataLoading={loading}
+            dataError={error}
+            onChooseDataDirectory={() => void chooseDirectory()}
             onAuthorize={() => void beginAuthorization()}
             onRefreshLark={() => void refreshLarkConnection(false)}
             onSyncSoundEffectCatalog={refreshSoundEffectCatalogFromLark}

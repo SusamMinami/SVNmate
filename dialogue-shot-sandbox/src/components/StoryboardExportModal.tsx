@@ -4,6 +4,7 @@ import {
   Layers3,
   LoaderCircle,
   Music2,
+  PersonStanding,
   Upload,
   Volume2,
   X,
@@ -22,6 +23,7 @@ interface StoryboardExportModalProps {
   onShowAll: () => void;
   onConfirm: (
     selectedShotIndexes: number[],
+    selectedCharacterActionIndexes: number[],
     selectedSoundEffectIndexes: number[],
     selectedMusicIndexes: number[],
   ) => void;
@@ -48,6 +50,13 @@ const SOUND_EFFECT_ACTION_LABELS: Record<
   unchanged: "无需修改",
 };
 
+const CHARACTER_ACTION_LABELS = {
+  add: "新增",
+  replace: "替换",
+  clear: "清空",
+  unchanged: "无需修改",
+} as const;
+
 export function StoryboardExportModal({
   preview,
   mode,
@@ -69,6 +78,23 @@ export function StoryboardExportModal({
       previewSoundEffects.map((soundEffect) => soundEffect.soundEffectIndex),
     );
   const selectedShots = new Set(selectedShotIndexes);
+  const previewCharacterActions = preview.characterActions ?? [];
+  const [
+    selectedCharacterActionIndexes,
+    setSelectedCharacterActionIndexes,
+  ] = useState<number[]>(() =>
+    previewCharacterActions.map((item) => item.characterActionIndex),
+  );
+  const selectedCharacterActions = new Set(
+    selectedCharacterActionIndexes,
+  );
+  const selectedCharacterActionRows = previewCharacterActions.filter(
+    (item) =>
+      selectedCharacterActions.has(item.characterActionIndex),
+  );
+  const changedCharacterActions = selectedCharacterActionRows.filter(
+    (item) => item.action !== "unchanged",
+  );
   const selectedSoundEffects = new Set(selectedSoundEffectIndexes);
   const previewMusic = preview.music ?? [];
   const [selectedMusicIndexes, setSelectedMusicIndexes] = useState<number[]>(
@@ -93,12 +119,21 @@ export function StoryboardExportModal({
   const changedSoundEffects = selectedSoundEffectRows.filter(
     (soundEffect) => soundEffect.action !== "unchanged",
   );
+  const selectedCharacterActionModelIndexes = new Set(
+    selectedCharacterActionRows.map((item) => item.modelIndex),
+  );
   const selectedBlockedReasons = [
     ...preview.globalBlockedReasons.filter(
       (reason) =>
         selectedShotIndexes.length > 0 ||
+        selectedCharacterActionIndexes.length > 0 ||
         !reason.startsWith("Formation BP"),
     ),
+    ...(preview.characterActionBlockedReasons ?? [])
+      .filter((item) =>
+        selectedCharacterActionModelIndexes.has(item.modelIndex),
+      )
+      .map((item) => item.reason),
     ...preview.shots
       .filter((shot) => selectedShots.has(shot.shotIndex))
       .flatMap((shot) => shot.blockedReasons),
@@ -118,7 +153,7 @@ export function StoryboardExportModal({
       : []),
     ...(selectedActorActionCount > 0
       ? [
-          `选中镜头包含 ${selectedActorActionCount} 个演员转身动作；当前导出只写相机，请按演员动作清单配置 UE 动作`,
+          `选中镜头包含 ${selectedActorActionCount} 个自动转身建议；只有动作编辑器中明确配置的动作会写入 UE`,
         ]
       : []),
   ];
@@ -130,8 +165,13 @@ export function StoryboardExportModal({
   const allMusicSelected =
     previewMusic.length > 0 &&
     selectedMusicIndexes.length === previewMusic.length;
+  const allCharacterActionsSelected =
+    previewCharacterActions.length > 0 &&
+    selectedCharacterActionIndexes.length ===
+      previewCharacterActions.length;
   const hasSelection =
     selectedShotIndexes.length > 0 ||
+    selectedCharacterActionIndexes.length > 0 ||
     selectedSoundEffectIndexes.length > 0 ||
     selectedMusicIndexes.length > 0;
 
@@ -144,6 +184,9 @@ export function StoryboardExportModal({
         (soundEffect) => soundEffect.soundEffectIndex,
       ),
     );
+    setSelectedCharacterActionIndexes(
+      previewCharacterActions.map((item) => item.characterActionIndex),
+    );
     setSelectedMusicIndexes(previewMusic.map((item) => item.musicIndex));
     setConfirmed(false);
   }, [preview.reviewToken]);
@@ -153,6 +196,31 @@ export function StoryboardExportModal({
       checked
         ? Array.from({ length: preview.shotCount }, (_, index) => index)
         : [],
+    );
+    setConfirmed(false);
+  }
+
+  function selectAllCharacterActions(checked: boolean) {
+    setSelectedCharacterActionIndexes(
+      checked
+        ? previewCharacterActions.map(
+            (item) => item.characterActionIndex,
+          )
+        : [],
+    );
+    setConfirmed(false);
+  }
+
+  function selectCharacterAction(
+    characterActionIndex: number,
+    checked: boolean,
+  ) {
+    setSelectedCharacterActionIndexes((current) =>
+      checked
+        ? [...current, characterActionIndex].sort(
+            (left, right) => left - right,
+          )
+        : current.filter((index) => index !== characterActionIndex),
     );
     setConfirmed(false);
   }
@@ -274,6 +342,13 @@ export function StoryboardExportModal({
             <div>
               <dt>变更节点</dt>
               <dd>{changedNodes.length}</dd>
+            </div>
+            <div>
+              <dt>角色动作</dt>
+              <dd>
+                {selectedCharacterActionIndexes.length} /{" "}
+                {previewCharacterActions.length}
+              </dd>
             </div>
             <div>
               <dt>音效</dt>
@@ -418,6 +493,107 @@ export function StoryboardExportModal({
                 ))}
               </tbody>
             </table>
+            </section>
+          )}
+
+          {previewCharacterActions.length > 0 && (
+            <section className="storyboard-export-table-section">
+              <div className="storyboard-export-table-section__title">
+                <PersonStanding size={14} />
+                <strong>角色动作</strong>
+                <small>
+                  {selectedCharacterActionIndexes.length} 项已选
+                </small>
+              </div>
+              <table className="storyboard-export-table storyboard-export-action-table">
+                <thead>
+                  <tr>
+                    <th className="storyboard-export-table__select">
+                      <input
+                        type="checkbox"
+                        aria-label="选择全部角色动作"
+                        title="选择全部角色动作"
+                        checked={allCharacterActionsSelected}
+                        disabled={busy || Boolean(result)}
+                        onChange={(event) =>
+                          selectAllCharacterActions(event.target.checked)
+                        }
+                      />
+                    </th>
+                    <th>台词节点</th>
+                    <th>角色槽</th>
+                    <th>当前动作</th>
+                    <th>导出后</th>
+                    <th className="storyboard-export-table__action">处理</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {previewCharacterActions.map((item) => (
+                    <tr
+                      key={`${item.dialogueId}:${item.modelIndex}`}
+                      data-action={item.action}
+                      data-selected={selectedCharacterActions.has(
+                        item.characterActionIndex,
+                      )}
+                    >
+                      <td className="storyboard-export-table__select">
+                        <input
+                          type="checkbox"
+                          aria-label={`选择节点 ${item.dialogueId} 槽 ${item.modelIndex} 的角色动作`}
+                          checked={selectedCharacterActions.has(
+                            item.characterActionIndex,
+                          )}
+                          disabled={busy || Boolean(result)}
+                          onChange={(event) =>
+                            selectCharacterAction(
+                              item.characterActionIndex,
+                              event.target.checked,
+                            )
+                          }
+                        />
+                      </td>
+                      <td><code>{item.dialogueId}</code></td>
+                      <td><code>BP {item.modelIndex}</code></td>
+                      <td>
+                        <code>
+                          {item.existingActions.length > 0
+                            ? item.existingActions
+                                .map(
+                                  (action) =>
+                                    `${action.montageName} @ ${action.delaySeconds.toFixed(1)}s`,
+                                )
+                                .join(" · ")
+                            : "空"}
+                        </code>
+                      </td>
+                      <td>
+                        <code>
+                          {item.desiredActions.length > 0
+                            ? item.desiredActions
+                                .map(
+                                  (action) =>
+                                    `${action.montageName} @ ${action.delaySeconds.toFixed(1)}s`,
+                                )
+                                .join(" · ")
+                            : "空"}
+                        </code>
+                        {item.preservedComplexActionCount > 0 && (
+                          <small>
+                            保留 {item.preservedComplexActionCount} 个特殊动作
+                          </small>
+                        )}
+                      </td>
+                      <td>
+                        <span
+                          className={`export-action export-action--${item.action}`}
+                        >
+                          {CHARACTER_ACTION_LABELS[item.action]}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </section>
           )}
 
@@ -574,6 +750,7 @@ export function StoryboardExportModal({
             />
             <span>
               已核对 {changedNodes.length} 个镜头节点、{" "}
+              {changedCharacterActions.length} 组角色动作、{" "}
               {changedSoundEffects.length} 个音效和 {changedMusic.length} 首音乐，
               并确认写入后保存 UE 对话资产
             </span>
@@ -600,6 +777,7 @@ export function StoryboardExportModal({
               onClick={() =>
                 onConfirm(
                   selectedShotIndexes,
+                  selectedCharacterActionIndexes,
                   selectedSoundEffectIndexes,
                   selectedMusicIndexes,
                 )

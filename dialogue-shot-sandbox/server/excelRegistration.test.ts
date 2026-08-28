@@ -7,6 +7,12 @@ import {
   readablePowerShellError,
 } from "./excelRegistration";
 
+const TEST_REGISTRATION_PATHS = {
+  missionTarget: "F:\\Project\\doc\\xlsdir\\r任务剧情\\m目标物表.xlsm",
+  npc: "F:\\Project\\doc\\xlsdir\\NPC表.xlsm",
+  model: "F:\\Project\\doc\\xlsdir\\m模型资源表.xlsm",
+};
+
 describe("Excel PowerShell errors", () => {
   it("turns Excel busy CLIXML into an actionable message", () => {
     const clixml =
@@ -40,6 +46,7 @@ describe("Excel PowerShell errors", () => {
   it("accepts NPC-only writes without a MapID when the model exists", () => {
     const request = parseNpcRegistrationWriteRequest({
       scope: "npc_only",
+      paths: TEST_REGISTRATION_PATHS,
       items: [
         {
           actorRef: "BP_Guard_C_1",
@@ -73,6 +80,7 @@ describe("Excel PowerShell errors", () => {
     expect(() =>
       parseNpcRegistrationWriteRequest({
         scope: "npc_only",
+        paths: TEST_REGISTRATION_PATHS,
         items: [
           {
             actorRef: "BP_Guard_C_1",

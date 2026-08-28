@@ -25,13 +25,6 @@ const VectorSchema = z.object({
   z: z.number().finite(),
 });
 
-const DEFAULT_REGISTRATION_PATHS = {
-  missionTarget:
-    "C:\\trunk\\doc\\xlsdir\\r任务剧情\\m目标物表.xlsm",
-  npc: "C:\\trunk\\doc\\xlsdir\\NPC表.xlsm",
-  model: "C:\\trunk\\doc\\xlsdir\\m模型资源表.xlsm",
-};
-
 const RegistrationPathsSchema = z.object({
   missionTarget: z.string().trim().min(1),
   npc: z.string().trim().min(1),
@@ -41,7 +34,7 @@ const RegistrationPathsSchema = z.object({
 const RegistrationWriteSchema = z
   .object({
     scope: z.enum(["all", "npc_only", "target_only"]).default("all"),
-    paths: RegistrationPathsSchema.default(DEFAULT_REGISTRATION_PATHS),
+    paths: RegistrationPathsSchema,
     items: z
       .array(
         z.object({
@@ -118,8 +111,7 @@ const TransformUpdateSchema = z
     targetPath: z
       .string()
       .trim()
-      .min(1)
-      .default(DEFAULT_REGISTRATION_PATHS.missionTarget),
+      .min(1),
     items: z
       .array(
         z.object({

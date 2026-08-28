@@ -43,7 +43,7 @@ npm run dev
 2. 选择包含 `csvdir` 的 `doc` 目录，也可以直接选择 `csvdir`。
 3. 输入四位数对话 ID（例如 `1001`）进行分析，或输入对白文字定位上下文。
 4. 选择“规则导演”、“TRAE 协作”或“Mira AI”，点击“分析”。
-5. 程序先显示剧情梗概、角色和完整对话文本，同时等待 BP 站位查询；检测到
+5. 程序先显示角色和完整对话文本，导演页提供默认收起的剧情梗概，同时等待 BP 站位查询；检测到
    BP 时，选择要使用的站位后才生成分镜，避免先显示一版自动站位、随后又被
    BP 结果替换。
 6. AI 完成后直接对比 AI 占位与当前 BP/规则占位。采用 AI 占位会进入已有
@@ -135,6 +135,12 @@ NPC。`0` 号槽固定为玩家；没有发言的玩家或 NPC 仍参与群像�
 机位。需要改变视线时，演员动作只使用项目现有的左右 `45°/90°/180°` 转身，
 并在镜头检查器中显示对应 `AM_Turn*` 动作；不可转身角色保持 BP 朝向。
 
+右侧 UE 页签可直接读取每个 Formation 角色 BP 的 `Montages`。当前分镜包含的
+台词节点可逐项展开，为同一节点添加多个角色和多个动作，设置 `StartTime`
+延迟并拖拽排序。动作在统一导出弹窗中独立勾选后写入对应节点的
+`CharacterBehaviours`；已有动作只读显示且始终保留。新增 `AM_Turn*` 动作
+自动写为 `ERotate`，沙盘中的对应角色同步预览名称所描述的转向角度。
+
 工作台左侧的“占位方案”只显示 BP 文件名，例如 `BP_736300`。右侧切换按钮可
 随时重新打开预览，在 BP、规则导演和已完成的 AI 占位方案之间切换，无需再次
 调用 UE 或 AI。协作连接和返修案例库状态收纳在顶部“当前数据源”左侧的图标中，
@@ -185,15 +191,16 @@ npm run dist:win
 产物位于 `artifacts`：
 
 - `Shot-Sandbox-Setup-<version>-x64.exe`：推荐安装版，支持在线增量升级。
-- `Shot-Sandbox-Portable-<version>-x64.exe`：单文件便携版，无需安装。
+- `Shot-Sandbox-Portable-<version>-x64.exe`：单文件便携版；检测到新版本后会
+  自动下载安装包，并可直接重启安装。
 - `latest.yml` 与 `.blockmap`：安装版在线升级元数据。
 
-首次启动会检测 TRAE、默认对话目录、分镜 MCP 状态和 UE OmniMcpCore
-连接。UE 默认地址为 `127.0.0.1:12031`；如果编辑器插件使用其他端口，可在
-首次启动页修改并检测，设置会保存在应用数据目录。点击“生成 TRAE 配置”后，
-应用会在 `%APPDATA%\Shot Sandbox\trae-integration` 创建独立工作区，其中
-包含 `.trae/mcp.json` 和 `.agents` Skill。使用 TRAE 打开该目录并启用项目
-MCP，即可处理镜头沙盘任务。TRAE 分镜 MCP 固定使用
+首次启动只引导选择项目的 `doc` 文件夹，也可以直接选择 `csvdir`；目录可位于
+任意磁盘和上级目录。飞书、TRAE、UE OmniMcpCore 与在线升级状态统一在桌面版
+设置中管理。UE 默认地址为 `127.0.0.1:12031`。点击“生成 TRAE 配置”后，应用
+会在 `%APPDATA%\Shot Sandbox\trae-integration` 创建独立工作区，其中包含
+`.trae/mcp.json` 和 `.agents` Skill。使用 TRAE 打开该目录并启用项目 MCP，
+即可处理镜头沙盘任务。TRAE 分镜 MCP 固定使用
 `http://127.0.0.1:43127/mcp`，与 UE 端口无关。
 
 在线升级使用固定 GitHub Release 标签 `shot-sandbox-update`。维护者安装并
@@ -214,8 +221,8 @@ powershell -ExecutionPolicy Bypass -File scripts\publish-update.ps1
 - **内部 TRAE 协作**：软件创建本地待处理任务，当前已登录的内部 TRAE 通过 MCP 领取并提交 `shot-plan.v5`。
 - **Mira AI**：前端调用本地 Vite/Node 桥，桥接服务通过 `lark-cli` 搜索 Mira、发送严格 JSON 请求并轮询回复。
 - **自动降级**：飞书未授权、回复非 JSON、Schema 错误、台词遗漏或重复时，自动使用规则导演，并在界面显示原因。TRAE 等待达到上限时仅结束本次界面等待，后台任务继续保留。
-- **已有音效推荐**：三种导演都会结合整段对话、场景、脚步和明确动作推荐已有资产，并绑定具体台词节点。导演页只显示当前分镜内容命中的建议，并提供试听与独立“写入本镜音效”入口。试听优先读取[音效资产表](https://bytedance.larkoffice.com/wiki/Tby3w6y0EiLTdfktBeecuvminbd?table=tblky7jbQIOlk44n&view=vewNcXGzda)中的 WAV 附件；远端缺失时从当前 UE 项目的 `WwiseAudio/Windows` 解析 WEM，使用内置 vgmstream 转码并回传远端。未生成媒体的资产会禁用播放按钮并说明原因。“导出到 UE”弹窗中也可与镜头分开批量勾选音效并写入 `SoundEffect`，节点原有 `DelayTime` 保持不变。目录可在设置中手动从[游戏音效资产编目](https://bytedance.larkoffice.com/docx/THMEdPSFfocRLgxh4qkcY6cin8g)同步；没有足够匹配时不强行推荐。
-- **对话配乐推荐**：应用将整段对白、剧情梗概和导演情绪走向与[音乐资料库](https://bytedance.larkoffice.com/wiki/Tby3w6y0EiLTdfktBeecuvminbd?table=tblXRZRyNviXeFSr&view=vew8FeUzEf)中的标签、备注和资源标识匹配，在开场和必要的情绪转折节点推荐配乐。导演页只显示当前分镜覆盖的建议并支持试听；附件首次试听时按需下载到本地缓存，不在目录同步时批量拉取。导出弹窗可独立勾选镜头、音效和音乐，音乐写入 `BackgroundMusic.CurrentUint32`，原有 `DelayBackgroundMusicTime` 保持不变。
+- **已有音效推荐**：三种导演都会结合整段对话、场景、脚步和明确动作推荐已有资产，并绑定具体台词节点。音频页只显示当前分镜内容命中的建议，并提供试听与独立“写入本镜音效”入口。试听优先读取[音效资产表](https://bytedance.larkoffice.com/wiki/Tby3w6y0EiLTdfktBeecuvminbd?table=tblky7jbQIOlk44n&view=vewNcXGzda)中的 WAV 附件；远端缺失时从当前 UE 项目的 `WwiseAudio/Windows` 解析 WEM，使用内置 vgmstream 转码并回传远端。未生成媒体的资产会禁用播放按钮并说明原因。“导出到 UE”弹窗中也可与镜头分开批量勾选音效并写入 `SoundEffect`，节点原有 `DelayTime` 保持不变。目录可在设置中手动从[游戏音效资产编目](https://bytedance.larkoffice.com/docx/THMEdPSFfocRLgxh4qkcY6cin8g)同步；没有足够匹配时不强行推荐。
+- **对话配乐推荐**：应用将整段对白、剧情梗概和导演情绪走向与[音乐资料库](https://bytedance.larkoffice.com/wiki/Tby3w6y0EiLTdfktBeecuvminbd?table=tblXRZRyNviXeFSr&view=vew8FeUzEf)中的标签、备注和资源标识匹配，在开场和必要的情绪转折节点推荐配乐。音频页只显示当前分镜覆盖的建议并支持试听；附件首次试听时按需下载到本地缓存，不在目录同步时批量拉取。导出弹窗可独立勾选镜头、音效和音乐，音乐写入 `BackgroundMusic.CurrentUint32`，原有 `DelayBackgroundMusicTime` 保持不变。
 
 ### 音乐音频分析
 
@@ -333,8 +340,7 @@ dialogue-shot-sandbox/trae-integration/mcp.json
 
 切换到 Mira 不会立即发送消息。只有用户点击查询/生成按钮时，当前对话和 NPC 信息才会以当前飞书用户身份发送给 Mira。
 
-桌面版首次启动且没有飞书用户登录数据时，会在设置窗口引导登录。应用按
-功能申请以下最小权限：
+桌面版设置中的飞书区域会显示当前登录和权限状态。应用按功能申请以下最小权限：
 
 - `search:bot`
 - `im:message.send_as_user`

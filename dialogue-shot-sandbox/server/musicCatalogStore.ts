@@ -76,12 +76,12 @@ export function parseMusicStateMap(text: string): Map<string, number> {
   return result;
 }
 
+function musicStateMapCandidates(): string[] {
+  return [join(getConfigCsvDirectory(), MUSIC_STATE_FILENAME)];
+}
+
 async function musicStateMap(
-  candidates = [
-    join(getConfigCsvDirectory(), MUSIC_STATE_FILENAME),
-    join("C:\\trunk\\doc\\csvdir", MUSIC_STATE_FILENAME),
-    join(root(), "doc", "csvdir", MUSIC_STATE_FILENAME),
-  ],
+  candidates = musicStateMapCandidates(),
 ): Promise<Map<string, number>> {
   for (const path of candidates) {
     try {

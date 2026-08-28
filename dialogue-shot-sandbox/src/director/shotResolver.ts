@@ -242,6 +242,13 @@ function createShotAxis(
   };
 }
 
+function relationshipAxisId(
+  subject: DialogueParticipant,
+  lookTarget: DialogueParticipant,
+): string {
+  return [subject.slot, lookTarget.slot].sort().join("-");
+}
+
 function adjustedSingleLabel(
   template: DirectorDecision["template"],
   subjectLabel: string,
@@ -280,6 +287,7 @@ function geometryFor(
   participants: DialogueParticipant[],
   primaryParticipants: DialogueParticipant[],
   previousGeometry?: CameraGeometry,
+  previousAxis?: ShotAxis | null,
 ): Geometry {
   const groupSubject =
     decision.subject === "both" || decision.subject === "group";
@@ -357,6 +365,13 @@ function geometryFor(
       shotSize,
       coverage,
       previousGeometry,
+      requiredRelationshipSide:
+        lookTarget &&
+        previousAxis?.kind === "relationship" &&
+        previousAxis.id === relationshipAxisId(participant, lookTarget) &&
+        previousAxis.cameraSide !== 0
+          ? previousAxis.cameraSide
+          : undefined,
       cameraRollDegrees: decision.camera_roll_degrees,
     });
   };
@@ -761,6 +776,7 @@ export function resolveShotDecisions(
       activeParticipants,
       activeDialogueParticipants,
       previousGeometry,
+      previousAxis,
     );
     const motionGeometry = resolveMotionGeometry(
       decision,
@@ -780,16 +796,11 @@ export function resolveShotDecisions(
       groupSubject ? null : lookTarget,
       motionGeometry.endPosition,
     );
-    if (
+    const motionCrossesRelationshipAxis =
       axis.kind === "relationship" &&
       axis.cameraSide !== 0 &&
       motionEndAxis.cameraSide !== 0 &&
-      motionEndAxis.cameraSide !== axis.cameraSide
-    ) {
-      throw new Error(
-        `镜头 ${index + 1} 的镜内运动越过了关系轴 ${axis.id}`,
-      );
-    }
+      motionEndAxis.cameraSide !== axis.cameraSide;
     const additionalVisibleSlots =
       geometry.coverage === "single"
         ? geometry.assessment.visibleParticipantSlots.filter(
@@ -829,6 +840,9 @@ export function resolveShotDecisions(
       ...geometry.assessment.warnings,
       ...actorActionPlan.warnings,
     ];
+    if (motionCrossesRelationshipAxis) {
+      projectionWarnings.push(`镜内运动越过了关系轴 ${axis.id}`);
+    }
     let motionEndAssessment: ProjectionAssessment | null = null;
     if (decision.camera_movement !== "static") {
       motionEndAssessment = assessProjection(
@@ -913,14 +927,14 @@ export function resolveShotDecisions(
         );
       }
     }
-    if (
+    const crossesPreviousRelationshipAxis =
       previousAxis?.kind === "relationship" &&
       axis.kind === "relationship" &&
       previousAxis.id === axis.id &&
       previousAxis.cameraSide !== 0 &&
-      axis.cameraSide !== previousAxis.cameraSide
-    ) {
-      throw new Error(`镜头 ${index + 1} 越过了关系轴 ${axis.id}`);
+      axis.cameraSide !== previousAxis.cameraSide;
+    if (crossesPreviousRelationshipAxis) {
+      projectionWarnings.push(`越过了关系轴 ${axis.id}`);
     }
     if (
       previousAxis?.kind === "relationship" &&
@@ -1032,8 +1046,13 @@ export function resolveShotDecisions(
     previousVisualSubjectSlot = shot.visualSubjectSlot;
     previousLookTargetSlot = shot.lookTargetSlot;
     previousCoverage = shot.projection.coverage;
-    previousAxis =
-      shot.cameraMovement === "static" ? shot.axis : motionEndAxis;
+    if (
+      !motionCrossesRelationshipAxis &&
+      !crossesPreviousRelationshipAxis
+    ) {
+      previousAxis =
+        shot.cameraMovement === "static" ? shot.axis : motionEndAxis;
+    }
     previousVisualAnchor =
       motionEndAssessment?.visualAnchor ?? shot.projection.visualAnchor;
     return shot;

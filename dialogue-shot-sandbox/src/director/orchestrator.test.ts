@@ -1,9 +1,29 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { demoDatabase } from "../data/demo";
 import { findDialogueSequence } from "../data/dialogueRepository";
-import { designShots } from "./orchestrator";
+import type { DialogueSequence, Vec3 } from "../types";
+import { createDefaultBlocking } from "./blockingResolver";
+import {
+  createDirectorInput,
+  type ReadyDirectorResponse,
+} from "./contracts";
+import {
+  createSharedPlanPreview,
+  designShots,
+  inspectDirectorProjection,
+} from "./orchestrator";
+import { createRuleDecisions } from "./ruleDirector";
 
 const sequence = findDialogueSequence(demoDatabase, "2048");
+
+function facingTargetAt(position: Vec3, angleDegrees: number): Vec3 {
+  const radians = (angleDegrees * Math.PI) / 180;
+  return [
+    position[0] + Math.cos(radians) * 2,
+    position[1],
+    position[2] + Math.sin(radians) * 2,
+  ];
+}
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -219,5 +239,96 @@ describe("designShots", () => {
       0,
       -0.18,
     ]);
+  });
+
+  it("reports an unsolved axis crossing as a revisable projection failure", () => {
+    const blueprintSequence: DialogueSequence = {
+      ...sequence,
+      participants: sequence.participants.map((participant, index) => ({
+        ...participant,
+        canTurn: false,
+        modelIndex: index,
+        positionSource: "blueprint" as const,
+        firstDialogueId: sequence.rows[0].id,
+        firstDialogueIndex: 0,
+        entryDialogueId: sequence.rows[0].id,
+        entryIndex: 0,
+        facingTarget: facingTargetAt(
+          participant.position,
+          participant.slot === "A" ? -90 : 180,
+        ),
+      })),
+    };
+    const input = createDirectorInput(
+      blueprintSequence,
+      "axis-projection-failure-test",
+    );
+    const blocking = createDefaultBlocking(input);
+    const plan = {
+      schema_version: "shot-plan.v5",
+      request_id: input.request_id,
+      status: "ready",
+      scene_analysis: {
+        dramatic_goal: "验证关系轴失败可返修",
+        emotional_progression: "保持测试对话节奏",
+        visual_strategy: "先建立空间，再切单人镜头",
+      },
+      blocking,
+      shots: createRuleDecisions(input, blocking),
+      sound_effects: [],
+    } satisfies ReadyDirectorResponse;
+
+    const failures = inspectDirectorProjection(input, plan);
+    const axisFailure = failures.find((failure) =>
+      failure.warnings.includes("越过了关系轴 A-B"),
+    );
+
+    expect(axisFailure).toMatchObject({
+      shotIndex: 2,
+      dialogueIds: ["204803", "204804"],
+    });
+  });
+
+  it("preserves Blueprint class paths in shared plan previews", () => {
+    const blueprintSequence: DialogueSequence = {
+      ...sequence,
+      participants: sequence.participants.map((participant, index) => ({
+        ...participant,
+        modelIndex: index,
+        modelClassPath: `/Game/Test/BP_${participant.slot}.BP_${participant.slot}_C`,
+        positionSource: "blueprint" as const,
+        firstDialogueId: sequence.rows[0].id,
+        firstDialogueIndex: 0,
+        lastDialogueId: sequence.rows.at(-1)!.id,
+        lastDialogueIndex: sequence.rows.length - 1,
+        entryDialogueId: sequence.rows[0].id,
+        entryIndex: 0,
+        exitDialogueId: null,
+        exitIndex: null,
+      })),
+    };
+    const input = createDirectorInput(
+      blueprintSequence,
+      "shared-blueprint-path-test",
+    );
+    const blocking = createDefaultBlocking(input);
+    const plan = {
+      schema_version: "shot-plan.v5",
+      request_id: input.request_id,
+      status: "ready",
+      scene_analysis: {
+        dramatic_goal: "验证共享方案保留 BP 路径",
+        emotional_progression: "保持测试对话节奏",
+        visual_strategy: "沿用当前站位",
+      },
+      blocking,
+      shots: createRuleDecisions(input, blocking),
+      sound_effects: [],
+    } satisfies ReadyDirectorResponse;
+
+    const shared = createSharedPlanPreview(input, plan);
+
+    expect(shared.sequence.participants.map((item) => item.modelClassPath))
+      .toEqual(blueprintSequence.participants.map((item) => item.modelClassPath));
   });
 });

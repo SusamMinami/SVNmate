@@ -13,6 +13,15 @@ import { resolveShotDecisions } from "./shotResolver";
 import { createShotPlan, createShotPreview } from "./shotPlanner";
 import { estimateDialogueDuration } from "./shotTiming";
 
+function facingTargetAt(position: Vec3, angleDegrees: number): Vec3 {
+  const radians = (angleDegrees * Math.PI) / 180;
+  return [
+    position[0] + Math.cos(radians) * 2,
+    position[1],
+    position[2] + Math.sin(radians) * 2,
+  ];
+}
+
 describe("createShotPlan", () => {
   const sequence = findDialogueSequence(demoDatabase, "2048");
   const shots = createShotPlan(sequence);
@@ -303,6 +312,69 @@ describe("createShotPlan", () => {
       );
       expect(delta).toBeGreaterThanOrEqual(30);
     }
+  });
+
+  it("keeps solvable singles on the established relationship axis side", () => {
+    const input = createDirectorInput(sequence, "axis-side-constraint-test");
+    const blocking = createDefaultBlocking(input);
+    const participants = resolveBlocking(
+      sequence.participants,
+      blocking,
+      sequence.rows.map((row) => row.id),
+    ).map((participant) => ({
+      ...participant,
+      canTurn: false,
+      facingTarget: facingTargetAt(
+        participant.position,
+        participant.slot === "A" ? -30 : 180,
+      ),
+    }));
+    const resolved = resolveShotDecisions(
+      { ...sequence, participants },
+      createRuleDecisions(input, blocking),
+    );
+
+    expect(resolved.map((shot) => shot.axis.cameraSide)).toEqual([
+      1, 1, 1, 1,
+    ]);
+    expect(
+      resolved.flatMap((shot) => shot.projection.warnings),
+    ).not.toContain("越过了关系轴 A-B");
+  });
+
+  it("keeps an unsolved axis crossing as one projection failure", () => {
+    const input = createDirectorInput(sequence, "axis-side-fallback-test");
+    const blocking = createDefaultBlocking(input);
+    const participants = resolveBlocking(
+      sequence.participants,
+      blocking,
+      sequence.rows.map((row) => row.id),
+    ).map((participant) => ({
+      ...participant,
+      canTurn: false,
+      facingTarget: facingTargetAt(
+        participant.position,
+        participant.slot === "A" ? -90 : 180,
+      ),
+    }));
+    const resolved = resolveShotDecisions(
+      { ...sequence, participants },
+      createRuleDecisions(input, blocking),
+    );
+    const crossingShots = resolved.filter((shot) =>
+      shot.projection.warnings.includes("越过了关系轴 A-B"),
+    );
+
+    expect(crossingShots).toHaveLength(1);
+    expect(crossingShots[0]).toMatchObject({
+      id: "shot-02",
+      axis: { id: "A-B", cameraSide: -1 },
+      projection: { valid: false },
+    });
+    expect(resolved[2].axis.cameraSide).toBe(1);
+    expect(resolved[2].projection.warnings).not.toContain(
+      "越过了关系轴 A-B",
+    );
   });
 
   it("selects narrative composition modes and validates screen anchors", () => {

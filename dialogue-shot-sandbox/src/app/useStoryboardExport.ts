@@ -18,9 +18,13 @@ type StoryboardExportMode = "current" | "all" | "sound";
 interface UseStoryboardExportOptions {
   sequence: DialogueSequence;
   shots: ShotPlan[];
+  characterActions: NonNullable<StoryboardExportRequest["characterActions"]>;
   soundEffects: DirectorSoundEffectRecommendation[];
   musicRecommendations: MusicRecommendation[];
   activeShot?: ShotPlan;
+  onCharacterActionsExported?: (
+    items: NonNullable<StoryboardExportRequest["characterActions"]>,
+  ) => void;
 }
 
 export interface StoryboardExportAvailability {
@@ -80,9 +84,11 @@ export function getStoryboardExportAvailability(
 export function useStoryboardExport({
   sequence,
   shots,
+  characterActions,
   soundEffects,
   musicRecommendations,
   activeShot,
+  onCharacterActionsExported,
 }: UseStoryboardExportOptions) {
   const [preview, setPreview] =
     useState<DialogueStoryboardExportPreview | null>(null);
@@ -103,6 +109,9 @@ export function useStoryboardExport({
   const buildRequest = useCallback(
     (
       selectedShots: ShotPlan[] = shots,
+      selectedCharacterActions: NonNullable<
+        StoryboardExportRequest["characterActions"]
+      > = characterActions,
       selectedSoundEffects: DirectorSoundEffectRecommendation[] = soundEffects,
       selectedMusic: MusicRecommendation[] = musicRecommendations,
     ): StoryboardExportRequest => {
@@ -114,10 +123,15 @@ export function useStoryboardExport({
         startId: sequence.startId,
         dialogueIds: selectedShots.flatMap((shot) => shot.dialogueIds),
         participantModelIndexes:
-          selectedShots.length > 0
+          selectedShots.length > 0 || selectedCharacterActions.length > 0
             ? sequence.participants.map((participant) => participant.modelIndex!)
             : [],
-        usesBlueprintFormation: selectedShots.length > 0,
+        usesBlueprintFormation:
+          selectedShots.length > 0 || selectedCharacterActions.length > 0,
+        characterActions: selectedCharacterActions.map((track) => ({
+          ...track,
+          actions: track.actions.map((action) => ({ ...action })),
+        })),
         soundEffects: selectedSoundEffects.map((recommendation) => ({
           dialogueId: recommendation.dialogueId,
           assetName: recommendation.assetName,
@@ -159,7 +173,14 @@ export function useStoryboardExport({
         })),
       };
     },
-    [canExport, sequence, shots, soundEffects, musicRecommendations],
+    [
+      canExport,
+      characterActions,
+      sequence,
+      shots,
+      soundEffects,
+      musicRecommendations,
+    ],
   );
 
   const previewCurrent = useCallback(async () => {
@@ -173,6 +194,9 @@ export function useStoryboardExport({
       const activeDialogueIds = new Set(activeShot.dialogueIds);
       const nextRequest = buildRequest(
         [activeShot],
+        characterActions.filter((track) =>
+          activeDialogueIds.has(track.dialogueId),
+        ),
         soundEffects.filter((recommendation) =>
           activeDialogueIds.has(recommendation.dialogueId),
         ),
@@ -195,7 +219,14 @@ export function useStoryboardExport({
     } finally {
       setBusy(false);
     }
-  }, [activeShot, buildRequest, shots, soundEffects, musicRecommendations]);
+  }, [
+    activeShot,
+    buildRequest,
+    characterActions,
+    shots,
+    soundEffects,
+    musicRecommendations,
+  ]);
 
   const previewCurrentSoundEffects = useCallback(async () => {
     setBusy(true);
@@ -212,7 +243,7 @@ export function useStoryboardExport({
       if (currentSoundEffects.length === 0) {
         throw new Error("当前分镜没有可写入的音效建议");
       }
-      const nextRequest = buildRequest([], currentSoundEffects, []);
+      const nextRequest = buildRequest([], [], currentSoundEffects, []);
       const nextPreview = await inspectDialogueStoryboardExport(nextRequest);
       const activeIndex = shots.indexOf(activeShot);
       setMode("sound");
@@ -254,6 +285,7 @@ export function useStoryboardExport({
   const confirm = useCallback(
     async (
       selectedShotIndexes: number[],
+      selectedCharacterActionIndexes: number[],
       selectedSoundEffectIndexes: number[],
       selectedMusicIndexes: number[],
     ) => {
@@ -267,6 +299,13 @@ export function useStoryboardExport({
         const selectedShots = request.shots.filter((_, index) =>
           selectedIndexes.has(index),
         );
+        const selectedCharacterIndexes = new Set(
+          selectedCharacterActionIndexes,
+        );
+        const availableCharacterActions = request.characterActions ?? [];
+        const selectedCharacterActions = availableCharacterActions.filter(
+          (_, index) => selectedCharacterIndexes.has(index),
+        );
         const selectedSoundIndexes = new Set(selectedSoundEffectIndexes);
         const availableSoundEffects = request.soundEffects ?? [];
         const selectedSoundEffects = availableSoundEffects.filter((_, index) =>
@@ -277,18 +316,26 @@ export function useStoryboardExport({
         const selectedMusic = availableMusic.filter((_, index) =>
           selectedMusicSet.has(index),
         );
-        if (selectedShots.length === 0 && selectedSoundEffects.length === 0 && selectedMusic.length === 0) {
-          throw new Error("请至少选择一个要导出的镜头、音效或音乐");
+        if (
+          selectedShots.length === 0 &&
+          selectedCharacterActions.length === 0 &&
+          selectedSoundEffects.length === 0 &&
+          selectedMusic.length === 0
+        ) {
+          throw new Error("请至少选择一个要导出的镜头、角色动作、音效或音乐");
         }
         const selectedRequest: StoryboardExportRequest = {
           ...request,
           dialogueIds: selectedShots.flatMap((shot) => shot.dialogueIds),
           shots: selectedShots,
+          characterActions: selectedCharacterActions,
           soundEffects: selectedSoundEffects,
           music: selectedMusic,
         };
         const exportsEntirePreview =
           selectedShots.length === request.shots.length &&
+          selectedCharacterActions.length ===
+            availableCharacterActions.length &&
           selectedSoundEffects.length === availableSoundEffects.length;
         const exportsAllMusic =
           selectedMusic.length === availableMusic.length;
@@ -300,10 +347,11 @@ export function useStoryboardExport({
           selectedRequest,
           selectedPreview.reviewToken,
         );
+        onCharacterActionsExported?.(selectedCharacterActions);
         setResult(
           exportResult.status === "unchanged"
-            ? "所选镜头、音效与音乐已与 UE 对话资产一致，无需写入"
-            : `已写入 ${exportResult.changedNodeCount} 个镜头节点、${exportResult.changedSoundEffectCount ?? 0} 个音效和 ${exportResult.changedMusicCount ?? 0} 首音乐并保存`,
+            ? "所选镜头、角色动作、音效与音乐已与 UE 对话资产一致，无需写入"
+            : `已写入 ${exportResult.changedNodeCount} 个镜头节点、${exportResult.changedCharacterActionCount ?? 0} 组角色动作、${exportResult.changedSoundEffectCount ?? 0} 个音效和 ${exportResult.changedMusicCount ?? 0} 首音乐并保存`,
         );
       } catch (exportError) {
         setError(
@@ -315,7 +363,7 @@ export function useStoryboardExport({
         setBusy(false);
       }
     },
-    [preview, request],
+    [onCharacterActionsExported, preview, request],
   );
 
   const close = useCallback(() => {

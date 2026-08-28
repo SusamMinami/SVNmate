@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import { resolve } from "node:path";
 import type { StoryboardExportRequest } from "../src/types";
 import {
+  appendCharacterActions,
   buildStoryboardCameraMove,
   exportDialogueStoryboard,
   inspectDialogueStoryboardExport,
+  readDialogueCharacterActions,
   updateDialogueContent,
   updateDialogueContents,
 } from "./ueBridge";
@@ -86,6 +88,11 @@ class FakeStoryboardExportConnection implements UnrealInvoker {
     ["ActionData2", [{ CameraMoveType: "EPush", FOV: 90 }]],
     ["ActionData3", [{ CameraMoveType: "EPush", FOV: 70 }]],
   ]);
+  readonly behavioursByData = new Map<string, unknown[]>([
+    ["ActionData1", []],
+    ["ActionData2", []],
+    ["ActionData3", []],
+  ]);
   saveResult = true;
   dirtyPackages: string[] = [];
   normalizeMoveReadback = false;
@@ -159,6 +166,12 @@ class FakeStoryboardExportConnection implements UnrealInvoker {
           structuredClone(args.Value as unknown[]),
         );
       }
+      if (args.PropertyName === "CharacterBehaviours") {
+        this.behavioursByData.set(
+          dataName,
+          structuredClone(args.Value as unknown[]),
+        );
+      }
       return true;
     }
     if (action !== "reflect.read_object_property") {
@@ -225,6 +238,9 @@ class FakeStoryboardExportConnection implements UnrealInvoker {
         }
         return normalized;
       }
+      if (property === "CharacterBehaviours") {
+        return structuredClone(this.behavioursByData.get(dataName));
+      }
     }
     if (
       object.endsWith(":SimpleConstructionScript_0") &&
@@ -251,6 +267,23 @@ class FakeStoryboardExportConnection implements UnrealInvoker {
     }
     if (object === "Template_1" && property === "RelativeLocation") {
       return { X: 100, Y: 50, Z: 0 };
+    }
+    if (object === "Template_0" && property === "ChildActorClass") {
+      return "/Game/Test/BP_Player.BP_Player_C";
+    }
+    if (object === "Template_1" && property === "ChildActorClass") {
+      return "/Game/Test/BP_Npc.BP_Npc_C";
+    }
+    if (object.includes("Default__") && property === "Montages") {
+      return {
+        Keys: ["AM_Idle1", "AM_Talk", "AM_TurnRight45", "AM_Wave"],
+        Values: [
+          "/Game/Test/Animation/AM_Idle1.AM_Idle1",
+          "/Game/Test/Animation/AM_Talk.AM_Talk",
+          "/Game/Test/Animation/AM_TurnRight45.AM_TurnRight45",
+          "/Game/Test/Animation/AM_Wave.AM_Wave",
+        ],
+      };
     }
     throw new Error(`Unhandled fake call: ${action} ${object} ${property}`);
   }
@@ -429,6 +462,223 @@ describe("dialogue storyboard export", () => {
     ).toBe(false);
   });
 
+  it("rejects camera export with fewer than two Blueprint participants", async () => {
+    const request = exportRequest();
+    request.participantModelIndexes = [0];
+
+    await expect(
+      inspectDialogueStoryboardExport(
+        request,
+        () => new FakeStoryboardExportConnection(),
+      ),
+    ).rejects.toThrow("至少两个 UE Blueprint 站位");
+  });
+
+  it("reads BP Montages and existing node actions for the editor", async () => {
+    const connection = new FakeStoryboardExportConnection();
+    connection.behavioursByData.set("ActionData1", [
+      {
+        CharacterBehaviourItems: [
+          {
+            StartTime: 0.25,
+            MontageName: "AM_Wave",
+            CharacterBehaviourType: "ENone",
+          },
+        ],
+        bStop: false,
+      },
+    ]);
+
+    const result = await readDialogueCharacterActions(
+      {
+        startId: "735200",
+        dialogueIds: ["735201"],
+        models: [
+          {
+            modelIndex: 0,
+            blueprintClassPath: "/Game/Test/BP_Player.BP_Player_C",
+          },
+        ],
+      },
+      () => connection,
+    );
+
+    expect(result).toMatchObject({
+      dialogueAssetPath: connection.dialogueAssetPath,
+      catalogs: [
+        {
+          modelIndex: 0,
+          status: "loaded",
+          actions: [
+            { name: "AM_Idle1" },
+            { name: "AM_Talk" },
+            { name: "AM_TurnRight45" },
+            { name: "AM_Wave" },
+          ],
+        },
+      ],
+      tracks: [
+        {
+          dialogueId: "735201",
+          modelIndex: 0,
+          actions: [{ montageName: "AM_Wave", delaySeconds: 0.25 }],
+          preservedComplexActionCount: 0,
+        },
+      ],
+    });
+  });
+
+  it("appends ordered Montage actions and maps AM_Turn to ERotate", async () => {
+    const connection = new FakeStoryboardExportConnection();
+    connection.behavioursByData.set("ActionData1", [
+      {
+        CharacterBehaviourItems: [
+          {
+            StartTime: 0,
+            MontageName: "AM_Walk",
+            CharacterBehaviourType: "EWalk",
+            StartLocation: { X: 1, Y: 2, Z: 3 },
+            EndLocation: { X: 4, Y: 5, Z: 6 },
+          },
+          {
+            StartTime: 0,
+            MontageName: "AM_Idle1",
+            CharacterBehaviourType: "ENone",
+          },
+        ],
+        bStop: true,
+      },
+    ]);
+    const request = exportRequest();
+    request.characterActions = [
+      {
+        dialogueId: "735201",
+        modelIndex: 0,
+        actions: [
+          { montageName: "AM_TurnRight45", delaySeconds: 0.2 },
+          { montageName: "AM_Talk", delaySeconds: 0.6 },
+        ],
+      },
+    ];
+
+    const preview = await inspectDialogueStoryboardExport(
+      request,
+      () => connection,
+    );
+    expect(preview.characterActions).toEqual([
+      expect.objectContaining({
+        dialogueId: "735201",
+        modelIndex: 0,
+        existingActions: [
+          expect.objectContaining({
+            montageName: "AM_Walk",
+            delaySeconds: 0,
+            behaviourType: "EWalk",
+          }),
+          expect.objectContaining({
+            montageName: "AM_Idle1",
+            delaySeconds: 0,
+            behaviourType: "ENone",
+          }),
+        ],
+        desiredActions: [
+          expect.objectContaining({ montageName: "AM_Walk" }),
+          expect.objectContaining({ montageName: "AM_Idle1" }),
+          expect.objectContaining({
+            montageName: "AM_TurnRight45",
+            delaySeconds: 0.2,
+            behaviourType: "ERotate",
+          }),
+          expect.objectContaining({
+            montageName: "AM_Talk",
+            delaySeconds: 0.6,
+            behaviourType: "ENone",
+          }),
+        ],
+        preservedComplexActionCount: 0,
+        action: "add",
+      }),
+    ]);
+
+    const result = await exportDialogueStoryboard(
+      { ...request, reviewToken: preview.reviewToken },
+      () => connection,
+    );
+    expect(result.changedCharacterActionCount).toBe(1);
+    expect(connection.behavioursByData.get("ActionData1")).toEqual([
+      expect.objectContaining({
+        bStop: true,
+        CharacterBehaviourItems: [
+          expect.objectContaining({
+            MontageName: "AM_Walk",
+            CharacterBehaviourType: "EWalk",
+          }),
+          expect.objectContaining({
+            MontageName: "AM_Idle1",
+            CharacterBehaviourType: "ENone",
+          }),
+          expect.objectContaining({
+            MontageName: "AM_TurnRight45",
+            StartTime: 0.2,
+            CharacterBehaviourType: "ERotate",
+          }),
+          expect.objectContaining({
+            MontageName: "AM_Talk",
+            StartTime: 0.6,
+            CharacterBehaviourType: "ENone",
+          }),
+        ],
+      }),
+    ]);
+  });
+
+  it("preserves existing items when appending editable actions", () => {
+    expect(
+      appendCharacterActions(
+        [
+          {
+            CharacterBehaviourItems: [
+              {
+                MontageName: "AM_Old",
+                CharacterBehaviourType: "ENone",
+              },
+              {
+                MontageName: "AM_TurnLeft45",
+                CharacterBehaviourType: "ERotate",
+              },
+            ],
+            bStop: true,
+          },
+        ],
+        [
+          {
+            modelIndex: 0,
+            actions: [{ montageName: "AM_Wave", delaySeconds: 0.3 }],
+          },
+        ],
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        bStop: true,
+        CharacterBehaviourItems: [
+          expect.objectContaining({
+            MontageName: "AM_Old",
+            CharacterBehaviourType: "ENone",
+          }),
+          expect.objectContaining({
+            MontageName: "AM_TurnLeft45",
+            CharacterBehaviourType: "ERotate",
+          }),
+          expect.objectContaining({
+            MontageName: "AM_Wave",
+            StartTime: 0.3,
+            CharacterBehaviourType: "ENone",
+          }),
+        ],
+      }),
+    ]);
+  });
+
   it("accepts UE float32 normalization and additional default fields", async () => {
     const connection = new FakeStoryboardExportConnection();
     connection.normalizeMoveReadback = true;
@@ -535,12 +785,59 @@ describe("dialogue storyboard export", () => {
     ).toBe(false);
   });
 
+  it("blocks character action export when its NPC Blueprint is dirty", async () => {
+    const connection = new FakeStoryboardExportConnection();
+    connection.dirtyPackages = ["/Game/Test/BP_Player"];
+    const request = exportRequest();
+    request.characterActions = [
+      {
+        dialogueId: "735201",
+        modelIndex: 0,
+        actions: [{ montageName: "AM_Wave", delaySeconds: 0 }],
+      },
+    ];
+
+    const preview = await inspectDialogueStoryboardExport(
+      request,
+      () => connection,
+    );
+
+    expect(preview.blockedReasons).toContainEqual(
+      expect.stringContaining("角色 BP /Game/Test/BP_Player"),
+    );
+    expect(preview.globalBlockedReasons).not.toContainEqual(
+      expect.stringContaining("角色 BP"),
+    );
+    expect(preview.characterActionBlockedReasons).toEqual([
+      {
+        modelIndex: 0,
+        reason: expect.stringContaining("角色 BP /Game/Test/BP_Player"),
+      },
+    ]);
+    await expect(
+      exportDialogueStoryboard(
+        { ...request, reviewToken: preview.reviewToken },
+        () => connection,
+      ),
+    ).rejects.toThrow("角色 BP");
+  });
+
   it("restores in-memory node values when saving fails", async () => {
     const connection = new FakeStoryboardExportConnection();
     connection.saveResult = false;
     const request = exportRequest();
+    request.characterActions = [
+      {
+        dialogueId: "735201",
+        modelIndex: 0,
+        actions: [{ montageName: "AM_Wave", delaySeconds: 0.2 }],
+      },
+    ];
     const originalCamera = connection.commonByData.get("ActionData1")?.[1]
       .CurrentString;
+    const originalBehaviours = structuredClone(
+      connection.behavioursByData.get("ActionData1"),
+    );
     const preview = await inspectDialogueStoryboardExport(
       request,
       () => connection,
@@ -556,6 +853,9 @@ describe("dialogue storyboard export", () => {
       originalCamera,
     );
     expect(connection.movesByData.get("ActionData1")).toEqual([]);
+    expect(connection.behavioursByData.get("ActionData1")).toEqual(
+      originalBehaviours,
+    );
   });
 
   it("reports when rollback cannot restore UE node values", async () => {

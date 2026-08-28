@@ -3,15 +3,20 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  isConfigCsvDirectoryReady,
+  normalizeConfigCsvDirectory,
+} from "./configDirectory";
+import {
   configureConfigCsvDirectory,
   getConfigCsvDirectory,
+  getConfigCsvPaths,
+  getOptionalConfigCsvDirectory,
   getConfigTablePaths,
   readConfiguredMissionTargetPlan,
 } from "./configRepository";
 import { scanSelectedNpcRegistration } from "./ueBridge";
 import type { UnrealInvoker } from "./ue/transport";
 
-const DEFAULT_CSV_DIRECTORY = "C:\\trunk\\doc\\csvdir";
 let temporaryRoot = "";
 
 class SelectedActorConnection implements UnrealInvoker {
@@ -47,7 +52,7 @@ class SelectedActorConnection implements UnrealInvoker {
 }
 
 afterEach(async () => {
-  configureConfigCsvDirectory(DEFAULT_CSV_DIRECTORY);
+  configureConfigCsvDirectory("");
   if (temporaryRoot) {
     await rm(temporaryRoot, { recursive: true, force: true });
     temporaryRoot = "";
@@ -55,6 +60,37 @@ afterEach(async () => {
 });
 
 describe("config data directory", () => {
+  it("rejects config access until the user selects a doc directory", () => {
+    configureConfigCsvDirectory("");
+
+    expect(getOptionalConfigCsvDirectory()).toBeNull();
+    expect(() => getConfigCsvDirectory()).toThrow("尚未选择 doc 文件夹");
+    expect(() => getConfigCsvPaths()).toThrow("尚未选择 doc 文件夹");
+    expect(() => getConfigTablePaths()).toThrow("尚未选择 doc 文件夹");
+  });
+
+  it("accepts a doc directory outside a trunk workspace", () => {
+    expect(normalizeConfigCsvDirectory("F:\\project-data\\doc")).toBe(
+      join("F:\\project-data\\doc", "csvdir"),
+    );
+    expect(normalizeConfigCsvDirectory("")).toBe("");
+  });
+
+  it("requires all dialogue CSV files before reporting data ready", async () => {
+    temporaryRoot = await mkdtemp(join(tmpdir(), "shot-sandbox-ready-"));
+    const csvDirectory = join(temporaryRoot, "csvdir");
+    await mkdir(csvDirectory, { recursive: true });
+    await writeFile(join(csvDirectory, "NPC表.csv"), "", "utf8");
+
+    expect(await isConfigCsvDirectoryReady(csvDirectory)).toBe(false);
+
+    await Promise.all([
+      writeFile(join(csvDirectory, "对话表.csv"), "", "utf8"),
+      writeFile(join(csvDirectory, "对话表_开始节点.csv"), "", "utf8"),
+    ]);
+    expect(await isConfigCsvDirectoryReady(csvDirectory)).toBe(true);
+  });
+
   it("scans NPC registration data from the selected doc directory", async () => {
     temporaryRoot = await mkdtemp(join(tmpdir(), "shot-sandbox-doc-"));
     const csvDirectory = join(temporaryRoot, "csvdir");

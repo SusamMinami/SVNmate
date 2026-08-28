@@ -349,6 +349,7 @@ export const DirectorInputSchema = z.object({
         npc_id: z.number().int().positive(),
         instance_id: z.string().min(1).optional(),
         model_index: z.number().int().nonnegative().nullable().optional(),
+        model_class_path: z.string().startsWith("/Game/").max(512).optional(),
         name: z.string().min(1),
         background: z.string(),
         role: z.enum(["dialogue", "background"]).default("dialogue"),
@@ -475,6 +476,7 @@ export interface DirectorInput {
     npc_id: number;
     instance_id?: string;
     model_index?: number | null;
+    model_class_path?: string;
     name: string;
     background: string;
     role: "dialogue" | "background";
@@ -640,6 +642,7 @@ export function createDirectorInput(
       npc_id: participant.id,
       instance_id: participant.instanceId,
       model_index: participant.modelIndex,
+      model_class_path: participant.modelClassPath,
       name: participant.name,
       background:
         participant.introduction || participant.note || "暂无补充角色背景",

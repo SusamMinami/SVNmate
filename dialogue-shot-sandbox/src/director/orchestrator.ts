@@ -191,6 +191,7 @@ function sequenceFromDirectorInput(input: DirectorInput): DialogueSequence {
         facingTarget:
           participant.initial_facing_target ?? ([0, 0, 0] as const),
         modelIndex: participant.model_index ?? null,
+        modelClassPath: participant.model_class_path,
         positionSource: participant.position_source ?? "generated",
         firstDialogueId: participant.first_dialogue_id,
         firstDialogueIndex,

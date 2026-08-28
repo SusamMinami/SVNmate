@@ -268,6 +268,7 @@ export function applyBlueprintFormation(
           formationSlot.transform.rotation.yaw,
         ),
         modelIndex: formationSlot.modelIndex,
+        modelClassPath: formationSlot.modelClassPath,
         positionSource: "blueprint",
         firstDialogueId: sequence.rows[0].id,
         firstDialogueIndex: 0,

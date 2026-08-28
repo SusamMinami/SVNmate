@@ -5,6 +5,7 @@ import {
   Download,
   ExternalLink,
   FolderCog,
+  FolderOpen,
   LoaderCircle,
   LogIn,
   Music2,
@@ -26,6 +27,9 @@ interface DesktopSetupModalProps {
   larkError: string;
   soundEffectCatalog: SoundEffectCatalogSnapshot;
   musicCatalog: MusicCatalogSnapshot;
+  dataLoading: boolean;
+  dataError: string;
+  onChooseDataDirectory: () => void;
   onAuthorize: () => void;
   onRefreshLark: () => void;
   onSyncSoundEffectCatalog: () => Promise<SoundEffectCatalogSnapshot>;
@@ -60,6 +64,9 @@ export function DesktopSetupModal({
   larkError,
   soundEffectCatalog: initialSoundEffectCatalog,
   musicCatalog: initialMusicCatalog,
+  dataLoading,
+  dataError,
+  onChooseDataDirectory,
   onAuthorize,
   onRefreshLark,
   onSyncSoundEffectCatalog,
@@ -88,7 +95,6 @@ export function DesktopSetupModal({
     Boolean(larkStatus?.authorized) && baseMissingScopes.length === 0;
   const docsReady =
     Boolean(larkStatus?.authorized) && docsMissingScopes.length === 0;
-  const isInitialSetup = !status.setupCompleted;
 
   useEffect(() => {
     if (!desktop) {
@@ -97,6 +103,10 @@ export function DesktopSetupModal({
     void desktop.getUpdateSnapshot().then(setUpdate);
     return desktop.onUpdateState(setUpdate);
   }, [desktop]);
+
+  useEffect(() => {
+    setStatus(initialStatus);
+  }, [initialStatus]);
 
   useEffect(() => {
     setSoundEffectCatalog(initialSoundEffectCatalog);
@@ -121,20 +131,6 @@ export function DesktopSetupModal({
           ? setupError.message
           : "无法生成 TRAE 集成配置",
       );
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function finishSetup() {
-    if (!desktop) {
-      onClose();
-      return;
-    }
-    setBusy(true);
-    try {
-      setStatus(await desktop.completeSetup());
-      onClose();
     } finally {
       setBusy(false);
     }
@@ -215,7 +211,7 @@ export function DesktopSetupModal({
       >
         <header>
           <div>
-            <small>{isInitialSetup ? "首次启动" : "桌面版设置"}</small>
+            <small>桌面版设置</small>
             <h2 id="desktop-setup-title">运行环境与数据协作</h2>
           </div>
           <button
@@ -249,9 +245,23 @@ export function DesktopSetupModal({
                 <small>
                   {status.defaultDataReady
                     ? `已找到 ${status.dataCsvDirectory}`
-                    : `未找到 ${status.dataCsvDirectory}，可进入应用后重新选择 doc 文件夹`}
+                    : status.dataCsvDirectory
+                      ? `未找到 ${status.dataCsvDirectory}`
+                      : "尚未选择 doc 文件夹"}
                 </small>
               </span>
+              <button
+                type="button"
+                disabled={dataLoading}
+                onClick={onChooseDataDirectory}
+              >
+                {dataLoading ? (
+                  <LoaderCircle className="spin" size={14} />
+                ) : (
+                  <FolderOpen size={14} />
+                )}
+                {dataLoading ? "读取中" : "选择"}
+              </button>
             </div>
             <div className={larkReady ? "" : "is-warning"}>
               {larkLoading ? (
@@ -445,22 +455,10 @@ export function DesktopSetupModal({
 
           <section
             className="setup-instructions"
-            aria-label={isInitialSetup ? "首次配置" : "TRAE 集成"}
+            aria-label="TRAE 集成"
           >
-            {isInitialSetup && (
-              <>
-                <h3>首次配置</h3>
-                <ol>
-                  <li>登录飞书，连接共享方案与返修案例库。</li>
-                  <li>生成独立的 TRAE 集成目录。</li>
-                  <li>在 TRAE 中打开该目录，并启用项目 MCP 与 Skill。</li>
-                  <li>启动 UE 编辑器并确认 OmniMcpCore 端口检测通过。</li>
-                </ol>
-                <p>
-                  应用每次启动都会同步内置 Skill；TRAE 已打开时请重载窗口。
-                </p>
-              </>
-            )}
+            <h3>TRAE 集成</h3>
+            <p>应用每次启动都会同步内置 Skill；TRAE 已打开时请重载窗口。</p>
             <code title={status.integrationRoot}>{status.integrationRoot}</code>
             <div className="setup-actions">
               <button
@@ -495,7 +493,7 @@ export function DesktopSetupModal({
               <h3>在线升级</h3>
               <p>
                 {status.portable
-                  ? "便携版可检查新版本并打开下载页；安装版支持下载后重启安装。"
+                  ? "便携版会自动下载更新；下载完成后可直接重启并安装。"
                   : "安装版会定期检查更新，并在下载完成后提示重启安装。"}
               </p>
               <small>{updateLabel(update)}</small>
@@ -527,10 +525,10 @@ export function DesktopSetupModal({
             </button>
           </section>
 
-          {error && (
+          {(error || dataError) && (
             <div className="inline-error" role="alert">
               <CircleAlert size={16} />
-              <span>{error}</span>
+              <span>{dataError || error}</span>
             </div>
           )}
         </div>
@@ -540,10 +538,9 @@ export function DesktopSetupModal({
           <button
             className="button button--primary"
             type="button"
-            disabled={busy}
-            onClick={() => void finishSetup()}
+            onClick={onClose}
           >
-            完成设置
+            关闭
           </button>
         </footer>
       </section>

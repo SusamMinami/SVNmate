@@ -1,38 +1,42 @@
 import { readFile } from "node:fs/promises";
-import { basename, dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import type { MissionTargetPreviewPlan } from "../src/types";
 import { parseMissionTargetDatabase } from "../src/data/csv";
 import { resolveMissionTargets } from "../src/data/missionTargetResolver";
+import { normalizeConfigCsvDirectory } from "./configDirectory";
 
-const DEFAULT_CONFIG_CSV_DIRECTORY = "C:\\trunk\\doc\\csvdir";
-let configCsvDirectory = DEFAULT_CONFIG_CSV_DIRECTORY;
+let configCsvDirectory = "";
 
 export function configureConfigCsvDirectory(directoryPath: string): void {
-  const normalized = resolve(directoryPath.trim());
-  configCsvDirectory =
-    basename(normalized).toLowerCase() === "csvdir"
-      ? normalized
-      : join(normalized, "csvdir");
+  configCsvDirectory = normalizeConfigCsvDirectory(directoryPath);
 }
 
 export function getConfigCsvDirectory(): string {
+  if (!configCsvDirectory) {
+    throw new Error("尚未选择 doc 文件夹");
+  }
   return configCsvDirectory;
 }
 
+export function getOptionalConfigCsvDirectory(): string | null {
+  return configCsvDirectory || null;
+}
+
 export function getConfigCsvPaths() {
+  const directory = getConfigCsvDirectory();
   return {
-    npc: join(configCsvDirectory, "NPC表.csv"),
-    model: join(configCsvDirectory, "m模型资源表.csv"),
-    mission: join(configCsvDirectory, "任务表.csv"),
-    dungeonMission: join(configCsvDirectory, "副本任务表.csv"),
-    missionTarget: join(configCsvDirectory, "m目标物表.csv"),
-    map: join(configCsvDirectory, "d地图配置表.csv"),
-    scene: join(configCsvDirectory, "d地图资源表.csv"),
+    npc: join(directory, "NPC表.csv"),
+    model: join(directory, "m模型资源表.csv"),
+    mission: join(directory, "任务表.csv"),
+    dungeonMission: join(directory, "副本任务表.csv"),
+    missionTarget: join(directory, "m目标物表.csv"),
+    map: join(directory, "d地图配置表.csv"),
+    scene: join(directory, "d地图资源表.csv"),
   };
 }
 
 export function getConfigTablePaths() {
-  const xlsDirectory = join(dirname(configCsvDirectory), "xlsdir");
+  const xlsDirectory = join(dirname(getConfigCsvDirectory()), "xlsdir");
   return {
     missionTarget: join(xlsDirectory, "r任务剧情", "m目标物表.xlsm"),
     npc: join(xlsDirectory, "NPC表.xlsm"),

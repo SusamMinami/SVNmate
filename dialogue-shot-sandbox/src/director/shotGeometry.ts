@@ -98,6 +98,7 @@ interface SingleCameraRequest {
   coverage: Extract<ShotCoverage, "single" | "group-medium">;
   preferredFaceAngle?: number;
   previousGeometry?: CameraGeometry;
+  requiredRelationshipSide?: -1 | 1;
   cameraRollDegrees?: number;
 }
 
@@ -201,6 +202,22 @@ function sceneCameraSide(participants: DialogueParticipant[]): Vec2 {
     side = scale(side, -1);
   }
   return side;
+}
+
+function relationshipCameraSide(
+  subject: DialogueParticipant,
+  lookTarget: DialogueParticipant,
+  cameraPosition: Vec3,
+): -1 | 0 | 1 {
+  const [first, last] = [subject, lookTarget].sort((left, right) =>
+    left.slot.localeCompare(right.slot),
+  );
+  const dx = last.position[0] - first.position[0];
+  const dz = last.position[2] - first.position[2];
+  const sideValue =
+    dx * (cameraPosition[2] - first.position[2]) -
+    dz * (cameraPosition[0] - first.position[0]);
+  return sideValue > 0.001 ? 1 : sideValue < -0.001 ? -1 : 0;
 }
 
 function subjectFacing(
@@ -773,10 +790,11 @@ export function solveSingleCamera(
     | {
         geometry: CameraGeometry;
         assessment: ProjectionAssessment;
-      composition: ShotComposition;
+        composition: ShotComposition;
         score: number;
       }
     | undefined;
+  let unconstrainedBest: typeof best;
 
   for (const faceAngle of angleCandidates) {
     const cameraDirection = cameraDirectionForSubject(
@@ -878,22 +896,38 @@ export function solveSingleCamera(
           Math.abs(faceAngle - preferredAngle) +
           Math.abs(distanceScale - 1) * 12 +
           (visualAnchor === request.composition.visualAnchor ? 0 : 24);
+        const candidate = {
+          geometry,
+          assessment,
+          composition: resolvedComposition,
+          score,
+        };
+        if (!unconstrainedBest || score < unconstrainedBest.score) {
+          unconstrainedBest = candidate;
+        }
+        if (
+          request.requiredRelationshipSide !== undefined &&
+          request.lookTarget &&
+          relationshipCameraSide(
+            request.subject,
+            request.lookTarget,
+            position,
+          ) !== request.requiredRelationshipSide
+        ) {
+          continue;
+        }
         if (!best || score < best.score) {
-          best = {
-            geometry,
-            assessment,
-            composition: resolvedComposition,
-            score,
-          };
+          best = candidate;
         }
       }
     }
   }
 
-  if (!best) {
+  const resolved = best ?? unconstrainedBest;
+  if (!resolved) {
     throw new Error(`无法为角色 ${request.subject.slot} 求解摄影机`);
   }
-  return best;
+  return resolved;
 }
 
 export function solveGroupCamera(

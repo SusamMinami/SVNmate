@@ -23,8 +23,11 @@ import {
 import { routeLarkRequest } from "../server/larkBridge";
 import {
   configureConfigCsvDirectory,
-  getConfigCsvDirectory,
+  getOptionalConfigCsvDirectory,
 } from "../server/configRepository";
+import {
+  isConfigCsvDirectoryReady,
+} from "../server/configDirectory";
 import { inspectUnrealMcpConnection } from "../server/ueBridge";
 import { routeUeRequest } from "../server/ue/routes";
 import {
@@ -142,13 +145,13 @@ async function readDesktopState(): Promise<DesktopState> {
         typeof parsed.dataCsvDirectory === "string" &&
         parsed.dataCsvDirectory.trim()
           ? parsed.dataCsvDirectory
-          : getConfigCsvDirectory(),
+          : "",
     };
   } catch {
     return {
       setupCompleted: false,
       ueMcpPort: getUnrealMcpEndpoint().port,
-      dataCsvDirectory: getConfigCsvDirectory(),
+      dataCsvDirectory: "",
     };
   }
 }
@@ -275,7 +278,7 @@ async function setupStatus() {
       detectTrae(),
       integrationStatus(),
       getStoryboardMcpPresence(),
-      pathExists(join(state.dataCsvDirectory, "NPC表.csv")),
+      isConfigCsvDirectoryReady(state.dataCsvDirectory),
       inspectUnrealMcpConnection(),
     ]);
   return {
@@ -379,18 +382,25 @@ function registerDesktopIpc(): void {
   );
   ipcMain.handle("desktop:complete-setup", async () => {
     const state = await readDesktopState();
+    if (!(await isConfigCsvDirectoryReady(state.dataCsvDirectory))) {
+      throw new Error("请先选择包含有效 csvdir 的 doc 文件夹");
+    }
     await writeDesktopState({ ...state, setupCompleted: true });
     return setupStatus();
   });
   ipcMain.handle(
     "desktop:set-data-directory",
     async (_event, directoryPath: unknown) => {
-      const previousDirectory = getConfigCsvDirectory();
+      const previousDirectory = getOptionalConfigCsvDirectory();
       let selectedDirectory = "";
       try {
         configureConfigCsvDirectory(String(directoryPath ?? ""));
-        selectedDirectory = getConfigCsvDirectory();
-        await access(join(selectedDirectory, "NPC表.csv"));
+        selectedDirectory = getOptionalConfigCsvDirectory() ?? "";
+        if (!(await isConfigCsvDirectoryReady(selectedDirectory))) {
+          throw new Error(
+            `所选位置缺少必需的对话 CSV：${selectedDirectory || String(directoryPath ?? "")}`,
+          );
+        }
         const state = await readDesktopState();
         await writeDesktopState({
           ...state,
@@ -398,12 +408,7 @@ function registerDesktopIpc(): void {
         });
         return setupStatus();
       } catch (error) {
-        configureConfigCsvDirectory(previousDirectory);
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-          throw new Error(
-            `所选位置未找到 csvdir\\NPC表.csv：${selectedDirectory || String(directoryPath ?? "")}`,
-          );
-        }
+        configureConfigCsvDirectory(previousDirectory ?? "");
         throw error;
       }
     },
@@ -418,10 +423,9 @@ function registerDesktopIpc(): void {
   });
   ipcMain.handle("desktop:check-update", () => checkForUpdates());
   ipcMain.handle("desktop:update-snapshot", () => updateSnapshot);
-  ipcMain.handle("desktop:install-update", async () => {
-    if (process.env.PORTABLE_EXECUTABLE_FILE) {
-      await shell.openExternal(UPDATE_PAGE);
-      return;
+  ipcMain.handle("desktop:install-update", () => {
+    if (updateSnapshot.state !== "downloaded") {
+      throw new Error("更新尚未下载完成");
     }
     autoUpdater.quitAndInstall(false, true);
   });
@@ -537,7 +541,9 @@ async function runDesktop(): Promise<void> {
   configureRuntimeEnvironment();
   const desktopState = await readDesktopState();
   configureUnrealMcpPort(desktopState.ueMcpPort);
-  configureConfigCsvDirectory(desktopState.dataCsvDirectory);
+  if (desktopState.dataCsvDirectory) {
+    configureConfigCsvDirectory(desktopState.dataCsvDirectory);
+  }
   await installTraeIntegration();
   registerDesktopIpc();
   configureUpdater();

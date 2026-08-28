@@ -1,4 +1,4 @@
-import { ArrowRight, Clapperboard } from "lucide-react";
+import { Clapperboard, LoaderCircle } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 interface LaunchScreenProps {
@@ -22,16 +22,7 @@ export function LaunchScreen({
       "(prefers-reduced-motion: reduce)",
     ).matches;
     const timer = window.setTimeout(beginExit, reducedMotion ? 80 : 1350);
-    const dismissWithKeyboard = (event: KeyboardEvent) => {
-      if (event.key === "Escape" || event.key === "Enter") {
-        beginExit();
-      }
-    };
-    window.addEventListener("keydown", dismissWithKeyboard);
-    return () => {
-      window.clearTimeout(timer);
-      window.removeEventListener("keydown", dismissWithKeyboard);
-    };
+    return () => window.clearTimeout(timer);
   }, [beginExit]);
 
   useEffect(() => {
@@ -74,10 +65,10 @@ export function LaunchScreen({
           <span>沙盘</span>
         </h1>
         <small title={sourceName}>{sourceName}</small>
-        <button type="button" onClick={beginExit} autoFocus>
-          进入工作台
-          <ArrowRight size={18} />
-        </button>
+        <div className="launch-screen__loading" role="status">
+          <LoaderCircle className="spin" size={17} />
+          <span>Loading</span>
+        </div>
       </div>
 
       <div className="launch-screen__system-mark" aria-hidden="true">
