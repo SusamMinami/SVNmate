@@ -489,7 +489,7 @@ function setConfigurationWindowMode(enabled: boolean): boolean {
       true,
     );
     mainWindow.setAlwaysOnTop(true, "floating");
-    mainWindow.setOpacity(0.75);
+    mainWindow.setOpacity(1);
     return true;
   }
 

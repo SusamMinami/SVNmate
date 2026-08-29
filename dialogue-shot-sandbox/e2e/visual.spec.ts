@@ -840,6 +840,38 @@ test("keeps configuration mode active while switching shots", async ({
   await page.setViewportSize({ width: 360, height: 720 });
   await expect(page.locator(".right-panel")).toHaveCSS("width", "360px");
   await expect(page.locator(".right-panel")).toHaveCSS("height", "720px");
+  await page.getByRole("tab", { name: "UE" }).click();
+  await expect(page.getByRole("tab", { name: "UE" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await page.getByRole("tab", { name: "音频" }).click();
+  await expect(page.getByRole("tab", { name: "音频" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(page.locator(".inspector-tab-panel")).toHaveCSS(
+    "animation-name",
+    "none",
+  );
+  const audioLibrary = page.locator(".audio-library-browser");
+  await expect(audioLibrary).toBeVisible();
+  await audioLibrary
+    .getByRole("button", { name: /音效资料库/ })
+    .click();
+  await audioLibrary
+    .locator(".audio-library-browser__categories button")
+    .first()
+    .click();
+  const resourceList = audioLibrary.locator(
+    ".audio-library-browser__resources",
+  );
+  await expect(resourceList).toBeVisible();
+  await expect(resourceList).toHaveCSS("overflow-y", "visible");
+  await expect(page.locator(".inspector-tab-panel")).toHaveCSS(
+    "overflow-y",
+    "auto",
+  );
   await page.waitForTimeout(350);
   await page.screenshot({
     path: testInfo.outputPath("configuration-window.png"),
