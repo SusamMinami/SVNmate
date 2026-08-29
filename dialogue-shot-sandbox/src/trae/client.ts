@@ -5,12 +5,14 @@ import type {
 
 export interface TraePendingTask {
   requestId: string;
+  status?: "pending" | "processing";
   dialogueId: string;
   outline: string;
   firstLine: string;
   dialogueCount: number;
   participantNames: string[];
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface TraeCollaborationStatus {
@@ -29,8 +31,10 @@ export interface TraeCollaborationStatus {
     processing: number;
     completed: number;
     failed: number;
+    cancelled?: number;
   };
   queue?: TraePendingTask[];
+  tasks?: TraePendingTask[];
 }
 
 export interface TraeMcpConfig {
@@ -90,6 +94,22 @@ export function deleteTraeQueueItem(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ request_id: requestId }),
+  });
+}
+
+export function cancelTraeTask(
+  requestId: string,
+  input?: DirectorInput,
+  reason = "用户在镜头沙盘中断了 TRAE 分镜分析",
+): Promise<{ requestId: string; status: "cancelled" }> {
+  return api("/api/trae/tasks/cancel", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      request_id: requestId,
+      ...(input ? { input } : {}),
+      reason,
+    }),
   });
 }
 

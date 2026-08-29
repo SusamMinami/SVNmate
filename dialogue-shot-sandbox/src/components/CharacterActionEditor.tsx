@@ -228,7 +228,7 @@ export function CharacterActionEditor({
                             className="character-action-track__slot"
                             style={{ backgroundColor: participant?.color }}
                           >
-                            {participant?.slot ?? modelIndex}
+                            {modelIndex}
                           </span>
                           <strong>
                             {participant?.name ?? `BP 槽 ${modelIndex}`}
@@ -479,7 +479,7 @@ export function CharacterActionEditor({
                             key={participant.instanceId}
                             value={participant.modelIndex!}
                           >
-                            {participant.slot} {participant.name}
+                            {participant.modelIndex} {participant.name}
                           </option>
                         ))
                       )}

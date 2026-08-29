@@ -13,11 +13,13 @@ import {
   STORYBOARD_MCP_VERSION,
 } from "./storyboardMcpHeartbeat";
 import {
+  cancelStoryboardTaskForInput,
   completeStoryboardTask,
   createStoryboardTask,
   deletePendingStoryboardTask,
+  expireAbandonedProcessingTasks,
   getStoryboardTask,
-  listPendingStoryboardTasks,
+  listActiveStoryboardTasks,
   reorderPendingStoryboardTasks,
   storyboardTaskStats,
 } from "./storyboardTaskStore";
@@ -57,6 +59,15 @@ class TraeWaitTimeoutError extends Error {
   }
 }
 
+class TraeTaskCancelledError extends Error {
+  readonly code = "TRAE_TASK_CANCELLED";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "TraeTaskCancelledError";
+  }
+}
+
 function durationMinutes(milliseconds: number): string {
   return (milliseconds / 60_000).toLocaleString("zh-CN", {
     maximumFractionDigits: 1,
@@ -74,6 +85,11 @@ const QueueReorderSchema = z.object({
 });
 const QueueDeleteSchema = z.object({
   request_id: z.string().min(1).max(120),
+});
+const TaskCancelSchema = z.object({
+  request_id: z.string().min(1).max(120),
+  input: DirectorInputSchema.optional(),
+  reason: z.string().trim().min(1).max(1_000).optional(),
 });
 
 function appRoot(): string {
@@ -165,11 +181,11 @@ async function isMcpConfigured(): Promise<boolean> {
 }
 
 async function collaborationStatus() {
-  const [configured, presence, stats, queue] = await Promise.all([
+  const tasks = await listActiveStoryboardTasks();
+  const [configured, presence, stats] = await Promise.all([
     isMcpConfigured(),
     getStoryboardMcpPresence(),
     storyboardTaskStats(),
-    listPendingStoryboardTasks(),
   ]);
   return {
     configured,
@@ -183,7 +199,8 @@ async function collaborationStatus() {
     mcpConfigPath: storyboardMcpConfigPath(),
     skillName: "internal-storyboard-director",
     stats,
-    queue,
+    queue: tasks.filter((task) => task.status === "pending"),
+    tasks,
   };
 }
 
@@ -228,8 +245,11 @@ export async function waitForCollaborationResult(
     options.processingTimeoutMs ?? PROCESSING_TIMEOUT_MS;
   const pollIntervalMs = options.pollIntervalMs ?? POLL_INTERVAL_MS;
   const queueDeadline = Date.now() + queueTimeoutMs;
-  let processingDeadline: number | null = null;
   while (true) {
+    const currentTask = await getStoryboardTask(taskRequestId);
+    if (currentTask) {
+      await expireAbandonedProcessingTasks([currentTask]);
+    }
     const task = await getStoryboardTask(taskRequestId);
     if (!task) {
       throw new Error(`内部 TRAE 协作任务 ${taskRequestId} 丢失`);
@@ -240,10 +260,15 @@ export async function waitForCollaborationResult(
     if (task.status === "failed") {
       throw new Error(task.error || "内部 TRAE 未能完成分镜任务");
     }
+    if (task.status === "cancelled") {
+      throw new TraeTaskCancelledError(
+        task.error || "TRAE 分镜分析已中断",
+      );
+    }
     const now = Date.now();
     if (task.status === "processing") {
-      processingDeadline ??=
-        Date.parse(task.claimedAt || task.updatedAt) +
+      const processingDeadline =
+        Date.parse(task.leaseUpdatedAt || task.claimedAt || task.updatedAt) +
         processingTimeoutMs;
       if (now >= processingDeadline) {
         throw new TraeWaitTimeoutError(
@@ -333,6 +358,25 @@ export async function routeTraeRequest(
       sendJson(response, 200, {
         ok: true,
         data: await deletePendingStoryboardTask(body.request_id),
+      });
+      return true;
+    }
+    if (
+      request.method === "POST" &&
+      url.pathname === "/api/trae/tasks/cancel"
+    ) {
+      const body = TaskCancelSchema.parse(await readJson(request));
+      const task = await cancelStoryboardTaskForInput(
+        body.request_id,
+        body.input,
+        body.reason,
+      );
+      sendJson(response, 200, {
+        ok: true,
+        data: {
+          requestId: task.requestId,
+          status: task.status,
+        },
       });
       return true;
     }
@@ -456,7 +500,8 @@ export async function routeTraeRequest(
       ok: false,
       error: {
         code:
-          error instanceof TraeWaitTimeoutError
+          error instanceof TraeWaitTimeoutError ||
+          error instanceof TraeTaskCancelledError
             ? error.code
             : "TRAE_COLLABORATION_ERROR",
         message:

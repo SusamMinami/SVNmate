@@ -12,7 +12,9 @@ import {
   BrowserWindow,
   dialog,
   ipcMain,
+  screen,
   shell,
+  type Rectangle,
 } from "electron";
 import updater from "electron-updater";
 import storyboardSkill from "../../.agents/skills/internal-storyboard-director/SKILL.md";
@@ -52,6 +54,12 @@ const { autoUpdater } = updater;
 const UPDATE_PAGE =
   "https://github.com/SusamMinami/SVNmate/releases/tag/shot-sandbox-update";
 const DESKTOP_PORT = 43127;
+const DEFAULT_WINDOW_MIN_WIDTH = 1080;
+const DEFAULT_WINDOW_MIN_HEIGHT = 700;
+const CONFIGURATION_WINDOW_WIDTH = 360;
+const CONFIGURATION_WINDOW_HEIGHT = 720;
+const CONFIGURATION_WINDOW_MIN_WIDTH = 320;
+const CONFIGURATION_WINDOW_MIN_HEIGHT = 480;
 const isMcpProcess = process.argv.includes("--storyboard-mcp");
 const contentTypes: Record<string, string> = {
   ".css": "text/css; charset=utf-8",
@@ -86,9 +94,19 @@ interface UpdateSnapshot {
   message?: string;
 }
 
+interface WindowRestoreState {
+  bounds: Rectangle;
+  minimumSize: number[];
+  maximized: boolean;
+  fullScreen: boolean;
+  alwaysOnTop: boolean;
+  opacity: number;
+}
+
 let mainWindow: BrowserWindow | null = null;
 let localServer: Server | null = null;
 let updateSnapshot: UpdateSnapshot = { state: "idle" };
+let configurationWindowRestoreState: WindowRestoreState | null = null;
 
 function dataRoot(): string {
   return join(app.getPath("appData"), "Shot Sandbox");
@@ -426,6 +444,75 @@ async function setConfigDocDirectory(directoryPath: unknown) {
   return setupStatus();
 }
 
+function setConfigurationWindowMode(enabled: boolean): boolean {
+  if (!mainWindow) {
+    throw new Error("镜头沙盘窗口尚未就绪");
+  }
+  if (enabled) {
+    if (!configurationWindowRestoreState) {
+      configurationWindowRestoreState = {
+        bounds: mainWindow.getBounds(),
+        minimumSize: mainWindow.getMinimumSize(),
+        maximized: mainWindow.isMaximized(),
+        fullScreen: mainWindow.isFullScreen(),
+        alwaysOnTop: mainWindow.isAlwaysOnTop(),
+        opacity: mainWindow.getOpacity(),
+      };
+    }
+    if (mainWindow.isFullScreen()) {
+      mainWindow.setFullScreen(false);
+    }
+    if (mainWindow.isMaximized()) {
+      mainWindow.unmaximize();
+    }
+    const currentBounds = mainWindow.getBounds();
+    const workArea = screen.getDisplayMatching(currentBounds).workArea;
+    const width = Math.min(CONFIGURATION_WINDOW_WIDTH, workArea.width);
+    const height = Math.min(CONFIGURATION_WINDOW_HEIGHT, workArea.height);
+    mainWindow.setMinimumSize(
+      Math.min(CONFIGURATION_WINDOW_MIN_WIDTH, width),
+      Math.min(CONFIGURATION_WINDOW_MIN_HEIGHT, height),
+    );
+    mainWindow.setBounds(
+      {
+        x: Math.min(
+          Math.max(currentBounds.x + currentBounds.width - width, workArea.x),
+          workArea.x + workArea.width - width,
+        ),
+        y: Math.min(
+          Math.max(currentBounds.y, workArea.y),
+          workArea.y + workArea.height - height,
+        ),
+        width,
+        height,
+      },
+      true,
+    );
+    mainWindow.setAlwaysOnTop(true, "floating");
+    mainWindow.setOpacity(0.75);
+    return true;
+  }
+
+  const restoreState = configurationWindowRestoreState;
+  configurationWindowRestoreState = null;
+  mainWindow.setOpacity(restoreState?.opacity ?? 1);
+  mainWindow.setAlwaysOnTop(restoreState?.alwaysOnTop ?? false);
+  mainWindow.setMinimumSize(
+    restoreState?.minimumSize[0] ?? DEFAULT_WINDOW_MIN_WIDTH,
+    restoreState?.minimumSize[1] ?? DEFAULT_WINDOW_MIN_HEIGHT,
+  );
+  if (restoreState) {
+    mainWindow.setBounds(restoreState.bounds, true);
+    if (restoreState.maximized) {
+      mainWindow.maximize();
+    }
+    if (restoreState.fullScreen) {
+      mainWindow.setFullScreen(true);
+    }
+  }
+  return false;
+}
+
 function registerDesktopIpc(): void {
   ipcMain.handle("desktop:setup-status", () => setupStatus());
   ipcMain.handle("desktop:install-trae-integration", async () => {
@@ -522,6 +609,15 @@ function registerDesktopIpc(): void {
     await writeDesktopState({ ...state, ueMcpPort: numericPort });
     return setupStatus();
   });
+  ipcMain.handle(
+    "desktop:set-configuration-window-mode",
+    (_event, enabled: unknown) =>
+      setConfigurationWindowMode(enabled === true),
+  );
+  ipcMain.handle(
+    "desktop:get-configuration-window-mode",
+    () => configurationWindowRestoreState !== null,
+  );
   ipcMain.handle("desktop:check-update", () => checkForUpdates());
   ipcMain.handle("desktop:update-snapshot", () => updateSnapshot);
   ipcMain.handle("desktop:install-update", () => {
@@ -602,8 +698,8 @@ async function createMainWindow(port: number): Promise<void> {
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 900,
-    minWidth: 1080,
-    minHeight: 700,
+    minWidth: DEFAULT_WINDOW_MIN_WIDTH,
+    minHeight: DEFAULT_WINDOW_MIN_HEIGHT,
     backgroundColor: "#eef0f2",
     show: false,
     autoHideMenuBar: true,
@@ -628,6 +724,7 @@ async function createMainWindow(port: number): Promise<void> {
   mainWindow.once("ready-to-show", () => mainWindow?.show());
   mainWindow.on("closed", () => {
     mainWindow = null;
+    configurationWindowRestoreState = null;
   });
   await mainWindow.loadURL(`http://127.0.0.1:${port}/`);
 }

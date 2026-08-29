@@ -8,6 +8,7 @@ import {
   type LarkStatus,
 } from "../lark/client";
 import {
+  cancelTraeTask,
   deleteTraeQueueItem,
   getTraeMcpConfig,
   getTraeStatus,
@@ -176,6 +177,14 @@ export function useCollaborationConnections() {
             ...current,
             queue,
             stats: { ...current.stats, pending: queue.length },
+            tasks: current.tasks
+              ? [
+                  ...queue,
+                  ...current.tasks.filter(
+                    (task) => task.status === "processing",
+                  ),
+                ]
+              : undefined,
           }
         : current,
     );
@@ -194,9 +203,24 @@ export function useCollaborationConnections() {
         ...current,
         queue,
         stats: { ...current.stats, pending: queue.length },
+        tasks: current.tasks?.filter(
+          (task) => task.requestId !== requestId,
+        ),
       };
     });
   }, []);
+
+  const cancelActiveTraeTask = useCallback(
+    async (
+      requestId: string,
+      input?: Parameters<typeof cancelTraeTask>[1],
+      reason?: string,
+    ) => {
+      await cancelTraeTask(requestId, input, reason);
+      await refreshTraeConnection(false);
+    },
+    [refreshTraeConnection],
+  );
 
   return {
     traeStatus,
@@ -219,5 +243,6 @@ export function useCollaborationConnections() {
     closeAuthorization,
     reorderPendingTasks,
     deletePendingTask,
+    cancelActiveTraeTask,
   };
 }

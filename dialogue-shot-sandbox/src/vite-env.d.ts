@@ -56,6 +56,8 @@ interface Window {
     openIntegrationFolder: () => Promise<void>;
     openTraeDownload: () => Promise<void>;
     setUeMcpPort: (port: number) => Promise<DesktopSetupStatus>;
+    getConfigurationWindowMode?: () => Promise<boolean>;
+    setConfigurationWindowMode?: (enabled: boolean) => Promise<boolean>;
     getPathForFile: (file: File) => string;
     chooseDataDirectory?: (
       kind: "live" | "config",

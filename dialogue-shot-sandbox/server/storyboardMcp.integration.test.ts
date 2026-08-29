@@ -25,6 +25,7 @@ import {
 } from "./storyboardMcpHeartbeat";
 import { routeStoryboardMcpRequest } from "../mcp/storyboardServer";
 import {
+  cancelStoryboardTask,
   claimPendingStoryboardTask,
   completeStoryboardTask,
   createStoryboardTask,
@@ -212,11 +213,41 @@ describe("internal storyboard MCP", () => {
       expect(tools.tools.map((tool) => tool.name)).toEqual(
         expect.arrayContaining([
           "storyboard_get_pending_request",
+          "storyboard_heartbeat_request",
+          "storyboard_cancel_request",
           "storyboard_submit_plan",
           "storyboard_fail_request",
           "storyboard_get_request_status",
         ]),
       );
+      const input = createDirectorInput(
+        findDialogueSequence(demoDatabase, "2048"),
+        "http-cancel-request",
+      );
+      await createStoryboardTask(input, { forceRegenerate: true });
+      await client.callTool({
+        name: "storyboard_get_pending_request",
+        arguments: {},
+      });
+      const heartbeat = await client.callTool({
+        name: "storyboard_heartbeat_request",
+        arguments: { request_id: input.request_id },
+      });
+      expect(heartbeat.structuredContent).toMatchObject({
+        status: "processing",
+        continue: true,
+      });
+      const cancelled = await client.callTool({
+        name: "storyboard_cancel_request",
+        arguments: {
+          request_id: input.request_id,
+          reason: "测试中断",
+        },
+      });
+      expect(cancelled.structuredContent).toMatchObject({
+        accepted: true,
+        status: "cancelled",
+      });
       await expect(getStoryboardMcpPresence()).resolves.toMatchObject({
         connected: true,
         compatible: true,
@@ -283,6 +314,8 @@ describe("internal storyboard MCP", () => {
         expect(tools.tools.map((tool) => tool.name)).toEqual(
           expect.arrayContaining([
             "storyboard_get_pending_request",
+            "storyboard_heartbeat_request",
+            "storyboard_cancel_request",
             "storyboard_submit_plan",
             "storyboard_fail_request",
             "storyboard_get_request_status",
@@ -302,7 +335,7 @@ describe("internal storyboard MCP", () => {
         }
         expect(presence.connected).toBe(true);
         expect(presence.compatible).toBe(true);
-        expect(presence.serverVersion).toBe("0.18.0");
+        expect(presence.serverVersion).toBe("0.19.0");
         expect(presence.transport).toBe("stdio");
 
         let claimed = await client.callTool({
@@ -422,6 +455,56 @@ describe("internal storyboard MCP", () => {
         expect(
           await getStoryboardTask(cachedInput.request_id),
         ).toBeNull();
+
+        const cancelledInput = createDirectorInput(
+          sequence,
+          "http-ui-cancel-request",
+        );
+        const cancelledResponsePromise = fetch(
+          `http://127.0.0.1:${address.port}/api/director/trae?force=1`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(cancelledInput),
+          },
+        );
+        for (let attempt = 0; attempt < 20; attempt += 1) {
+          if (await getStoryboardTask(cancelledInput.request_id)) {
+            break;
+          }
+          await new Promise((resolvePromise) =>
+            setTimeout(resolvePromise, 25),
+          );
+        }
+        const cancelResponse = await fetch(
+          `http://127.0.0.1:${address.port}/api/trae/tasks/cancel`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              request_id: cancelledInput.request_id,
+              input: cancelledInput,
+              reason: "界面主动中断",
+            }),
+          },
+        );
+        expect(cancelResponse.status).toBe(200);
+        await expect(cancelResponse.json()).resolves.toMatchObject({
+          ok: true,
+          data: {
+            requestId: cancelledInput.request_id,
+            status: "cancelled",
+          },
+        });
+        const cancelledResponse = await cancelledResponsePromise;
+        expect(cancelledResponse.status).toBe(503);
+        await expect(cancelledResponse.json()).resolves.toMatchObject({
+          ok: false,
+          error: {
+            code: "TRAE_TASK_CANCELLED",
+            message: "界面主动中断",
+          },
+        });
       } finally {
         await client.close();
         await vite.close();
@@ -526,6 +609,32 @@ describe("internal storyboard MCP", () => {
     expect((await getStoryboardTask(input.request_id))?.status).toBe(
       "processing",
     );
+  });
+
+  it("stops a waiting UI request when its TRAE task is cancelled", async () => {
+    temporaryRoot = await mkdtemp(join(tmpdir(), "storyboard-cancelled-"));
+    process.env.STORYBOARD_PROJECT_ROOT = temporaryRoot;
+    const input = createDirectorInput(
+      findDialogueSequence(demoDatabase, "2048"),
+      "cancelled-request",
+    );
+    await createStoryboardTask(input);
+    await claimPendingStoryboardTask();
+
+    const waiting = waitForCollaborationResult(
+      input.request_id,
+      input.request_id,
+      {
+        queueTimeoutMs: 1_000,
+        processingTimeoutMs: 1_000,
+        pollIntervalMs: 1,
+      },
+    ).catch((error) => error);
+    await cancelStoryboardTask(input.request_id, "用户主动中断");
+
+    await expect(waiting).resolves.toMatchObject({
+      code: "TRAE_TASK_CANCELLED",
+    });
   });
 
   it("keeps content hashes stable when JSON object keys are reordered", () => {

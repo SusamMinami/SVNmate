@@ -59,6 +59,8 @@ interface DirectorRunOptions {
   collectRevisionCases?: boolean;
   soundEffectCatalog?: readonly SoundEffectCatalogEntry[];
   forceRegenerate?: boolean;
+  signal?: AbortSignal;
+  onRequestCreated?: (input: DirectorInput) => void;
 }
 
 const providers = {
@@ -77,8 +79,10 @@ async function runProvider(
     collectRevisionCases: options.collectRevisionCases,
     soundEffectCatalog: options.soundEffectCatalog,
   });
+  options.onRequestCreated?.(input);
   const providerResult = await providers[mode].design(input, {
     forceRegenerate: options.forceRegenerate,
+    signal: options.signal,
   });
   const participants = resolveBlocking(
     sequence.participants,
@@ -128,6 +132,9 @@ export async function designShots(
       fallbackReason: null,
     };
   } catch (error) {
+    if (options.signal?.aborted) {
+      throw error;
+    }
     const fallbackReason =
       error instanceof Error
         ? error.message

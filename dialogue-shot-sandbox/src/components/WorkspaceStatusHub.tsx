@@ -1,7 +1,6 @@
 import {
   Bot,
   CircleCheck,
-  Database,
   GripVertical,
   LoaderCircle,
   RefreshCw,
@@ -22,17 +21,14 @@ interface WorkspaceStatusHubProps {
   larkLoading: boolean;
   larkStatus: LarkStatus | null;
   larkError: string;
-  collectRevisionCases: boolean;
   onRefreshTrae: () => void;
   onSetupTrae: () => void;
   onRefreshLark: () => void;
   onAuthorize: () => void;
-  onCollectRevisionCasesChange: (enabled: boolean) => void;
   onReorderPendingTasks: (requestIds: string[]) => Promise<void>;
   onDeletePendingTask: (requestId: string) => Promise<void>;
+  onCancelTask: (requestId: string) => Promise<void>;
 }
-
-type StatusPanel = "provider" | "cases";
 
 function larkConnectionLabel(
   loading: boolean,
@@ -65,33 +61,35 @@ export function WorkspaceStatusHub({
   larkLoading,
   larkStatus,
   larkError,
-  collectRevisionCases,
   onRefreshTrae,
   onSetupTrae,
   onRefreshLark,
   onAuthorize,
-  onCollectRevisionCasesChange,
   onReorderPendingTasks,
   onDeletePendingTask,
+  onCancelTask,
 }: WorkspaceStatusHubProps) {
-  const [openPanel, setOpenPanel] = useState<StatusPanel | null>(null);
+  const [open, setOpen] = useState(false);
   const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);
   const [queueBusy, setQueueBusy] = useState(false);
   const [queueError, setQueueError] = useState("");
   const rootRef = useRef<HTMLDivElement>(null);
-  const pendingTasks = traeStatus?.queue ?? [];
+  const activeTasks =
+    traeStatus?.tasks ??
+    (traeStatus?.queue ?? []).map((task) => ({
+      ...task,
+      status: "pending" as const,
+    }));
+  const pendingTasks = activeTasks.filter(
+    (task) => task.status !== "processing",
+  );
   const miraMissingScopes =
     larkStatus?.miraMissingScopes ?? larkStatus?.missingScopes ?? [];
-  const baseMissingScopes =
-    larkStatus?.baseMissingScopes ?? larkStatus?.missingScopes ?? [];
   const traeConnected = Boolean(traeStatus?.connected);
   const miraReady =
     Boolean(larkStatus?.authorized) &&
     miraMissingScopes.length === 0 &&
     Boolean(larkStatus?.miraBot);
-  const caseLibraryReady =
-    larkStatus?.caseLibraryReady ??
-    (Boolean(larkStatus?.authorized) && baseMissingScopes.length === 0);
   const providerIsTrae = mode !== "mira";
   const needsAuthorization =
     !larkStatus?.authorized || (larkStatus?.missingScopes.length ?? 0) > 0;
@@ -123,19 +121,8 @@ export function WorkspaceStatusHub({
       : miraReady
         ? `飞书用户：${larkStatus?.userName || "已授权用户"}`
         : "不可用时会自动降级到规则导演";
-  const caseLabel = !collectRevisionCases
-    ? "返修案例收集已关闭"
-    : caseLibraryReady
-      ? "返修案例收集已开启"
-      : "返修案例库尚未连接";
-  const caseDetail = !collectRevisionCases
-    ? "本次不读取或写入案例库"
-    : caseLibraryReady
-      ? "失败返修将写入待审核，并参考已通过案例"
-      : "需要飞书登录和多维表格权限";
-
   useEffect(() => {
-    if (!openPanel) {
+    if (!open) {
       return;
     }
     const closeOnOutsidePointer = (event: PointerEvent) => {
@@ -143,12 +130,12 @@ export function WorkspaceStatusHub({
         event.target instanceof Node &&
         !rootRef.current?.contains(event.target)
       ) {
-        setOpenPanel(null);
+        setOpen(false);
       }
     };
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        setOpenPanel(null);
+        setOpen(false);
       }
     };
     document.addEventListener("pointerdown", closeOnOutsidePointer);
@@ -157,7 +144,7 @@ export function WorkspaceStatusHub({
       document.removeEventListener("pointerdown", closeOnOutsidePointer);
       document.removeEventListener("keydown", closeOnEscape);
     };
-  }, [openPanel]);
+  }, [open]);
 
   async function movePendingTask(targetRequestId: string) {
     if (
@@ -191,11 +178,17 @@ export function WorkspaceStatusHub({
     }
   }
 
-  async function removePendingTask(requestId: string, dialogueId: string) {
+  async function removeTask(
+    requestId: string,
+    dialogueId: string,
+    processing: boolean,
+  ) {
     if (
       queueBusy ||
       !window.confirm(
-        `确定删除待处理分镜 ${dialogueId} 吗？\n删除后 TRAE 将不会处理该任务。`,
+        processing
+          ? `确定中断正在处理的分镜 ${dialogueId} 吗？\n当前 TRAE 结果将被丢弃。`
+          : `确定删除待处理分镜 ${dialogueId} 吗？\n删除后 TRAE 将不会处理该任务。`,
       )
     ) {
       return;
@@ -203,7 +196,11 @@ export function WorkspaceStatusHub({
     setQueueBusy(true);
     setQueueError("");
     try {
-      await onDeletePendingTask(requestId);
+      if (processing) {
+        await onCancelTask(requestId);
+      } else {
+        await onDeletePendingTask(requestId);
+      }
     } catch (error) {
       setQueueError(
         error instanceof Error ? error.message : "无法删除待处理分镜",
@@ -223,12 +220,8 @@ export function WorkspaceStatusHub({
         type="button"
         aria-label="协作连接状态"
         aria-haspopup="dialog"
-        aria-expanded={openPanel === "provider"}
-        onClick={() =>
-          setOpenPanel((current) =>
-            current === "provider" ? null : "provider",
-          )
-        }
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
       >
         {providerLoading ? (
           <LoaderCircle className="spin" size={17} />
@@ -240,216 +233,178 @@ export function WorkspaceStatusHub({
         <span className="workspace-status-tooltip">{providerLabel}</span>
       </button>
 
-      <button
-        className="workspace-status-icon"
-        data-state={
-          !collectRevisionCases
-            ? "inactive"
-            : caseLibraryReady
-              ? "ready"
-              : "warning"
-        }
-        type="button"
-        aria-label="返修案例状态"
-        aria-haspopup="dialog"
-        aria-expanded={openPanel === "cases"}
-        onClick={() =>
-          setOpenPanel((current) =>
-            current === "cases" ? null : "cases",
-          )
-        }
-      >
-        <Database size={17} />
-        <span className="workspace-status-tooltip">{caseLabel}</span>
-      </button>
-
-      {openPanel && (
+      {open && (
         <section
           className="workspace-status-popover"
           role="dialog"
-          aria-label={
-            openPanel === "provider" ? "协作连接状态" : "返修案例状态"
-          }
+          aria-label="协作连接状态"
         >
           <header>
             <span>
-              {openPanel === "provider" ? (
-                providerReady ? (
-                  <CircleCheck size={17} />
-                ) : (
-                  <ShieldAlert size={17} />
-                )
+              {providerReady ? (
+                <CircleCheck size={17} />
               ) : (
-                <Database size={17} />
+                <ShieldAlert size={17} />
               )}
             </span>
             <div>
-              <small>
-                {openPanel === "provider" ? "协作连接" : "案例库"}
-              </small>
-              <strong>
-                {openPanel === "provider" ? providerLabel : caseLabel}
-              </strong>
+              <small>协作连接</small>
+              <strong>{providerLabel}</strong>
             </div>
           </header>
 
-          {openPanel === "provider" ? (
-            <>
-              <p>{providerDetail}</p>
-              {providerIsTrae && (
-                <section
-                  className="workspace-status-queue"
-                  aria-label="待处理分镜队列"
-                  aria-busy={queueBusy}
-                >
-                  <header>
-                    <strong>待处理队列</strong>
-                    <small>{pendingTasks.length} 项</small>
-                  </header>
-                  {pendingTasks.length === 0 ? (
-                    <p>当前没有等待处理的分镜</p>
-                  ) : (
-                    <ol>
-                      {pendingTasks.map((task) => (
-                        <li
-                          className={
-                            draggingTaskId === task.requestId
-                              ? "is-dragging"
-                              : ""
-                          }
-                          draggable={!queueBusy}
-                          key={task.requestId}
-                          onDragStart={(event) => {
-                            event.dataTransfer.effectAllowed = "move";
-                            event.dataTransfer.setData(
-                              "text/plain",
-                              task.requestId,
-                            );
-                            setDraggingTaskId(task.requestId);
-                          }}
-                          onDragOver={(event) => {
-                            if (!queueBusy) {
-                              event.preventDefault();
-                              event.dataTransfer.dropEffect = "move";
-                            }
-                          }}
-                          onDrop={(event) => {
-                            event.preventDefault();
-                            void movePendingTask(task.requestId);
-                          }}
-                          onDragEnd={() => setDraggingTaskId(null)}
-                        >
-                          <GripVertical
-                            className="workspace-status-queue__handle"
-                            size={14}
-                            aria-hidden="true"
-                          />
-                          <div>
-                            <strong>对话 {task.dialogueId}</strong>
-                            <span>{task.outline || task.firstLine}</span>
-                            <small>
-                              {task.dialogueCount} 句 ·{" "}
-                              {task.participantNames.join("、")}
-                            </small>
-                          </div>
-                          <button
-                            className="workspace-status-queue__delete"
-                            type="button"
-                            title={`删除待处理分镜 ${task.dialogueId}`}
-                            aria-label={`删除待处理分镜 ${task.dialogueId}`}
-                            disabled={queueBusy}
-                            onClick={() =>
-                              void removePendingTask(
-                                task.requestId,
-                                task.dialogueId,
-                              )
-                            }
-                          >
-                            <X size={13} />
-                          </button>
-                        </li>
-                      ))}
-                    </ol>
-                  )}
-                  {queueError && (
-                    <p className="workspace-status-queue__error" role="alert">
-                      {queueError}
-                    </p>
-                  )}
-                </section>
+          <p>{providerDetail}</p>
+          {providerIsTrae && (
+            <section
+              className="workspace-status-queue"
+              aria-label="TRAE 协作任务"
+              aria-busy={queueBusy}
+            >
+              <header>
+                <strong>协作任务</strong>
+                <small>{activeTasks.length} 项</small>
+              </header>
+              {activeTasks.length === 0 ? (
+                <p>当前没有等待或处理中的分镜</p>
+              ) : (
+                <ol>
+                  {activeTasks.map((task) => {
+                    const processing = task.status === "processing";
+                    return (
+                    <li
+                      className={
+                        `${draggingTaskId === task.requestId ? "is-dragging" : ""} ${
+                          processing ? "is-processing" : ""
+                        }`
+                      }
+                      draggable={!queueBusy && !processing}
+                      key={task.requestId}
+                      onDragStart={(event) => {
+                        if (processing) {
+                          event.preventDefault();
+                          return;
+                        }
+                        event.dataTransfer.effectAllowed = "move";
+                        event.dataTransfer.setData("text/plain", task.requestId);
+                        setDraggingTaskId(task.requestId);
+                      }}
+                      onDragOver={(event) => {
+                        if (!queueBusy) {
+                          event.preventDefault();
+                          event.dataTransfer.dropEffect = "move";
+                        }
+                      }}
+                      onDrop={(event) => {
+                        event.preventDefault();
+                        if (!processing) {
+                          void movePendingTask(task.requestId);
+                        }
+                      }}
+                      onDragEnd={() => setDraggingTaskId(null)}
+                    >
+                      {processing ? (
+                        <LoaderCircle
+                          className="workspace-status-queue__handle spin"
+                          size={14}
+                          aria-hidden="true"
+                        />
+                      ) : (
+                        <GripVertical
+                          className="workspace-status-queue__handle"
+                          size={14}
+                          aria-hidden="true"
+                        />
+                      )}
+                      <div>
+                        <strong>
+                          对话 {task.dialogueId}
+                          <em>{processing ? "处理中" : "等待中"}</em>
+                        </strong>
+                        <span>{task.outline || task.firstLine}</span>
+                        <small>
+                          {task.dialogueCount} 句 ·{" "}
+                          {task.participantNames.join("、")}
+                        </small>
+                      </div>
+                      <button
+                        className="workspace-status-queue__delete"
+                        type="button"
+                        title={
+                          processing
+                            ? `中断正在处理分镜 ${task.dialogueId}`
+                            : `删除待处理分镜 ${task.dialogueId}`
+                        }
+                        aria-label={
+                          processing
+                            ? `中断正在处理分镜 ${task.dialogueId}`
+                            : `删除待处理分镜 ${task.dialogueId}`
+                        }
+                        disabled={queueBusy}
+                        onClick={() =>
+                          void removeTask(
+                            task.requestId,
+                            task.dialogueId,
+                            processing,
+                          )
+                        }
+                      >
+                        <X size={13} />
+                      </button>
+                    </li>
+                    );
+                  })}
+                </ol>
               )}
-              <button
-                className="button"
-                type="button"
-                title={
-                  providerIsTrae
-                    ? traeConnected
-                      ? "刷新协作状态"
-                      : traeStatus?.versionMismatch
-                        ? "查看 MCP 重启步骤"
-                        : "查看 MCP 配置"
-                    : needsAuthorization
-                      ? "授权飞书"
-                      : "刷新连接"
-                }
-                aria-label={
-                  providerIsTrae
-                    ? traeConnected
-                      ? "刷新内部 TRAE 协作状态"
-                      : "配置内部 TRAE MCP"
-                    : needsAuthorization
-                      ? "授权飞书"
-                      : "刷新飞书连接"
-                }
-                onClick={
-                  providerIsTrae
-                    ? traeConnected
-                      ? onRefreshTrae
-                      : onSetupTrae
-                    : needsAuthorization
-                      ? onAuthorize
-                      : onRefreshLark
-                }
-                disabled={providerLoading}
-              >
-                <RefreshCw size={14} />
-                {providerIsTrae
-                  ? traeConnected
-                    ? "刷新状态"
-                    : "查看配置"
-                  : needsAuthorization
-                    ? "授权飞书"
-                    : "刷新状态"}
-              </button>
-            </>
-          ) : (
-            <>
-              <label className="workspace-status-toggle">
-                <input
-                  type="checkbox"
-                  checked={collectRevisionCases}
-                  onChange={(event) =>
-                    onCollectRevisionCasesChange(event.target.checked)
-                  }
-                />
-                <span>
-                  <strong>收集返修案例</strong>
-                  <small>{caseDetail}</small>
-                </span>
-              </label>
-              {collectRevisionCases && (
-                <button
-                  className="button"
-                  type="button"
-                  onClick={caseLibraryReady ? onRefreshLark : onAuthorize}
-                  disabled={larkLoading}
-                >
-                  <RefreshCw size={14} />
-                  {caseLibraryReady ? "刷新案例库" : "登录飞书"}
-                </button>
+              {queueError && (
+                <p className="workspace-status-queue__error" role="alert">
+                  {queueError}
+                </p>
               )}
-            </>
+            </section>
           )}
+          <button
+            className="button"
+            type="button"
+            title={
+              providerIsTrae
+                ? traeConnected
+                  ? "刷新协作状态"
+                  : traeStatus?.versionMismatch
+                    ? "查看 MCP 重启步骤"
+                    : "查看 MCP 配置"
+                : needsAuthorization
+                  ? "授权飞书"
+                  : "刷新连接"
+            }
+            aria-label={
+              providerIsTrae
+                ? traeConnected
+                  ? "刷新内部 TRAE 协作状态"
+                  : "配置内部 TRAE MCP"
+                : needsAuthorization
+                  ? "授权飞书"
+                  : "刷新飞书连接"
+            }
+            onClick={
+              providerIsTrae
+                ? traeConnected
+                  ? onRefreshTrae
+                  : onSetupTrae
+                : needsAuthorization
+                  ? onAuthorize
+                  : onRefreshLark
+            }
+            disabled={providerLoading}
+          >
+            <RefreshCw size={14} />
+            {providerIsTrae
+              ? traeConnected
+                ? "刷新状态"
+                : "查看配置"
+              : needsAuthorization
+                ? "授权飞书"
+                : "刷新状态"}
+          </button>
         </section>
       )}
     </div>

@@ -4,6 +4,7 @@ import {
   Move3d,
   Undo2,
 } from "lucide-react";
+import { participantSlotLabel } from "../data/dialogueRoles";
 import type {
   DirectorBlocking,
   DirectorSceneAnalysis,
@@ -93,7 +94,7 @@ export function StoryBriefModal({
               {sequence.participants.map((participant) => (
                 <span key={participant.instanceId}>
                   <i style={{ backgroundColor: participant.color }}>
-                    {participant.slot}
+                    {participantSlotLabel(participant)}
                   </i>
                   <b>{participant.name}</b>
                   <small>

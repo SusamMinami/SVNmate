@@ -13,11 +13,14 @@ import {
   LoaderCircle,
   LocateFixed,
   MapPinned,
+  Maximize2,
+  PanelRightClose,
   Pencil,
   RefreshCw,
   RotateCw,
   Search,
   Settings,
+  Square,
   Upload,
   UserRoundPlus,
   Users,
@@ -47,6 +50,7 @@ import type {
   FormationSelectionId,
 } from "./components/BlueprintFormationModal";
 import type { DialogueTextEditorItem } from "./components/DialogueTextEditorModal";
+import { AudioLibraryBrowser } from "./components/AudioLibraryBrowser";
 import { CharacterActionEditor } from "./components/CharacterActionEditor";
 import { DataSourceStatus } from "./components/DataSourceStatus";
 import { DirectorControl } from "./components/DirectorControl";
@@ -65,7 +69,10 @@ import {
 } from "./data/csvLoader";
 import { applyBlueprintFormation } from "./data/blueprintFormation";
 import { demoDatabase } from "./data/demo";
-import { splitDialogueParticipants } from "./data/dialogueRoles";
+import {
+  participantSlotLabel,
+  splitDialogueParticipants,
+} from "./data/dialogueRoles";
 import {
   bundledSoundEffectCatalog,
   type SoundEffectCatalogSnapshot,
@@ -81,6 +88,7 @@ import {
 } from "./data/dialogueRepository";
 import type {
   DirectorBlocking,
+  DirectorInput,
   DirectorMode,
   DirectorSceneAnalysis,
   DirectorSoundEffectRecommendation,
@@ -586,7 +594,9 @@ interface ShotInspectorProps {
   sequence: DialogueSequence;
   directorAnalysis: DirectorSceneAnalysis | undefined;
   soundEffects: DirectorSoundEffectRecommendation[];
+  soundEffectCatalog: SoundEffectCatalogSnapshot;
   musicRecommendations: MusicRecommendation[];
+  musicCatalog: MusicCatalogSnapshot;
   directorBlocking: DirectorBlocking;
   appliedDirector: DirectorMode;
   activeIndex: number;
@@ -598,9 +608,12 @@ interface ShotInspectorProps {
   exportButtonLabel: string;
   exportUnavailableReason: string;
   backgroundGenerationActive: boolean;
+  configurationMode: boolean;
+  configurationModeBusy: boolean;
   characterActionEditor: CharacterActionEditorController;
   onMove: (offset: number) => void;
   onTabChange: (tab: InspectorTab) => void;
+  onConfigurationModeChange: (enabled: boolean) => void;
   onExport: () => void;
   onExportSoundEffects: () => void;
 }
@@ -610,7 +623,9 @@ function ShotInspector({
   sequence,
   directorAnalysis,
   soundEffects,
+  soundEffectCatalog,
   musicRecommendations,
+  musicCatalog,
   directorBlocking,
   appliedDirector,
   activeIndex,
@@ -622,9 +637,12 @@ function ShotInspector({
   exportButtonLabel,
   exportUnavailableReason,
   backgroundGenerationActive,
+  configurationMode,
+  configurationModeBusy,
   characterActionEditor,
   onMove,
   onTabChange,
+  onConfigurationModeChange,
   onExport,
   onExportSoundEffects,
 }: ShotInspectorProps) {
@@ -632,6 +650,12 @@ function ShotInspector({
     string | null
   >(null);
   const storyOutlineExpanded = expandedOutlinePrefix === sequence.prefix;
+  const slotLabelsBySlot = new Map(
+    sequence.participants.map((participant) => [
+      participant.slot,
+      participantSlotLabel(participant),
+    ]),
+  );
 
   const tabs: Array<{
     id: InspectorTab;
@@ -643,6 +667,9 @@ function ShotInspector({
     { id: "audio", label: "音频", icon: AudioLines },
     { id: "ue", label: "UE", icon: Boxes },
   ];
+  const visibleTabs = configurationMode
+    ? tabs.filter(({ id }) => id === "audio" || id === "ue")
+    : tabs;
 
   return (
     <>
@@ -655,6 +682,23 @@ function ShotInspector({
           <h2>{shot.label}</h2>
         </div>
         <div className="shot-nav">
+          <button
+            className="icon-button configuration-mode-toggle"
+            type="button"
+            title={configurationMode ? "返回完整窗口" : "进入配置小窗"}
+            aria-label={configurationMode ? "返回完整窗口" : "进入配置小窗"}
+            aria-pressed={configurationMode}
+            disabled={configurationModeBusy}
+            onClick={() => onConfigurationModeChange(!configurationMode)}
+          >
+            {configurationModeBusy ? (
+              <LoaderCircle className="spin" size={17} />
+            ) : configurationMode ? (
+              <Maximize2 size={17} />
+            ) : (
+              <PanelRightClose size={17} />
+            )}
+          </button>
           <button
             className="icon-button"
             type="button"
@@ -679,7 +723,7 @@ function ShotInspector({
       </section>
 
       <nav className="inspector-tabs" aria-label="镜头检查器" role="tablist">
-        {tabs.map(({ id, label, icon: Icon }) => (
+        {visibleTabs.map(({ id, label, icon: Icon }) => (
           <button
             type="button"
             role="tab"
@@ -919,7 +963,8 @@ function ShotInspector({
                         size={15}
                       />
                       <strong>
-                        {action.participantSlot} {action.participantName}
+                        {slotLabelsBySlot.get(action.participantSlot) ?? "?"}{" "}
+                        {action.participantName}
                       </strong>
                       <span>{actorTurnLabel(action.angleDegrees)}</span>
                       <small>
@@ -974,7 +1019,9 @@ function ShotInspector({
                   return (
                     <div key={placement.subject}>
                       <span style={{ backgroundColor: participant?.color }}>
-                        {placement.subject}
+                        {participant
+                          ? participantSlotLabel(participant)
+                          : "?"}
                       </span>
                       <strong>{participant?.name ?? placement.subject}</strong>
                       <small title={placement.intent}>
@@ -1004,6 +1051,10 @@ function ShotInspector({
               recommendations={musicRecommendations}
               dialogueOrder={sequence.rows.map((row) => row.id)}
               currentDialogueIds={shot.dialogueIds}
+            />
+            <AudioLibraryBrowser
+              soundEffectCatalog={soundEffectCatalog}
+              musicCatalog={musicCatalog}
             />
           </>
         )}
@@ -1207,7 +1258,12 @@ export default function App() {
     closeAuthorization,
     reorderPendingTasks,
     deletePendingTask,
+    cancelActiveTraeTask,
   } = useCollaborationConnections();
+  const [traeCancelBusy, setTraeCancelBusy] = useState(false);
+  const [activeTraeRequestId, setActiveTraeRequestId] = useState("");
+  const activeTraeRequestRef = useRef<DirectorInput | null>(null);
+  const activeTraeAbortRef = useRef<AbortController | null>(null);
   const [contentSearch, setContentSearch] =
     useState<DialogueContentSearchResult | null>(null);
   const [designedStoryboards, setDesignedStoryboards] = useState<
@@ -1246,6 +1302,8 @@ export default function App() {
     useState(false);
   const [inspectorTab, setInspectorTab] =
     useState<InspectorTab>("direction");
+  const [configurationMode, setConfigurationMode] = useState(false);
+  const [configurationModeBusy, setConfigurationModeBusy] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const directorySelectionKindRef = useRef<"live" | "config">("live");
   const dialogueEditorRef = useRef<HTMLDivElement>(null);
@@ -1383,6 +1441,16 @@ export default function App() {
       ),
     [sequence.participants],
   );
+  const participantSlotLabelsBySlot = useMemo(
+    () =>
+      new Map(
+        sequence.participants.map((participant) => [
+          participant.slot,
+          participantSlotLabel(participant),
+        ]),
+      ),
+    [sequence.participants],
+  );
   const participantRoles = useMemo(
     () => splitDialogueParticipants(sequence.participants, sequence.rows),
     [sequence.participants, sequence.rows],
@@ -1499,6 +1567,27 @@ export default function App() {
   ) {
     setSoundEffects(recommendations);
   }
+
+  useEffect(() => {
+    const getConfigurationWindowMode =
+      window.shotSandboxDesktop?.getConfigurationWindowMode;
+    if (!getConfigurationWindowMode) {
+      return;
+    }
+    let active = true;
+    void getConfigurationWindowMode()
+      .then((enabled) => {
+        if (!active || !enabled) {
+          return;
+        }
+        setInspectorTab("audio");
+        setConfigurationMode(true);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     void refreshTraeConnection();
@@ -1695,6 +1784,13 @@ export default function App() {
 
     setDirectorLoading(true);
     setDirectorLoadingMode(requestedMode);
+    const traeAbortController =
+      requestedMode === "trae" ? new AbortController() : null;
+    if (traeAbortController) {
+      activeTraeRequestRef.current = null;
+      setActiveTraeRequestId("");
+      activeTraeAbortRef.current = traeAbortController;
+    }
     try {
       const result = await designShots(nextSequence, requestedMode, {
         preserveInputPositions,
@@ -1703,6 +1799,16 @@ export default function App() {
         collectRevisionCases,
         soundEffectCatalog: activeSoundEffectCatalog.entries,
         forceRegenerate: options.forceRegenerate,
+        signal: traeAbortController?.signal,
+        onRequestCreated:
+          requestedMode === "trae"
+            ? (input) => {
+                if (runId === directorRunRef.current) {
+                  activeTraeRequestRef.current = input;
+                  setActiveTraeRequestId(input.request_id);
+                }
+              }
+            : undefined,
       });
       if (runId !== directorRunRef.current) {
         return;
@@ -1774,12 +1880,89 @@ export default function App() {
       } else if (requestedMode === "trae") {
         void refreshTraeConnection();
       }
+    } catch (directorError) {
+      if (!traeAbortController?.signal.aborted) {
+        throw directorError;
+      }
     } finally {
       if (runId === directorRunRef.current) {
         setDirectorLoading(false);
         setDirectorLoadingMode(null);
+        activeTraeRequestRef.current = null;
+        setActiveTraeRequestId("");
+        activeTraeAbortRef.current = null;
       }
     }
+  }
+
+  function finishLocalTraeCancellation() {
+    directorRunRef.current += 1;
+    activeTraeAbortRef.current?.abort();
+    activeTraeAbortRef.current = null;
+    activeTraeRequestRef.current = null;
+    setActiveTraeRequestId("");
+    setDirectorLoading(false);
+    setDirectorLoadingMode(null);
+    setDirectorMode("rule");
+    setFormationChoice((current) =>
+      current ? { ...current, requestedMode: "rule" } : current,
+    );
+    setPendingDirectorResult(null);
+    setSharedComparison(null);
+    setFallbackReason(null);
+    setFormationStatus("TRAE 分析已中断，当前占位和分镜已保留");
+  }
+
+  async function interruptTraeAnalysis(
+    confirmInterruption = true,
+  ): Promise<boolean> {
+    const input = activeTraeRequestRef.current;
+    if (
+      directorLoadingMode !== "trae" ||
+      !input ||
+      traeCancelBusy
+    ) {
+      return false;
+    }
+    if (
+      confirmInterruption &&
+      !window.confirm(
+        `确定中断对话 ${input.dialogue_prefix} 的 TRAE 分析吗？\n当前已显示的占位和分镜会保留。`,
+      )
+    ) {
+      return false;
+    }
+    setTraeCancelBusy(true);
+    setError("");
+    finishLocalTraeCancellation();
+    try {
+      await cancelActiveTraeTask(
+        input.request_id,
+        input,
+        "用户在镜头沙盘中断了 TRAE 分镜分析",
+      );
+      return true;
+    } catch (cancelError) {
+      setError(
+        `本地等待已停止，但服务端任务取消失败：${
+          cancelError instanceof Error
+            ? cancelError.message
+            : "未知错误"
+        }`,
+      );
+      return false;
+    } finally {
+      setTraeCancelBusy(false);
+    }
+  }
+
+  async function cancelTraeTaskFromStatus(requestId: string) {
+    const isCurrentTask =
+      activeTraeRequestRef.current?.request_id === requestId;
+    if (isCurrentTask) {
+      finishLocalTraeCancellation();
+    }
+    await cancelActiveTraeTask(requestId);
   }
 
   function focusPlanShot(
@@ -1975,7 +2158,20 @@ export default function App() {
   }
 
   async function refreshBlueprintFormation() {
-    if (!formationChoice || formationChecking) {
+    if (!formationChoice || formationChecking || traeCancelBusy) {
+      return;
+    }
+    let requestedMode = formationChoice.requestedMode;
+    if (directorLoading) {
+      if (
+        directorLoadingMode !== "trae" ||
+        !(await interruptTraeAnalysis())
+      ) {
+        return;
+      }
+      requestedMode = "rule";
+    }
+    if (!sequence.prefix) {
       return;
     }
     const formationRunId = ++formationRunRef.current;
@@ -2008,7 +2204,7 @@ export default function App() {
           database,
           sourceSequence,
           lookup.snapshot,
-          formationChoice.requestedMode,
+          requestedMode,
           soundEffectCatalog.entries,
           formationChoice.ai,
         ),
@@ -2302,6 +2498,39 @@ export default function App() {
         keepBackgroundRequest: directorLoading,
       });
     }
+  }
+
+  async function changeConfigurationMode(enabled: boolean) {
+    if (configurationModeBusy) {
+      return;
+    }
+    setConfigurationModeBusy(true);
+    setError("");
+    try {
+      await window.shotSandboxDesktop?.setConfigurationWindowMode?.(enabled);
+      if (enabled && inspectorTab !== "audio" && inspectorTab !== "ue") {
+        setInspectorTab("audio");
+      }
+      setConfigurationMode(enabled);
+    } catch (windowError) {
+      if (!enabled) {
+        setConfigurationMode(false);
+      }
+      setError(
+        windowError instanceof Error
+          ? windowError.message
+          : "无法切换配置小窗",
+      );
+    } finally {
+      setConfigurationModeBusy(false);
+    }
+  }
+
+  async function openStoryboardExport() {
+    if (configurationMode) {
+      await changeConfigurationMode(false);
+    }
+    await previewStoryboardExport();
   }
 
   async function chooseDirectory(
@@ -2703,6 +2932,7 @@ export default function App() {
       data-ark-theme="endfield"
       data-ark-depth="moderate"
       data-workspace-direction={workspaceDirection}
+      data-configuration-mode={configurationMode}
     >
       <input
         ref={(element) => {
@@ -2838,14 +3068,13 @@ export default function App() {
               larkLoading={larkLoading}
               larkStatus={larkStatus}
               larkError={larkError}
-              collectRevisionCases={collectRevisionCases}
               onRefreshTrae={() => void refreshTraeConnection()}
               onSetupTrae={() => void setupTrae()}
               onRefreshLark={() => void refreshLarkConnection(true)}
               onAuthorize={() => void beginAuthorization()}
-              onCollectRevisionCasesChange={changeCaseCollection}
               onReorderPendingTasks={reorderPendingTasks}
               onDeletePendingTask={deletePendingTask}
+              onCancelTask={cancelTraeTaskFromStatus}
             />
           )}
           <DataSourceStatus
@@ -2853,6 +3082,13 @@ export default function App() {
             dialogueCount={sourceStats.dialogues}
             npcCount={sourceStats.npcs}
             setupStatus={desktopSetup}
+            larkLoading={larkLoading}
+            larkStatus={larkStatus}
+            larkError={larkError}
+            collectRevisionCases={collectRevisionCases}
+            onRefreshLark={() => void refreshLarkConnection(true)}
+            onAuthorize={() => void beginAuthorization()}
+            onCollectRevisionCasesChange={changeCaseCollection}
             onOpenSettings={
               window.shotSandboxDesktop
                 ? () => void openDesktopSetup()
@@ -2943,9 +3179,17 @@ export default function App() {
                     <button
                       className="formation-status__reload"
                       type="button"
-                      title={`重新读取 ${activeFormationName} 位置`}
+                      title={
+                        directorLoadingMode === "trae"
+                          ? `中断 TRAE 并重新读取 ${activeFormationName} 位置`
+                          : `重新读取 ${activeFormationName} 位置`
+                      }
                       aria-label={`重新读取 ${activeFormationName} 位置`}
-                      disabled={directorLoading || formationChecking}
+                      disabled={
+                        formationChecking ||
+                        traeCancelBusy ||
+                        (directorLoading && directorLoadingMode !== "trae")
+                      }
                       onClick={() => void refreshBlueprintFormation()}
                     >
                       <strong>
@@ -3031,7 +3275,7 @@ export default function App() {
                       className="cast-row__slot"
                       style={{ backgroundColor: participant.color }}
                     >
-                      {participant.slot}
+                      {participantSlotLabel(participant)}
                     </span>
                     <div>
                       <strong>{participant.name}</strong>
@@ -3156,7 +3400,9 @@ export default function App() {
                                   backgroundColor: participant?.color,
                                 }}
                               >
-                                {row.speakerSlot ?? "?"}
+                                {participant
+                                  ? participantSlotLabel(participant)
+                                  : "?"}
                               </span>
                               <span className="shot-row__body">
                                 <strong>
@@ -3201,7 +3447,8 @@ export default function App() {
                           ),
                         }}
                       >
-                        {shot.speakerSlot}
+                        {participantSlotLabelsBySlot.get(shot.speakerSlot) ??
+                          "?"}
                       </span>
                       <span className="shot-row__body">
                         <strong>{shot.label}</strong>
@@ -3239,7 +3486,10 @@ export default function App() {
                             : undefined,
                         }}
                       >
-                        {row.speakerSlot ?? "?"}
+                        {row.speakerSlot
+                          ? participantSlotLabelsBySlot.get(row.speakerSlot) ??
+                            "?"
+                          : "?"}
                       </span>
                       <span className="shot-row__body">
                         <strong>
@@ -3325,6 +3575,28 @@ export default function App() {
                           : "正在维护动态关系轴与视线连续"}
                     </small>
                   </div>
+                  {directorLoadingMode === "trae" && (
+                    <button
+                      className="director-loading__cancel"
+                      type="button"
+                      disabled={
+                        traeCancelBusy || !activeTraeRequestId
+                      }
+                      title={
+                        activeTraeRequestId
+                          ? "中断当前 TRAE 分镜分析"
+                          : "正在创建 TRAE 任务"
+                      }
+                      onClick={() => void interruptTraeAnalysis()}
+                    >
+                      {traeCancelBusy ? (
+                        <LoaderCircle className="spin" size={13} />
+                      ) : (
+                        <Square size={12} fill="currentColor" />
+                      )}
+                      {traeCancelBusy ? "中断中" : "中断分析"}
+                    </button>
+                  )}
                 </div>
               )}
               <div
@@ -3342,7 +3614,9 @@ export default function App() {
                     ),
                   }}
                 >
-                  {activeDialogueRow?.speakerSlot ?? activeShot.speakerSlot}
+                  {participantSlotLabelsBySlot.get(
+                    activeDialogueRow?.speakerSlot ?? activeShot.speakerSlot,
+                  ) ?? "?"}
                 </span>
                 <div className="dialogue-strip__content">
                   <strong>
@@ -3470,7 +3744,10 @@ export default function App() {
                             : undefined,
                         }}
                       >
-                        {row.speakerSlot ?? "?"}
+                        {row.speakerSlot
+                          ? participantSlotLabelsBySlot.get(row.speakerSlot) ??
+                            "?"
+                          : "?"}
                       </span>
                       <div>
                         <strong>
@@ -3506,31 +3783,42 @@ export default function App() {
         <aside className="right-panel">
           {activeShot ? (
             <>
-          <ShotInspector
-            shot={activeShot}
-            sequence={sequence}
-            directorAnalysis={directorAnalysis}
-            soundEffects={soundEffects}
-            musicRecommendations={musicRecommendations}
-            directorBlocking={directorBlocking}
-            appliedDirector={appliedDirector}
-            activeIndex={activeIndex}
-            shotCount={shots.length}
-            tab={inspectorTab}
-            canExport={canExportStoryboard}
-            exportBusy={storyboardExportBusy || formationChecking}
-            exportError={storyboardExportError}
-            exportButtonLabel={storyboardExportButtonLabel}
-            exportUnavailableReason={storyboardExportUnavailableReason}
-            backgroundGenerationActive={directorLoading}
-            characterActionEditor={characterActionEditor}
-            onMove={moveShot}
-            onTabChange={setInspectorTab}
-            onExport={() => void previewStoryboardExport()}
-            onExportSoundEffects={() =>
-              void previewCurrentSoundEffectExport()
-            }
-          />
+              <ShotInspector
+                shot={activeShot}
+                sequence={sequence}
+                directorAnalysis={directorAnalysis}
+                soundEffects={soundEffects}
+                soundEffectCatalog={soundEffectCatalog}
+                musicRecommendations={musicRecommendations}
+                musicCatalog={musicCatalog}
+                directorBlocking={directorBlocking}
+                appliedDirector={appliedDirector}
+                activeIndex={activeIndex}
+                shotCount={shots.length}
+                tab={inspectorTab}
+                canExport={canExportStoryboard}
+                exportBusy={
+                  storyboardExportBusy ||
+                  formationChecking ||
+                  configurationModeBusy
+                }
+                exportError={storyboardExportError}
+                exportButtonLabel={storyboardExportButtonLabel}
+                exportUnavailableReason={storyboardExportUnavailableReason}
+                backgroundGenerationActive={directorLoading}
+                configurationMode={configurationMode}
+                configurationModeBusy={configurationModeBusy}
+                characterActionEditor={characterActionEditor}
+                onMove={moveShot}
+                onTabChange={setInspectorTab}
+                onConfigurationModeChange={(enabled) =>
+                  void changeConfigurationMode(enabled)
+                }
+                onExport={() => void openStoryboardExport()}
+                onExportSoundEffects={() =>
+                  void previewCurrentSoundEffectExport()
+                }
+              />
             </>
           ) : (
             <>

@@ -55,6 +55,8 @@ try {
   const names = tools.tools.map((tool) => tool.name);
   const required = [
     "storyboard_get_pending_request",
+    "storyboard_heartbeat_request",
+    "storyboard_cancel_request",
     "storyboard_submit_plan",
     "storyboard_fail_request",
     "storyboard_get_request_status",

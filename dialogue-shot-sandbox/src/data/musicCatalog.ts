@@ -395,7 +395,12 @@ export function activeMusicRecommendationForDialogueIds(
   return active;
 }
 
-export function musicPreviewUrl(recommendation: MusicRecommendation): string {
+export function musicPreviewUrl(
+  recommendation: Pick<
+    MusicCatalogEntry,
+    "recordId" | "fileToken" | "fileName"
+  >,
+): string {
   const params = new URLSearchParams({
     recordId: recommendation.recordId,
     fileToken: recommendation.fileToken ?? "",

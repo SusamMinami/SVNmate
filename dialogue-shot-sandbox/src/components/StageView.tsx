@@ -15,6 +15,7 @@ import {
   useState,
 } from "react";
 import * as THREE from "three";
+import { participantSlotLabel } from "../data/dialogueRoles";
 import { participantFacingYawDegrees } from "../director/actorActionPlanner";
 import type {
   DialogueParticipant,
@@ -103,6 +104,7 @@ function Character({
 }: CharacterProps) {
   const pending = presence === "pending";
   const opacity = pending ? 0.28 : 1;
+  const slotLabel = participantSlotLabel(participant);
   const facingCenter = Math.atan2(
     participant.facingTarget[0] - participant.position[0],
     participant.facingTarget[2] - participant.position[2],
@@ -199,12 +201,12 @@ function Character({
             .map((value) => value.toFixed(3))
             .join(",")}
           style={{ borderColor: participant.color }}
-          title={`${participant.slot} ${participant.name} NPC ${participant.id}${
+          title={`槽位 ${slotLabel} · ${participant.name} · NPC ${participant.id}${
             pending ? " · 未登场" : ""
           }`}
         >
           <strong style={{ backgroundColor: participant.color }}>
-            {participant.slot}
+            {slotLabel}
           </strong>
           {!slotOnly && (
             <>
@@ -642,10 +644,61 @@ function SceneCastRoster({
   dialogueParticipantSlots: ReadonlySet<ParticipantSlot>;
   dialogueEndIndex: number;
 }) {
+  const dragStateRef = useRef<{
+    pointerId: number;
+    startX: number;
+    scrollLeft: number;
+  } | null>(null);
+
+  function startDrag(event: ReactPointerEvent<HTMLDivElement>) {
+    if (
+      event.button !== 0 ||
+      event.currentTarget.scrollWidth <= event.currentTarget.clientWidth
+    ) {
+      return;
+    }
+    dragStateRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      scrollLeft: event.currentTarget.scrollLeft,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    event.currentTarget.dataset.dragging = "true";
+  }
+
+  function drag(event: ReactPointerEvent<HTMLDivElement>) {
+    const state = dragStateRef.current;
+    if (!state || state.pointerId !== event.pointerId) {
+      return;
+    }
+    event.currentTarget.scrollLeft =
+      state.scrollLeft - (event.clientX - state.startX);
+  }
+
+  function stopDrag(event: ReactPointerEvent<HTMLDivElement>) {
+    const state = dragStateRef.current;
+    if (!state || state.pointerId !== event.pointerId) {
+      return;
+    }
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    dragStateRef.current = null;
+    delete event.currentTarget.dataset.dragging;
+  }
+
   return (
     <section className="stage-cast" aria-label="场景角色">
-      <div className="stage-cast__list" role="list">
+      <div
+        className="stage-cast__list"
+        role="list"
+        onPointerDown={startDrag}
+        onPointerMove={drag}
+        onPointerUp={stopDrag}
+        onPointerCancel={stopDrag}
+      >
         {participants.map((participant) => {
+          const slotLabel = participantSlotLabel(participant);
           const presence =
             participant.entryIndex > dialogueEndIndex
               ? "pending"
@@ -678,12 +731,12 @@ function SceneCastRoster({
               data-presence={presence}
               key={participant.instanceId}
               role="listitem"
-              aria-label={`${participant.name} · ${detailLabel}`}
+              aria-label={`槽位 ${slotLabel} · ${participant.name} · ${detailLabel}`}
               tabIndex={0}
               title={detailLabel}
             >
               <span style={{ backgroundColor: participant.color }}>
-                {participant.slot}
+                {slotLabel}
               </span>
               <strong>{participant.name}</strong>
             </div>

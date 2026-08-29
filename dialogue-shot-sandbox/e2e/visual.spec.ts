@@ -425,12 +425,36 @@ test("renders every participant in a multi-character dialogue", async ({
   await expect(firstCastItem).toHaveAttribute("tabindex", "0");
   await expect(firstCastItem).toHaveAttribute(
     "aria-label",
-    /玩家 · 背景 NPC · 在场/,
+    /槽位 0 · 玩家 · 背景 NPC · 在场/,
   );
   const castList = page.locator(".stage-cast__list");
+  await expect(castList.locator(".stage-cast__item > span")).toHaveText([
+    "0",
+    "1",
+    "2",
+    "3",
+    "4",
+  ]);
+  await expect(castList).toHaveCSS("scrollbar-width", "none");
   await castList.evaluate((element) => {
-    element.scrollLeft = element.scrollWidth;
+    element.style.maxWidth = "180px";
   });
+  const castBounds = await castList.boundingBox();
+  expect(castBounds).not.toBeNull();
+  await page.mouse.move(
+    castBounds!.x + castBounds!.width - 8,
+    castBounds!.y + castBounds!.height / 2,
+  );
+  await page.mouse.down();
+  await page.mouse.move(
+    castBounds!.x + 20,
+    castBounds!.y + castBounds!.height / 2,
+    { steps: 5 },
+  );
+  await page.mouse.up();
+  await expect.poll(() =>
+    castList.evaluate((element) => element.scrollLeft),
+  ).toBeGreaterThan(0);
   await expect(page.locator(".stage-cast__item").last()).toBeInViewport();
   await expect(page.locator(".axis-status")).toContainText("关系轴 B-C");
   await expect(
@@ -438,14 +462,14 @@ test("renders every participant in a multi-character dialogue", async ({
   ).toHaveCount(3);
 
   await page
-    .getByRole("button", { name: /D 3人群像重建全景/ })
+    .getByRole("button", { name: /3 3人群像重建全景/ })
     .click();
   await expect(page.locator(".axis-status")).toContainText("群像总轴");
   await expect(
     page.locator(".actor-label--on-body:not(.actor-label--below)"),
   ).toHaveCount(4);
   await page
-    .getByRole("button", { name: /E 4人群像重建全景/ })
+    .getByRole("button", { name: /4 4人群像重建全景/ })
     .click();
   await expect(page.locator(".axis-status")).toContainText("群像总轴");
   await expect(
@@ -488,7 +512,7 @@ test("previews future entrants as transparent blocking markers", async ({
   );
 
   await page
-    .getByRole("button", { name: /D 3人群像重建全景/ })
+    .getByRole("button", { name: /3 3人群像重建全景/ })
     .click();
   await expect(page.locator(".stage-main .actor-label--pending")).toHaveCount(
     1,
@@ -498,7 +522,7 @@ test("previews future entrants as transparent blocking markers", async ({
   );
 
   await page
-    .getByRole("button", { name: /E 4人群像重建全景/ })
+    .getByRole("button", { name: /4 4人群像重建全景/ })
     .click();
   await expect(page.locator(".stage-main .actor-label--pending")).toHaveCount(
     0,
@@ -637,7 +661,7 @@ test("removes a character after the AI-directed exit node", async ({
     .click();
 
   await page
-    .getByRole("button", { name: /03 D 3人群像重建全景/ })
+    .getByRole("button", { name: /03 3 3人群像重建全景/ })
     .click();
   await expect(
     page.locator(".stage-main .actor-label", { hasText: "弥莎" }),
@@ -647,7 +671,7 @@ test("removes a character after the AI-directed exit node", async ({
   ).toHaveCount(0);
 
   await page
-    .getByRole("button", { name: /04 E 3人群像重建全景/ })
+    .getByRole("button", { name: /04 4 3人群像重建全景/ })
     .click();
   await expect(
     page.locator(".stage-main .actor-label", { hasText: "弥莎" }),
@@ -731,6 +755,101 @@ test("switches the main canvas between shot and blocking views", async ({
     page.getByRole("button", { name: "切换到俯视调度" }),
   ).toBeVisible();
   await expect(page.locator(".shot-hud")).toContainText("双人建立镜头");
+});
+
+test("keeps configuration mode active while switching shots", async ({
+  page,
+}, testInfo) => {
+  const requestedWindowModes: boolean[] = [];
+  await page.exposeFunction(
+    "__recordConfigurationWindowMode",
+    (enabled: boolean) => {
+      requestedWindowModes.push(enabled);
+    },
+  );
+  await page.addInitScript(() => {
+    const setupStatus = {
+      firstRun: false,
+      setupCompleted: true,
+      version: "0.22.7",
+      packaged: true,
+      portable: false,
+      runtimeBundled: true,
+      traeDetected: true,
+      traeExecutable: "C:\\Test\\Trae.exe",
+      integrationInstalled: true,
+      integrationRoot: "C:\\Test\\Shot Sandbox\\trae-integration",
+      mcpConnected: true,
+      mcpVersion: "test",
+      expectedMcpVersion: "test",
+      defaultDataReady: true,
+      liveDataReady: false,
+      configDataReady: false,
+      liveResDirectory: "",
+      configDocDirectory: "",
+      liveCsvDirectory: "",
+      configCsvDirectory: "",
+      missionTargetTablePath: "",
+      ueConnected: true,
+      ueMcpHost: "127.0.0.1",
+      ueMcpPort: 12031,
+      ueConnectionMessage: "已连接",
+      updateSupported: false,
+      updatePage: "https://example.com/update",
+    };
+    window.shotSandboxDesktop = {
+      getSetupStatus: async () => setupStatus,
+      getConfigurationWindowMode: async () => false,
+      setConfigurationWindowMode: async (enabled: boolean) => {
+        await (
+          window as typeof window & {
+            __recordConfigurationWindowMode: (
+              value: boolean,
+            ) => Promise<void>;
+          }
+        ).__recordConfigurationWindowMode(enabled);
+        return enabled;
+      },
+    } as unknown as NonNullable<Window["shotSandboxDesktop"]>;
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "进入配置小窗" }).click();
+  await expect.poll(() => requestedWindowModes).toEqual([true]);
+
+  const appShell = page.locator(".app-shell");
+  await expect(appShell).toHaveAttribute("data-configuration-mode", "true");
+  await expect(page.locator(".left-panel")).toBeHidden();
+  await expect(page.locator(".viewport-panel")).toBeHidden();
+  await expect(page.getByRole("tab", { name: "导演" })).toHaveCount(0);
+  await expect(page.getByRole("tab", { name: "镜头" })).toHaveCount(0);
+  await expect(page.getByRole("tab", { name: "音频" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(page.getByRole("tab", { name: "UE" })).toBeVisible();
+
+  await page.getByRole("button", { name: "下一个镜头" }).click();
+  await expect(page.locator(".inspector-header")).toContainText("SHOT 02 / 04");
+  await expect(page.getByRole("tab", { name: "音频" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await page.getByRole("button", { name: "上一个镜头" }).click();
+  await expect(page.locator(".inspector-header")).toContainText("SHOT 01 / 04");
+
+  await page.setViewportSize({ width: 360, height: 720 });
+  await expect(page.locator(".right-panel")).toHaveCSS("width", "360px");
+  await expect(page.locator(".right-panel")).toHaveCSS("height", "720px");
+  await page.waitForTimeout(350);
+  await page.screenshot({
+    path: testInfo.outputPath("configuration-window.png"),
+    fullPage: true,
+  });
+
+  await page.getByRole("button", { name: "返回完整窗口" }).click();
+  await expect.poll(() => requestedWindowModes).toEqual([true, false]);
+  await expect(appShell).toHaveAttribute("data-configuration-mode", "false");
+  await expect(page.getByRole("tab", { name: "导演" })).toBeVisible();
 });
 
 test("shows local content immediately and compares AI blocking before applying it", async ({
@@ -1038,22 +1157,43 @@ test("shows local content immediately and compares AI blocking before applying i
   const providerStatus = page.getByRole("button", {
     name: "协作连接状态",
   });
+  const dataSourceStatus = page.getByRole("button", {
+    name: "数据源状态",
+  });
   await expect(providerStatus).toBeVisible();
   await expect(
     page.getByRole("button", { name: "返修案例状态" }),
-  ).toBeVisible();
+  ).toHaveCount(0);
+  const statusIcons = page.locator(
+    ".app-header__status > div > .workspace-status-icon",
+  );
+  await expect(statusIcons).toHaveCount(2);
+  const [providerBox, dataSourceBox] = await Promise.all([
+    statusIcons.nth(0).boundingBox(),
+    statusIcons.nth(1).boundingBox(),
+  ]);
+  expect(
+    Math.round(
+      (dataSourceBox?.x ?? 0) -
+        (providerBox?.x ?? 0) -
+        (providerBox?.width ?? 0),
+    ),
+  ).toBe(6);
   await providerStatus.hover();
   await expect(page.getByText("内部 TRAE MCP 已连接")).toBeVisible();
-  await page.getByRole("button", { name: "返修案例状态" }).click();
+  await dataSourceStatus.click();
   await expect(page.getByRole("checkbox", { name: /收集返修案例/ }))
     .toBeVisible();
+  await expect(
+    page.getByRole("dialog", { name: "数据源配置" }),
+  ).toContainText("返修案例库已连接");
   await page.screenshot({
     path: testInfo.outputPath("header-status-popover.png"),
     fullPage: true,
   });
   await page.locator(".viewport-toolbar").click();
   await expect(
-    page.getByRole("dialog", { name: "返修案例状态" }),
+    page.getByRole("dialog", { name: "数据源配置" }),
   ).toHaveCount(0);
 
   await expect(page.locator(".section-label--sticky")).toContainText(
@@ -1109,12 +1249,56 @@ test("shows local content immediately and compares AI blocking before applying i
   await expect(page.locator(".sound-effect-list")).toContainText(
     "画外系统警报预告封锁区危险升级。",
   );
+  const audioLibrary = page.locator(".audio-library-browser");
+  await audioLibrary
+    .getByRole("button", { name: /音效资料库/ })
+    .click();
+  await expect(
+    audioLibrary.getByRole("group", { name: "音效分类" }),
+  ).toBeVisible();
+  await expect(
+    audioLibrary.getByRole("list", { name: "特殊音效" }),
+  ).toHaveCount(0);
+  await audioLibrary.getByRole("button", { name: /特殊/ }).click();
+  const soundLibraryList = audioLibrary.getByRole("list", {
+    name: "特殊音效",
+  });
+  await expect(soundLibraryList).toContainText("A_SFX_Dialog_516918");
+  await soundLibraryList
+    .getByRole("button", {
+      name: "试听资料库音效 A_SFX_Dialog_516918",
+    })
+    .click();
+  await expect.poll(() => soundPreviewRequests).toBe(1);
+
+  await audioLibrary
+    .getByRole("button", { name: /音乐资料库/ })
+    .click();
+  await expect(
+    audioLibrary.getByRole("group", { name: "音乐分类" }),
+  ).toBeVisible();
+  await expect(
+    audioLibrary.getByRole("list", { name: "日常轻松音乐" }),
+  ).toHaveCount(0);
+  await audioLibrary.getByRole("button", { name: /日常轻松/ }).click();
+  const musicLibraryList = audioLibrary.getByRole("list", {
+    name: "日常轻松音乐",
+  });
+  await expect(musicLibraryList).toContainText("情绪-真诚");
+  await audioLibrary.screenshot({
+    path: testInfo.outputPath("audio-library-browser.png"),
+  });
+  await musicLibraryList
+    .getByRole("button", { name: "试听资料库音乐 情绪-真诚" })
+    .click();
+  await expect.poll(() => musicPreviewRequests).toBe(1);
+
   const soundPreviewButton = page.getByRole("button", {
     name: "试听音效 A_SFX_Dialog_516918",
   });
   await expect(soundPreviewButton).toBeEnabled();
   await soundPreviewButton.click();
-  await expect.poll(() => soundPreviewRequests).toBe(1);
+  await expect.poll(() => soundPreviewRequests).toBe(2);
   await expect(page.locator(".music-recommendation-list")).toContainText(
     "情绪-真诚",
   );
@@ -1122,7 +1306,7 @@ test("shows local content immediately and compares AI blocking before applying i
     "慢速、低能量、音色偏暗",
   );
   await page.getByRole("button", { name: "试听配乐 情绪-真诚" }).click();
-  await expect.poll(() => musicPreviewRequests).toBe(1);
+  await expect.poll(() => musicPreviewRequests).toBe(2);
   await page.locator(".shot-row").nth(1).click();
   await expect(page.locator(".music-recommendations")).toContainText("沿用中");
   await expect(page.locator(".music-recommendation-list")).toContainText(
@@ -1201,6 +1385,28 @@ test("manages the pending TRAE queue from the status popover", async ({
   ];
   const reorderedRequests: string[][] = [];
   const deletedRequests: string[] = [];
+  const cancelledRequests: string[] = [];
+  let processingTask: {
+    requestId: string;
+    status: "processing";
+    dialogueId: string;
+    outline: string;
+    firstLine: string;
+    dialogueCount: number;
+    participantNames: string[];
+    createdAt: string;
+    updatedAt: string;
+  } | null = {
+    requestId: "processing-c",
+    status: "processing",
+    dialogueId: "3003",
+    outline: "正在生成的剧情",
+    firstLine: "处理中台词",
+    dialogueCount: 5,
+    participantNames: ["玩家", "丙"],
+    createdAt: "2026-08-27T01:02:00.000Z",
+    updatedAt: "2026-08-27T01:03:00.000Z",
+  };
   await page.addInitScript(() => {
     window.sessionStorage.setItem("shot-sandbox.launch-screen-seen", "1");
   });
@@ -1214,8 +1420,8 @@ test("manages the pending TRAE queue from the status popover", async ({
           configured: true,
           connected: true,
           versionMismatch: false,
-          expectedVersion: "0.18.0",
-          serverVersion: "0.18.0",
+          expectedVersion: "0.19.0",
+          serverVersion: "0.19.0",
           transport: "http",
           lastSeenAt: "2026-08-27T01:02:00.000Z",
           mcpName: "internal-storyboard-collaboration",
@@ -1223,11 +1429,16 @@ test("manages the pending TRAE queue from the status popover", async ({
           skillName: "internal-storyboard-director",
           stats: {
             pending: queue.length,
-            processing: 0,
+            processing: processingTask ? 1 : 0,
             completed: 0,
             failed: 0,
+            cancelled: processingTask ? 0 : 1,
           },
           queue,
+          tasks: [
+            ...queue.map((task) => ({ ...task, status: "pending" })),
+            ...(processingTask ? [processingTask] : []),
+          ],
         },
       }),
     });
@@ -1260,6 +1471,24 @@ test("manages the pending TRAE queue from the status popover", async ({
       }),
     });
   });
+  await page.route("**/api/trae/tasks/cancel", async (route) => {
+    const request = route.request().postDataJSON() as {
+      request_id: string;
+    };
+    cancelledRequests.push(request.request_id);
+    processingTask = null;
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          requestId: request.request_id,
+          status: "cancelled",
+        },
+      }),
+    });
+  });
 
   await page.goto("/");
   await page.getByRole("button", { name: "协作连接状态" }).click();
@@ -1269,8 +1498,9 @@ test("manages the pending TRAE queue from the status popover", async ({
     statusDialog.getByRole("button", { name: "关闭状态详情" }),
   ).toHaveCount(0);
   const queueItems = statusDialog.locator(".workspace-status-queue li");
-  await expect(queueItems).toHaveCount(2);
+  await expect(queueItems).toHaveCount(3);
   await expect(queueItems.nth(0)).toContainText("对话 3001");
+  await expect(queueItems.nth(2)).toContainText("处理中");
   await statusDialog.screenshot({
     path: testInfo.outputPath("trae-pending-queue.png"),
   });
@@ -1285,18 +1515,127 @@ test("manages the pending TRAE queue from the status popover", async ({
     .getByRole("button", { name: "删除待处理分镜 3002" })
     .click();
   expect(deletedRequests).toEqual([]);
-  await expect(queueItems).toHaveCount(2);
+  await expect(queueItems).toHaveCount(3);
 
   page.once("dialog", async (dialog) => dialog.accept());
   await statusDialog
     .getByRole("button", { name: "删除待处理分镜 3002" })
     .click();
   await expect.poll(() => deletedRequests).toEqual(["queue-b"]);
-  await expect(queueItems).toHaveCount(1);
+  await expect(queueItems).toHaveCount(2);
   await expect(queueItems.first()).toContainText("对话 3001");
+
+  page.once("dialog", async (dialog) => dialog.accept());
+  await statusDialog
+    .getByRole("button", { name: "中断正在处理分镜 3003" })
+    .click();
+  await expect.poll(() => cancelledRequests).toEqual(["processing-c"]);
+  await expect(queueItems).toHaveCount(1);
 
   await page.locator(".viewport-toolbar").click();
   await expect(statusDialog).toHaveCount(0);
+});
+
+test("interrupts an active TRAE analysis from the storyboard", async ({
+  page,
+}, testInfo) => {
+  let directorRequest: Record<string, unknown> | null = null;
+  let cancelRequest: Record<string, unknown> | null = null;
+  let releaseDirector!: () => void;
+  const directorGate = new Promise<void>((resolve) => {
+    releaseDirector = resolve;
+  });
+  await page.addInitScript(() => {
+    window.sessionStorage.setItem("shot-sandbox.launch-screen-seen", "1");
+  });
+  await page.route("**/api/trae/status", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          configured: true,
+          connected: true,
+          versionMismatch: false,
+          expectedVersion: "0.19.0",
+          serverVersion: "0.19.0",
+          transport: "http",
+          lastSeenAt: "2026-08-29T01:02:00.000Z",
+          mcpName: "internal-storyboard-collaboration",
+          mcpConfigPath: "C:\\workspace\\.trae\\mcp.json",
+          skillName: "internal-storyboard-director",
+          stats: {
+            pending: 0,
+            processing: directorRequest ? 1 : 0,
+            completed: 0,
+            failed: 0,
+            cancelled: cancelRequest ? 1 : 0,
+          },
+          queue: [],
+          tasks: [],
+        },
+      }),
+    });
+  });
+  await page.route("**/api/director/trae", async (route) => {
+    directorRequest = route.request().postDataJSON();
+    await directorGate;
+    await route.fulfill({
+      status: 503,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: false,
+        error: {
+          code: "TRAE_TASK_CANCELLED",
+          message: "用户在镜头沙盘中断了 TRAE 分镜分析",
+        },
+      }),
+    });
+  });
+  await page.route("**/api/trae/tasks/cancel", async (route) => {
+    cancelRequest = route.request().postDataJSON();
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          requestId: cancelRequest?.request_id,
+          status: "cancelled",
+        },
+      }),
+    });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "TRAE 协作" }).click();
+  const cancelButton = page.getByRole("button", { name: "中断分析" });
+  await expect(cancelButton).toBeEnabled();
+  await page.screenshot({
+    path: testInfo.outputPath("trae-active-cancel.png"),
+  });
+
+  page.once("dialog", async (dialog) => {
+    expect(dialog.message()).toContain("当前已显示的占位和分镜会保留");
+    await dialog.accept();
+  });
+  await cancelButton.click();
+
+  await expect.poll(() => cancelRequest).not.toBeNull();
+  expect(cancelRequest).toMatchObject({
+    request_id: directorRequest?.request_id,
+    input: {
+      request_id: directorRequest?.request_id,
+      dialogue_prefix: "2048",
+    },
+  });
+  await expect(page.locator(".director-loading")).toHaveCount(0);
+  await expect(
+    page.getByText("TRAE 分析已中断，当前占位和分镜已保留"),
+  ).toBeVisible();
+  await expect(page.locator(".shot-row")).not.toHaveCount(0);
+  releaseDirector();
 });
 
 test("reuses a cached TRAE plan and forces regeneration on the repeated click", async ({
@@ -1326,8 +1665,8 @@ test("reuses a cached TRAE plan and forces regeneration on the repeated click", 
           configured: true,
           connected: true,
           versionMismatch: false,
-          expectedVersion: "0.18.0",
-          serverVersion: "0.18.0",
+          expectedVersion: "0.19.0",
+          serverVersion: "0.19.0",
           lastSeenAt: "2026-08-26T00:00:00.000Z",
           mcpName: "internal-storyboard-collaboration",
           mcpConfigPath: "C:\\workspace\\.trae\\mcp.json",
@@ -2222,7 +2561,7 @@ test("guides first desktop launch to select live and config directories", async 
   await expect(page.getByLabel("四位数对话 ID 或对白内容")).toHaveValue("");
   await expect(page.getByText("等待对话", { exact: true }).first()).toBeVisible();
   await expect(page.getByRole("heading", { name: "分镜工作台" })).toBeVisible();
-  await expect(page.locator(".app-rail__brand")).toContainText("v0.22.6");
+  await expect(page.locator(".app-rail__brand")).toContainText("v0.22.7");
   await page.screenshot({
     path: testInfo.outputPath("desktop-workspace-ready-collapsed.png"),
   });
@@ -3632,6 +3971,12 @@ test("offers the detected Blueprint formation before designing shots", async ({
   await expect(
     page.getByText("AI 后台生成中，可导出当前方案"),
   ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "重新读取 BP_735000 位置" }),
+  ).toBeEnabled();
+  await expect(
+    page.getByRole("button", { name: "重新读取 BP_735000 位置" }),
+  ).toHaveAttribute("title", /中断 TRAE 并重新读取/);
   const backgroundExportButton = page.getByRole("button", {
     name: "导出到 UE",
   });
@@ -3696,8 +4041,18 @@ test("offers the detected Blueprint formation before designing shots", async ({
     page.locator(".stage-cast__item", { hasText: "玩家" }),
   ).toHaveAttribute("title", /对白角色 · 在场 · BP 0 · 初始朝向 -90°/);
   await expect(
+    page
+      .locator(".stage-cast__item", { hasText: "玩家" })
+      .locator(":scope > span"),
+  ).toHaveText("0");
+  await expect(
     page.locator(".stage-cast__item", { hasText: "西维尔" }),
   ).toHaveAttribute("title", /背景 NPC · 在场 · BP 2 · 初始朝向 -180°/);
+  await expect(
+    page
+      .locator(".stage-cast__item", { hasText: "西维尔" })
+      .locator(":scope > span"),
+  ).toHaveText("2");
   await page.getByRole("tab", { name: "导演" }).click();
   await expect(page.getByText("演员动作", { exact: true })).toBeVisible();
   await expect(page.getByText("右转 45°", { exact: true })).toHaveCount(2);
@@ -3795,15 +4150,36 @@ test("offers the detected Blueprint formation before designing shots", async ({
     path: testInfo.outputPath("character-action-editor.png"),
     fullPage: true,
   });
+  await expect(page.locator(".shot-row.is-invalid")).toHaveCount(1);
+  await expect(page.getByLabel("投影验收未通过")).toBeVisible();
+  await page.getByRole("button", { name: "进入配置小窗" }).click();
+  await expect(page.locator(".app-shell")).toHaveAttribute(
+    "data-configuration-mode",
+    "true",
+  );
+  await expect(page.locator(".left-panel")).toBeHidden();
+  await expect(page.locator(".viewport-panel")).toBeHidden();
+  await expect(page.getByRole("tab", { name: "导演" })).toHaveCount(0);
+  await expect(page.getByRole("tab", { name: "镜头" })).toHaveCount(0);
+  await expect(page.getByRole("tab", { name: "音频" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "UE" })).toBeVisible();
+  await page.getByRole("tab", { name: "音频" }).click();
+  await page.getByRole("tab", { name: "UE" }).click();
+  await expect(
+    guardActions.locator(".character-action-row").first().getByRole("combobox"),
+  ).toHaveValue("AM_Wave");
   await page.getByRole("tab", { name: "音频" }).click();
   await expect(page.locator(".music-recommendation-list")).toContainText(
     "情绪-危机爆发",
   );
-  await expect(page.locator(".shot-row.is-invalid")).toHaveCount(1);
-  await expect(page.getByLabel("投影验收未通过")).toBeVisible();
   const exportButton = page.getByRole("button", { name: "导出到 UE" });
   await expect(exportButton).toBeEnabled();
   await exportButton.click();
+  await expect(page.locator(".app-shell")).toHaveAttribute(
+    "data-configuration-mode",
+    "false",
+  );
+  await expect(page.getByRole("tab", { name: "导演" })).toBeVisible();
   const exportDialog = page.getByRole("dialog");
   await expect(exportDialog).toBeVisible();
   await expect(

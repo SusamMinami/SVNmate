@@ -31,7 +31,7 @@ export class TraeDirectorProvider implements ShotDirectorProvider {
 
   async design(
     input: DirectorInput,
-    options: { forceRegenerate?: boolean } = {},
+    options: { forceRegenerate?: boolean; signal?: AbortSignal } = {},
   ): Promise<DirectorProviderResult> {
     let response: Response;
     try {
@@ -43,9 +43,13 @@ export class TraeDirectorProvider implements ShotDirectorProvider {
             "Content-Type": "application/json",
           },
           body: JSON.stringify(input),
+          signal: options.signal,
         },
       );
-    } catch {
+    } catch (error) {
+      if (options.signal?.aborted) {
+        throw error;
+      }
       throw new Error("无法连接内部 TRAE 协作服务");
     }
 

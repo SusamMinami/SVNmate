@@ -15,11 +15,14 @@ import {
   STORYBOARD_MCP_VERSION,
 } from "../server/storyboardMcpHeartbeat";
 import {
+  cancelStoryboardTask,
   claimPendingStoryboardTask,
   completeStoryboardTask,
+  expireAbandonedProcessingTasks,
   failStoryboardTask,
   getStoryboardTask,
   recordStoryboardProjectionRevision,
+  renewStoryboardTaskLease,
 } from "../server/storyboardTaskStore";
 import {
   findRelevantStoryboardCases,
@@ -61,6 +64,54 @@ export function createStoryboardMcpServer(): McpServer {
     };
   },
 );
+
+  server.registerTool(
+    "storyboard_heartbeat_request",
+    {
+      description:
+        "续期正在处理的分镜任务。长时间分析时应定期调用；若任务已取消，返回 continue=false 并立即停止处理。",
+      inputSchema: {
+        request_id: z.string().min(1),
+      },
+    },
+    async ({ request_id }) => {
+      const task = await renewStoryboardTaskLease(request_id);
+      const result = {
+        request_id: task.requestId,
+        status: task.status,
+        continue: task.status === "processing",
+        error: task.error || "",
+      };
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        structuredContent: result,
+      };
+    },
+  );
+
+  server.registerTool(
+    "storyboard_cancel_request",
+    {
+      description:
+        "中断当前已领取或尚未领取的分镜任务，并同步通知镜头沙盘停止等待。",
+      inputSchema: {
+        request_id: z.string().min(1),
+        reason: z.string().min(1).max(1_000).optional(),
+      },
+    },
+    async ({ request_id, reason }) => {
+      const task = await cancelStoryboardTask(request_id, reason);
+      const result = {
+        accepted: true,
+        request_id: task.requestId,
+        status: task.status,
+      };
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        structuredContent: result,
+      };
+    },
+  );
 
   server.registerTool(
   "storyboard_submit_plan",
@@ -238,6 +289,10 @@ export function createStoryboardMcpServer(): McpServer {
     },
   },
   async ({ request_id }) => {
+    const currentTask = await getStoryboardTask(request_id);
+    if (currentTask) {
+      await expireAbandonedProcessingTasks([currentTask]);
+    }
     const task = await getStoryboardTask(request_id);
     const result = task
       ? {

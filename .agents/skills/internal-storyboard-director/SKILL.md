@@ -32,24 +32,29 @@ description: "Designs UE4 dialogue storyboards through the local storyboard MCP 
    - `adjacent_context.previous/next`：当前四位 ID 前一段和后一段对话
    - `sound_effect_catalog`：允许推荐的现有音效资产、分类和用途描述
    - `constraints.supported_templates`：允许的镜头模板
-4. 分析戏剧目标、情绪推进、关系变化、信息揭示和视觉节奏。
-5. 根据角色关系、权力状态和当前事件设计语义站位。
-6. 生成满足下述要求的 `shot-plan.v5`。
-7. 调用 `storyboard_submit_plan` 提交结果。
-8. 如果 MCP 返回 `accepted=false`、`retry_required=true`，逐项读取
+4. 调用 `storyboard_heartbeat_request` 续期刚领取的任务。若返回
+   `continue=false`，说明任务已由镜头沙盘取消，立即停止且不得提交结果；
+   长任务在分析和返修阶段至少每 60 秒续期一次。
+5. 分析戏剧目标、情绪推进、关系变化、信息揭示和视觉节奏。
+6. 根据角色关系、权力状态和当前事件设计语义站位。
+7. 生成满足下述要求的 `shot-plan.v5`。形成方案后再次调用
+   `storyboard_heartbeat_request`；若用户在 TRAE 中要求中断，则调用
+   `storyboard_cancel_request`，不得让任务继续停留在处理中。
+8. 调用 `storyboard_submit_plan` 提交结果。
+9. 如果 MCP 返回 `accepted=false`、`retry_required=true`，逐项读取
    `failed_shots` 的台词节点、上一版决策与投影验收原因，并参考
    `reference_cases` 中已人工审核通过的相似经验。历史案例只用于判断修改
    方向，不得照抄与当前人物站位或叙事目标冲突的参数。保留未列出的镜头，
    只重新设计失败镜头，在顶层 `revision_reflections` 为每个失败镜头填写
    一条简短的事后总结，然后再次提交完整方案，并在
    `storyboard_submit_plan` 参数中传入返回的 `revision_attempt: 1`。
-9. 每个任务最多执行一次投影返修。第二次提交即使仍有
+10. 每个任务最多执行一次投影返修。第二次提交即使仍有
    `remaining_failed_shots` 也以 MCP 返回状态为准，不得无限重试。
-10. 只有 MCP 返回 `accepted=true` 才计为完成；随后再次调用
+11. 只有 MCP 返回 `accepted=true` 才计为完成；随后再次调用
    `storyboard_get_pending_request`，继续处理下一项。
-11. 单次最多连续处理 5 项，或在 `found=false` 时停止，并汇总实际完成的
+12. 单次最多连续处理 5 项，或在 `found=false` 时停止，并汇总实际完成的
    `request_id`。若队列仍有任务，明确提示用户再次触发。
-12. 若无法完成，调用 `storyboard_fail_request` 写入明确原因。
+13. 若无法完成，调用 `storyboard_fail_request` 写入明确原因。
 
 ## 分镜要求
 

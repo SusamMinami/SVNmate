@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   mkdir,
   open,
@@ -24,7 +24,8 @@ export type StoryboardTaskStatus =
   | "pending"
   | "processing"
   | "completed"
-  | "failed";
+  | "failed"
+  | "cancelled";
 
 export interface StoryboardTask {
   requestId: string;
@@ -32,6 +33,8 @@ export interface StoryboardTask {
   createdAt: string;
   updatedAt: string;
   claimedAt?: string;
+  leaseUpdatedAt?: string;
+  cancelledAt?: string;
   cacheKey?: string;
   cacheSourceRequestId?: string;
   cachePropagationDisabled?: boolean;
@@ -46,15 +49,17 @@ export interface StoryboardTask {
 
 export interface StoryboardQueueItem {
   requestId: string;
+  status: "pending" | "processing";
   dialogueId: string;
   outline: string;
   firstLine: string;
   dialogueCount: number;
   participantNames: string[];
   createdAt: string;
+  updatedAt: string;
 }
 
-const PROCESSING_LEASE_MS = 20 * 60_000;
+const PROCESSING_LEASE_MS = 5 * 60_000;
 const TASK_LOCK_TIMEOUT_MS = 5_000;
 const TASK_LOCK_STALE_MS = 30_000;
 const QUEUE_LOCK_NAME = ".queue.lock";
@@ -122,7 +127,7 @@ export function storyboardInputCacheKey(input: DirectorInput): string {
 async function writeTask(task: StoryboardTask): Promise<void> {
   await mkdir(taskDirectory(), { recursive: true });
   const destination = taskPath(task.requestId);
-  const temporary = `${destination}.${process.pid}.tmp`;
+  const temporary = `${destination}.${process.pid}.${randomUUID()}.tmp`;
   await writeFile(temporary, JSON.stringify(task, null, 2), "utf8");
   await rename(temporary, destination);
 }
@@ -236,6 +241,7 @@ function compareQueueOrder(
 function queueItem(task: StoryboardTask): StoryboardQueueItem {
   return {
     requestId: task.requestId,
+    status: task.status === "processing" ? "processing" : "pending",
     dialogueId: task.input.dialogue_prefix,
     outline: task.input.outline,
     firstLine: task.input.dialogue[0]?.content ?? "",
@@ -244,6 +250,7 @@ function queueItem(task: StoryboardTask): StoryboardQueueItem {
       (participant) => participant.name,
     ),
     createdAt: task.createdAt,
+    updatedAt: task.leaseUpdatedAt ?? task.updatedAt,
   };
 }
 
@@ -280,13 +287,29 @@ async function completeMatchingActiveTasks(
           taskCacheKey(task) === cacheKey,
       )
       .map(async (task) => {
-        task.status = "completed";
-        task.updatedAt = timestamp;
-        task.cacheKey = cacheKey;
-        task.cacheSourceRequestId = source.requestId;
-        task.result = resultForRequest(source.result!, task.requestId);
-        task.error = undefined;
-        await writeTask(task);
+        await withTaskLock(task.requestId, async () => {
+          const current = await getStoryboardTask(task.requestId);
+          if (
+            !current ||
+            (current.status !== "pending" &&
+              current.status !== "processing") ||
+            current.cachePropagationDisabled ||
+            taskCacheKey(current) !== cacheKey
+          ) {
+            return;
+          }
+          current.status = "completed";
+          current.updatedAt = timestamp;
+          current.leaseUpdatedAt = undefined;
+          current.cacheKey = cacheKey;
+          current.cacheSourceRequestId = source.requestId;
+          current.result = resultForRequest(
+            source.result!,
+            current.requestId,
+          );
+          current.error = undefined;
+          await writeTask(current);
+        });
       }),
   );
 }
@@ -366,31 +389,44 @@ export async function createStoryboardTask(
   return task;
 }
 
-function processingLeaseExpired(task: StoryboardTask): boolean {
+function processingLeaseExpired(
+  task: StoryboardTask,
+  leaseMs = PROCESSING_LEASE_MS,
+  now = Date.now(),
+): boolean {
   if (task.status !== "processing" || !task.claimedAt) {
     return false;
   }
-  return Date.now() - Date.parse(task.claimedAt) > PROCESSING_LEASE_MS;
+  return (
+    now - Date.parse(task.leaseUpdatedAt || task.claimedAt) > leaseMs
+  );
 }
 
 export async function claimPendingStoryboardTask(): Promise<StoryboardTask | null> {
+  await expireAbandonedProcessingTasks(await readAllTasks());
   return withQueueLock(async () => {
     const tasks = (await readAllTasks())
-      .filter(
-        (task) => task.status === "pending" || processingLeaseExpired(task),
-      )
+      .filter((task) => task.status === "pending")
       .sort(compareQueueOrder);
     const task = tasks[0];
     if (!task) {
       return null;
     }
-    const timestamp = new Date().toISOString();
-    task.status = "processing";
-    task.claimedAt = timestamp;
-    task.updatedAt = timestamp;
-    task.error = undefined;
-    await writeTask(task);
-    return task;
+    return withTaskLock(task.requestId, async () => {
+      const current = await getStoryboardTask(task.requestId);
+      if (!current || current.status !== "pending") {
+        return null;
+      }
+      const timestamp = new Date().toISOString();
+      current.status = "processing";
+      current.claimedAt = timestamp;
+      current.leaseUpdatedAt = timestamp;
+      current.updatedAt = timestamp;
+      current.cancelledAt = undefined;
+      current.error = undefined;
+      await writeTask(current);
+      return current;
+    });
   });
 }
 
@@ -398,9 +434,16 @@ export async function completeStoryboardTask(
   requestId: string,
   rawResult: unknown,
 ): Promise<StoryboardTask> {
+  return withTaskLock(requestId, async () => {
   const task = await getStoryboardTask(requestId);
   if (!task) {
     throw new Error(`未找到分镜任务 ${requestId}`);
+  }
+  if (task.status === "cancelled") {
+    throw new Error(task.error || "分镜任务已取消");
+  }
+  if (task.status === "failed") {
+    throw new Error(task.error || "分镜任务已失败");
   }
   const result = MiraDirectorResponseSchema.parse(rawResult);
   if (result.request_id !== requestId) {
@@ -761,6 +804,7 @@ export async function completeStoryboardTask(
   task.result = result;
   task.status = "completed";
   task.updatedAt = new Date().toISOString();
+  task.leaseUpdatedAt = undefined;
   task.cacheKey = taskCacheKey(task);
   task.error = undefined;
   await writeTask(task);
@@ -770,6 +814,7 @@ export async function completeStoryboardTask(
     task,
   );
   return task;
+  });
 }
 
 export async function recordStoryboardProjectionRevision(
@@ -797,24 +842,157 @@ export async function failStoryboardTask(
   requestId: string,
   errorMessage: string,
 ): Promise<StoryboardTask> {
-  const task = await getStoryboardTask(requestId);
-  if (!task) {
-    throw new Error(`未找到分镜任务 ${requestId}`);
-  }
-  task.status = "failed";
-  task.error = errorMessage.slice(0, 1_000);
-  task.updatedAt = new Date().toISOString();
+  return withTaskLock(requestId, async () => {
+    const task = await getStoryboardTask(requestId);
+    if (!task) {
+      throw new Error(`未找到分镜任务 ${requestId}`);
+    }
+    if (task.status === "cancelled") {
+      return task;
+    }
+    task.status = "failed";
+    task.error = errorMessage.slice(0, 1_000);
+    task.updatedAt = new Date().toISOString();
+    task.leaseUpdatedAt = undefined;
+    await writeTask(task);
+    return task;
+  });
+}
+
+export async function renewStoryboardTaskLease(
+  requestId: string,
+): Promise<StoryboardTask> {
+  return withTaskLock(requestId, async () => {
+    const task = await getStoryboardTask(requestId);
+    if (!task) {
+      throw new Error(`未找到分镜任务 ${requestId}`);
+    }
+    if (processingLeaseExpired(task)) {
+      return markStoryboardTaskCancelled(
+        task,
+        "TRAE 处理心跳已中断，任务已自动结束",
+      );
+    }
+    if (task.status !== "processing") {
+      return task;
+    }
+    const timestamp = new Date().toISOString();
+    task.leaseUpdatedAt = timestamp;
+    task.updatedAt = timestamp;
+    await writeTask(task);
+    return task;
+  });
+}
+
+async function markStoryboardTaskCancelled(
+  task: StoryboardTask,
+  reason: string,
+): Promise<StoryboardTask> {
+  const timestamp = new Date().toISOString();
+  task.status = "cancelled";
+  task.cancelledAt = timestamp;
+  task.updatedAt = timestamp;
+  task.leaseUpdatedAt = undefined;
+  task.error = reason.slice(0, 1_000);
   await writeTask(task);
   return task;
+}
+
+export async function cancelStoryboardTask(
+  requestId: string,
+  reason = "用户中断了 TRAE 分镜分析",
+): Promise<StoryboardTask> {
+  safeRequestId(requestId);
+  return withQueueLock(() =>
+    withTaskLock(requestId, async () => {
+      const task = await getStoryboardTask(requestId);
+      if (!task) {
+        throw new Error(`未找到分镜任务 ${requestId}`);
+      }
+      if (task.status === "completed") {
+        throw new Error("任务已完成，不能中断");
+      }
+      if (task.status === "failed" || task.status === "cancelled") {
+        return task;
+      }
+      return markStoryboardTaskCancelled(task, reason);
+    }),
+  );
+}
+
+export async function cancelStoryboardTaskForInput(
+  requestId: string,
+  rawInput?: unknown,
+  reason = "用户中断了 TRAE 分镜分析",
+): Promise<StoryboardTask> {
+  const exactTask = await getStoryboardTask(requestId);
+  if (
+    exactTask &&
+    (exactTask.status === "pending" || exactTask.status === "processing")
+  ) {
+    return cancelStoryboardTask(exactTask.requestId, reason);
+  }
+  if (rawInput === undefined) {
+    throw new Error(`未找到可中断的分镜任务 ${requestId}`);
+  }
+  const input = DirectorInputSchema.parse(rawInput) as DirectorInput;
+  const cacheKey = storyboardInputCacheKey(input);
+  const activeTask = (await readAllTasks())
+    .filter(
+      (task) =>
+        (task.status === "pending" || task.status === "processing") &&
+        taskCacheKey(task) === cacheKey,
+    )
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
+  if (!activeTask) {
+    throw new Error(`未找到可中断的分镜任务 ${requestId}`);
+  }
+  return cancelStoryboardTask(activeTask.requestId, reason);
+}
+
+export async function expireAbandonedProcessingTasks(
+  tasks: StoryboardTask[],
+  leaseMs = PROCESSING_LEASE_MS,
+  now = Date.now(),
+): Promise<void> {
+  const expired = tasks.filter((task) =>
+    processingLeaseExpired(task, leaseMs, now),
+  );
+  await Promise.all(
+    expired.map((task) =>
+      withTaskLock(task.requestId, async () => {
+        const current = await getStoryboardTask(task.requestId);
+        if (!current || !processingLeaseExpired(current, leaseMs, now)) {
+          return;
+        }
+        await markStoryboardTaskCancelled(
+          current,
+          "TRAE 处理心跳已中断，任务已自动结束",
+        );
+      }),
+    ),
+  );
+}
+
+export async function listActiveStoryboardTasks(): Promise<
+  StoryboardQueueItem[]
+> {
+  const tasks = await readAllTasks();
+  await expireAbandonedProcessingTasks(tasks);
+  return (await readAllTasks())
+    .filter(
+      (task) => task.status === "pending" || task.status === "processing",
+    )
+    .sort(compareQueueOrder)
+    .map(queueItem);
 }
 
 export async function listPendingStoryboardTasks(): Promise<
   StoryboardQueueItem[]
 > {
-  return (await readAllTasks())
-    .filter((task) => task.status === "pending")
-    .sort(compareQueueOrder)
-    .map(queueItem);
+  return (await listActiveStoryboardTasks()).filter(
+    (task) => task.status === "pending",
+  );
 }
 
 export async function reorderPendingStoryboardTasks(
@@ -870,16 +1048,18 @@ export async function storyboardTaskStats(): Promise<{
   processing: number;
   completed: number;
   failed: number;
+  cancelled: number;
 }> {
-  await mkdir(taskDirectory(), { recursive: true });
-  const stats = { pending: 0, processing: 0, completed: 0, failed: 0 };
-  for (const filename of await readdir(taskDirectory())) {
-    if (!filename.endsWith(".json")) {
-      continue;
-    }
-    const task = JSON.parse(
-      await readFile(join(taskDirectory(), filename), "utf8"),
-    ) as StoryboardTask;
+  const tasks = await readAllTasks();
+  await expireAbandonedProcessingTasks(tasks);
+  const stats = {
+    pending: 0,
+    processing: 0,
+    completed: 0,
+    failed: 0,
+    cancelled: 0,
+  };
+  for (const task of await readAllTasks()) {
     stats[task.status] += 1;
   }
   return stats;

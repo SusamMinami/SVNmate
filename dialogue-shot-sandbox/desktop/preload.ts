@@ -10,6 +10,10 @@ contextBridge.exposeInMainWorld("shotSandboxDesktop", {
     ipcRenderer.invoke("desktop:open-trae-download"),
   setUeMcpPort: (port: number) =>
     ipcRenderer.invoke("desktop:set-ue-port", port),
+  getConfigurationWindowMode: () =>
+    ipcRenderer.invoke("desktop:get-configuration-window-mode"),
+  setConfigurationWindowMode: (enabled: boolean) =>
+    ipcRenderer.invoke("desktop:set-configuration-window-mode", enabled),
   getPathForFile: (file: File) => webUtils.getPathForFile(file),
   chooseDataDirectory: (kind: "live" | "config") =>
     ipcRenderer.invoke("desktop:choose-data-directory", kind),

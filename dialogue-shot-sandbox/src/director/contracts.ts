@@ -599,7 +599,7 @@ export interface ShotDirectorProvider {
   readonly id: DirectorMode;
   design(
     input: DirectorInput,
-    options?: { forceRegenerate?: boolean },
+    options?: { forceRegenerate?: boolean; signal?: AbortSignal },
   ): Promise<DirectorProviderResult>;
 }
 
