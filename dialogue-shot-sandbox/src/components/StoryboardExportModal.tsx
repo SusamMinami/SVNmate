@@ -81,6 +81,8 @@ export function StoryboardExportModal({
     music: true,
   });
   const previousModeRef = useRef(mode);
+  const reviewed = Boolean(preview.reviewToken);
+  const previousReviewedRef = useRef(reviewed);
   const [confirmed, setConfirmed] = useState(false);
   const [selectedShotIndexes, setSelectedShotIndexes] = useState<number[]>(
     () => Array.from({ length: preview.shotCount }, (_, index) => index),
@@ -190,7 +192,11 @@ export function StoryboardExportModal({
 
   useEffect(() => {
     const modeChanged = previousModeRef.current !== mode;
+    const reviewCompleted =
+      !previousReviewedRef.current && Boolean(preview.reviewToken);
     previousModeRef.current = mode;
+    previousReviewedRef.current = Boolean(preview.reviewToken);
+    const resetSelection = modeChanged || reviewCompleted;
     const availableShots = new Set(
       Array.from({ length: preview.shotCount }, (_, index) => index),
     );
@@ -204,26 +210,26 @@ export function StoryboardExportModal({
       previewMusic.map((item) => item.musicIndex),
     );
     setSelectedShotIndexes((current) =>
-      modeChanged
+      resetSelection
         ? [...availableShots]
         : current.filter((index) => availableShots.has(index)),
     );
     setSelectedCharacterActionIndexes((current) =>
-      modeChanged
+      resetSelection
         ? [...availableCharacterActions]
         : current.filter((index) => availableCharacterActions.has(index)),
     );
     setSelectedSoundEffectIndexes((current) =>
-      modeChanged
+      resetSelection
         ? [...availableSoundEffects]
         : current.filter((index) => availableSoundEffects.has(index)),
     );
     setSelectedMusicIndexes((current) =>
-      modeChanged
+      resetSelection
         ? [...availableMusic]
         : current.filter((index) => availableMusic.has(index)),
     );
-    if (modeChanged) {
+    if (resetSelection) {
       setExpandedSections({
         shots: true,
         characterActions: true,
@@ -334,7 +340,9 @@ export function StoryboardExportModal({
               <Upload size={18} />
             </span>
             <div>
-              <small>UE Dialog Graph 写入预检</small>
+              <small>
+                {reviewed ? "UE Dialog Graph 写入预检" : "本地待导出清单"}
+              </small>
               <h2 id="storyboard-export-title">
                 {mode === "sound"
                   ? `写入当前分镜音效 ${String(currentShotNumber).padStart(2, "0")}`
@@ -392,7 +400,7 @@ export function StoryboardExportModal({
               </dd>
             </div>
             <div>
-              <dt>变更节点</dt>
+              <dt>{reviewed ? "变更节点" : "计划节点"}</dt>
               <dd>{changedNodes.length}</dd>
             </div>
             <div>
@@ -415,11 +423,17 @@ export function StoryboardExportModal({
             </div>
             <div>
               <dt>启用相机</dt>
-              <dd>{preview.cameraName || "不写相机"}</dd>
+              <dd>
+                {reviewed
+                  ? preview.cameraName || "不写相机"
+                  : preview.shotCount > 0
+                    ? "待检查"
+                    : "不写相机"}
+              </dd>
             </div>
           </dl>
           <code title={preview.dialogueAssetPath}>
-            {preview.dialogueAssetPath}
+            {reviewed ? preview.dialogueAssetPath : "尚未连接 UE"}
           </code>
         </section>
 
@@ -574,16 +588,28 @@ export function StoryboardExportModal({
                       {node.role === "shot_start" ? "镜头起点" : "镜头延续"}
                     </td>
                     <td>
-                      <code>{node.existingCameraPosition || "空"}</code>
-                      <small>{node.existingMovementCount} 段运镜</small>
+                      <code>
+                        {reviewed
+                          ? node.existingCameraPosition || "空"
+                          : "待检查"}
+                      </code>
+                      {reviewed && (
+                        <small>{node.existingMovementCount} 段运镜</small>
+                      )}
                     </td>
                     <td>
                       <code>{node.desiredCameraPosition || "空"}</code>
                       <small>{node.desiredMovementCount} 段运镜</small>
                     </td>
                     <td>
-                      <span className={`export-action export-action--${node.action}`}>
-                        {ACTION_LABELS[node.action]}
+                      <span
+                        className={`export-action ${
+                          reviewed
+                            ? `export-action--${node.action}`
+                            : "export-action--pending"
+                        }`}
+                      >
+                        {reviewed ? ACTION_LABELS[node.action] : "待检查"}
                       </span>
                     </td>
                   </tr>
@@ -633,7 +659,7 @@ export function StoryboardExportModal({
                         />
                       </th>
                       <th>台词节点</th>
-                      <th>角色槽</th>
+                      <th>角色</th>
                       <th>当前动作</th>
                       <th>导出后</th>
                       <th className="storyboard-export-table__action">处理</th>
@@ -665,10 +691,17 @@ export function StoryboardExportModal({
                         />
                       </td>
                       <td><code>{item.dialogueId}</code></td>
-                      <td><code>BP {item.modelIndex}</code></td>
+                      <td>
+                        <strong>
+                          {item.characterLabel || `槽位 ${item.modelIndex}`}
+                        </strong>
+                        <small>BP {item.modelIndex}</small>
+                      </td>
                       <td>
                         <code>
-                          {item.existingActions.length > 0
+                          {!reviewed
+                            ? "待检查"
+                            : item.existingActions.length > 0
                             ? item.existingActions
                                 .map(
                                   (action) =>
@@ -697,9 +730,15 @@ export function StoryboardExportModal({
                       </td>
                       <td>
                         <span
-                          className={`export-action export-action--${item.action}`}
+                          className={`export-action ${
+                            reviewed
+                              ? `export-action--${item.action}`
+                              : "export-action--pending"
+                          }`}
                         >
-                          {CHARACTER_ACTION_LABELS[item.action]}
+                          {reviewed
+                            ? CHARACTER_ACTION_LABELS[item.action]
+                            : "待检查"}
                         </span>
                       </td>
                       </tr>
@@ -750,6 +789,7 @@ export function StoryboardExportModal({
                         台词节点
                       </th>
                       <th>推荐资产</th>
+                      <th>延迟</th>
                       <th>当前音效</th>
                       <th className="storyboard-export-table__action">处理</th>
                     </tr>
@@ -786,18 +826,37 @@ export function StoryboardExportModal({
                         <code>{soundEffect.assetName}</code>
                       </td>
                       <td>
+                        <code>{soundEffect.delaySeconds.toFixed(1)}s</code>
+                        {reviewed &&
+                          (soundEffect.existingDelaySeconds ?? 0) !==
+                          soundEffect.delaySeconds && (
+                          <small>
+                            当前{" "}
+                            {(soundEffect.existingDelaySeconds ?? 0).toFixed(1)}s
+                          </small>
+                        )}
+                      </td>
+                      <td>
                         <code>
-                          {soundEffect.existingAssetPath
-                            .split(/[./]/)
-                            .filter(Boolean)
-                            .at(-1) || "空"}
+                          {reviewed
+                            ? soundEffect.existingAssetPath
+                                .split(/[./]/)
+                                .filter(Boolean)
+                                .at(-1) || "空"
+                            : "待检查"}
                         </code>
                       </td>
                       <td>
                         <span
-                          className={`export-action export-action--${soundEffect.action}`}
+                          className={`export-action ${
+                            reviewed
+                              ? `export-action--${soundEffect.action}`
+                              : "export-action--pending"
+                          }`}
                         >
-                          {SOUND_EFFECT_ACTION_LABELS[soundEffect.action]}
+                          {reviewed
+                            ? SOUND_EFFECT_ACTION_LABELS[soundEffect.action]
+                            : "待检查"}
                         </span>
                       </td>
                       </tr>
@@ -873,16 +932,24 @@ export function StoryboardExportModal({
                         </td>
                         <td>{item.musicName}</td>
                         <td>
-                          <code>{item.existingStateId}</code>
+                          <code>
+                            {reviewed ? item.existingStateId : "待检查"}
+                          </code>
                         </td>
                         <td>
                           <code>{item.stateName}</code>
                         </td>
                         <td>
                           <span
-                            className={`export-action export-action--${item.action}`}
+                            className={`export-action ${
+                              reviewed
+                                ? `export-action--${item.action}`
+                                : "export-action--pending"
+                            }`}
                           >
-                            {SOUND_EFFECT_ACTION_LABELS[item.action]}
+                            {reviewed
+                              ? SOUND_EFFECT_ACTION_LABELS[item.action]
+                              : "待检查"}
                           </span>
                         </td>
                       </tr>
@@ -895,25 +962,29 @@ export function StoryboardExportModal({
         </div>
 
         <footer>
-          <label className="storyboard-export-confirm">
-            <input
-              type="checkbox"
-              checked={confirmed}
-              disabled={
-                busy ||
-                blocked ||
-                !hasSelection ||
-                Boolean(result)
-              }
-              onChange={(event) => setConfirmed(event.target.checked)}
-            />
-            <span>
-              已核对 {changedNodes.length} 个镜头节点、{" "}
-              {changedCharacterActions.length} 组角色动作、{" "}
-              {changedSoundEffects.length} 个音效和 {changedMusic.length} 首音乐，
-              并确认写入后保存 UE 对话资产
-            </span>
-          </label>
+          {reviewed ? (
+            <label className="storyboard-export-confirm">
+              <input
+                type="checkbox"
+                checked={confirmed}
+                disabled={
+                  busy ||
+                  blocked ||
+                  !hasSelection ||
+                  Boolean(result)
+                }
+                onChange={(event) => setConfirmed(event.target.checked)}
+              />
+              <span>
+                已核对 {changedNodes.length} 个镜头节点、{" "}
+                {changedCharacterActions.length} 组角色动作、{" "}
+                {changedSoundEffects.length} 个音效和 {changedMusic.length} 首音乐，
+                并确认写入后保存 UE 对话资产
+              </span>
+            </label>
+          ) : (
+            <span />
+          )}
           <div>
             <button
               className="button"
@@ -928,9 +999,8 @@ export function StoryboardExportModal({
               type="button"
               disabled={
                 busy ||
-                blocked ||
                 !hasSelection ||
-                !confirmed ||
+                (reviewed && (blocked || !confirmed)) ||
                 Boolean(result)
               }
               onClick={() =>
@@ -947,7 +1017,11 @@ export function StoryboardExportModal({
               ) : (
                 <Upload size={16} />
               )}
-              {busy ? busyLabel || "处理中" : "确认写入并保存"}
+              {busy
+                ? busyLabel || "处理中"
+                : reviewed
+                  ? "确认写入并保存"
+                  : "检查所选内容"}
             </button>
           </div>
         </footer>

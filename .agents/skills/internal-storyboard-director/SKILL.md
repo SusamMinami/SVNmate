@@ -32,6 +32,9 @@ description: "Designs UE4 dialogue storyboards through the local storyboard MCP 
    - `adjacent_context.previous/next`：当前四位 ID 前一段和后一段对话
    - `sound_effect_catalog`：允许推荐的现有音效资产、分类和用途描述
    - `constraints.supported_templates`：允许的镜头模板
+   - `constraints.preserve_input_formation`：是否以 BP 站位为基础
+   - `constraints.lock_player_position`：使用 BP 站位时是否固定
+     `model_index=0` 的 0 号玩家位置
 4. 调用 `storyboard_heartbeat_request` 续期刚领取的任务。若返回
    `continue=false`，说明任务已由镜头沙盘取消，立即停止且不得提交结果；
    长任务在分析和返修阶段至少每 60 秒续期一次。
@@ -101,8 +104,11 @@ description: "Designs UE4 dialogue storyboards through the local storyboard MCP 
 - 预判每个镜头中的人物投影，避免重要角色互相遮挡或堆叠。
 - 普通对话的单人镜头优先呈现主体正面或四分之三正面；侧面角度只用于
   明确的对峙、疏离、隐藏或观察意图。
-- 使用 BP 站位时不得假设角色天然朝向 `look_target`。先根据
-  `initial_yaw_degrees` 判断真实朝向；需要改变视线时，只允许使用
+- 使用 BP 站位时，`lock_player_position=true` 表示包括 0 号玩家在内的
+  全部角色位置固定；`lock_player_position=false` 表示仅允许
+  `model_index=0` 的 0 号玩家根据剧情与构图需要调整 `blocking.position`，
+  其他 BP 角色仍须保持原位。不得假设固定角色天然朝向 `look_target`。
+  先根据 `initial_yaw_degrees` 判断真实朝向；需要改变视线时，只允许使用
   `constraints.supported_actor_turn_degrees` 中的左右 45°、90°、180°
   离散转身。`can_turn=false` 的角色不得规划转身，应调整机位或构图。
 - 转身属于演员动作和镜头连续性的一部分，应在角色开始交流或视觉焦点变化的

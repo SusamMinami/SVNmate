@@ -554,6 +554,7 @@ describe("dialogue storyboard export", () => {
       {
         dialogueId: "735201",
         modelIndex: 0,
+        characterLabel: "玩家",
         actions: [
           { montageName: "AM_TurnRight45", delaySeconds: 0.2 },
           { montageName: "AM_Talk", delaySeconds: 0.6 },
@@ -569,6 +570,7 @@ describe("dialogue storyboard export", () => {
       expect.objectContaining({
         dialogueId: "735201",
         modelIndex: 0,
+        characterLabel: "玩家",
         existingActions: [
           expect.objectContaining({
             montageName: "AM_Walk",
@@ -630,6 +632,56 @@ describe("dialogue storyboard export", () => {
         ],
       }),
     ]);
+  });
+
+  it("limits an action-only preview to the requested actor and properties", async () => {
+    const connection = new FakeStoryboardExportConnection();
+    const request = exportRequest();
+    request.dialogueIds = [];
+    request.shots = [];
+    request.participantModelIndexes = [1];
+    request.characterActions = [
+      {
+        dialogueId: "735201",
+        modelIndex: 1,
+        actions: [{ montageName: "AM_Wave", delaySeconds: 0.2 }],
+      },
+    ];
+
+    const preview = await inspectDialogueStoryboardExport(
+      request,
+      () => connection,
+    );
+
+    expect(preview.characterActions).toEqual([
+      expect.objectContaining({
+        dialogueId: "735201",
+        modelIndex: 1,
+        characterLabel: "BP_Npc",
+      }),
+    ]);
+    expect(
+      connection.calls.some(
+        (call) =>
+          call.action === "reflect.read_object_property" &&
+          call.args.PropertyName === "RelativeLocation",
+      ),
+    ).toBe(false);
+    expect(
+      connection.calls.some(
+        (call) =>
+          call.action === "reflect.read_object_property" &&
+          call.args.PropertyName === "MoveCameras",
+      ),
+    ).toBe(false);
+    expect(
+      connection.calls.some(
+        (call) =>
+          call.action === "reflect.read_object_property" &&
+          call.args.ThisPtr === "SCS_Node_0" &&
+          call.args.PropertyName === "ComponentClass",
+      ),
+    ).toBe(false);
   });
 
   it("preserves existing items when appending editable actions", () => {
@@ -878,7 +930,7 @@ describe("dialogue storyboard export", () => {
 });
 
 describe("storyboard sound and music export", () => {
-  it("previews and writes selected sound and music without changing delays", async () => {
+  it("previews and writes selected sound with its delay and preserves music delay", async () => {
     const connection = new FakeStoryboardExportConnection();
     const request = {
       ...exportRequest(),
@@ -886,6 +938,7 @@ describe("storyboard sound and music export", () => {
         {
           dialogueId: "735201",
           assetName: "A_SFX_Dialog_516918",
+          delaySeconds: 0.7,
         },
       ],
       music: [
@@ -914,6 +967,8 @@ describe("storyboard sound and music export", () => {
           soundEffectIndex: 0,
           dialogueId: "735201",
           assetName: "A_SFX_Dialog_516918",
+          delaySeconds: 0.7,
+          existingDelaySeconds: 0,
           action: "add",
         },
       ],
@@ -946,7 +1001,7 @@ describe("storyboard sound and music export", () => {
     expect(
       written.find((property) => property.Alias === "DelayTime")
         ?.CurrentFloat,
-    ).toBe(0);
+    ).toBe(0.7);
     expect(written[1].CurrentString).toBe("c1");
     expect(
       written.find((property) => property.Alias === "BackgroundMusic")

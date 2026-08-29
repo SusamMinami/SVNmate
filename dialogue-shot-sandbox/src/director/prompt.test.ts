@@ -36,6 +36,23 @@ describe("buildDirectorPrompt", () => {
     expect(prompt).toContain("目录中没有足够匹配");
   });
 
+  it("allows only the BP player slot to move when it is unlocked", () => {
+    const sequence = findDialogueSequence(demoDatabase, "2048");
+    const input = createDirectorInput(sequence, "flexible-player-request", {
+      preserveInputFormation: true,
+      lockPlayerPosition: false,
+    });
+    const prompt = buildDirectorPrompt(input, "内部 TRAE");
+
+    expect(input.constraints).toMatchObject({
+      preserve_input_formation: true,
+      lock_player_position: false,
+    });
+    expect(prompt).toContain("model_index=0 的 0 号玩家");
+    expect(prompt).toContain("其他角色必须保留");
+    expect(prompt).toContain("0 号玩家可以根据剧情和构图需要");
+  });
+
   it("separates silent scene actors from dialogue subjects", () => {
     const sequence = findDialogueSequence(demoDatabase, "2048");
     const backgroundParticipant = {

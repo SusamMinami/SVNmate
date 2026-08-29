@@ -58,6 +58,7 @@ export function createShotPreview(
   sequence: DialogueSequence,
   options: {
     preserveInputPositions?: boolean;
+    lockPlayerPosition?: boolean;
     soundEffectCatalog?: readonly SoundEffectCatalogEntry[];
   } = {},
 ): {
@@ -68,6 +69,8 @@ export function createShotPreview(
   soundEffects: DirectorSoundEffectRecommendation[];
 } {
   const input = createDirectorInput(sequence, `${sequence.prefix}-rule`, {
+    preserveInputFormation: options.preserveInputPositions,
+    lockPlayerPosition: options.lockPlayerPosition,
     soundEffectCatalog: options.soundEffectCatalog,
   });
   const blocking = createDefaultBlocking(input);

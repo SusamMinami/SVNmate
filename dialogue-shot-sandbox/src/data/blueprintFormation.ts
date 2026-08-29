@@ -153,6 +153,89 @@ function explicitNpcIdsByModelIndex(
   return result;
 }
 
+interface ResolvedFormationSlot {
+  slot: BlueprintFormationSnapshot["slots"][number];
+  profile: NpcProfile;
+  required: boolean;
+}
+
+function npcProfile(
+  database: DialogueDatabase,
+  sequence: DialogueSequence,
+  npcId: number,
+): NpcProfile | undefined {
+  return (
+    sequence.participants.find((participant) => participant.id === npcId) ??
+    database.npcs.get(npcId)
+  );
+}
+
+function profileMatchesSlot(
+  database: DialogueDatabase,
+  profile: NpcProfile,
+  slot: BlueprintFormationSnapshot["slots"][number],
+): boolean {
+  if (profile.id === 1) {
+    return slot.modelIndex === 0;
+  }
+  return matchesResource(
+    slot.modelClassPath,
+    profile.resourceId === null
+      ? undefined
+      : database.models.get(profile.resourceId),
+  );
+}
+
+function distanceSquared(
+  left: BlueprintFormationSnapshot["slots"][number],
+  right: BlueprintFormationSnapshot["slots"][number],
+): number {
+  const dx = left.transform.location.x - right.transform.location.x;
+  const dy = left.transform.location.y - right.transform.location.y;
+  const dz = left.transform.location.z - right.transform.location.z;
+  return dx * dx + dy * dy + dz * dz;
+}
+
+function selectFormationSlots(
+  resolvedSlots: ResolvedFormationSlot[],
+  warnings: string[],
+): ResolvedFormationSlot[] {
+  if (resolvedSlots.length <= MAX_DIALOGUE_PARTICIPANTS) {
+    return resolvedSlots;
+  }
+
+  const required = resolvedSlots.filter((item) => item.required);
+  if (required.length > MAX_DIALOGUE_PARTICIPANTS) {
+    throw new Error(
+      `BP 中需要保留 ${required.length} 个对话角色实例，超过当前支持的 ${MAX_DIALOGUE_PARTICIPANTS} 位上限`,
+    );
+  }
+  const background = resolvedSlots
+    .filter((item) => !item.required)
+    .map((item) => ({
+      item,
+      distance: Math.min(
+        ...required.map((anchor) => distanceSquared(item.slot, anchor.slot)),
+      ),
+    }))
+    .sort(
+      (left, right) =>
+        left.distance - right.distance ||
+        left.item.slot.modelIndex - right.item.slot.modelIndex,
+    );
+  const selected = [
+    ...required,
+    ...background
+      .slice(0, MAX_DIALOGUE_PARTICIPANTS - required.length)
+      .map(({ item }) => item),
+  ].sort((left, right) => left.slot.modelIndex - right.slot.modelIndex);
+  const omittedCount = resolvedSlots.length - selected.length;
+  warnings.push(
+    `BP 有 ${resolvedSlots.length} 个有效角色槽，已优先保留 ${required.length} 个对话角色槽和距离最近的 ${selected.length - required.length} 个背景槽；省略 ${omittedCount} 个背景槽`,
+  );
+  return selected;
+}
+
 export function applyBlueprintFormation(
   database: DialogueDatabase,
   sequence: DialogueSequence,
@@ -175,53 +258,156 @@ export function applyBlueprintFormation(
       const modelName = (modelNames[slot.modelIndex] ?? "").toLowerCase();
       return !["", "none", "null"].includes(modelName);
     })
-    .sort((left, right) => left.modelIndex - right.modelIndex)
-    .slice(0, MAX_DIALOGUE_PARTICIPANTS);
-  if (!activeSlots.some((slot) => slot.modelIndex === 0)) {
+    .sort((left, right) => left.modelIndex - right.modelIndex);
+  const playerSlot = activeSlots.find((slot) => slot.modelIndex === 0);
+  if (!playerSlot) {
     throw new Error("Formation BP 缺少固定的 0 号玩家槽位");
   }
-  if (snapshot.slots.length > MAX_DIALOGUE_PARTICIPANTS) {
-    warnings.push(
-      `BP 包含 ${snapshot.slots.length} 个数字角色槽，当前最多读取前 ${MAX_DIALOGUE_PARTICIPANTS} 个`,
+  const activeSlotByIndex = new Map(
+    activeSlots.map((slot) => [slot.modelIndex, slot]),
+  );
+  const requiredProfiles = new Map<number, NpcProfile>();
+  for (const row of sequence.rows) {
+    if (row.npcId === null || requiredProfiles.has(row.npcId)) {
+      continue;
+    }
+    const profile = npcProfile(database, sequence, row.npcId);
+    if (!profile) {
+      throw new Error(
+        `对话节点 ${row.id} 的 NPC ${row.npcId} 在 NPC 表中不存在，无法校验 BP 角色`,
+      );
+    }
+    requiredProfiles.set(row.npcId, profile);
+  }
+
+  const requiredProfileByModelIndex = new Map<number, NpcProfile>();
+  requiredProfileByModelIndex.set(
+    0,
+    npcProfile(database, sequence, 1) ??
+      profileCandidates(
+        database,
+        sequence,
+        0,
+        modelNames[0] ?? "",
+        playerSlot.modelClassPath,
+      )[0],
+  );
+  for (const [modelIndex, npcIds] of explicitNpcIds) {
+    if (npcIds.size !== 1) {
+      throw new Error(
+        `BP 槽位 ${modelIndex} 同时被多个 NPC 的 AM_Talk 引用，无法确认说话角色`,
+      );
+    }
+    const slot = activeSlotByIndex.get(modelIndex);
+    const npcId = Array.from(npcIds)[0];
+    const profile = npcProfile(database, sequence, npcId);
+    if (!slot) {
+      warnings.push(
+        `对话 NPC ${profile?.name ?? npcId}（${npcId}）的 AM_Talk 槽位 ${modelIndex} 在当前 BP 中不可用，已改按模型路径匹配`,
+      );
+      continue;
+    }
+    if (!profile || !profileMatchesSlot(database, profile, slot)) {
+      throw new Error(
+        `对话 NPC ${profile?.name ?? npcId}（${npcId}）与 AM_Talk 指向的 BP 槽位 ${modelIndex} 模型不一致`,
+      );
+    }
+    requiredProfileByModelIndex.set(modelIndex, profile);
+  }
+
+  for (const profile of requiredProfiles.values()) {
+    if (
+      Array.from(requiredProfileByModelIndex.values()).some(
+        (candidate) => candidate.id === profile.id,
+      )
+    ) {
+      continue;
+    }
+    const matchingSlots = activeSlots.filter(
+      (slot) =>
+        !requiredProfileByModelIndex.has(slot.modelIndex) &&
+        profileMatchesSlot(database, profile, slot),
+    );
+    if (matchingSlots.length === 0) {
+      throw new Error(
+        `BP 未找到与对话 NPC ${profile.name}（${profile.id}）模型一致的角色槽`,
+      );
+    }
+    const sameModelProfiles = Array.from(requiredProfiles.values()).filter(
+      (candidate) =>
+        candidate.id !== profile.id &&
+        matchingSlots.some((slot) =>
+          profileMatchesSlot(database, candidate, slot),
+        ) &&
+        !Array.from(requiredProfileByModelIndex.values()).some(
+          (assigned) => assigned.id === candidate.id,
+        ),
+    );
+    if (sameModelProfiles.length > 0) {
+      throw new Error(
+        `对话 NPC ${[profile, ...sameModelProfiles]
+          .map((candidate) => `${candidate.name}（${candidate.id}）`)
+          .join("、")} 共用同一模型且没有 AM_Talk 槽位，无法安全区分`,
+      );
+    }
+    const selectedSlot = matchingSlots[0];
+    requiredProfileByModelIndex.set(selectedSlot.modelIndex, profile);
+    if (matchingSlots.length > 1) {
+      warnings.push(
+        `对话 NPC ${profile.name}（${profile.id}）的模型对应多个 BP 槽位（${matchingSlots
+          .map((slot) => slot.modelIndex)
+          .join("、")}），未配置 AM_Talk 时使用 ${selectedSlot.modelIndex} 号槽`,
+      );
+    }
+  }
+
+  const unresolvedRequiredProfiles = Array.from(requiredProfiles.values()).filter(
+    (profile) =>
+      !Array.from(requiredProfileByModelIndex.values()).some(
+        (candidate) => candidate.id === profile.id,
+      ),
+  );
+  if (unresolvedRequiredProfiles.length > 0) {
+    throw new Error(
+      `BP 无法绑定对话角色：${unresolvedRequiredProfiles
+        .map((profile) => `${profile.name}（${profile.id}）`)
+        .join("、")}`,
     );
   }
-  const mapped = activeSlots.map((slot) => {
+
+  const resolvedSlots = activeSlots.map((slot): ResolvedFormationSlot => {
     const modelName = modelNames[slot.modelIndex] ?? "";
-    const candidates = profileCandidates(
-      database,
-      sequence,
-      slot.modelIndex,
-      modelName,
-      slot.modelClassPath,
-    );
-    const explicitIds = explicitNpcIds.get(slot.modelIndex);
-    const explicitCandidates = explicitIds
-      ? Array.from(explicitIds).flatMap((npcId) => {
-          const profile =
-            sequence.participants.find(
-              (participant) => participant.id === npcId,
-            ) ?? database.npcs.get(npcId);
-          return profile ? [profile] : [];
-        })
-      : [];
-    const speakingCandidates = candidates.filter((candidate) =>
-      speakingNpcIds.has(candidate.id),
-    );
+    const requiredProfile = requiredProfileByModelIndex.get(slot.modelIndex);
+    const backgroundCandidates = requiredProfile
+      ? []
+      : profileCandidates(
+          database,
+          sequence,
+          slot.modelIndex,
+          modelName,
+          slot.modelClassPath,
+        ).filter((candidate) => !speakingNpcIds.has(candidate.id));
     const profile =
-      explicitCandidates[0] ??
-      (speakingCandidates.length === 1
-        ? speakingCandidates[0]
-        : candidates.length === 1
-          ? candidates[0]
-          : undefined) ??
+      requiredProfile ??
+      (backgroundCandidates.length === 1
+        ? backgroundCandidates[0]
+        : undefined) ??
       placeholderProfile(slot.modelIndex, modelName, slot.modelClassPath);
+    return {
+      slot,
+      profile,
+      required: requiredProfile !== undefined,
+    };
+  });
+  const mapped = selectFormationSlots(resolvedSlots, warnings);
+  for (const { slot, profile } of mapped) {
     if (profile.id >= 2_000_000_000) {
+      const modelName = modelNames[slot.modelIndex] ?? "";
       warnings.push(
         `BP 槽位 ${slot.modelIndex}（${modelName || slot.modelClassPath}）无法映射 NPC 表，已作为场内未识别角色保留`,
       );
     }
-    return { slot, profile };
-  });
+  }
 
   if (mapped.length < 2) {
     throw new Error("BP 中可映射到当前对话的有效角色不足两位");
@@ -305,12 +491,17 @@ export function applyBlueprintFormation(
         : row.npcId === null
           ? undefined
           : (lastSpeakerByNpcId.get(row.npcId) ?? candidates[0]);
+    if (row.npcId !== null && !participant) {
+      throw new Error(
+        `对话节点 ${row.id} 的 NPC ${row.npcId} 未绑定到 BP 角色槽`,
+      );
+    }
     if (participant && row.npcId !== null) {
       lastSpeakerByNpcId.set(row.npcId, participant);
     }
     return {
       ...row,
-      speakerSlot: participant?.slot ?? row.speakerSlot,
+      speakerSlot: participant?.slot ?? null,
     };
   });
 

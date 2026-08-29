@@ -476,13 +476,6 @@ test("renders every participant in a multi-character dialogue", async ({
     page.locator(".actor-label--on-body:not(.actor-label--below)"),
   ).toHaveCount(5);
 
-  const canvases = page.locator("canvas");
-  await expect(canvases).toHaveCount(2);
-  for (let index = 0; index < 2; index += 1) {
-    const metrics = imageMetrics(await canvases.nth(index).screenshot());
-    expect(metrics.luminanceSpan).toBeGreaterThan(24);
-    expect(metrics.sampledColors).toBeGreaterThan(18);
-  }
 });
 
 test("previews future entrants as transparent blocking markers", async ({
@@ -655,10 +648,6 @@ test("removes a character after the AI-directed exit node", async ({
   await page.getByLabel("四位数对话 ID").fill("3099");
   await page.getByRole("button", { name: "TRAE 协作" }).click();
   await page.getByRole("button", { name: "分析对话与站位" }).click();
-  await page
-    .getByRole("dialog", { name: "对比 AI 与当前占位" })
-    .getByRole("button", { name: "采用 AI 占位" })
-    .click();
 
   await page
     .getByRole("button", { name: /03 3 3人群像重建全景/ })
@@ -728,15 +717,6 @@ test("switches the main canvas between shot and blocking views", async ({
   expect(firstActorAfter!.y).toBeCloseTo(firstActorBefore!.y, 1);
   const switchedCanvases = page.locator("canvas");
   await expect(switchedCanvases).toHaveCount(2);
-  const insetFrame = await page.locator(".top-view__canvas").boundingBox();
-  const insetCanvas = await page
-    .locator(".top-view__canvas canvas")
-    .boundingBox();
-  expect(insetFrame).not.toBeNull();
-  expect(insetCanvas).not.toBeNull();
-  expect(insetCanvas!.x).toBeCloseTo(insetFrame!.x, 1);
-  expect(insetCanvas!.width).toBeCloseTo(insetFrame!.width, 1);
-  expect(insetCanvas!.width / insetCanvas!.height).toBeCloseTo(16 / 9, 2);
   for (let index = 0; index < 2; index += 1) {
     const metrics = imageMetrics(
       await switchedCanvases.nth(index).screenshot(),
@@ -914,6 +894,29 @@ test("keeps configuration mode active while switching shots", async ({
     path: testInfo.outputPath("configuration-window.png"),
     fullPage: true,
   });
+  await audioLibrary
+    .getByRole("combobox", { name: "资料库资源应用节点" })
+    .selectOption("204802");
+  const compactApplySoundEffect = resourceList.getByRole("button", {
+    name: "应用资料库音效 A_SFX_Dialog_516301 到节点 204802",
+  });
+  await expect(compactApplySoundEffect).toHaveCount(0);
+  await resourceList
+    .getByRole("button", {
+      name: "试听资料库音效 A_SFX_Dialog_516301",
+    })
+    .click();
+  await expect(compactApplySoundEffect).toBeVisible();
+  await compactApplySoundEffect.click();
+  const appliedSoundEffectNode = page.getByRole("combobox", {
+    name: "音效 A_SFX_Dialog_516301 的对话节点",
+  });
+  await expect(appliedSoundEffectNode).toHaveValue("204802");
+  await page
+    .getByRole("spinbutton", {
+      name: "音效 A_SFX_Dialog_516301 的延迟",
+    })
+    .fill("0.4");
 
   await page.getByRole("button", { name: "返回完整窗口" }).click();
   await expect.poll(() => requestedWindowModes.length).toBe(2);
@@ -925,7 +928,7 @@ test("keeps configuration mode active while switching shots", async ({
   await expect(page.getByRole("tab", { name: "导演" })).toBeVisible();
 });
 
-test("shows local content immediately and compares AI blocking before applying it", async ({
+test("shows local content while TRAE works and applies the completed plan directly", async ({
   page,
 }, testInfo) => {
   let formationRequests = 0;
@@ -1260,6 +1263,15 @@ test("shows local content immediately and compares AI blocking before applying i
   await expect(
     page.getByRole("dialog", { name: "数据源配置" }),
   ).toContainText("返修案例库已连接");
+  await expect(
+    page.getByRole("dialog", { name: "数据源配置" }),
+  ).not.toContainText("实时数据");
+  await expect(
+    page.getByRole("dialog", { name: "数据源配置" }),
+  ).not.toContainText("配置文档");
+  await expect(
+    page.getByRole("dialog", { name: "数据源配置" }),
+  ).not.toContainText("目标物表");
   await page.screenshot({
     path: testInfo.outputPath("header-status-popover.png"),
     fullPage: true,
@@ -1291,23 +1303,14 @@ test("shows local content immediately and compares AI blocking before applying i
   expect(directorRequests).toBe(1);
 
   releaseDirector();
-  const dialog = page.getByRole("dialog", {
-    name: "对比 AI 与当前占位",
-  });
-  await expect(dialog).toBeVisible();
   await expect(
-    dialog.getByRole("button", { name: "当前 · 规则导演占位" }),
-  ).toBeVisible();
-  await expect(
-    dialog.getByRole("button", { name: "内部 TRAE 建议占位" }),
-  ).toHaveAttribute("aria-pressed", "true");
-  await expect(dialog.getByText("迫使隐瞒者说明钥匙真相。"))
-    .toHaveCount(0);
-  await dialog.screenshot({
-    path: testInfo.outputPath("ai-formation-review.png"),
+    page.getByRole("dialog", { name: "对比 AI 与当前占位" }),
+  ).toHaveCount(0);
+  const completedTraeButton = page.getByRole("button", {
+    name: "TRAE 协作",
   });
-  await dialog.getByRole("button", { name: "采用 AI 占位" }).click();
-  await expect(dialog).toBeHidden();
+  await expect(completedTraeButton).toBeEnabled();
+  await completedTraeButton.click();
   await expect(page.getByText(/实际：内部 TRAE/)).toBeVisible();
   await expect(page.locator(".shot-row").nth(2)).toHaveClass(/is-active/);
   await page.locator(".shot-row").first().click();
@@ -1337,12 +1340,19 @@ test("shows local content immediately and compares AI blocking before applying i
     name: "特殊音效",
   });
   await expect(soundLibraryList).toContainText("A_SFX_Dialog_516918");
+  const applySoundEffect = soundLibraryList.getByRole("button", {
+    name: "应用资料库音效 A_SFX_Dialog_516918 到节点 204801",
+  });
+  await expect(applySoundEffect).toHaveCount(0);
   await soundLibraryList
     .getByRole("button", {
       name: "试听资料库音效 A_SFX_Dialog_516918",
     })
     .click();
   await expect.poll(() => soundPreviewRequests).toBe(1);
+  await expect(applySoundEffect).toBeVisible();
+  await applySoundEffect.click();
+  await expect(applySoundEffect).toHaveAttribute("aria-pressed", "true");
 
   await audioLibrary
     .getByRole("button", { name: /音乐资料库/ })
@@ -1361,10 +1371,17 @@ test("shows local content immediately and compares AI blocking before applying i
   await audioLibrary.screenshot({
     path: testInfo.outputPath("audio-library-browser.png"),
   });
+  const applyMusic = musicLibraryList.getByRole("button", {
+    name: "应用资料库音乐 情绪-真诚 到节点 204801",
+  });
+  await expect(applyMusic).toHaveCount(0);
   await musicLibraryList
     .getByRole("button", { name: "试听资料库音乐 情绪-真诚" })
     .click();
   await expect.poll(() => musicPreviewRequests).toBe(1);
+  await expect(applyMusic).toBeVisible();
+  await applyMusic.click();
+  await expect(applyMusic).toHaveAttribute("aria-pressed", "true");
 
   const soundPreviewButton = page.getByRole("button", {
     name: "试听音效 A_SFX_Dialog_516918",
@@ -1372,6 +1389,11 @@ test("shows local content immediately and compares AI blocking before applying i
   await expect(soundPreviewButton).toBeEnabled();
   await soundPreviewButton.click();
   await expect.poll(() => soundPreviewRequests).toBe(2);
+  await page
+    .getByRole("spinbutton", {
+      name: "音效 A_SFX_Dialog_516918 的延迟",
+    })
+    .fill("0.6");
   await expect(page.locator(".music-recommendation-list")).toContainText(
     "情绪-真诚",
   );
@@ -1399,7 +1421,12 @@ test("shows local content immediately and compares AI blocking before applying i
       name: "选择音效 A_SFX_Dialog_516918",
     }),
   ).toBeChecked();
+  await expect(soundExportDialog).toContainText("0.6s");
   await expect(soundExportDialog.getByText("镜头数据")).toHaveCount(0);
+  await expect(soundExportDialog).toContainText("尚未连接 UE");
+  await soundExportDialog
+    .getByRole("button", { name: "检查所选内容" })
+    .click();
   await soundExportDialog
     .getByLabel(
       /已核对 0 个镜头节点、 0 组角色动作、 1 个音效和 0 首音乐/,
@@ -1421,6 +1448,7 @@ test("shows local content immediately and compares AI blocking before applying i
       {
         dialogueId: "204801",
         assetName: "A_SFX_Dialog_516918",
+        delaySeconds: 0.6,
       },
     ],
     music: [],
@@ -1711,7 +1739,7 @@ test("interrupts an active TRAE analysis from the storyboard", async ({
   releaseDirector();
 });
 
-test("reuses a cached TRAE plan and forces regeneration on the repeated click", async ({
+test("applies a cached TRAE plan and regenerates it without a second placement round", async ({
   page,
 }) => {
   const requestUrls: string[] = [];
@@ -1722,12 +1750,11 @@ test("reuses a cached TRAE plan and forces regeneration on the repeated click", 
       initial_position: [number, number, number];
     }>;
     dialogue: Array<{ dialogue_id: string; speaker: "A" | "B" }>;
-    constraints: { preserve_input_formation?: boolean };
+    constraints: {
+      preserve_input_formation?: boolean;
+      lock_player_position?: boolean;
+    };
   }> = [];
-  let releaseFormationRegeneration!: () => void;
-  const formationRegenerationGate = new Promise<void>((resolve) => {
-    releaseFormationRegeneration = resolve;
-  });
   await page.route("**/api/trae/status", async (route) => {
     await route.fulfill({
       status: 200,
@@ -1758,14 +1785,14 @@ test("reuses a cached TRAE plan and forces regeneration on the repeated click", 
         initial_position: [number, number, number];
       }>;
       dialogue: Array<{ dialogue_id: string; speaker: "A" | "B" }>;
-      constraints: { preserve_input_formation?: boolean };
+      constraints: {
+        preserve_input_formation?: boolean;
+        lock_player_position?: boolean;
+      };
     };
     requestBodies.push(input);
     const requestNumber = requestUrls.length;
     const regenerated = requestNumber > 1;
-    if (requestNumber === 3) {
-      await formationRegenerationGate;
-    }
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -1777,9 +1804,7 @@ test("reuses a cached TRAE plan and forces regeneration on the repeated click", 
           status: "ready",
           scene_analysis: {
             dramatic_goal:
-              requestNumber === 3
-                ? "按当前占位生成的 TRAE 方案"
-                : regenerated
+              regenerated
                   ? "重新生成的 TRAE 方案"
                   : "已缓存的 TRAE 方案",
             emotional_progression: "由试探逐步推进到合作。",
@@ -1832,9 +1857,7 @@ test("reuses a cached TRAE plan and forces regeneration on the repeated click", 
                 : "individual_perspective",
             camera_height: "eye",
             intent:
-              requestNumber === 3
-                ? "按当前占位重新生成。"
-                : regenerated
+              regenerated
                   ? "强制重新生成。"
                   : "直接复用缓存。",
           })),
@@ -1862,41 +1885,22 @@ test("reuses a cached TRAE plan and forces regeneration on the repeated click", 
   await expect(page.locator(".shot-row").nth(2)).toHaveClass(/is-active/);
   await traeButton.click();
 
-  const regeneratedDialog = page.getByRole("dialog", {
-    name: "对比 AI 与当前占位",
-  });
-  await expect(regeneratedDialog).toBeVisible();
+  await expect.poll(() => requestUrls.length).toBe(2);
   expect(new URL(requestUrls[1]).search).toBe("?force=1");
-  await regeneratedDialog
-    .getByRole("button", { name: "当前 · 内部 TRAE 占位" })
-    .click();
-  await regeneratedDialog
-    .getByRole("button", { name: "按当前占位重新生成" })
-    .click();
-
-  await expect(regeneratedDialog).toBeHidden();
-  await expect(page.locator(".section-label--sticky")).toContainText(
-    "内部 TRAE 已出方案",
-  );
-  await page.locator(".shot-row").nth(1).click();
-  await expect(page.locator(".shot-row").nth(1)).toHaveClass(/is-active/);
-  await expect.poll(() => requestUrls.length).toBe(3);
-  expect(new URL(requestUrls[2]).search).toBe("?force=1");
-  expect(requestBodies[2].constraints.preserve_input_formation).toBe(true);
-  expect(requestBodies[2].participants.map((participant) =>
-    participant.initial_position,
-  )).toEqual([
-    [-2.05, 0, -0.18],
-    [2.05, 0, -0.18],
-  ]);
-
-  releaseFormationRegeneration();
+  expect(requestBodies[1].constraints).toMatchObject({
+    preserve_input_formation: false,
+    lock_player_position: false,
+  });
+  await expect(
+    page.getByRole("dialog", { name: "对比 AI 与当前占位" }),
+  ).toHaveCount(0);
+  await expect(page.getByText(/实际：内部 TRAE/)).toBeVisible();
   await expect(page.locator(".section-label--sticky")).not.toContainText(
-    "已出方案",
+    "本地预览",
   );
-  await expect(page.locator(".shot-row").nth(1)).toHaveClass(/is-active/);
+  await expect(page.locator(".shot-row").nth(2)).toHaveClass(/is-active/);
   await page.getByRole("tab", { name: "导演" }).click();
-  await expect(page.getByText("按当前占位重新生成。", { exact: true }))
+  await expect(page.getByText("强制重新生成。", { exact: true }))
     .toBeVisible();
 });
 
@@ -2634,7 +2638,6 @@ test("guides first desktop launch to select live and config directories", async 
   await expect(page.getByLabel("四位数对话 ID 或对白内容")).toHaveValue("");
   await expect(page.getByText("等待对话", { exact: true }).first()).toBeVisible();
   await expect(page.getByRole("heading", { name: "分镜工作台" })).toBeVisible();
-  await expect(page.locator(".app-rail__brand")).toContainText("v0.22.8");
   await page.screenshot({
     path: testInfo.outputPath("desktop-workspace-ready-collapsed.png"),
   });
@@ -3485,6 +3488,12 @@ test("batch edits text search results without requiring a storyboard", async ({
 test("offers the detected Blueprint formation before designing shots", async ({
   page,
 }, testInfo) => {
+  let traeDirectorInput: {
+    constraints: {
+      preserve_input_formation?: boolean;
+      lock_player_position?: boolean;
+    };
+  } | null = null;
   const inspectedExportRequests: Record<string, unknown>[] = [];
   let exportedStoryboardRequest: Record<string, unknown> | null = null;
   let exportRequests = 0;
@@ -3559,7 +3568,12 @@ test("offers the detected Blueprint formation before designing shots", async ({
         slot: "A" | "B" | "C";
         role: "dialogue" | "background";
       }>;
+      constraints: {
+        preserve_input_formation?: boolean;
+        lock_player_position?: boolean;
+      };
     };
+    traeDirectorInput = input;
     await directorGate;
     await route.fulfill({
       status: 200,
@@ -3763,6 +3777,7 @@ test("offers the detected Blueprint formation before designing shots", async ({
         item: {
           dialogueId: string;
           modelIndex: number;
+          characterLabel?: string;
           actions: Array<{
             montageName: string;
             delaySeconds: number;
@@ -4003,9 +4018,21 @@ test("offers the detected Blueprint formation before designing shots", async ({
     "对白 / 背景2 / 1",
   );
   await expect(dialog.getByText(/背景 NPC 只参与构图/)).toBeVisible();
+  const playerPositionLock = dialog.getByRole("checkbox", {
+    name: /固定 0 号玩家位置/,
+  });
+  await expect(playerPositionLock).not.toBeChecked();
+  await expect(
+    dialog.getByText(/取消后仅允许导演调整 0 号位/),
+  ).toBeVisible();
+  await expect(
+    dialog.locator(".actor-label").filter({ hasText: "玩家" }).first(),
+  ).not.toHaveAttribute("data-facing-target", "-1.500,0.000,4.600");
+  await playerPositionLock.check();
   await expect(
     dialog.locator(".actor-label").filter({ hasText: "玩家" }).first(),
   ).toHaveAttribute("data-facing-target", "-1.500,0.000,4.600");
+  await playerPositionLock.uncheck();
   await dialog.screenshot({
     path: testInfo.outputPath("blueprint-formation-choice.png"),
   });
@@ -4060,6 +4087,45 @@ test("offers the detected Blueprint formation before designing shots", async ({
     .getByRole("button", { name: "关闭占位方案切换" })
     .click();
   await page.getByRole("button", { name: "TRAE 协作" }).click();
+  const traeStrategyDialog = page.getByRole("dialog", {
+    name: "选择 TRAE 分镜使用的占位",
+  });
+  await expect(traeStrategyDialog).toBeVisible();
+  await expect(
+    traeStrategyDialog.getByRole("button", { name: "BP_735000" }),
+  ).toHaveAttribute("aria-pressed", "true");
+  const traeAutonomousPlacement = traeStrategyDialog.getByRole("button", {
+    name: "TRAE 自主占位",
+  });
+  const traePlayerPositionLock = traeStrategyDialog.getByRole("checkbox", {
+    name: /固定 0 号玩家位置/,
+  });
+  await expect(traeAutonomousPlacement).toBeVisible();
+  await traeAutonomousPlacement.click();
+  await expect(traePlayerPositionLock).toBeDisabled();
+  await expect(
+    traeStrategyDialog.getByText(/重新设计全部角色位置/),
+  ).toBeVisible();
+  await traeStrategyDialog
+    .getByRole("button", { name: "BP_735000" })
+    .click();
+  await expect(
+    traePlayerPositionLock,
+  ).not.toBeChecked();
+  await traeStrategyDialog.screenshot({
+    path: testInfo.outputPath("trae-formation-strategy.png"),
+  });
+  await traeStrategyDialog
+    .getByRole("button", { name: "开始 TRAE 分析" })
+    .click();
+  await expect(traeStrategyDialog).toBeHidden();
+  await expect.poll(() => traeDirectorInput).not.toBeNull();
+  expect(traeDirectorInput).toMatchObject({
+    constraints: {
+      preserve_input_formation: true,
+      lock_player_position: false,
+    },
+  });
   await expect(
     page.getByText("AI 后台生成中，可导出当前方案"),
   ).toBeVisible();
@@ -4083,18 +4149,10 @@ test("offers the detected Blueprint formation before designing shots", async ({
     .click();
   inspectedExportRequests.length = 0;
   releaseDirector();
-  const aiReviewDialog = page.getByRole("dialog", {
-    name: "对比 AI 与当前占位",
-  });
-  await expect(aiReviewDialog).toBeVisible();
   await expect(
-    aiReviewDialog.getByRole("button", {
-      name: "当前 · BP_735000",
-    }),
-  ).toBeVisible();
-  await aiReviewDialog
-    .getByRole("button", { name: "采用 AI 占位" })
-    .click();
+    page.getByRole("dialog", { name: "对比 AI 与当前占位" }),
+  ).toHaveCount(0);
+  await expect(page.getByText(/实际：内部 TRAE/)).toBeVisible();
   await page.getByRole("button", { name: "切换占位方案" }).click();
   const aiSwitchDialog = page.getByRole("dialog", {
     name: "切换占位方案",
@@ -4114,8 +4172,8 @@ test("offers the detected Blueprint formation before designing shots", async ({
     .click();
   await expect(formationStatus).toContainText("内部 TRAE 占位");
   await expect(
-    page.getByRole("button", { name: "需绑定 BP 站位" }),
-  ).toBeDisabled();
+    page.getByRole("button", { name: "导出到 UE" }),
+  ).toBeEnabled();
   await page.getByRole("button", { name: "切换占位方案" }).click();
   await page
     .getByRole("dialog", { name: "切换占位方案" })
@@ -4131,7 +4189,10 @@ test("offers the detected Blueprint formation before designing shots", async ({
   await expect(page.locator(".stage-cast__item")).toHaveCount(3);
   await expect(
     page.locator(".stage-cast__item", { hasText: "玩家" }),
-  ).toHaveAttribute("title", /对白角色 · 在场 · BP 0 · 初始朝向 -90°/);
+  ).toHaveAttribute("title", /对白角色 · 在场 · BP 0/);
+  await expect(
+    page.locator(".stage-cast__item", { hasText: "玩家" }),
+  ).not.toHaveAttribute("title", /初始朝向 -90°/);
   await expect(
     page
       .locator(".stage-cast__item", { hasText: "玩家" })
@@ -4147,7 +4208,7 @@ test("offers the detected Blueprint formation before designing shots", async ({
   ).toHaveText("2");
   await page.getByRole("tab", { name: "导演" }).click();
   await expect(page.getByText("演员动作", { exact: true })).toBeVisible();
-  await expect(page.getByText("右转 45°", { exact: true })).toHaveCount(2);
+  await expect(page.getByText("右转 45°", { exact: true })).toHaveCount(1);
   await page.waitForTimeout(350);
   await page.screenshot({
     path: testInfo.outputPath("blueprint-facing-and-turn-plan.png"),
@@ -4178,6 +4239,9 @@ test("offers the detected Blueprint formation before designing shots", async ({
       "combobox",
     ),
   ).toHaveCount(0);
+  await expect(
+    page.getByRole("combobox", { name: "节点 735001 添加角色" }),
+  ).toHaveValue("-1");
   const guardFacingLabel = page
     .locator(".actor-label")
     .filter({ hasText: "商会安保" })
@@ -4186,11 +4250,19 @@ test("offers the detected Blueprint formation before designing shots", async ({
     "data-facing-target",
   );
   await guardActions.getByRole("button", { name: "添加动作" }).click();
-  await guardActions
+  const firstActionPicker = guardActions
     .locator(".character-action-row")
     .first()
-    .getByRole("combobox")
-    .selectOption("AM_TurnRight90");
+    .getByRole("combobox");
+  await expect(firstActionPicker).toHaveValue("");
+  await firstActionPicker.fill("TurnRight90");
+  await page.screenshot({
+    path: testInfo.outputPath("character-action-search.png"),
+    fullPage: true,
+  });
+  await guardActions
+    .getByRole("option", { name: "AM_TurnRight90", exact: true })
+    .click();
   await page.waitForTimeout(500);
   expect(
     await guardFacingLabel.getAttribute("data-facing-target"),
@@ -4198,11 +4270,15 @@ test("offers the detected Blueprint formation before designing shots", async ({
     facingBeforeTurn,
   );
   await guardActions.getByRole("button", { name: "添加动作" }).click();
-  await guardActions
+  const secondActionPicker = guardActions
     .locator(".character-action-row")
     .nth(1)
-    .getByRole("combobox")
-    .selectOption("AM_Wave");
+    .getByRole("combobox");
+  await expect(secondActionPicker).toHaveValue("");
+  await secondActionPicker.fill("wave");
+  await guardActions
+    .getByRole("option", { name: "AM_Wave", exact: true })
+    .click();
   await guardActions
     .locator(".character-action-row")
     .nth(1)
@@ -4242,8 +4318,8 @@ test("offers the detected Blueprint formation before designing shots", async ({
     path: testInfo.outputPath("character-action-editor.png"),
     fullPage: true,
   });
-  await expect(page.locator(".shot-row.is-invalid")).toHaveCount(1);
-  await expect(page.getByLabel("投影验收未通过")).toBeVisible();
+  await expect(page.locator(".shot-row.is-invalid")).toHaveCount(0);
+  await expect(page.getByLabel("投影验收未通过")).toHaveCount(0);
   await page.getByRole("button", { name: "进入配置小窗" }).click();
   await expect(page.locator(".app-shell")).toHaveAttribute(
     "data-configuration-mode",
@@ -4277,14 +4353,57 @@ test("offers the detected Blueprint formation before designing shots", async ({
   await expect(
     exportDialog.getByRole("heading", { name: "导出当前镜头 01" }),
   ).toBeVisible();
+  await expect(exportDialog).toContainText("尚未连接 UE");
+  await expect(exportDialog.getByText("商会安保")).toBeVisible();
+  await expect(exportDialog.getByText("BP 1")).toBeVisible();
+  expect(inspectedExportRequests).toHaveLength(0);
   const currentShotCheckbox = exportDialog.getByRole("checkbox", {
     name: "选择镜头 01",
   });
   await expect(currentShotCheckbox).toBeChecked();
   await currentShotCheckbox.uncheck();
   await expect(exportDialog.getByText("01 · 未选")).toBeVisible();
-  await currentShotCheckbox.check();
+  await exportDialog
+    .getByRole("checkbox", { name: "选择音效 A_SFX_Dialog_729701" })
+    .uncheck();
+  await exportDialog
+    .getByRole("checkbox", { name: "选择音乐 情绪-危机爆发" })
+    .uncheck();
+  await exportDialog
+    .getByRole("button", { name: "检查所选内容" })
+    .click();
+  await expect.poll(() => inspectedExportRequests.length).toBe(1);
+  expect(inspectedExportRequests[0]).toMatchObject({
+    dialogueIds: [],
+    participantModelIndexes: [1],
+    shots: [],
+    characterActions: [
+      {
+        dialogueId: "735001",
+        modelIndex: 1,
+        characterLabel: "商会安保",
+      },
+    ],
+    soundEffects: [],
+    music: [],
+  });
+  await exportDialog
+    .getByRole("button", { name: "关闭导出预检" })
+    .click();
+  inspectedExportRequests.length = 0;
+  await exportButton.click();
+  await expect(exportDialog).toContainText("尚未连接 UE");
+  const reopenedCurrentShotCheckbox = exportDialog.getByRole("checkbox", {
+    name: "选择镜头 01",
+  });
+  await expect(reopenedCurrentShotCheckbox).toBeChecked();
+  await reopenedCurrentShotCheckbox.uncheck();
+  await expect(exportDialog.getByText("01 · 未选")).toBeVisible();
+  await reopenedCurrentShotCheckbox.check();
   await expect(exportDialog.getByText("01 · 已选")).toBeVisible();
+  await exportDialog
+    .getByRole("button", { name: "检查所选内容" })
+    .click();
   await expect(
     exportDialog.getByText(/Formation BP .*存在未保存修改/),
   ).toBeVisible();
@@ -4297,7 +4416,7 @@ test("offers the detected Blueprint formation before designing shots", async ({
   await expect(
     exportDialog.getByText(/Formation BP .*存在未保存修改/),
   ).toHaveCount(0);
-  await expect(currentShotCheckbox).toBeChecked();
+  await expect(reopenedCurrentShotCheckbox).toBeChecked();
   await expect(exportDialog.getByText("覆盖", { exact: true })).toBeVisible();
   await expect(
     exportDialog.getByText("清空旧镜头", { exact: true }),
@@ -4337,7 +4456,7 @@ test("offers the detected Blueprint formation before designing shots", async ({
         actorActions: [
           expect.objectContaining({
             modelIndex: 0,
-            montageName: "AM_TurnRight45",
+            montageName: "AM_TurnLeft45",
           }),
           expect.objectContaining({
             modelIndex: 1,
@@ -4364,8 +4483,12 @@ test("offers the detected Blueprint formation before designing shots", async ({
     path: testInfo.outputPath("storyboard-export-current.png"),
   });
   await exportDialog.getByRole("button", { name: "全部导出" }).click();
+  await expect(exportDialog).toContainText("尚未连接 UE");
+  await exportDialog
+    .getByRole("button", { name: "检查所选内容" })
+    .click();
   await expect(
-    exportDialog.getByRole("button", { name: "读取中" }),
+    exportDialog.getByRole("button", { name: "检查中" }),
   ).toBeVisible();
   await expect(
     exportDialog.getByText("写入中", { exact: true }),

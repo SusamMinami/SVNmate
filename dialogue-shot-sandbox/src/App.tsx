@@ -75,10 +75,12 @@ import {
 } from "./data/dialogueRoles";
 import {
   bundledSoundEffectCatalog,
+  type SoundEffectCatalogEntry,
   type SoundEffectCatalogSnapshot,
 } from "./data/soundEffectCatalog";
 import {
   recommendMusic,
+  type MusicCatalogEntry,
   type MusicCatalogSnapshot,
   type MusicRecommendation,
 } from "./data/musicCatalog";
@@ -235,12 +237,14 @@ interface SharedComparisonPresentation {
 
 interface FormationChoicePresentation {
   blueprint: ReturnType<typeof createShotPreview>;
+  blueprintPlayerLocked: ReturnType<typeof createShotPreview>;
   generated: ReturnType<typeof createShotPreview>;
   ai?: PendingDirectorPresentation;
   snapshot: BlueprintFormationSnapshot;
   mappedSlotCount: number;
   requestedMode: DirectorMode;
   sourceSequence: DialogueSequence;
+  playerPositionLocked: boolean;
 }
 
 function createFormationChoice(
@@ -250,11 +254,18 @@ function createFormationChoice(
   requestedMode: DirectorMode,
   soundEffectCatalog: SoundEffectCatalogSnapshot["entries"],
   ai?: PendingDirectorPresentation,
+  playerPositionLocked = false,
 ): FormationChoicePresentation {
   const imported = applyBlueprintFormation(database, sourceSequence, snapshot);
   return {
     blueprint: createShotPreview(imported.sequence, {
       preserveInputPositions: true,
+      lockPlayerPosition: false,
+      soundEffectCatalog,
+    }),
+    blueprintPlayerLocked: createShotPreview(imported.sequence, {
+      preserveInputPositions: true,
+      lockPlayerPosition: true,
       soundEffectCatalog,
     }),
     generated: createShotPreview(sourceSequence, { soundEffectCatalog }),
@@ -263,11 +274,13 @@ function createFormationChoice(
     mappedSlotCount: imported.mappedSlotCount,
     requestedMode,
     sourceSequence,
+    playerPositionLocked,
   };
 }
 
 interface ApplySequenceOptions {
   preserveInputPositions?: boolean;
+  lockPlayerPosition?: boolean;
   fallbackPreserveInputPositions?: boolean;
   keepCurrentPreview?: boolean;
   forceRegenerate?: boolean;
@@ -417,6 +430,12 @@ function blueprintDisplayName(assetPath: string): string {
       .at(-1)
       ?.split(".")[0] || "BP 占位"
   );
+}
+
+function blueprintFormationStatus(playerPositionLocked: boolean): string {
+  return playerPositionLocked
+    ? "保留 UE Formation 的全部初始位置与朝向，0 号玩家固定"
+    : "保留 UE Formation 的其他角色位置，0 号玩家由导演调整";
 }
 
 function shotSizeLabel(shotSize: ShotSize): string {
@@ -592,6 +611,7 @@ function blockingPositionLabel(
 interface ShotInspectorProps {
   shot: ShotPlan;
   sequence: DialogueSequence;
+  activeDialogueId: string;
   directorAnalysis: DirectorSceneAnalysis | undefined;
   soundEffects: DirectorSoundEffectRecommendation[];
   soundEffectCatalog: SoundEffectCatalogSnapshot;
@@ -616,11 +636,24 @@ interface ShotInspectorProps {
   onConfigurationModeChange: (enabled: boolean) => void;
   onExport: () => void;
   onExportSoundEffects: () => void;
+  onChangeSoundEffect: (
+    recommendation: DirectorSoundEffectRecommendation,
+    update: Pick<
+      DirectorSoundEffectRecommendation,
+      "dialogueId" | "delaySeconds"
+    >,
+  ) => void;
+  onApplySoundEffect: (
+    entry: SoundEffectCatalogEntry,
+    dialogueId: string,
+  ) => void;
+  onApplyMusic: (entry: MusicCatalogEntry, dialogueId: string) => void;
 }
 
 function ShotInspector({
   shot,
   sequence,
+  activeDialogueId,
   directorAnalysis,
   soundEffects,
   soundEffectCatalog,
@@ -645,6 +678,9 @@ function ShotInspector({
   onConfigurationModeChange,
   onExport,
   onExportSoundEffects,
+  onChangeSoundEffect,
+  onApplySoundEffect,
+  onApplyMusic,
 }: ShotInspectorProps) {
   const [expandedOutlinePrefix, setExpandedOutlinePrefix] = useState<
     string | null
@@ -1046,6 +1082,7 @@ function ShotInspector({
               currentDialogueIds={shot.dialogueIds}
               busy={exportBusy}
               onWrite={onExportSoundEffects}
+              onChange={onChangeSoundEffect}
             />
             <MusicRecommendations
               recommendations={musicRecommendations}
@@ -1055,6 +1092,13 @@ function ShotInspector({
             <AudioLibraryBrowser
               soundEffectCatalog={soundEffectCatalog}
               musicCatalog={musicCatalog}
+              dialogueRows={sequence.rows}
+              currentDialogueIds={shot.dialogueIds}
+              activeDialogueId={activeDialogueId}
+              appliedSoundEffects={soundEffects}
+              appliedMusic={musicRecommendations}
+              onApplySoundEffect={onApplySoundEffect}
+              onApplyMusic={onApplyMusic}
             />
           </>
         )}
@@ -1206,6 +1250,8 @@ export default function App() {
     missingAttachmentCount: 0,
     analyzedCount: 0,
   });
+  const [musicOverridesByDialogueId, setMusicOverridesByDialogueId] =
+    useState<Map<string, MusicRecommendation>>(() => new Map());
   const [directorBlocking, setDirectorBlocking] =
     useState<DirectorBlocking>(initial.blocking);
   const [pendingDirectorResult, setPendingDirectorResult] =
@@ -1217,7 +1263,7 @@ export default function App() {
   const [formationChoice, setFormationChoice] =
     useState<FormationChoicePresentation | null>(null);
   const [formationChoiceMode, setFormationChoiceMode] = useState<
-    "initial" | "switch" | null
+    "initial" | "switch" | "director-request" | null
   >(null);
   const [formationChecking, setFormationChecking] = useState(false);
   const [formationStatus, setFormationStatus] = useState("");
@@ -1311,11 +1357,13 @@ export default function App() {
   const dialogueEditorRef = useRef<HTMLDivElement>(null);
   const directorRunRef = useRef(0);
   const formationRunRef = useRef(0);
+  const traeForceRegenerateRef = useRef(false);
   const activeIndexRef = useRef(activeIndex);
   const directorModeRef = useRef(directorMode);
   const sequenceRef = useRef(sequence);
   const appliedDirectorRef = useRef(appliedDirector);
   const activeFormationSourceRef = useRef(activeFormationSource);
+  const playerPositionLockedRef = useRef(true);
   const soundEffectCatalogRef = useRef(soundEffectCatalog);
   const soundEffectCatalogLoadRef =
     useRef<Promise<SoundEffectCatalogSnapshot> | null>(null);
@@ -1324,6 +1372,8 @@ export default function App() {
   sequenceRef.current = sequence;
   appliedDirectorRef.current = appliedDirector;
   activeFormationSourceRef.current = activeFormationSource;
+  playerPositionLockedRef.current =
+    formationChoice?.playerPositionLocked ?? true;
   soundEffectCatalogRef.current = soundEffectCatalog;
 
   const activeShot: ShotPlan | undefined = shots[activeIndex] ?? shots[0];
@@ -1366,7 +1416,7 @@ export default function App() {
     characterActionEditor.turnDegreesByModelIndex,
     sequence.participants,
   ]);
-  const musicRecommendations = useMemo(
+  const generatedMusicRecommendations = useMemo(
     () =>
       recommendMusic(
         sequence,
@@ -1375,6 +1425,28 @@ export default function App() {
       ),
     [directorAnalysis?.emotionalProgression, musicCatalog.entries, sequence],
   );
+  const musicRecommendations = useMemo(() => {
+    const dialogueOrder = new Map(
+      sequence.rows.map((row, index) => [row.id, index]),
+    );
+    const byDialogueId = new Map(
+      generatedMusicRecommendations.map((item) => [item.dialogueId, item]),
+    );
+    for (const [dialogueId, item] of musicOverridesByDialogueId) {
+      if (dialogueOrder.has(dialogueId)) {
+        byDialogueId.set(dialogueId, item);
+      }
+    }
+    return [...byDialogueId.values()].sort(
+      (left, right) =>
+        (dialogueOrder.get(left.dialogueId) ?? Number.MAX_SAFE_INTEGER) -
+        (dialogueOrder.get(right.dialogueId) ?? Number.MAX_SAFE_INTEGER),
+    );
+  }, [
+    generatedMusicRecommendations,
+    musicOverridesByDialogueId,
+    sequence.rows,
+  ]);
   const {
     preview: storyboardExportPreview,
     request: storyboardExportRequest,
@@ -1541,6 +1613,8 @@ export default function App() {
       ? "正在查询 UE Blueprint 站位"
       : formationChoiceMode === "initial"
         ? "BP 占位已读取，等待选择"
+        : formationChoiceMode === "director-request"
+          ? "请选择 TRAE 占位策略"
         : directorLoading
           ? `${directorLabel(directorLoadingMode ?? directorMode)}正在生成镜头`
           : "镜头方案尚未生成";
@@ -1556,9 +1630,9 @@ export default function App() {
     appliedDirector === directorLoadingMode;
   const traeWaitDetail =
     browsingPreviousAiPlan
-      ? "当前 AI 分镜仍可浏览，完成后自动切换到按当前占位生成的新方案"
+      ? "当前 AI 分镜仍可浏览，完成后自动应用新方案"
       : (traeStatus?.stats.processing ?? 0) > 0
-        ? "对话与规则分镜保持可用，完成后再确认 TRAE 方案"
+        ? "对话与规则分镜保持可用，完成后自动应用所选占位策略"
       : "模型繁忙时会继续排队，不会立即判定协作失败";
 
   const dismissLaunchScreen = useCallback(() => {
@@ -1570,6 +1644,102 @@ export default function App() {
     recommendations: DirectorSoundEffectRecommendation[],
   ) {
     setSoundEffects(recommendations);
+  }
+
+  function updateSoundEffectRecommendation(
+    recommendation: DirectorSoundEffectRecommendation,
+    update: Pick<
+      DirectorSoundEffectRecommendation,
+      "dialogueId" | "delaySeconds"
+    >,
+  ) {
+    setSoundEffects((current) => {
+      const sourceIndex = current.findIndex(
+        (item) =>
+          item === recommendation ||
+          (item.dialogueId === recommendation.dialogueId &&
+            item.assetName === recommendation.assetName),
+      );
+      if (sourceIndex < 0) {
+        return current;
+      }
+      const updated = { ...current[sourceIndex], ...update };
+      const dialogueOrder = new Map(
+        sequence.rows.map((row, index) => [row.id, index]),
+      );
+      return current
+        .filter(
+          (item, index) =>
+            index !== sourceIndex &&
+            item.dialogueId !== updated.dialogueId,
+        )
+        .concat(updated)
+        .sort(
+          (left, right) =>
+            (dialogueOrder.get(left.dialogueId) ??
+              Number.MAX_SAFE_INTEGER) -
+            (dialogueOrder.get(right.dialogueId) ??
+              Number.MAX_SAFE_INTEGER),
+        );
+    });
+  }
+
+  function applySoundEffectFromLibrary(
+    entry: SoundEffectCatalogEntry,
+    dialogueId: string,
+  ) {
+    if (!dialogueId) {
+      return;
+    }
+    setSoundEffects((current) => {
+      const existing = current.find(
+        (item) => item.dialogueId === dialogueId,
+      );
+      const next = current
+        .filter((item) => item.dialogueId !== dialogueId)
+        .concat({
+          dialogueId,
+          assetName: entry.assetName,
+          category: entry.category,
+          reason: "手动从资料库选择。",
+          description: entry.description,
+          delaySeconds: existing?.delaySeconds ?? 0,
+        });
+      const dialogueOrder = new Map(
+        sequence.rows.map((row, index) => [row.id, index]),
+      );
+      return next.sort(
+        (left, right) =>
+          (dialogueOrder.get(left.dialogueId) ??
+            Number.MAX_SAFE_INTEGER) -
+          (dialogueOrder.get(right.dialogueId) ??
+            Number.MAX_SAFE_INTEGER),
+      );
+    });
+  }
+
+  function applyMusicFromLibrary(
+    entry: MusicCatalogEntry,
+    dialogueId: string,
+  ) {
+    if (!dialogueId) {
+      return;
+    }
+    setMusicOverridesByDialogueId((current) => {
+      const next = new Map(current);
+      next.set(dialogueId, {
+        dialogueId,
+        stateId: entry.stateId,
+        stateName: entry.stateName,
+        musicName: entry.name,
+        reason: "手动从资料库选择。",
+        fileToken: entry.fileToken,
+        fileName: entry.fileName,
+        recordId: entry.recordId,
+        audioSummary: entry.analysis?.summary ?? null,
+      });
+      return next;
+    });
   }
 
   useEffect(() => {
@@ -1608,8 +1778,9 @@ export default function App() {
           if (appliedDirectorRef.current === "rule") {
             replaceSoundEffectRecommendations(
               createShotPreview(sequenceRef.current, {
-              preserveInputPositions:
+                preserveInputPositions:
                   activeFormationSourceRef.current === "blueprint",
+                lockPlayerPosition: playerPositionLockedRef.current,
                 soundEffectCatalog: snapshot.entries,
               }).soundEffects,
             );
@@ -1745,6 +1916,7 @@ export default function App() {
     }
     const {
       preserveInputPositions = false,
+      lockPlayerPosition = true,
       keepCurrentPreview = false,
     } = options;
     const activeSoundEffectCatalog = soundEffectCatalogRef.current;
@@ -1755,6 +1927,7 @@ export default function App() {
       : ++directorRunRef.current;
     const preview = createShotPreview(nextSequence, {
       preserveInputPositions,
+      lockPlayerPosition,
       soundEffectCatalog: activeSoundEffectCatalog.entries,
     });
     setFallbackReason(null);
@@ -1798,6 +1971,7 @@ export default function App() {
     try {
       const result = await designShots(nextSequence, requestedMode, {
         preserveInputPositions,
+        lockPlayerPosition,
         fallbackPreserveInputPositions:
           options.fallbackPreserveInputPositions,
         collectRevisionCases,
@@ -1849,7 +2023,12 @@ export default function App() {
             shared,
           });
         } catch {
-          setPendingDirectorResult({ sequence: nextSequence, result });
+          setPendingDirectorResult({
+            sequence: nextSequence,
+            result,
+            reviewFormation:
+              requestedMode === "trae" ? false : undefined,
+          });
           setError("共享方案与当前对话结构不兼容，已保留本地方案");
         }
       } else if (
@@ -1996,6 +2175,8 @@ export default function App() {
     );
     const preservesInputFormation =
       result.input.constraints.preserve_input_formation === true;
+    const playerPositionLocked =
+      result.input.constraints.lock_player_position !== false;
     setSequence({
       ...sourceSequence,
       participants: result.participants,
@@ -2021,16 +2202,19 @@ export default function App() {
         ? {
             ...current,
             ai: { sequence: sourceSequence, result },
+            ...(preservesInputFormation ? { playerPositionLocked } : {}),
           }
         : current,
     );
     setFormationStatus(
       result.appliedMode === "rule"
         ? usesBlueprintFormation
-          ? "保留 UE Formation 的初始位置与朝向"
+          ? blueprintFormationStatus(playerPositionLocked)
           : "使用规则导演自动安排的角色位置"
         : usesBlueprintFormation
-          ? `${directorLabel(result.appliedMode)} 分镜沿用 BP 占位`
+          ? `${directorLabel(result.appliedMode)} 分镜沿用 BP 占位，0 号玩家${
+              playerPositionLocked ? "固定" : "可调整"
+            }`
           : preservesInputFormation
             ? `${directorLabel(result.appliedMode)} 分镜沿用当前占位`
           : `使用 ${directorLabel(result.appliedMode)} 返回的角色占位`,
@@ -2083,6 +2267,7 @@ export default function App() {
     setDialogueSaveStatus("");
     const formationRunId = ++formationRunRef.current;
     directorRunRef.current += 1;
+    traeForceRegenerateRef.current = false;
     setSequence(nextSequence);
     setShots([]);
     setActiveIndex(0);
@@ -2095,6 +2280,7 @@ export default function App() {
     setDirectorLoadingMode(null);
     setDirectorAnalysis(undefined);
     replaceSoundEffectRecommendations([]);
+    setMusicOverridesByDialogueId(new Map());
     setFallbackReason(null);
     setError("");
     setActiveFormationSource("generated");
@@ -2102,7 +2288,9 @@ export default function App() {
     setFormationStatus("正在检查 UE Blueprint 站位...");
     if (nextDatabase.sourceName === "内置演示数据") {
       setFormationStatus("使用规则导演自动安排的角色位置");
-      await applySequence(nextSequence, requestedMode);
+      await applySequence(nextSequence, requestedMode, {
+        applyResultImmediately: requestedMode === "trae",
+      });
       return;
     }
 
@@ -2132,7 +2320,9 @@ export default function App() {
             : "BP 站位读取失败",
         ),
       );
-      await applySequence(nextSequence, requestedMode);
+      await applySequence(nextSequence, requestedMode, {
+        applyResultImmediately: requestedMode === "trae",
+      });
       return;
     } finally {
       window.clearTimeout(slowFormationNotice);
@@ -2144,21 +2334,37 @@ export default function App() {
       return;
     }
     if (lookup.status === "found" && lookup.snapshot) {
-      setFormationStatus(lookup.message);
-      setFormationChoice(
-        createFormationChoice(
+      try {
+        const choice = createFormationChoice(
           nextDatabase,
           nextSequence,
           lookup.snapshot,
           requestedMode,
           soundEffectCatalog.entries,
-        ),
-      );
-      setFormationChoiceMode("initial");
+        );
+        setFormationStatus(lookup.message);
+        setFormationChoice(choice);
+        setFormationChoiceMode(
+          requestedMode === "trae" ? "director-request" : "initial",
+        );
+      } catch (mappingError) {
+        setFormationStatus(
+          skippedBlueprintMessage(
+            mappingError instanceof Error
+              ? mappingError.message
+              : "BP 角色与对话 NPC 不匹配",
+          ),
+        );
+        await applySequence(nextSequence, requestedMode, {
+          applyResultImmediately: requestedMode === "trae",
+        });
+      }
       return;
     }
     setFormationStatus(skippedBlueprintMessage(lookup.message));
-    await applySequence(nextSequence, requestedMode);
+    await applySequence(nextSequence, requestedMode, {
+      applyResultImmediately: requestedMode === "trae",
+    });
   }
 
   async function refreshBlueprintFormation() {
@@ -2203,18 +2409,33 @@ export default function App() {
         setFormationStatus(skippedBlueprintMessage(lookup.message));
         return;
       }
-      setFormationChoice(
-        createFormationChoice(
+      try {
+        const choice = createFormationChoice(
           database,
           sourceSequence,
           lookup.snapshot,
           requestedMode,
           soundEffectCatalog.entries,
           formationChoice.ai,
-        ),
-      );
-      setFormationStatus(`${lookup.message}，请确认是否采用最新位置`);
-      setFormationChoiceMode("switch");
+          formationChoice.playerPositionLocked,
+        );
+        setFormationChoice(choice);
+        setFormationStatus(`${lookup.message}，请确认是否采用最新位置`);
+        setFormationChoiceMode("switch");
+      } catch (mappingError) {
+        setFormationChoice(null);
+        setFormationChoiceMode(null);
+        setFormationStatus(
+          skippedBlueprintMessage(
+            mappingError instanceof Error
+              ? mappingError.message
+              : "BP 角色与对话 NPC 不匹配",
+          ),
+        );
+        await applySequence(sourceSequence, requestedMode, {
+          applyResultImmediately: requestedMode === "trae",
+        });
+      }
     } catch (formationError) {
       if (formationRunId !== formationRunRef.current) {
         return;
@@ -2234,12 +2455,68 @@ export default function App() {
     }
   }
 
-  function chooseFormation(choice: FormationOptionId) {
+  function chooseFormation(
+    choice: FormationOptionId,
+    playerPositionLocked: boolean,
+  ) {
     if (!formationChoice) {
       return;
     }
     const selectionMode = formationChoiceMode;
+    const nextFormationChoice = {
+      ...formationChoice,
+      playerPositionLocked,
+      requestedMode:
+        selectionMode === "director-request"
+          ? ("trae" as const)
+          : formationChoice.requestedMode,
+    };
+    setFormationChoice(nextFormationChoice);
     setFormationChoiceMode(null);
+    const useBlueprint = choice === "blueprint";
+    const blueprintPreview = playerPositionLocked
+      ? nextFormationChoice.blueprintPlayerLocked
+      : nextFormationChoice.blueprint;
+    if (selectionMode === "director-request") {
+      const existingTraePlan = nextFormationChoice.ai;
+      const existingMatchesStrategy =
+        existingTraePlan?.result.appliedMode === "trae" &&
+        existingTraePlan.result.input.constraints
+          .preserve_input_formation === useBlueprint &&
+        (!useBlueprint ||
+          (existingTraePlan.result.input.constraints.lock_player_position !==
+            false) === playerPositionLocked);
+      if (
+        existingMatchesStrategy &&
+        !traeForceRegenerateRef.current &&
+        existingTraePlan
+      ) {
+        applyDirectorResult(
+          existingTraePlan.sequence,
+          existingTraePlan.result,
+        );
+        return;
+      }
+
+      const selectedSequence =
+        nextFormationChoice.blueprintPlayerLocked.sequence;
+      setActiveFormationSource(useBlueprint ? "blueprint" : "generated");
+      setActiveFormationVariant(useBlueprint ? "blueprint" : "generated");
+      setFormationStatus(
+        useBlueprint
+          ? blueprintFormationStatus(playerPositionLocked)
+          : "TRAE 将自主设计全部角色占位",
+      );
+      void applySequence(selectedSequence, "trae", {
+        preserveInputPositions: useBlueprint,
+        lockPlayerPosition: playerPositionLocked,
+        fallbackPreserveInputPositions: useBlueprint,
+        forceRegenerate: traeForceRegenerateRef.current,
+        preserveActiveShot: true,
+        applyResultImmediately: true,
+      });
+      return;
+    }
     if (selectionMode === "switch") {
       setPendingDirectorResult(null);
       setSharedComparison(null);
@@ -2254,8 +2531,8 @@ export default function App() {
       }
       const selectedPreview =
         choice === "blueprint"
-          ? formationChoice.blueprint
-          : formationChoice.generated;
+          ? blueprintPreview
+          : nextFormationChoice.generated;
       setSequence(selectedPreview.sequence);
       setShots(selectedPreview.shots);
       setAppliedDirector("rule");
@@ -2268,28 +2545,33 @@ export default function App() {
       setActiveFormationVariant(choice);
       setFormationStatus(
         choice === "blueprint"
-          ? "保留 UE Formation 的初始位置与朝向"
+          ? blueprintFormationStatus(playerPositionLocked)
           : "使用规则导演自动安排的角色位置",
       );
       focusPlanShot(selectedPreview.shots, selectedPreview.sequence, true);
       return;
     }
-    const useBlueprint = choice === "blueprint";
     const selected = useBlueprint
-      ? formationChoice.blueprint.sequence
-      : formationChoice.sourceSequence;
+      ? nextFormationChoice.blueprintPlayerLocked.sequence
+      : nextFormationChoice.requestedMode === "trae"
+        ? nextFormationChoice.blueprintPlayerLocked.sequence
+        : nextFormationChoice.sourceSequence;
     setActiveFormationSource(useBlueprint ? "blueprint" : "generated");
     setActiveFormationVariant(choice);
     setFormationStatus(
       useBlueprint
-        ? "保留 UE Formation 的初始位置与朝向"
-        : "使用规则导演自动安排的角色位置",
+        ? blueprintFormationStatus(playerPositionLocked)
+        : nextFormationChoice.requestedMode === "trae"
+          ? "TRAE 将自主设计全部角色占位"
+          : "使用规则导演自动安排的角色位置",
     );
-    void applySequence(
-      selected,
-      formationChoice.requestedMode,
-      { preserveInputPositions: useBlueprint },
-    );
+    void applySequence(selected, nextFormationChoice.requestedMode, {
+      preserveInputPositions: useBlueprint,
+      lockPlayerPosition: playerPositionLocked,
+      fallbackPreserveInputPositions: useBlueprint,
+      applyResultImmediately:
+        nextFormationChoice.requestedMode === "trae",
+    });
   }
 
   function choosePendingDirectorFormation(choice: FormationSelectionId) {
@@ -2309,6 +2591,8 @@ export default function App() {
     }
     void applySequence(currentFormationSequence, pending.result.appliedMode, {
       preserveInputPositions: true,
+      lockPlayerPosition:
+        formationChoice?.playerPositionLocked ?? true,
       fallbackPreserveInputPositions: true,
       keepCurrentPreview: true,
       forceRegenerate: true,
@@ -2434,6 +2718,8 @@ export default function App() {
       setFormationChoiceMode(null);
       void applySequence(sequence, "rule", {
         preserveInputPositions: activeFormationSource === "blueprint",
+        lockPlayerPosition:
+          formationChoice?.playerPositionLocked ?? true,
         preserveActiveShot: true,
       });
       return;
@@ -2463,13 +2749,14 @@ export default function App() {
     } else if (mode === "trae") {
       void refreshTraeConnection();
       if (
-        !forceRegenerate &&
-        formationChoice?.ai?.result.appliedMode === "trae"
+        formationChoice &&
+        query === sequence.prefix &&
+        !formationChecking &&
+        !formationChoiceMode &&
+        !directorLoading
       ) {
-        applyDirectorResult(
-          formationChoice.ai.sequence,
-          formationChoice.ai.result,
-        );
+        traeForceRegenerateRef.current = forceRegenerate;
+        setFormationChoiceMode("director-request");
         return;
       }
       if (
@@ -2483,6 +2770,7 @@ export default function App() {
           preserveInputPositions: false,
           fallbackPreserveInputPositions: true,
           forceRegenerate,
+          applyResultImmediately: true,
         });
       }
     } else {
@@ -2493,11 +2781,15 @@ export default function App() {
       );
       setFormationStatus(
         activeFormationSource === "blueprint"
-          ? "保留 UE Formation 的初始位置与朝向"
+          ? blueprintFormationStatus(
+              formationChoice?.playerPositionLocked ?? true,
+            )
           : "使用规则导演自动安排的角色位置",
       );
       void applySequence(sequence, "rule", {
         preserveInputPositions: activeFormationSource === "blueprint",
+        lockPlayerPosition:
+          formationChoice?.playerPositionLocked ?? true,
         preserveActiveShot: true,
         keepBackgroundRequest: directorLoading,
       });
@@ -3821,6 +4113,7 @@ export default function App() {
               <ShotInspector
                 shot={activeShot}
                 sequence={sequence}
+                activeDialogueId={activeDialogueId}
                 directorAnalysis={directorAnalysis}
                 soundEffects={soundEffects}
                 soundEffectCatalog={soundEffectCatalog}
@@ -3853,6 +4146,9 @@ export default function App() {
                 onExportSoundEffects={() =>
                   void previewCurrentSoundEffectExport()
                 }
+                onChangeSoundEffect={updateSoundEffectRecommendation}
+                onApplySoundEffect={applySoundEffectFromLibrary}
+                onApplyMusic={applyMusicFromLibrary}
               />
             </>
           ) : (
@@ -4005,6 +4301,7 @@ export default function App() {
         {formationChoice && formationChoiceMode && !sharedComparison && (
           <LazyBlueprintFormationModal
             blueprint={formationChoice.blueprint}
+            blueprintPlayerLocked={formationChoice.blueprintPlayerLocked}
             generated={formationChoice.generated}
             ai={
               formationChoice.ai
@@ -4025,21 +4322,35 @@ export default function App() {
             snapshot={formationChoice.snapshot}
             mappedSlotCount={formationChoice.mappedSlotCount}
             initialChoice={
-              formationChoiceMode === "initial"
+              formationChoiceMode === "initial" ||
+              formationChoiceMode === "director-request"
                 ? "blueprint"
                 : activeFormationVariant
             }
+            initialPlayerPositionLocked={
+              formationChoice.playerPositionLocked
+            }
             mode={formationChoiceMode}
-            onChoose={(choice) => {
+            onChoose={(choice, playerPositionLocked) => {
               if (choice !== "current") {
-                chooseFormation(choice);
+                chooseFormation(choice, playerPositionLocked);
               }
             }}
-            onClose={() => setFormationChoiceMode(null)}
+            onClose={() => {
+              traeForceRegenerateRef.current = false;
+              if (
+                formationChoiceMode === "director-request" &&
+                appliedDirector !== "trae"
+              ) {
+                setDirectorMode(appliedDirector);
+              }
+              setFormationChoiceMode(null);
+            }}
           />
         )}
 
         {pendingDirectorResult?.result.analysis &&
+          pendingDirectorResult.result.appliedMode !== "trae" &&
           pendingDirectorResult.reviewFormation !== false &&
           !sharedComparison &&
           !storyboardExportBusy &&
@@ -4066,8 +4377,13 @@ export default function App() {
               )} 建议占位`}
               aiSource={pendingDirectorResult.result.sharedSource}
               initialChoice="ai"
+              initialPlayerPositionLocked={
+                formationChoice?.playerPositionLocked ?? true
+              }
               mode="ai-review"
-              onChoose={choosePendingDirectorFormation}
+              onChoose={(choice) =>
+                choosePendingDirectorFormation(choice)
+              }
               onClose={() => undefined}
             />
           )}

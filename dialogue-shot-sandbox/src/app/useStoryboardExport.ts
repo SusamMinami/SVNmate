@@ -81,6 +81,95 @@ export function getStoryboardExportAvailability(
   };
 }
 
+function createLocalExportPreview(
+  request: StoryboardExportRequest,
+): DialogueStoryboardExportPreview {
+  const nodes = request.shots.flatMap((shot, shotIndex) =>
+    shot.dialogueIds.map((dialogueId, dialogueIndex) => ({
+      dialogueId,
+      shotIndex,
+      role: dialogueIndex === 0 ? "shot_start" as const : "continuation" as const,
+      action: "create" as const,
+      existingCameraPosition: "",
+      desiredCameraPosition: dialogueIndex === 0 ? "c1" : "",
+      existingMovementCount: 0,
+      desiredMovementCount: dialogueIndex === 0 ? 1 : 0,
+    })),
+  );
+  const characterActions = (request.characterActions ?? []).map(
+    (item, characterActionIndex) => ({
+      characterActionIndex,
+      dialogueId: item.dialogueId,
+      modelIndex: item.modelIndex,
+      characterLabel: item.characterLabel || `槽位 ${item.modelIndex}`,
+      existingActions: [],
+      desiredActions: item.actions.map((action) => ({ ...action })),
+      preservedComplexActionCount: 0,
+      action: "add" as const,
+    }),
+  );
+  const soundEffects = (request.soundEffects ?? []).map(
+    (item, soundEffectIndex) => ({
+      soundEffectIndex,
+      dialogueId: item.dialogueId,
+      assetName: item.assetName,
+      delaySeconds: item.delaySeconds ?? 0,
+      resolvedAssetPath: "",
+      existingAssetPath: "",
+      existingDelaySeconds: 0,
+      action: "add" as const,
+    }),
+  );
+  const music = (request.music ?? []).map((item, musicIndex) => ({
+    musicIndex,
+    dialogueId: item.dialogueId,
+    stateId: item.stateId,
+    stateName: item.stateName,
+    musicName: item.musicName,
+    existingStateId: 0,
+    action: "add" as const,
+  }));
+  const invalidShotCount = request.shots.filter(
+    (shot) => !shot.projectionValid,
+  ).length;
+  return {
+    reviewToken: "",
+    dialogueId: request.dialogueId,
+    startId: request.startId,
+    dialogueAssetPath: "",
+    formationAssetPath: "",
+    cameraName: "",
+    shotCount: request.shots.length,
+    changedNodeCount: nodes.length,
+    overwrittenNodeCount: 0,
+    clearedNodeCount: 0,
+    soundEffectCount: soundEffects.length,
+    changedSoundEffectCount: soundEffects.length,
+    replacedSoundEffectCount: 0,
+    invalidShotCount,
+    globalBlockedReasons: [],
+    blockedReasons: [],
+    warnings: [],
+    shots: request.shots.map((shot, shotIndex) => ({
+      shotIndex,
+      dialogueIds: [...shot.dialogueIds],
+      projectionValid: shot.projectionValid,
+      actorActionCount: shot.actorActions?.length ?? 0,
+      blockedReasons: [],
+    })),
+    nodes,
+    characterActions,
+    characterActionBlockedReasons: [],
+    characterActionCount: characterActions.length,
+    changedCharacterActionCount: characterActions.length,
+    soundEffects,
+    music,
+    musicCount: music.length,
+    changedMusicCount: music.length,
+    replacedMusicCount: 0,
+  };
+}
+
 export function useStoryboardExport({
   sequence,
   shots,
@@ -124,18 +213,29 @@ export function useStoryboardExport({
         startId: sequence.startId,
         dialogueIds: selectedShots.flatMap((shot) => shot.dialogueIds),
         participantModelIndexes:
-          selectedShots.length > 0 || selectedCharacterActions.length > 0
+          selectedShots.length > 0
             ? sequence.participants.map((participant) => participant.modelIndex!)
-            : [],
+            : Array.from(
+                new Set(
+                  selectedCharacterActions.map((track) => track.modelIndex),
+                ),
+              ),
         usesBlueprintFormation:
           selectedShots.length > 0 || selectedCharacterActions.length > 0,
-        characterActions: selectedCharacterActions.map((track) => ({
-          ...track,
-          actions: track.actions.map((action) => ({ ...action })),
-        })),
+        characterActions: selectedCharacterActions.map((track) => {
+          const participant = sequence.participants.find(
+            (candidate) => candidate.modelIndex === track.modelIndex,
+          );
+          return {
+            ...track,
+            characterLabel: participant?.name ?? "",
+            actions: track.actions.map((action) => ({ ...action })),
+          };
+        }),
         soundEffects: selectedSoundEffects.map((recommendation) => ({
           dialogueId: recommendation.dialogueId,
           assetName: recommendation.assetName,
+          delaySeconds: recommendation.delaySeconds ?? 0,
         })),
         music: selectedMusic.map((recommendation) => ({
           dialogueId: recommendation.dialogueId,
@@ -185,8 +285,6 @@ export function useStoryboardExport({
   );
 
   const previewCurrent = useCallback(async () => {
-    setBusy(true);
-    setBusyLabel("读取中");
     setError("");
     setResult("");
     try {
@@ -206,21 +304,17 @@ export function useStoryboardExport({
           activeDialogueIds.has(recommendation.dialogueId),
         ),
       );
-      const nextPreview = await inspectDialogueStoryboardExport(nextRequest);
       const activeIndex = shots.indexOf(activeShot);
       setMode("current");
       setCurrentShotNumber((activeIndex >= 0 ? activeIndex : 0) + 1);
       setRequest(nextRequest);
-      setPreview(nextPreview);
+      setPreview(createLocalExportPreview(nextRequest));
     } catch (exportError) {
       setError(
         exportError instanceof Error
           ? exportError.message
           : "无法检查 UE 分镜写入",
       );
-    } finally {
-      setBusy(false);
-      setBusyLabel("");
     }
   }, [
     activeShot,
@@ -232,8 +326,6 @@ export function useStoryboardExport({
   ]);
 
   const previewCurrentSoundEffects = useCallback(async () => {
-    setBusy(true);
-    setBusyLabel("读取中");
     setError("");
     setResult("");
     try {
@@ -248,44 +340,34 @@ export function useStoryboardExport({
         throw new Error("当前分镜没有可写入的音效建议");
       }
       const nextRequest = buildRequest([], [], currentSoundEffects, []);
-      const nextPreview = await inspectDialogueStoryboardExport(nextRequest);
       const activeIndex = shots.indexOf(activeShot);
       setMode("sound");
       setCurrentShotNumber((activeIndex >= 0 ? activeIndex : 0) + 1);
       setRequest(nextRequest);
-      setPreview(nextPreview);
+      setPreview(createLocalExportPreview(nextRequest));
     } catch (exportError) {
       setError(
         exportError instanceof Error
           ? exportError.message
           : "无法检查当前分镜音效写入",
       );
-    } finally {
-      setBusy(false);
-      setBusyLabel("");
     }
   }, [activeShot, buildRequest, shots, soundEffects]);
 
   const previewAll = useCallback(async () => {
-    setBusy(true);
-    setBusyLabel("读取中");
     setError("");
     setResult("");
     try {
       const nextRequest = buildRequest();
-      const nextPreview = await inspectDialogueStoryboardExport(nextRequest);
       setMode("all");
       setRequest(nextRequest);
-      setPreview(nextPreview);
+      setPreview(createLocalExportPreview(nextRequest));
     } catch (exportError) {
       setError(
         exportError instanceof Error
           ? exportError.message
           : "无法检查全部 UE 分镜写入",
       );
-    } finally {
-      setBusy(false);
-      setBusyLabel("");
     }
   }, [buildRequest]);
 
@@ -322,7 +404,7 @@ export function useStoryboardExport({
         return;
       }
       setBusy(true);
-      setBusyLabel("写入中");
+      setBusyLabel(preview.reviewToken ? "写入中" : "检查中");
       setError("");
       try {
         const selectedIndexes = new Set(selectedShotIndexes);
@@ -357,11 +439,31 @@ export function useStoryboardExport({
         const selectedRequest: StoryboardExportRequest = {
           ...request,
           dialogueIds: selectedShots.flatMap((shot) => shot.dialogueIds),
+          participantModelIndexes:
+            selectedShots.length > 0
+              ? request.participantModelIndexes
+              : Array.from(
+                  new Set(
+                    selectedCharacterActions.map(
+                      (track) => track.modelIndex,
+                    ),
+                  ),
+                ),
+          usesBlueprintFormation:
+            selectedShots.length > 0 ||
+            selectedCharacterActions.length > 0,
           shots: selectedShots,
           characterActions: selectedCharacterActions,
           soundEffects: selectedSoundEffects,
           music: selectedMusic,
         };
+        if (!preview.reviewToken) {
+          const inspectedPreview =
+            await inspectDialogueStoryboardExport(selectedRequest);
+          setRequest(selectedRequest);
+          setPreview(inspectedPreview);
+          return;
+        }
         const exportsEntirePreview =
           selectedShots.length === request.shots.length &&
           selectedCharacterActions.length ===

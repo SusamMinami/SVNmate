@@ -171,30 +171,6 @@ export function DataSourceStatus({
               <dt>数据来源</dt>
               <dd title={sourceName}>{sourceName}</dd>
             </div>
-            {setupStatus && (
-              <>
-                <div>
-                  <dt>实时数据</dt>
-                  <dd title={setupStatus.liveResDirectory}>
-                    {setupStatus.liveResDirectory || "未配置"}
-                  </dd>
-                </div>
-                <div>
-                  <dt>配置文档</dt>
-                  <dd title={setupStatus.configDocDirectory}>
-                    {setupStatus.configDocDirectory || "未配置"}
-                  </dd>
-                </div>
-                {setupStatus.missionTargetTablePath && (
-                  <div>
-                    <dt>目标物表</dt>
-                    <dd title={setupStatus.missionTargetTablePath}>
-                      {setupStatus.missionTargetTablePath}
-                    </dd>
-                  </div>
-                )}
-              </>
-            )}
           </dl>
 
           <label className="workspace-status-toggle data-source-status__case">

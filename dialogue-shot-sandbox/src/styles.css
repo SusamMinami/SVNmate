@@ -168,7 +168,7 @@ textarea:focus-visible {
 }
 
 .data-source-status__popover {
-  width: min(420px, calc(100vw - 24px));
+  width: min(340px, calc(100vw - 24px));
 }
 
 .data-source-status__popover[data-state="warning"] > header > span {
@@ -2544,7 +2544,7 @@ textarea:focus-visible {
   color: #929891;
 }
 
-.character-action-row select,
+.character-action-picker__input,
 .character-action-node__add select {
   width: 100%;
   min-width: 0;
@@ -2555,6 +2555,66 @@ textarea:focus-visible {
   border: 1px solid var(--border);
   font-family: "Cascadia Code", Consolas, monospace;
   font-size: 9px;
+}
+
+.character-action-picker {
+  position: relative;
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 0;
+}
+
+.character-action-picker__input {
+  padding-right: 7px;
+}
+
+.character-action-picker__input[aria-invalid="true"] {
+  border-color: var(--warning);
+}
+
+.character-action-picker__menu {
+  position: absolute;
+  z-index: 12;
+  top: calc(100% + 3px);
+  right: 0;
+  left: 0;
+  display: grid;
+  padding: 3px;
+  background: #ffffff;
+  border: 1px solid var(--border-strong);
+  box-shadow: 0 8px 20px rgb(32 38 42 / 14%);
+}
+
+.character-action-picker__menu button {
+  overflow: hidden;
+  min-height: 25px;
+  padding: 4px 6px;
+  color: #303b44;
+  background: transparent;
+  border: 0;
+  font: 9px/15px "Cascadia Code", Consolas, monospace;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.character-action-picker__menu button:hover,
+.character-action-picker__menu button.is-active {
+  color: #ffffff;
+  background: var(--ink);
+}
+
+.character-action-picker__menu > span,
+.character-action-picker__menu > small {
+  padding: 5px 6px;
+  color: var(--text-muted);
+  font-size: 8px;
+}
+
+.character-action-picker__menu > small {
+  border-top: 1px solid var(--border);
+  text-align: right;
 }
 
 .character-action-row label {
@@ -2568,7 +2628,7 @@ textarea:focus-visible {
   font-size: 8px;
 }
 
-.character-action-row input {
+.character-action-row label input {
   width: 48px;
   height: 30px;
   min-width: 0;
@@ -2739,6 +2799,45 @@ textarea:focus-visible {
   flex-basis: 30px;
 }
 
+.sound-effect-list__controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 76px;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.sound-effect-list__controls label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  min-width: 0;
+  gap: 5px;
+}
+
+.sound-effect-list__controls label:last-child {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.sound-effect-list__controls select,
+.sound-effect-list__controls input {
+  width: 100%;
+  min-width: 0;
+  height: 27px;
+  padding: 0 5px;
+  color: var(--ink);
+  background: #ffffff;
+  border: 1px solid var(--border-strong);
+  border-radius: 2px;
+  font: 9px/1 "Cascadia Code", Consolas, monospace;
+}
+
+.sound-effect-list__controls label > span,
+.sound-effect-list__controls label > small {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 8px;
+}
+
 .sound-effect-playback-error {
   margin-top: 8px !important;
   color: var(--danger) !important;
@@ -2860,6 +2959,31 @@ textarea:focus-visible {
   transform: rotate(180deg);
 }
 
+.audio-library-browser__target {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  margin-top: 9px;
+}
+
+.audio-library-browser__target > span {
+  color: var(--text-muted);
+  font-size: 9px;
+}
+
+.audio-library-browser__target > select {
+  width: 100%;
+  min-width: 0;
+  height: 28px;
+  padding: 0 7px;
+  color: var(--ink);
+  background: #ffffff;
+  border: 1px solid var(--border-strong);
+  border-radius: 2px;
+  font: 9px/1 "Cascadia Code", Consolas, monospace;
+}
+
 .audio-library-browser__categories {
   display: flex;
   flex-wrap: wrap;
@@ -2901,7 +3025,7 @@ textarea:focus-visible {
 
 .audio-library-browser__resources > div {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 30px;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   min-width: 0;
   gap: 8px;
@@ -2939,12 +3063,31 @@ textarea:focus-visible {
   color: #515b64;
   font-size: 9px;
   line-height: 14px;
+  overflow-wrap: anywhere;
 }
 
 .audio-library-browser__resources .icon-button {
   width: 30px;
   height: 30px;
   flex-basis: 30px;
+}
+
+.audio-library-browser__resource-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.audio-library-browser__apply {
+  width: 30px;
+  height: 30px;
+  flex-basis: 30px;
+}
+
+.audio-library-browser__apply[aria-pressed="true"] {
+  color: #245c43;
+  background: #edf8f2;
+  border-color: #aed4c0;
 }
 
 .audio-library-browser__error {
@@ -3739,7 +3882,7 @@ textarea:focus-visible {
 
 .formation-compare-modal {
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto auto;
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto auto;
   width: min(980px, 97vw);
   height: min(760px, 94vh);
   overflow: hidden;
@@ -3819,6 +3962,52 @@ textarea:focus-visible {
   font-family: "Cascadia Code", Consolas, monospace;
   font-size: 11px;
   font-weight: 700;
+}
+
+.formation-player-lock {
+  padding: 9px 18px;
+  background: #ffffff;
+  border-bottom: 1px solid var(--border);
+}
+
+.formation-player-lock label {
+  display: inline-grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.formation-player-lock input {
+  width: 15px;
+  height: 15px;
+  margin: 1px 0 0;
+  accent-color: var(--accent);
+}
+
+.formation-player-lock span {
+  display: grid;
+  gap: 1px;
+}
+
+.formation-player-lock strong {
+  color: var(--ink);
+  font-size: 10px;
+}
+
+.formation-player-lock small {
+  color: var(--text-muted);
+  font-size: 9px;
+  line-height: 14px;
+}
+
+.formation-player-lock[data-enabled="false"] {
+  background: var(--surface-muted);
+  opacity: 0.62;
+}
+
+.formation-player-lock[data-enabled="false"] label {
+  cursor: not-allowed;
 }
 
 .formation-compare-stage {
@@ -4167,6 +4356,12 @@ textarea:focus-visible {
   white-space: normal;
 }
 
+.storyboard-export-action-table td strong {
+  display: block;
+  color: var(--ink);
+  font-size: 10px;
+}
+
 .storyboard-export-table td small {
   margin-top: 2px;
   color: var(--text-muted);
@@ -4184,6 +4379,7 @@ textarea:focus-visible {
 }
 
 .storyboard-export-table tr[data-selected="false"] td code,
+.storyboard-export-table tr[data-selected="false"] td strong,
 .storyboard-export-table tr[data-selected="false"] td small {
   color: #89939b;
 }

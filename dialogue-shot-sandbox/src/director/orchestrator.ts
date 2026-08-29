@@ -55,6 +55,7 @@ export interface DirectorRunResult {
 
 interface DirectorRunOptions {
   preserveInputPositions?: boolean;
+  lockPlayerPosition?: boolean;
   fallbackPreserveInputPositions?: boolean;
   collectRevisionCases?: boolean;
   soundEffectCatalog?: readonly SoundEffectCatalogEntry[];
@@ -76,6 +77,7 @@ async function runProvider(
 ): Promise<Omit<DirectorRunResult, "requestedMode" | "fallbackReason">> {
   const input = createDirectorInput(sequence, undefined, {
     preserveInputFormation: options.preserveInputPositions,
+    lockPlayerPosition: options.lockPlayerPosition,
     collectRevisionCases: options.collectRevisionCases,
     soundEffectCatalog: options.soundEffectCatalog,
   });
@@ -144,6 +146,7 @@ export async function designShots(
         preserveInputPositions:
           options.fallbackPreserveInputPositions ??
           options.preserveInputPositions,
+        lockPlayerPosition: options.lockPlayerPosition,
         soundEffectCatalog: options.soundEffectCatalog,
       })),
       requestedMode,
@@ -258,6 +261,8 @@ export function createSharedPlanPreview(
     {
       preserveInputPositions:
         input.constraints.preserve_input_formation === true,
+      lockPlayerPosition:
+        input.constraints.lock_player_position !== false,
     },
   );
   const stagedSequence = { ...sequence, participants };

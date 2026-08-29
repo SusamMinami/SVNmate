@@ -1,5 +1,6 @@
 import {
   AudioLines,
+  Check,
   ChevronDown,
   LoaderCircle,
   Music2,
@@ -17,7 +18,10 @@ import {
   musicPreviewUrl,
   type MusicCatalogEntry,
   type MusicCatalogSnapshot,
+  type MusicRecommendation,
 } from "../data/musicCatalog";
+import type { DirectorSoundEffectRecommendation } from "../director/contracts";
+import type { DialogueRow } from "../types";
 import { prepareSoundEffectPreview } from "../ue/client";
 
 type AudioLibraryKind = "sound-effect" | "music";
@@ -31,6 +35,16 @@ interface AudioLibraryCategory {
 interface AudioLibraryBrowserProps {
   soundEffectCatalog: SoundEffectCatalogSnapshot;
   musicCatalog: MusicCatalogSnapshot;
+  dialogueRows: DialogueRow[];
+  currentDialogueIds: string[];
+  activeDialogueId: string;
+  appliedSoundEffects: DirectorSoundEffectRecommendation[];
+  appliedMusic: MusicRecommendation[];
+  onApplySoundEffect: (
+    entry: SoundEffectCatalogEntry,
+    dialogueId: string,
+  ) => void;
+  onApplyMusic: (entry: MusicCatalogEntry, dialogueId: string) => void;
 }
 
 const UNCATEGORIZED_MUSIC = "__uncategorized__";
@@ -58,11 +72,23 @@ function musicCategories(
 export function AudioLibraryBrowser({
   soundEffectCatalog,
   musicCatalog,
+  dialogueRows,
+  currentDialogueIds,
+  activeDialogueId,
+  appliedSoundEffects,
+  appliedMusic,
+  onApplySoundEffect,
+  onApplyMusic,
 }: AudioLibraryBrowserProps) {
   const [library, setLibrary] = useState<AudioLibraryKind | null>(null);
   const [category, setCategory] = useState<string | null>(null);
+  const [targetDialogueId, setTargetDialogueId] =
+    useState(activeDialogueId);
   const [playingKey, setPlayingKey] = useState<string | null>(null);
   const [preparingKey, setPreparingKey] = useState<string | null>(null);
+  const [auditionedKeys, setAuditionedKeys] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [playbackError, setPlaybackError] = useState("");
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const playbackRunRef = useRef(0);
@@ -96,6 +122,22 @@ export function AudioLibraryBrowser({
             : entry.tags.some((tag) => tag.trim() === category),
         )
       : [];
+  const dialogueById = useMemo(
+    () => new Map(dialogueRows.map((row) => [row.id, row])),
+    [dialogueRows],
+  );
+  const dialogueScope = currentDialogueIds.join("|");
+
+  useEffect(() => {
+    setTargetDialogueId((current) => {
+      if (currentDialogueIds.includes(current)) {
+        return current;
+      }
+      return currentDialogueIds.includes(activeDialogueId)
+        ? activeDialogueId
+        : currentDialogueIds[0] ?? "";
+    });
+  }, [activeDialogueId, dialogueScope]);
 
   function stopPlayback() {
     playbackRunRef.current += 1;
@@ -162,6 +204,14 @@ export function AudioLibraryBrowser({
       await audio.play();
       if (audioRef.current === audio) {
         setPlayingKey(key);
+        setAuditionedKeys((current) => {
+          if (current.has(key)) {
+            return current;
+          }
+          const next = new Set(current);
+          next.add(key);
+          return next;
+        });
       }
     } catch (error) {
       if (playbackRunRef.current === runId) {
@@ -247,24 +297,43 @@ export function AudioLibraryBrowser({
       </div>
 
       {library && (
-        <div
-          className="audio-library-browser__categories"
-          role="group"
-          aria-label={library === "sound-effect" ? "音效分类" : "音乐分类"}
-        >
-          {categories.map((item) => (
-            <button
-              type="button"
-              aria-pressed={category === item.id}
-              className={category === item.id ? "is-active" : ""}
-              key={item.id}
-              onClick={() => selectCategory(item.id)}
+        <>
+          <label className="audio-library-browser__target">
+            <span>应用到节点</span>
+            <select
+              aria-label="资料库资源应用节点"
+              value={targetDialogueId}
+              onChange={(event) => setTargetDialogueId(event.target.value)}
             >
-              <span>{item.label}</span>
-              <small>{item.count}</small>
-            </button>
-          ))}
-        </div>
+              {currentDialogueIds.map((dialogueId) => (
+                <option key={dialogueId} value={dialogueId}>
+                  {dialogueId}
+                  {dialogueById.get(dialogueId)?.content
+                    ? ` · ${dialogueById.get(dialogueId)!.content}`
+                    : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div
+            className="audio-library-browser__categories"
+            role="group"
+            aria-label={library === "sound-effect" ? "音效分类" : "音乐分类"}
+          >
+            {categories.map((item) => (
+              <button
+                type="button"
+                aria-pressed={category === item.id}
+                className={category === item.id ? "is-active" : ""}
+                key={item.id}
+                onClick={() => selectCategory(item.id)}
+              >
+                <span>{item.label}</span>
+                <small>{item.count}</small>
+              </button>
+            ))}
+          </div>
+        </>
       )}
 
       {library === "sound-effect" && category && (
@@ -278,32 +347,59 @@ export function AudioLibraryBrowser({
           {soundEffects.map((entry) => {
             const key = `sound-effect:${entry.assetName}`;
             const preparing = preparingKey === key;
+            const applied = appliedSoundEffects.some(
+              (recommendation) =>
+                recommendation.dialogueId === targetDialogueId &&
+                recommendation.assetName === entry.assetName,
+            );
+            const auditioned = auditionedKeys.has(key);
             return (
               <div role="listitem" key={`${entry.category}:${entry.assetName}`}>
                 <div>
                   <strong>{entry.assetName}</strong>
                   <p>{entry.description}</p>
                 </div>
-                <button
-                  className="icon-button"
-                  type="button"
-                  title={playingKey === key ? "暂停音效" : "试听音效"}
-                  aria-label={
-                    playingKey === key
-                      ? `暂停资料库音效 ${entry.assetName}`
-                      : `试听资料库音效 ${entry.assetName}`
-                  }
-                  disabled={preparing}
-                  onClick={() => playSoundEffect(entry)}
-                >
-                  {preparing ? (
-                    <LoaderCircle className="spin" size={15} />
-                  ) : playingKey === key ? (
-                    <Pause size={15} />
-                  ) : (
-                    <Play size={15} />
+                <div className="audio-library-browser__resource-actions">
+                  {auditioned && (
+                    <button
+                      className="icon-button audio-library-browser__apply"
+                      type="button"
+                      aria-label={`应用资料库音效 ${entry.assetName} 到节点 ${targetDialogueId}`}
+                      aria-pressed={applied}
+                      disabled={!targetDialogueId}
+                      title={
+                        targetDialogueId
+                          ? `应用到节点 ${targetDialogueId}`
+                          : "当前分镜没有可用对话节点"
+                      }
+                      onClick={() =>
+                        onApplySoundEffect(entry, targetDialogueId)
+                      }
+                    >
+                      <Check size={14} />
+                    </button>
                   )}
-                </button>
+                  <button
+                    className="icon-button"
+                    type="button"
+                    title={playingKey === key ? "暂停音效" : "试听音效"}
+                    aria-label={
+                      playingKey === key
+                        ? `暂停资料库音效 ${entry.assetName}`
+                        : `试听资料库音效 ${entry.assetName}`
+                    }
+                    disabled={preparing}
+                    onClick={() => playSoundEffect(entry)}
+                  >
+                    {preparing ? (
+                      <LoaderCircle className="spin" size={15} />
+                    ) : playingKey === key ? (
+                      <Pause size={15} />
+                    ) : (
+                      <Play size={15} />
+                    )}
+                  </button>
+                </div>
               </div>
             );
           })}
@@ -319,6 +415,12 @@ export function AudioLibraryBrowser({
           {music.map((entry) => {
             const key = `music:${entry.recordId}`;
             const preparing = preparingKey === key;
+            const applied = appliedMusic.some(
+              (recommendation) =>
+                recommendation.dialogueId === targetDialogueId &&
+                recommendation.recordId === entry.recordId,
+            );
+            const auditioned = auditionedKeys.has(key);
             return (
               <div role="listitem" key={entry.recordId}>
                 <div>
@@ -328,32 +430,51 @@ export function AudioLibraryBrowser({
                   </span>
                   <p>{entry.notes || entry.analysis?.summary || "无备注"}</p>
                 </div>
-                <button
-                  className="icon-button"
-                  type="button"
-                  title={
-                    entry.fileToken
-                      ? playingKey === key
-                        ? "暂停音乐"
-                        : "试听音乐"
-                      : "未提供试听文件"
-                  }
-                  aria-label={
-                    playingKey === key
-                      ? `暂停资料库音乐 ${entry.name}`
-                      : `试听资料库音乐 ${entry.name}`
-                  }
-                  disabled={!entry.fileToken || preparing}
-                  onClick={() => playMusic(entry)}
-                >
-                  {preparing ? (
-                    <LoaderCircle className="spin" size={15} />
-                  ) : playingKey === key ? (
-                    <Pause size={15} />
-                  ) : (
-                    <Play size={15} />
+                <div className="audio-library-browser__resource-actions">
+                  {auditioned && (
+                    <button
+                      className="icon-button audio-library-browser__apply"
+                      type="button"
+                      aria-label={`应用资料库音乐 ${entry.name} 到节点 ${targetDialogueId}`}
+                      aria-pressed={applied}
+                      disabled={!targetDialogueId}
+                      title={
+                        targetDialogueId
+                          ? `应用到节点 ${targetDialogueId}`
+                          : "当前分镜没有可用对话节点"
+                      }
+                      onClick={() => onApplyMusic(entry, targetDialogueId)}
+                    >
+                      <Check size={14} />
+                    </button>
                   )}
-                </button>
+                  <button
+                    className="icon-button"
+                    type="button"
+                    title={
+                      entry.fileToken
+                        ? playingKey === key
+                          ? "暂停音乐"
+                          : "试听音乐"
+                        : "未提供试听文件"
+                    }
+                    aria-label={
+                      playingKey === key
+                        ? `暂停资料库音乐 ${entry.name}`
+                        : `试听资料库音乐 ${entry.name}`
+                    }
+                    disabled={!entry.fileToken || preparing}
+                    onClick={() => playMusic(entry)}
+                  >
+                    {preparing ? (
+                      <LoaderCircle className="spin" size={15} />
+                    ) : playingKey === key ? (
+                      <Pause size={15} />
+                    ) : (
+                      <Play size={15} />
+                    )}
+                  </button>
+                </div>
               </div>
             );
           })}

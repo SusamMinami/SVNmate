@@ -160,4 +160,41 @@ describe("sound effect preview", () => {
       mediaId: "89313708",
     });
   });
+
+  it("preserves a compressed remote attachment extension in the local cache", async () => {
+    temporaryRoot = await mkdtemp(join(tmpdir(), "sound-preview-"));
+    const cacheRoot = join(temporaryRoot, "cache");
+    const cachedPath = join(
+      cacheRoot,
+      "A_SFX_Dialog_516918-remote-fileRemote.mp3",
+    );
+    await mkdir(cacheRoot, { recursive: true });
+    await writeFile(cachedPath, Buffer.alloc(80, 3));
+
+    const preview = await prepareSoundEffectPreview(
+      "A_SFX_Dialog_516918",
+      {
+        cacheRoot,
+        remoteLibrary: [
+          {
+            recordId: "recRemote",
+            assetName: "A_SFX_Dialog_516918",
+            category: "特殊",
+            description: "报警声",
+            status: "可试听",
+            mediaId: "89313708",
+            durationSeconds: 6.976,
+            mediaCount: 1,
+            attachment: {
+              fileToken: "fileRemote",
+              fileName: "A_SFX_Dialog_516918.mp3",
+              size: 80,
+            },
+          },
+        ],
+      },
+    );
+
+    expect(preview.filePath).toBe(cachedPath);
+  });
 });

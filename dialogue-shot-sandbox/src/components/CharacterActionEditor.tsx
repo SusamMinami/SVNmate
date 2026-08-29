@@ -8,10 +8,23 @@ import {
   RefreshCw,
   Trash2,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
-import type { CharacterActionEditorController } from "../app/useCharacterActionEditor";
+import {
+  memo,
+  useDeferredValue,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type {
+  CharacterActionEditorController,
+  CharacterActionTrackDraft,
+} from "../app/useCharacterActionEditor";
+import type {
+  BlueprintMontageAction,
   DialogueCharacterActionItem,
+  DialogueCharacterActionTrack,
   DialogueSequence,
 } from "../types";
 
@@ -28,6 +41,206 @@ interface DraggedAction {
   actionId: string;
 }
 
+interface MontagePickerProps {
+  actions: BlueprintMontageAction[];
+  actionByName: ReadonlyMap<string, BlueprintMontageAction>;
+  value: string;
+  label: string;
+  disabled: boolean;
+  dialogueId: string;
+  modelIndex: number;
+  actionId: string;
+  onUpdate: CharacterActionEditorController["updateAction"];
+}
+
+const MAX_VISIBLE_MONTAGES = 8;
+const EMPTY_MONTAGE_ACTIONS: BlueprintMontageAction[] = [];
+const EMPTY_MONTAGE_ACTION_INDEX = new Map<
+  string,
+  BlueprintMontageAction
+>();
+
+const MontagePicker = memo(function MontagePicker({
+  actions,
+  actionByName,
+  value,
+  label,
+  disabled,
+  dialogueId,
+  modelIndex,
+  actionId,
+  onUpdate,
+}: MontagePickerProps) {
+  const listboxId = useId();
+  const rootRef = useRef<HTMLDivElement>(null);
+  const committedValueRef = useRef(value);
+  const [query, setQuery] = useState(value);
+  const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const deferredQuery = useDeferredValue(query.trim().toLocaleLowerCase());
+  const filtered = useMemo(() => {
+    if (!open) {
+      return { total: 0, visible: [] };
+    }
+    const terms = deferredQuery.split(/\s+/).filter(Boolean);
+    const matches = actions.filter((action) => {
+      if (terms.length === 0) {
+        return true;
+      }
+      const searchable =
+        `${action.name} ${action.assetPath}`.toLocaleLowerCase();
+      return terms.every((term) => searchable.includes(term));
+    });
+    return {
+      total: matches.length,
+      visible: matches.slice(0, MAX_VISIBLE_MONTAGES),
+    };
+  }, [actions, deferredQuery, open]);
+
+  useEffect(() => {
+    if (value === committedValueRef.current) {
+      return;
+    }
+    committedValueRef.current = value;
+    setQuery(value);
+  }, [value]);
+
+  useEffect(() => {
+    setActiveIndex(0);
+  }, [deferredQuery]);
+
+  function selectAction(action: BlueprintMontageAction) {
+    committedValueRef.current = action.name;
+    setQuery(action.name);
+    setOpen(false);
+    onUpdate(dialogueId, modelIndex, actionId, {
+      montageName: action.name,
+    });
+  }
+
+  function closeAndRestore() {
+    setOpen(false);
+    setQuery(committedValueRef.current);
+  }
+
+  const selectedAction = actionByName.get(value.toLocaleLowerCase());
+  const queryIsInvalid =
+    query.trim().length > 0 &&
+    !actionByName.has(query.trim().toLocaleLowerCase());
+
+  return (
+    <div
+      className="character-action-picker"
+      ref={rootRef}
+      onBlur={() => {
+        window.requestAnimationFrame(() => {
+          if (!rootRef.current?.contains(document.activeElement)) {
+            closeAndRestore();
+          }
+        });
+      }}
+    >
+      <input
+        className="character-action-picker__input"
+        type="text"
+        role="combobox"
+        aria-label={label}
+        aria-autocomplete="list"
+        aria-controls={listboxId}
+        aria-expanded={open}
+        aria-invalid={queryIsInvalid}
+        aria-activedescendant={
+          open && filtered.visible[activeIndex]
+            ? `${listboxId}-${activeIndex}`
+            : undefined
+        }
+        autoComplete="off"
+        disabled={disabled}
+        placeholder="输入动作关键词"
+        title={selectedAction?.assetPath ?? ""}
+        value={query}
+        onFocus={() => setOpen(true)}
+        onChange={(event) => {
+          const nextQuery = event.target.value;
+          const exact = actionByName.get(
+            nextQuery.trim().toLocaleLowerCase(),
+          );
+          setQuery(nextQuery);
+          setOpen(true);
+          setActiveIndex(0);
+          if (exact) {
+            committedValueRef.current = exact.name;
+            if (exact.name !== value) {
+              onUpdate(dialogueId, modelIndex, actionId, {
+                montageName: exact.name,
+              });
+            }
+          } else if (value) {
+            committedValueRef.current = "";
+            onUpdate(dialogueId, modelIndex, actionId, {
+              montageName: "",
+            });
+          }
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowDown") {
+            event.preventDefault();
+            setOpen(true);
+            setActiveIndex((current) =>
+              filtered.visible.length === 0
+                ? 0
+                : Math.min(current + 1, filtered.visible.length - 1),
+            );
+          } else if (event.key === "ArrowUp") {
+            event.preventDefault();
+            setOpen(true);
+            setActiveIndex((current) => Math.max(0, current - 1));
+          } else if (event.key === "Enter" && open) {
+            const action = filtered.visible[activeIndex];
+            if (action) {
+              event.preventDefault();
+              selectAction(action);
+            }
+          } else if (event.key === "Escape") {
+            event.preventDefault();
+            closeAndRestore();
+          }
+        }}
+      />
+      {open && (
+        <div
+          className="character-action-picker__menu"
+          id={listboxId}
+          role="listbox"
+        >
+          {filtered.visible.map((action, index) => (
+            <button
+              type="button"
+              role="option"
+              id={`${listboxId}-${index}`}
+              aria-selected={action.name === value}
+              className={index === activeIndex ? "is-active" : ""}
+              key={action.name}
+              title={action.assetPath}
+              onMouseDown={(event) => event.preventDefault()}
+              onMouseEnter={() => setActiveIndex(index)}
+              onClick={() => selectAction(action)}
+            >
+              {action.name}
+            </button>
+          ))}
+          {filtered.total === 0 && <span>没有匹配动作</span>}
+          {filtered.total > filtered.visible.length && (
+            <small>
+              {filtered.visible.length} / {filtered.total}
+            </small>
+          )}
+        </div>
+      )}
+    </div>
+  );
+});
+
 function actionTypeLabel(action: DialogueCharacterActionItem): string {
   const type = action.behaviourType ?? "ENone";
   return {
@@ -36,6 +249,18 @@ function actionTypeLabel(action: DialogueCharacterActionItem): string {
     ewalk: "走位",
     estatemachinewalk: "状态机走位",
   }[type.toLowerCase()] ?? type;
+}
+
+function groupTracksByDialogue<T extends { dialogueId: string }>(
+  tracks: readonly T[],
+): Map<string, T[]> {
+  const grouped = new Map<string, T[]>();
+  for (const track of tracks) {
+    const values = grouped.get(track.dialogueId) ?? [];
+    values.push(track);
+    grouped.set(track.dialogueId, values);
+  }
+  return grouped;
 }
 
 export function CharacterActionEditor({
@@ -86,11 +311,48 @@ export function CharacterActionEditor({
       ),
     [controller.catalogs],
   );
-  const rows = dialogueIds.flatMap((dialogueId) => {
-    const row = sequence.rows.find((item) => item.id === dialogueId);
-    return row ? [row] : [];
-  });
-
+  const actionByNameByModelIndex = useMemo(
+    () =>
+      new Map(
+        controller.catalogs.map((catalog) => [
+          catalog.modelIndex,
+          new Map(
+            catalog.actions.map((action) => [
+              action.name.toLocaleLowerCase(),
+              action,
+            ]),
+          ),
+        ]),
+      ),
+    [controller.catalogs],
+  );
+  const rowsById = useMemo(
+    () => new Map(sequence.rows.map((row) => [row.id, row])),
+    [sequence.rows],
+  );
+  const dialogueScope = dialogueIds.join("|");
+  const rows = useMemo(
+    () =>
+      dialogueIds.flatMap((dialogueId) => {
+        const row = rowsById.get(dialogueId);
+        return row ? [row] : [];
+      }),
+    [dialogueScope, rowsById],
+  );
+  const existingTracksByDialogue = useMemo(
+    () =>
+      groupTracksByDialogue<DialogueCharacterActionTrack>(
+        controller.existingTracks,
+      ),
+    [controller.existingTracks],
+  );
+  const pendingTracksByDialogue = useMemo(
+    () =>
+      groupTracksByDialogue<CharacterActionTrackDraft>(
+        controller.tracks,
+      ),
+    [controller.tracks],
+  );
   useEffect(() => {
     if (
       expandedDialogueId &&
@@ -149,12 +411,10 @@ export function CharacterActionEditor({
       <div className="character-action-nodes">
         {rows.map((row) => {
           const expanded = expandedDialogueId === row.id;
-          const existingTracks = controller.existingTracks.filter(
-            (track) => track.dialogueId === row.id,
-          );
-          const pendingTracks = controller.tracks.filter(
-            (track) => track.dialogueId === row.id,
-          );
+          const existingTracks =
+            existingTracksByDialogue.get(row.id) ?? [];
+          const pendingTracks =
+            pendingTracksByDialogue.get(row.id) ?? [];
           const modelIndexes = Array.from(
             new Set([
               ...existingTracks.map((track) => track.modelIndex),
@@ -168,10 +428,12 @@ export function CharacterActionEditor({
               (catalogByModelIndex.get(participant.modelIndex!)?.actions
                 .length ?? 0) > 0,
           );
-          const pendingModel =
-            pendingModelByDialogue[row.id] ??
-            availableParticipants[0]?.modelIndex ??
-            -1;
+          const requestedModel = pendingModelByDialogue[row.id] ?? -1;
+          const pendingModel = availableParticipants.some(
+            (participant) => participant.modelIndex === requestedModel,
+          )
+            ? requestedModel
+            : -1;
           const actionCount =
             existingTracks.reduce(
               (total, track) => total + track.actions.length,
@@ -351,35 +613,23 @@ export function CharacterActionEditor({
                                     className="character-action-row__handle"
                                     size={14}
                                   />
-                                  <select
-                                    aria-label={`${participant?.name ?? "角色"} 新增动作 ${actionIndex + 1}`}
+                                  <MontagePicker
+                                    actions={
+                                      catalog?.actions ??
+                                      EMPTY_MONTAGE_ACTIONS
+                                    }
+                                    actionByName={
+                                      actionByNameByModelIndex.get(modelIndex) ??
+                                      EMPTY_MONTAGE_ACTION_INDEX
+                                    }
                                     disabled={editingDisabled}
-                                    title={
-                                      catalog?.actions.find(
-                                        (montage) =>
-                                          montage.name === action.montageName,
-                                      )?.assetPath ?? action.montageName
-                                    }
+                                    dialogueId={row.id}
+                                    label={`${participant?.name ?? "角色"} 新增动作 ${actionIndex + 1}`}
+                                    modelIndex={modelIndex}
+                                    actionId={action.id}
+                                    onUpdate={controller.updateAction}
                                     value={action.montageName}
-                                    onChange={(event) =>
-                                      controller.updateAction(
-                                        row.id,
-                                        modelIndex,
-                                        action.id,
-                                        { montageName: event.target.value },
-                                      )
-                                    }
-                                  >
-                                    {(catalog?.actions ?? []).map((montage) => (
-                                      <option
-                                        key={montage.name}
-                                        title={montage.assetPath}
-                                        value={montage.name}
-                                      >
-                                        {montage.name}
-                                      </option>
-                                    ))}
-                                  </select>
+                                  />
                                   <label>
                                     <span>延迟</span>
                                     <input
@@ -412,7 +662,7 @@ export function CharacterActionEditor({
                                     className="icon-button"
                                     type="button"
                                     title="删除新增动作"
-                                    aria-label={`删除新增动作 ${action.montageName}`}
+                                    aria-label={`删除新增动作 ${action.montageName || "未选择"}`}
                                     disabled={editingDisabled}
                                     onClick={() =>
                                       controller.removeAction(
@@ -436,12 +686,19 @@ export function CharacterActionEditor({
                           disabled={
                             editingDisabled ||
                             catalog?.status !== "loaded" ||
-                            catalog.actions.length === 0
+                            catalog.actions.length === 0 ||
+                            pendingTrack?.actions.some(
+                              (action) => !action.montageName,
+                            )
                           }
                           title={
-                            catalog?.status === "loaded"
-                              ? "添加新动作"
-                              : catalog?.message || "该 BP 没有可用动作"
+                            pendingTrack?.actions.some(
+                              (action) => !action.montageName,
+                            )
+                              ? "请先选择当前空白动作"
+                              : catalog?.status === "loaded"
+                                ? "添加新动作"
+                                : catalog?.message || "该 BP 没有可用动作"
                           }
                           onClick={() =>
                             pendingTrack
@@ -471,18 +728,19 @@ export function CharacterActionEditor({
                         }))
                       }
                     >
-                      {availableParticipants.length === 0 ? (
-                        <option value={-1}>没有可添加的角色</option>
-                      ) : (
-                        availableParticipants.map((participant) => (
+                      <option value={-1}>
+                        {availableParticipants.length === 0
+                          ? "没有可添加的角色"
+                          : "选择角色"}
+                      </option>
+                      {availableParticipants.map((participant) => (
                           <option
                             key={participant.instanceId}
                             value={participant.modelIndex!}
                           >
                             {participant.modelIndex} {participant.name}
                           </option>
-                        ))
-                      )}
+                      ))}
                     </select>
                     <button
                       className="button"
@@ -492,9 +750,11 @@ export function CharacterActionEditor({
                         pendingModel < 0
                       }
                       title={
-                        availableParticipants.length > 0
-                          ? "添加角色动作"
-                          : "当前节点没有其他可添加角色"
+                        availableParticipants.length === 0
+                          ? "当前节点没有其他可添加角色"
+                          : pendingModel < 0
+                            ? "请先选择角色"
+                            : "添加角色动作"
                       }
                       onClick={() => {
                         controller.addParticipant(row.id, pendingModel);

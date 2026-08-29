@@ -405,11 +405,13 @@ export interface StoryboardExportRequest {
   characterActions?: Array<{
     dialogueId: string;
     modelIndex: number;
+    characterLabel?: string;
     actions: DialogueCharacterActionItem[];
   }>;
   soundEffects?: Array<{
     dialogueId: string;
     assetName: string;
+    delaySeconds?: number;
   }>;
   music?: Array<{
     dialogueId: string;
@@ -442,8 +444,10 @@ export interface StoryboardExportSoundEffectPreview {
   soundEffectIndex: number;
   dialogueId: string;
   assetName: string;
+  delaySeconds: number;
   resolvedAssetPath: string;
   existingAssetPath: string;
+  existingDelaySeconds: number;
   action: "add" | "replace" | "unchanged";
 }
 
@@ -451,6 +455,7 @@ export interface StoryboardExportCharacterActionPreview {
   characterActionIndex: number;
   dialogueId: string;
   modelIndex: number;
+  characterLabel: string;
   existingActions: DialogueCharacterActionItem[];
   desiredActions: DialogueCharacterActionItem[];
   preservedComplexActionCount: number;

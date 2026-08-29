@@ -19,6 +19,13 @@ interface SoundEffectRecommendationsProps {
   currentDialogueIds: string[];
   busy: boolean;
   onWrite: () => void;
+  onChange: (
+    recommendation: DirectorSoundEffectRecommendation,
+    update: Pick<
+      DirectorSoundEffectRecommendation,
+      "dialogueId" | "delaySeconds"
+    >,
+  ) => void;
 }
 
 function soundEffectRecommendationKey(
@@ -54,6 +61,7 @@ export function SoundEffectRecommendations({
   currentDialogueIds,
   busy,
   onWrite,
+  onChange,
 }: SoundEffectRecommendationsProps) {
   const dialogueById = new Map(dialogueRows.map((row) => [row.id, row]));
   const currentIds = new Set(currentDialogueIds);
@@ -246,6 +254,60 @@ export function SoundEffectRecommendations({
                   {row && <blockquote>{row.content}</blockquote>}
                   <p>{recommendation.reason}</p>
                   <small>{recommendation.description}</small>
+                  <div className="sound-effect-list__controls">
+                    <label>
+                      <span>节点</span>
+                      <select
+                        aria-label={`音效 ${recommendation.assetName} 的对话节点`}
+                        disabled={busy}
+                        value={recommendation.dialogueId}
+                        onChange={(event) =>
+                          onChange(recommendation, {
+                            dialogueId: event.target.value,
+                            delaySeconds:
+                              recommendation.delaySeconds ?? 0,
+                          })
+                        }
+                      >
+                        {currentDialogueIds.map((dialogueId) => {
+                          const dialogue = dialogueById.get(dialogueId);
+                          return (
+                            <option key={dialogueId} value={dialogueId}>
+                              {dialogueId}
+                              {dialogue?.content
+                                ? ` · ${dialogue.content}`
+                                : ""}
+                            </option>
+                          );
+                        })}
+                      </select>
+                    </label>
+                    <label>
+                      <span>延迟</span>
+                      <input
+                        aria-label={`音效 ${recommendation.assetName} 的延迟`}
+                        disabled={busy}
+                        type="number"
+                        min="0"
+                        max="120"
+                        step="0.1"
+                        value={recommendation.delaySeconds ?? 0}
+                        onChange={(event) =>
+                          onChange(recommendation, {
+                            dialogueId: recommendation.dialogueId,
+                            delaySeconds: Math.max(
+                              0,
+                              Math.min(
+                                120,
+                                Number(event.target.value) || 0,
+                              ),
+                            ),
+                          })
+                        }
+                      />
+                      <small>s</small>
+                    </label>
+                  </div>
                 </div>
                 <button
                   className="icon-button"

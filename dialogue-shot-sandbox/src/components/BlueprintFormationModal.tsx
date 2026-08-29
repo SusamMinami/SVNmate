@@ -14,6 +14,7 @@ export interface FormationOption {
 
 interface BlueprintFormationModalProps {
   blueprint?: FormationOption;
+  blueprintPlayerLocked?: FormationOption;
   generated?: FormationOption;
   current?: FormationOption;
   currentLabel?: string;
@@ -25,8 +26,12 @@ interface BlueprintFormationModalProps {
   snapshot?: BlueprintFormationSnapshot;
   mappedSlotCount?: number;
   initialChoice: FormationSelectionId;
-  mode: "initial" | "switch" | "ai-review";
-  onChoose: (choice: FormationSelectionId) => void;
+  initialPlayerPositionLocked?: boolean;
+  mode: "initial" | "switch" | "director-request" | "ai-review";
+  onChoose: (
+    choice: FormationSelectionId,
+    playerPositionLocked: boolean,
+  ) => void;
   onClose: () => void;
 }
 
@@ -50,6 +55,7 @@ function averageDistance(sequence: DialogueSequence): number {
 
 export function BlueprintFormationModal({
   blueprint,
+  blueprintPlayerLocked,
   generated,
   current,
   currentLabel,
@@ -61,17 +67,23 @@ export function BlueprintFormationModal({
   snapshot,
   mappedSlotCount = 0,
   initialChoice,
+  initialPlayerPositionLocked = false,
   mode,
   onChoose,
   onClose,
 }: BlueprintFormationModalProps) {
   const [selected, setSelected] =
     useState<FormationSelectionId>(initialChoice);
+  const [playerPositionLocked, setPlayerPositionLocked] = useState(
+    initialPlayerPositionLocked,
+  );
   const option =
     selected === "current"
       ? current
       : selected === "blueprint"
-      ? blueprint
+      ? playerPositionLocked
+        ? blueprintPlayerLocked ?? blueprint
+        : blueprint
       : selected === "ai" && ai
         ? ai
         : generated;
@@ -95,6 +107,10 @@ export function BlueprintFormationModal({
   }
 
   const isAiReview = mode === "ai-review";
+  const isDirectorRequest = mode === "director-request";
+  const usesBlueprintStrategy =
+    selected === "blueprint" ||
+    (selected === "current" && currentUsesBlueprint);
   const sourceLabel =
     aiSource === "shared-library"
       ? "飞书共享方案"
@@ -115,6 +131,8 @@ export function BlueprintFormationModal({
             <small>
               {isAiReview
                 ? `${sourceLabel} · 先确认角色占位`
+                : isDirectorRequest
+                  ? "内部 TRAE 协作 · 先确定占位策略"
                 : mode === "initial"
                 ? "检测到 UE Blueprint 初始占位"
                 : "当前对话已有多个占位方案"}
@@ -122,6 +140,8 @@ export function BlueprintFormationModal({
             <h2 id="formation-compare-title">
               {isAiReview
                 ? "对比 AI 与当前占位"
+                : isDirectorRequest
+                  ? "选择 TRAE 分镜使用的占位"
                 : mode === "initial"
                   ? "选择镜头分析使用的占位"
                   : "切换占位方案"}
@@ -135,7 +155,11 @@ export function BlueprintFormationModal({
                 type="button"
                 title="关闭"
                 aria-label={
-                  mode === "initial" ? "关闭占位选择" : "关闭占位方案切换"
+                  mode === "initial"
+                    ? "关闭占位选择"
+                    : isDirectorRequest
+                      ? "关闭 TRAE 占位选择"
+                      : "关闭占位方案切换"
                 }
                 onClick={onClose}
               >
@@ -170,6 +194,30 @@ export function BlueprintFormationModal({
                 >
                   <Sparkles size={15} />
                   {aiLabel ?? "AI 占位"}
+                </button>
+              </>
+            ) : isDirectorRequest ? (
+              <>
+                <button
+                  type="button"
+                  className={selected === "blueprint" ? "is-active" : ""}
+                  aria-pressed={selected === "blueprint"}
+                  onClick={() => setSelected("blueprint")}
+                >
+                  <Boxes size={15} />
+                  {snapshot?.blueprintAssetPath
+                    .split("/")
+                    .at(-1)
+                    ?.split(".")[0] ?? "BP 占位"}
+                </button>
+                <button
+                  type="button"
+                  className={selected === "ai" ? "is-active" : ""}
+                  aria-pressed={selected === "ai"}
+                  onClick={() => setSelected("ai")}
+                >
+                  <Sparkles size={15} />
+                  TRAE 自主占位
                 </button>
               </>
             ) : (
@@ -234,6 +282,32 @@ export function BlueprintFormationModal({
           </dl>
         </div>
 
+        {!isAiReview && (
+          <div
+            className="formation-player-lock"
+            data-enabled={usesBlueprintStrategy}
+          >
+            <label>
+              <input
+                type="checkbox"
+                checked={playerPositionLocked}
+                disabled={!usesBlueprintStrategy}
+                onChange={(event) =>
+                  setPlayerPositionLocked(event.target.checked)
+                }
+              />
+              <span>
+                <strong>固定 0 号玩家位置</strong>
+                <small>
+                  {usesBlueprintStrategy
+                    ? "取消后仅允许导演调整 0 号位，其他 BP 角色保持原位"
+                    : "TRAE 自主占位时会重新设计全部角色位置"}
+                </small>
+              </span>
+            </label>
+          </div>
+        )}
+
         <div className="formation-compare-stage">
           <StageView
             participants={option.sequence.participants}
@@ -249,12 +323,18 @@ export function BlueprintFormationModal({
           <strong>
             {selected === "current"
               ? currentUsesBlueprint
-                ? "保留当前 BP 位置与朝向，仅为对白角色重新规划镜头"
+                ? playerPositionLocked
+                  ? "保留当前 BP 全部位置与朝向，仅重新规划镜头"
+                  : "保留其他 BP 角色，允许导演调整 0 号玩家位置"
                 : "保留当前角色占位，由 AI 重新规划镜头"
               : selected === "blueprint"
-              ? "保留全部 UE 角色；背景 NPC 只参与构图，不参与关系轴"
+              ? playerPositionLocked
+                ? "保留全部 UE 角色位置，0 号玩家也保持固定；背景 NPC 只参与构图"
+                : "保留其他 UE 角色，0 号玩家可按导演需要调整；背景 NPC 只参与构图"
               : selected === "ai"
-                ? "采用 AI 返回的角色占位、朝向关系与分镜"
+                ? isDirectorRequest
+                  ? "由 TRAE 一次完成角色占位、朝向关系与分镜"
+                  : "采用 AI 返回的角色占位、朝向关系与分镜"
                 : "使用规则导演自动安排的角色占位"}
           </strong>
           <span
@@ -282,6 +362,12 @@ export function BlueprintFormationModal({
               ? selected === "current"
                 ? "先进入这版 AI 分镜，后台将按当前占位重新生成。"
                 : "直接进入 AI 已生成的分镜方案。"
+              : isDirectorRequest
+                ? usesBlueprintStrategy
+                  ? playerPositionLocked
+                    ? "TRAE 将沿用完整 BP 站位，一次生成最终方案。"
+                    : "TRAE 将沿用其他 BP 角色，只调整 0 号玩家并一次生成最终方案。"
+                  : "TRAE 将自主规划全部角色占位并一次生成最终方案。"
               : mode === "initial"
               ? "确认后仅按对白角色生成关系轴；背景 NPC 保留在镜头构图中。"
               : "切换后将载入该占位对应的完整分镜，无需重新分析。"}
@@ -289,13 +375,15 @@ export function BlueprintFormationModal({
           <button
             className="button button--primary"
             type="button"
-            onClick={() => onChoose(selected)}
+            onClick={() => onChoose(selected, playerPositionLocked)}
           >
             <Check size={16} />
             {isAiReview
               ? selected === "current"
                 ? "按当前占位重新生成"
                 : "采用 AI 占位"
+              : isDirectorRequest
+                ? "开始 TRAE 分析"
               : "使用此占位"}
           </button>
         </footer>

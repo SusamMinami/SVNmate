@@ -245,8 +245,7 @@ export function useCharacterActionEditor({
 
   const addParticipant = useCallback(
     (dialogueId: string, modelIndex: number) => {
-      const firstMontage = catalogByModelIndex.get(modelIndex)?.actions[0];
-      if (!firstMontage) {
+      if (!catalogByModelIndex.get(modelIndex)?.actions.length) {
         return;
       }
       setTracks((current) =>
@@ -263,7 +262,7 @@ export function useCharacterActionEditor({
                 modelIndex,
                 actions: [{
                   id: nextActionId(dialogueId, modelIndex),
-                  montageName: firstMontage.name,
+                  montageName: "",
                   delaySeconds: 0,
                 }],
               },
@@ -288,8 +287,7 @@ export function useCharacterActionEditor({
 
   const addAction = useCallback(
     (dialogueId: string, modelIndex: number) => {
-      const firstMontage = catalogByModelIndex.get(modelIndex)?.actions[0];
-      if (!firstMontage) {
+      if (!catalogByModelIndex.get(modelIndex)?.actions.length) {
         return;
       }
       updateTrack(dialogueId, modelIndex, (track) => ({
@@ -298,7 +296,7 @@ export function useCharacterActionEditor({
           ...track.actions,
           {
             id: nextActionId(dialogueId, modelIndex),
-            montageName: firstMontage.name,
+            montageName: "",
             delaySeconds: 0,
           },
         ],
@@ -374,18 +372,21 @@ export function useCharacterActionEditor({
 
   const exportActions = useMemo(
     () =>
-      tracks.flatMap((track) =>
-        track.actions.length > 0
+      tracks.flatMap((track) => {
+        const actions = track.actions
+          .filter((action) => action.montageName.trim())
+          .map((action) => ({
+            montageName: action.montageName,
+            delaySeconds: action.delaySeconds,
+          }));
+        return actions.length > 0
           ? [{
               dialogueId: track.dialogueId,
               modelIndex: track.modelIndex,
-              actions: track.actions.map((action) => ({
-                montageName: action.montageName,
-                delaySeconds: action.delaySeconds,
-              })),
+              actions,
             }]
-          : [],
-      ),
+          : [];
+      }),
     [tracks],
   );
 

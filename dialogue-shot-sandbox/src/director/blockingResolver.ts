@@ -26,6 +26,11 @@ const POSITION_COORDINATES = {
 
 const MINIMUM_HORIZONTAL_SEPARATION = 0.9;
 
+export interface ResolveBlockingOptions {
+  preserveInputPositions?: boolean;
+  lockPlayerPosition?: boolean;
+}
+
 const POSITION_SETS = {
   2: ["front_left", "front_right"],
   3: ["front_center", "back_left", "back_right"],
@@ -171,11 +176,76 @@ export function defaultEntryDialogueId(
     : firstDialogueId;
 }
 
+function isPlayerParticipant(participant: DialogueParticipant): boolean {
+  return participant.modelIndex === 0 || participant.id === 1;
+}
+
+function preservesParticipantPosition(
+  participant: DialogueParticipant,
+  options: ResolveBlockingOptions,
+): boolean {
+  return (
+    options.preserveInputPositions === true &&
+    (options.lockPlayerPosition !== false ||
+      !isPlayerParticipant(participant))
+  );
+}
+
+function horizontalDistance(left: Vec3, right: Vec3): number {
+  return Math.hypot(left[0] - right[0], left[2] - right[2]);
+}
+
+function nearestAvailablePlayerPosition(
+  requested: Vec3,
+  fixedPositions: Vec3[],
+): Vec3 {
+  const candidates = [
+    requested,
+    ...Object.values(POSITION_COORDINATES).filter(
+      (candidate) => candidate !== requested,
+    ),
+  ];
+  const available = candidates
+    .filter((candidate) =>
+      fixedPositions.every(
+        (fixed) =>
+          horizontalDistance(candidate, fixed) >=
+          MINIMUM_HORIZONTAL_SEPARATION,
+      ),
+    )
+    .sort(
+      (left, right) =>
+        horizontalDistance(left, requested) -
+        horizontalDistance(right, requested),
+    )[0];
+  if (available) {
+    return [...available] as Vec3;
+  }
+
+  for (let step = 1; step <= fixedPositions.length + 2; step += 1) {
+    const candidate: Vec3 = [
+      requested[0] + MINIMUM_HORIZONTAL_SEPARATION * step,
+      requested[1],
+      requested[2],
+    ];
+    if (
+      fixedPositions.every(
+        (fixed) =>
+          horizontalDistance(candidate, fixed) >=
+          MINIMUM_HORIZONTAL_SEPARATION,
+      )
+    ) {
+      return candidate;
+    }
+  }
+  return requested;
+}
+
 export function resolveBlocking(
   participants: DialogueParticipant[],
   blocking: DirectorBlocking,
   dialogueIds: string[],
-  options: { preserveInputPositions?: boolean } = {},
+  options: ResolveBlockingOptions = {},
 ): DialogueParticipant[] {
   const expectedSlots = participants.map((participant) => participant.slot);
   const actualSlots = blocking.placements.map(
@@ -214,7 +284,7 @@ export function resolveBlocking(
     }
     positionBySlot.set(
       participant.slot,
-      options.preserveInputPositions
+      preservesParticipantPosition(participant, options)
         ? participant.position
         : POSITION_COORDINATES[placement.position],
     );
@@ -263,6 +333,25 @@ export function resolveBlocking(
         ]);
       }
     }
+  } else if (options.lockPlayerPosition === false) {
+    const player = participants.find(isPlayerParticipant);
+    if (player) {
+      const requested = positionBySlot.get(player.slot);
+      if (requested) {
+        positionBySlot.set(
+          player.slot,
+          nearestAvailablePlayerPosition(
+            requested,
+            participants
+              .filter((participant) => participant.slot !== player.slot)
+              .map(
+                (participant) =>
+                  positionBySlot.get(participant.slot) ?? participant.position,
+              ),
+          ),
+        );
+      }
+    }
   }
 
   const center = participants.reduce<[number, number, number]>(
@@ -291,7 +380,7 @@ export function resolveBlocking(
     if (placement.facing === placement.subject) {
       throw new Error(`角色 ${participant.slot} 不能面向自己`);
     }
-    const facingTarget = options.preserveInputPositions
+    const facingTarget = preservesParticipantPosition(participant, options)
       ? participant.facingTarget
       : placement.facing === "group_center"
         ? groupCenter

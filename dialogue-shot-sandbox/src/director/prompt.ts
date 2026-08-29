@@ -24,6 +24,16 @@ interface DirectorProjectionRevision {
   }>;
 }
 
+function formationInstruction(input: DirectorInput): string {
+  if (!input.constraints.preserve_input_formation) {
+    return "角色初始坐标由软件根据 blocking.position 的语义站位确定；可以调整全部角色站位，但位置必须唯一。";
+  }
+  if (input.constraints.lock_player_position === false) {
+    return "输入角色来自 UE Blueprint。除 model_index=0 的 0 号玩家外，其他角色必须保留 initial_position 与 initial_yaw_degrees，不得假设 blocking.position 会改变其实际坐标；0 号玩家可以根据剧情和构图需要通过 blocking.position 调整位置与朝向，但必须避开其他角色。";
+  }
+  return "输入角色包含从 UE Blueprint 读取的 initial_position、initial_facing_target 和 initial_yaw_degrees。必须以这些现有站位与朝向分析遮挡、关系轴和镜头，不得假设 blocking.position 会改变实际坐标。0 号玩家位置也已固定。";
+}
+
 export function buildDirectorPrompt(
   input: DirectorInput,
   providerName: string,
@@ -64,9 +74,7 @@ export function buildDirectorPrompt(
       "保留上一版 sound_effects；投影返修不改变音效建议。",
       "根据每条 warnings 调整失败镜头的模板、主体、注视对象、焦段、机位高度、运动或构图语义。不要只改 intent 文案。",
       "在顶层 revision_reflections 中为每个失败镜头输出一条简短的事后总结，包含 shot_index、summary、root_cause、strategy、applies_when、avoid_when；只记录可复用结论，不输出推理过程。",
-      input.constraints.preserve_input_formation
-        ? "角色站位和初始朝向来自 UE Blueprint，不得修改或假设 blocking.position 会改变实际坐标；需要改变视线时只能规划支持的离散转身动作。"
-        : "可以调整 blocking，但所有角色位置必须唯一，并保持进出场节点有效。",
+      `${formationInstruction(input)} 需要改变视线时只能规划支持的离散转身动作。`,
       "role=background 的 NPC 只能作为构图、遮挡和空间层次参考，不得成为 shot.subject、shot.look_target 或关系轴端点；只允许 role=dialogue 的角色参与分镜叙事。",
       "继续遵守 16:9 主构图、21:9 安全区域、关系轴同侧、视线空间、角色不重叠、运镜起止画面可读和相邻镜头至少 30 度变化等约束。",
       revision.referenceCases?.length
@@ -88,9 +96,7 @@ export function buildDirectorPrompt(
     "可以把连续台词合并到一个镜头，但不得改写台词或增删角色。",
     "按约每秒 4-5 个汉字估算台词时长；普通镜头至少覆盖连续两句台词，不能仅因说话人变化就切镜。常规镜头尽量保持 4-8 秒；若新镜头不足两句或预计不足 4 秒，优先与相邻台词合并并保留当前机位，除非遇到进出场边界或明确的重大情绪、动作、信息转折。",
     "不要输出 XYZ 坐标，软件会根据语义模板计算机位。",
-    input.constraints.preserve_input_formation
-      ? "输入角色包含从 UE Blueprint 读取的 initial_position、initial_facing_target 和 initial_yaw_degrees。必须以这些现有站位与朝向分析遮挡、关系轴和镜头，不得假设 blocking.position 会改变实际坐标。"
-      : "角色初始坐标由软件根据 blocking.position 的语义站位确定。",
+    formationInstruction(input),
     "participants 中 role=dialogue 表示实际说话、参与分镜叙事的角色；role=background 表示从 BP 导入的背景 NPC。背景 NPC 必须保留在场景与 blocking 中，并参与遮挡、画面重量、前中后景和安全区域判断，但不得成为 shot.subject、shot.look_target 或关系轴端点。",
     `演员只能使用离散转身 ${input.constraints.supported_actor_turn_degrees?.join("、") ?? "-180、-90、-45、45、90、180"} 度；can_turn=false 的角色不得转身。镜头沙盘会根据每镜 subject/look_target 生成必要转身动作，不能假设角色已经精确朝向对话对象。`,
     "blocking 必须覆盖所有场景角色，每个角色只能出现一次，position 不能重复；背景 NPC 保持整场在场，不为其设计表演或关系变化。",

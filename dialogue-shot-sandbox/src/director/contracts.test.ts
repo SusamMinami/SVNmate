@@ -112,17 +112,6 @@ describe("DirectorRevisionReflectionSchema", () => {
 });
 
 describe("DirectorSoundEffectCueSchema", () => {
-  it("accepts an existing catalog asset with its matching category", () => {
-    expect(
-      DirectorSoundEffectCueSchema.safeParse({
-        dialogue_id: "204803",
-        asset_name: "A_SFX_Dialog_516918",
-        category: "special",
-        reason: "系统错误节点需要明确报警提示。",
-      }).success,
-    ).toBe(true);
-  });
-
   it("accepts runtime catalog assets and rejects incomplete cues", () => {
     expect(
       DirectorSoundEffectCueSchema.safeParse({

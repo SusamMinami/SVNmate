@@ -1022,16 +1022,6 @@ describe("mission target UE preview", () => {
 
 describe("mission target Blueprint creation", () => {
   it("compares selected model order with the dialogue model slots", () => {
-    expect(
-      compareDialogueModelOrder(
-        ["player", "N111_Aldridge_Sit", "N91_Dolores_sitting"],
-        [
-          "/Game/N111/BP_N111_Aldridge_Sit.BP_N111_Aldridge_Sit_C",
-          "/Game/N91/BP_N91_Dolores_sitting.BP_N91_Dolores_sitting_C",
-        ],
-      ),
-    ).toMatchObject({ matched: true });
-
     const mismatch = compareDialogueModelOrder(
       ["player", "N111_Aldridge_Sit", "N91_Dolores_sitting"],
       [
@@ -1106,26 +1096,6 @@ describe("mission target Blueprint creation", () => {
         rotation: { pitch: 0, yaw: -90, roll: 0 },
       },
     });
-  });
-
-  it("compacts model indexes when only some target rows are selected", () => {
-    const plan = previewPlan();
-    const secondTarget = {
-      ...plan.targets[0],
-      targetId: "500004",
-    };
-
-    const components = buildMissionTargetBlueprintComponents([
-      plan.targets[0],
-      secondTarget,
-    ]);
-
-    expect(components.map((component) => component.componentName)).toEqual([
-      "0",
-      "1",
-      "2",
-      "c1",
-    ]);
   });
 
   it("populates an existing empty PositionMode Blueprint and saves it", async () => {

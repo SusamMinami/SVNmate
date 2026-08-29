@@ -9,7 +9,7 @@ import {
   rm,
   stat,
 } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { dirname, extname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import type {
   SoundEffectPreviewInfo,
@@ -26,6 +26,14 @@ import {
 
 const execFileAsync = promisify(execFile);
 const SOUND_EFFECT_NAME_PATTERN = /^A_SFX_[A-Za-z0-9_]+$/;
+const PREVIEW_AUDIO_EXTENSIONS = new Set([
+  ".aac",
+  ".flac",
+  ".m4a",
+  ".mp3",
+  ".ogg",
+  ".wav",
+]);
 const conversionLocks = new Map<string, Promise<string>>();
 
 interface WwiseMedia {
@@ -111,6 +119,11 @@ function assertAssetName(assetName: string): void {
   if (!SOUND_EFFECT_NAME_PATTERN.test(assetName)) {
     throw new Error("音效资产名无效");
   }
+}
+
+function previewAudioExtension(fileName: string): string {
+  const extension = extname(fileName).toLowerCase();
+  return PREVIEW_AUDIO_EXTENSIONS.has(extension) ? extension : ".wav";
 }
 
 export function wwiseShortId(name: string): number {
@@ -284,9 +297,12 @@ export async function prepareSoundEffectPreview(
     join(runtimeRoot(), ".storyboard-data", "sound-effect-preview");
   await mkdir(cacheRoot, { recursive: true });
   if (info.remoteEntry?.attachment) {
+    const extension = previewAudioExtension(
+      info.remoteEntry.attachment.fileName,
+    );
     const remoteFilePath = join(
       cacheRoot,
-      `${assetName}-remote-${info.remoteEntry.attachment.fileToken}.wav`,
+      `${assetName}-remote-${info.remoteEntry.attachment.fileToken}${extension}`,
     );
     try {
       const cached = await stat(remoteFilePath);

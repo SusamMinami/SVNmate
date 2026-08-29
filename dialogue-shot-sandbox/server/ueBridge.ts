@@ -372,6 +372,7 @@ const StoryboardExportRequestSchema = z.object({
       z.object({
         dialogueId: z.string().regex(/^\d+$/),
         modelIndex: z.number().int().nonnegative().max(255),
+        characterLabel: z.string().trim().max(128).optional().default(""),
         actions: z.array(DialogueCharacterActionItemSchema).min(1).max(32),
       }),
     )
@@ -383,6 +384,7 @@ const StoryboardExportRequestSchema = z.object({
       z.object({
         dialogueId: z.string().regex(/^\d+$/),
         assetName: z.string().regex(/^A_SFX_[A-Za-z0-9_]+$/),
+        delaySeconds: z.number().finite().min(0).max(120).default(0),
       }),
     )
     .max(100)
@@ -1724,44 +1726,44 @@ async function readDialogueNodes(
       `对话资产中未找到台词节点：${missingIds.join("、")}`,
     );
   }
-  const result: DialogueNodeContext[] = [];
-  for (const dialogueId of dialogueIds) {
-    const nodeIndex = nodeIndexByDialogueId.get(dialogueId)!;
-    const nodeValue = nodes[nodeIndex];
-    if (!hasUnrealObjectReference(nodeValue)) {
-      throw new Error(`台词节点 ${dialogueId} 的图节点引用无效`);
-    }
-    const nodePath = objectReferencePath(nodeValue);
-    const nodeDataValue = await readProperty(
-      connection,
-      nodePath,
-      "DialogGraphNodeData",
-    );
-    if (!hasUnrealObjectReference(nodeDataValue)) {
-      throw new Error(`台词节点 ${dialogueId} 的节点数据引用无效`);
-    }
-    const nodeDataPath = objectReferencePath(nodeDataValue);
-    const commonProperties = reflectedArray(
-      await readProperty(
+  return Promise.all(
+    dialogueIds.map(async (dialogueId): Promise<DialogueNodeContext> => {
+      const nodeIndex = nodeIndexByDialogueId.get(dialogueId)!;
+      const nodeValue = nodes[nodeIndex];
+      if (!hasUnrealObjectReference(nodeValue)) {
+        throw new Error(`台词节点 ${dialogueId} 的图节点引用无效`);
+      }
+      const nodePath = objectReferencePath(nodeValue);
+      const nodeDataValue = await readProperty(
         connection,
-        nodeDataPath,
+        nodePath,
+        "DialogGraphNodeData",
+      );
+      if (!hasUnrealObjectReference(nodeDataValue)) {
+        throw new Error(`台词节点 ${dialogueId} 的节点数据引用无效`);
+      }
+      const nodeDataPath = objectReferencePath(nodeDataValue);
+      const commonProperties = reflectedArray(
+        await readProperty(
+          connection,
+          nodeDataPath,
+          "CommonDialogGraphProperties",
+        ),
         "CommonDialogGraphProperties",
-      ),
-      "CommonDialogGraphProperties",
-    ) as ReflectedProperty[];
-    const idProperty = commonProperties.find(
-      (property) => String(property.Alias).toLowerCase() === "id",
-    );
-    if (String(Number(idProperty?.CurrentUint32)) !== dialogueId) {
-      throw new Error(`台词节点 ${dialogueId} 的 UE 回读 ID 不一致`);
-    }
-    result.push({
-      dialogueId,
-      nodeDataPath,
-      commonProperties,
-    });
-  }
-  return result;
+      ) as ReflectedProperty[];
+      const idProperty = commonProperties.find(
+        (property) => String(property.Alias).toLowerCase() === "id",
+      );
+      if (String(Number(idProperty?.CurrentUint32)) !== dialogueId) {
+        throw new Error(`台词节点 ${dialogueId} 的 UE 回读 ID 不一致`);
+      }
+      return {
+        dialogueId,
+        nodeDataPath,
+        commonProperties,
+      };
+    }),
+  );
 }
 
 async function readStoryboardDialogueNodes(
@@ -1769,6 +1771,10 @@ async function readStoryboardDialogueNodes(
   dialogueAssetPath: string,
   dialogueIds: string[],
   exportedText: string,
+  options: {
+    readCamera: boolean;
+    readCharacterActions: boolean;
+  },
 ): Promise<StoryboardDialogueNodeContext[]> {
   const dialogueNodes = await readDialogueNodes(
     connection,
@@ -1776,40 +1782,49 @@ async function readStoryboardDialogueNodes(
     dialogueIds,
     exportedText,
   );
-  const result: StoryboardDialogueNodeContext[] = [];
-  for (const node of dialogueNodes) {
-    const commonProperties = node.commonProperties;
-    const cameraPropertyIndex = commonProperties.findIndex(
-      (property) =>
-        String(property.Alias).toLowerCase() === "cameraposition",
-    );
-    if (cameraPropertyIndex < 0) {
-      throw new Error(`台词节点 ${node.dialogueId} 缺少 CameraPosition 属性`);
-    }
-    const existingMoveCameras = reflectedArray(
-      await readProperty(connection, node.nodeDataPath, "MoveCameras"),
-      "MoveCameras",
-    );
-    const existingCharacterBehaviours = reflectedArray(
-      await readProperty(
-        connection,
-        node.nodeDataPath,
-        "CharacterBehaviours",
-      ),
-      "CharacterBehaviours",
-    ) as ReflectedCharacterBehaviourTrack[];
-    result.push({
-      ...node,
-      commonProperties,
-      cameraPropertyIndex,
-      existingCameraPosition: String(
-        commonProperties[cameraPropertyIndex].CurrentString ?? "",
-      ),
-      existingMoveCameras,
-      existingCharacterBehaviours,
-    });
-  }
-  return result;
+  return Promise.all(
+    dialogueNodes.map(async (node): Promise<StoryboardDialogueNodeContext> => {
+      const commonProperties = node.commonProperties;
+      const cameraPropertyIndex = commonProperties.findIndex(
+        (property) =>
+          String(property.Alias).toLowerCase() === "cameraposition",
+      );
+      if (options.readCamera && cameraPropertyIndex < 0) {
+        throw new Error(`台词节点 ${node.dialogueId} 缺少 CameraPosition 属性`);
+      }
+      const [moveCamerasValue, characterBehavioursValue] = await Promise.all([
+        options.readCamera
+          ? readProperty(connection, node.nodeDataPath, "MoveCameras")
+          : Promise.resolve([]),
+        options.readCharacterActions
+          ? readProperty(
+              connection,
+              node.nodeDataPath,
+              "CharacterBehaviours",
+            )
+          : Promise.resolve([]),
+      ]);
+      return {
+        ...node,
+        commonProperties,
+        cameraPropertyIndex,
+        existingCameraPosition:
+          cameraPropertyIndex < 0
+            ? ""
+            : String(
+                commonProperties[cameraPropertyIndex].CurrentString ?? "",
+              ),
+        existingMoveCameras: reflectedArray(
+          moveCamerasValue,
+          "MoveCameras",
+        ),
+        existingCharacterBehaviours: reflectedArray(
+          characterBehavioursValue,
+          "CharacterBehaviours",
+        ) as ReflectedCharacterBehaviourTrack[],
+      };
+    }),
+  );
 }
 
 export async function readDialogueCharacterActions(
@@ -1855,60 +1870,83 @@ export async function readDialogueCharacterActions(
       request.dialogueIds,
       exportedText,
     );
+    const uniqueModelsByPath = new Map<
+      string,
+      (typeof request.models)[number]
+    >();
+    for (const model of request.models) {
+      const normalizedPath = model.blueprintClassPath.toLowerCase();
+      if (!uniqueModelsByPath.has(normalizedPath)) {
+        uniqueModelsByPath.set(normalizedPath, model);
+      }
+    }
+    const loadedCatalogs = await Promise.all(
+      Array.from(uniqueModelsByPath.values()).map((model) =>
+        readBlueprintMontageCatalog(
+          connection,
+          model.modelIndex,
+          model.blueprintClassPath,
+        ),
+      ),
+    );
     const catalogByPath = new Map<
       string,
       Omit<BlueprintMontageCatalog, "modelIndex">
     >();
-    const catalogs: BlueprintMontageCatalog[] = [];
-    for (const model of request.models) {
+    for (const [normalizedPath, model] of uniqueModelsByPath) {
+      const loaded = loadedCatalogs.find(
+        (catalog) => catalog.modelIndex === model.modelIndex,
+      )!;
+      const { modelIndex: _modelIndex, ...sharedCatalog } = loaded;
+      catalogByPath.set(normalizedPath, sharedCatalog);
+    }
+    const catalogs = request.models.map((model) => {
       const normalizedPath = model.blueprintClassPath.toLowerCase();
-      let catalog = catalogByPath.get(normalizedPath);
+      const catalog = catalogByPath.get(normalizedPath);
       if (!catalog) {
-        const loaded = await readBlueprintMontageCatalog(
-          connection,
-          model.modelIndex,
-          model.blueprintClassPath,
-        );
-        const { modelIndex: _modelIndex, ...sharedCatalog } = loaded;
-        catalog = sharedCatalog;
-        catalogByPath.set(normalizedPath, catalog);
+        throw new Error(`无法读取角色 BP 动作：${model.blueprintClassPath}`);
       }
-      catalogs.push({
+      return {
         modelIndex: model.modelIndex,
         ...catalog,
-      });
-    }
+      };
+    });
     const requestedModelIndexes = new Set(
       request.models.map((model) => model.modelIndex),
     );
-    const tracks: DialogueCharacterActionTrack[] = [];
-    for (const node of nodes) {
-      const behaviours = reflectedArray(
-        await readProperty(
-          connection,
-          node.nodeDataPath,
-          "CharacterBehaviours",
-        ),
-        "CharacterBehaviours",
-      ) as ReflectedCharacterBehaviourTrack[];
-      behaviours.forEach((track, modelIndex) => {
-        if (!requestedModelIndexes.has(modelIndex)) {
-          return;
-        }
-        const actions = configuredCharacterActions(track);
-        const preservedComplexActionCount =
-          complexCharacterActionCount(track);
-        if (actions.length === 0 && preservedComplexActionCount === 0) {
-          return;
-        }
-        tracks.push({
-          dialogueId: node.dialogueId,
-          modelIndex,
-          actions,
-          preservedComplexActionCount,
-        });
-      });
-    }
+    const tracks = (
+      await Promise.all(
+        nodes.map(async (node) => {
+          const behaviours = reflectedArray(
+            await readProperty(
+              connection,
+              node.nodeDataPath,
+              "CharacterBehaviours",
+            ),
+            "CharacterBehaviours",
+          ) as ReflectedCharacterBehaviourTrack[];
+          return behaviours.flatMap<DialogueCharacterActionTrack>(
+            (track, modelIndex) => {
+              if (!requestedModelIndexes.has(modelIndex)) {
+                return [];
+              }
+              const actions = configuredCharacterActions(track);
+              const preservedComplexActionCount =
+                complexCharacterActionCount(track);
+              return actions.length === 0 &&
+                preservedComplexActionCount === 0
+                ? []
+                : [{
+                    dialogueId: node.dialogueId,
+                    modelIndex,
+                    actions,
+                    preservedComplexActionCount,
+                  }];
+            },
+          );
+        }),
+      )
+    ).flat();
     return {
       dialogueAssetPath,
       catalogs,
@@ -1925,6 +1963,7 @@ async function readFormationExportLayout(
   formationClassPath: string,
   participantModelIndexes: number[],
   requireCamera = true,
+  requireLocations = true,
 ): Promise<FormationExportLayout> {
   const assetPath = await resolveAssetPath(
     connection,
@@ -1950,19 +1989,49 @@ async function readFormationExportLayout(
   const locations = new Map<number, { x: number; y: number }>();
   const modelClassPaths = new Map<number, string>();
   let cameraName = "";
-  for (const nodeValue of nodes) {
-    const nodePath = String(nodeValue);
-    const variableName = String(
-      await readProperty(connection, nodePath, "InternalVariableName"),
+  const namedNodes = await Promise.all(
+    nodes.map(async (nodeValue) => {
+      const nodePath = String(nodeValue);
+      return {
+        nodePath,
+        variableName: String(
+          await readProperty(connection, nodePath, "InternalVariableName"),
+        ),
+      };
+    }),
+  );
+  const relevantNodes = namedNodes.filter(({ variableName }) => {
+    if (requireCamera && variableName.toLowerCase() === "c1") {
+      return true;
+    }
+    return (
+      /^\d+$/.test(variableName) &&
+      requestedIndexes.has(Number(variableName))
     );
-    const componentClass = String(
-      await readProperty(connection, nodePath, "ComponentClass"),
-    );
-    const componentTemplate = await readProperty(
-      connection,
-      nodePath,
-      "ComponentTemplate",
-    );
+  });
+  const componentNodes = await Promise.all(
+    relevantNodes.map(async ({ nodePath, variableName }) => {
+      const isRequestedSlot =
+        /^\d+$/.test(variableName) &&
+        requestedIndexes.has(Number(variableName));
+      const [componentClass, componentTemplate] = await Promise.all([
+        readProperty(connection, nodePath, "ComponentClass"),
+        isRequestedSlot
+          ? readProperty(connection, nodePath, "ComponentTemplate")
+          : Promise.resolve(""),
+      ]);
+      return {
+        variableName,
+        componentClass: String(componentClass),
+        componentTemplate,
+      };
+    }),
+  );
+  for (const {
+    variableName,
+    componentClass,
+    componentTemplate,
+  } of componentNodes) {
     if (
       variableName.toLowerCase() === "c1" &&
       componentClass.endsWith("CameraComponent")
@@ -1978,22 +2047,26 @@ async function readFormationExportLayout(
       continue;
     }
     const [locationValue, modelClassPath] = await Promise.all([
-      readProperty(
-        connection,
-        String(componentTemplate),
-        "RelativeLocation",
-      ),
+      requireLocations
+        ? readProperty(
+            connection,
+            String(componentTemplate),
+            "RelativeLocation",
+          )
+        : Promise.resolve(null),
       readProperty(
         connection,
         String(componentTemplate),
         "ChildActorClass",
       ),
     ]);
-    const location = vector(locationValue);
-    locations.set(Number(variableName), {
-      x: location.x,
-      y: location.y,
-    });
+    if (requireLocations) {
+      const location = vector(locationValue);
+      locations.set(Number(variableName), {
+        x: location.x,
+        y: location.y,
+      });
+    }
     modelClassPaths.set(
       Number(variableName),
       unrealReferenceText(modelClassPath),
@@ -2003,26 +2076,34 @@ async function readFormationExportLayout(
     throw new Error(`Formation BP ${assetPath} 中没有 c1 摄像机组件`);
   }
   const missingIndexes = participantModelIndexes.filter(
-    (modelIndex) => !locations.has(modelIndex),
+    (modelIndex) => !modelClassPaths.has(modelIndex),
   );
   if (missingIndexes.length > 0) {
     throw new Error(
       `Formation BP 缺少当前站位槽：${missingIndexes.join("、")}`,
     );
   }
-  const selectedLocations = participantModelIndexes.map(
-    (modelIndex) => locations.get(modelIndex)!,
-  );
+  const selectedLocations = requireLocations
+    ? participantModelIndexes.map((modelIndex) => locations.get(modelIndex)!)
+    : [];
   return {
     assetPath,
     cameraName,
     modelClassPaths,
     centerX:
-      selectedLocations.reduce((total, location) => total + location.x, 0) /
-      selectedLocations.length,
+      selectedLocations.length === 0
+        ? 0
+        : selectedLocations.reduce(
+            (total, location) => total + location.x,
+            0,
+          ) / selectedLocations.length,
     centerY:
-      selectedLocations.reduce((total, location) => total + location.y, 0) /
-      selectedLocations.length,
+      selectedLocations.length === 0
+        ? 0
+        : selectedLocations.reduce(
+            (total, location) => total + location.y,
+            0,
+          ) / selectedLocations.length,
   };
 }
 
@@ -2127,6 +2208,7 @@ async function prepareStoryboardExport(
           exportedDialogue.formationClassPath ?? "",
           request.participantModelIndexes,
           request.shots.length > 0,
+          request.shots.length > 0,
         )
       : null;
   const requestedDialogueIds = Array.from(
@@ -2142,6 +2224,10 @@ async function prepareStoryboardExport(
     dialogueAssetPath,
     requestedDialogueIds,
     exportedText,
+    {
+      readCamera: request.shots.length > 0,
+      readCharacterActions: requestedCharacterActions.length > 0,
+    },
   );
   const shotByDialogueId = new Map(
     request.shots.flatMap((shot, shotIndex) =>
@@ -2164,27 +2250,31 @@ async function prepareStoryboardExport(
     items.push({ ...item, characterActionIndex });
     characterActionsByDialogueId.set(item.dialogueId, items);
   });
-  const availableMontagesByModelIndex = new Map<number, Set<string>>();
+  const requestedModelClassPaths = new Map<number, string>();
   for (const item of requestedCharacterActions) {
-    if (availableMontagesByModelIndex.has(item.modelIndex)) {
+    if (requestedModelClassPaths.has(item.modelIndex)) {
       continue;
     }
     const classPath = layout?.modelClassPaths.get(item.modelIndex);
     if (!classPath) {
       throw new Error(`Formation BP 槽 ${item.modelIndex} 没有角色 Blueprint`);
     }
-    const catalog = await readBlueprintMontageCatalog(
-      connection,
-      item.modelIndex,
-      classPath,
-    );
+    requestedModelClassPaths.set(item.modelIndex, classPath);
+  }
+  const availableMontagesByModelIndex = new Map<number, Set<string>>();
+  const catalogResults = await Promise.all(
+    Array.from(requestedModelClassPaths, ([modelIndex, classPath]) =>
+      readBlueprintMontageCatalog(connection, modelIndex, classPath),
+    ),
+  );
+  for (const catalog of catalogResults) {
     if (catalog.status !== "loaded") {
       throw new Error(
-        `Formation BP 槽 ${item.modelIndex} 无法读取动作：${catalog.message}`,
+        `Formation BP 槽 ${catalog.modelIndex} 无法读取动作：${catalog.message}`,
       );
     }
     availableMontagesByModelIndex.set(
-      item.modelIndex,
+      catalog.modelIndex,
       new Set(catalog.actions.map((action) => action.name)),
     );
   }
@@ -2199,20 +2289,26 @@ async function prepareStoryboardExport(
       );
     }
   }
-  const resolvedSoundEffects: StoryboardExportSoundEffectPreview[] = [];
-  for (const [soundEffectIndex, soundEffect] of requestedSoundEffects.entries()) {
-    resolvedSoundEffects.push({
-      soundEffectIndex,
-      dialogueId: soundEffect.dialogueId,
-      assetName: soundEffect.assetName,
-      resolvedAssetPath: await findSoundEffectAssetPath(
-        connection,
-        soundEffect.assetName,
-      ),
-      existingAssetPath: "",
-      action: "unchanged",
-    });
-  }
+  const resolvedSoundEffects = await Promise.all(
+    requestedSoundEffects.map(
+      async (
+        soundEffect,
+        soundEffectIndex,
+      ): Promise<StoryboardExportSoundEffectPreview> => ({
+        soundEffectIndex,
+        dialogueId: soundEffect.dialogueId,
+        assetName: soundEffect.assetName,
+        delaySeconds: soundEffect.delaySeconds ?? 0,
+        resolvedAssetPath: await findSoundEffectAssetPath(
+          connection,
+          soundEffect.assetName,
+        ),
+        existingAssetPath: "",
+        existingDelaySeconds: 0,
+        action: "unchanged",
+      }),
+    ),
+  );
   const soundEffectByDialogueId = new Map(
     resolvedSoundEffects.map((soundEffect) => [
       soundEffect.dialogueId,
@@ -2311,6 +2407,13 @@ async function prepareStoryboardExport(
           characterActionIndex: edit.characterActionIndex,
           dialogueId: node.dialogueId,
           modelIndex: edit.modelIndex,
+          characterLabel:
+            edit.characterLabel?.trim() ||
+            exportedDialogue.dialogueModels[edit.modelIndex] ||
+            assetNameFromPath(
+              layout?.modelClassPaths.get(edit.modelIndex) ?? "",
+            ) ||
+            `槽位 ${edit.modelIndex}`,
           existingActions,
           desiredActions,
           preservedComplexActionCount: complexCharacterActionCount(
@@ -2323,31 +2426,52 @@ async function prepareStoryboardExport(
     let soundEffectPreview: StoryboardExportSoundEffectPreview | null = null;
     let writeSoundEffect = false;
     if (soundEffect) {
-      const propertyIndex = node.commonProperties.findIndex(
+      const soundEffectPropertyIndex = node.commonProperties.findIndex(
         (property) =>
           String(property.Alias).toLowerCase() === "soundeffect",
       );
-      if (propertyIndex < 0) {
+      if (soundEffectPropertyIndex < 0) {
         throw new Error(
           `台词节点 ${node.dialogueId} 缺少 SoundEffect 属性`,
         );
       }
+      const delayPropertyIndex = node.commonProperties.findIndex(
+        (property) =>
+          String(property.Alias).toLowerCase() === "delaytime",
+      );
+      if (delayPropertyIndex < 0) {
+        throw new Error(
+          `台词节点 ${node.dialogueId} 缺少 DelayTime 属性`,
+        );
+      }
       const rawExistingPath = unrealReferenceText(
-        node.commonProperties[propertyIndex].CurrentPath,
+        node.commonProperties[soundEffectPropertyIndex].CurrentPath,
       );
       const existingAssetPath = ["none", "null"].includes(
         rawExistingPath.toLowerCase(),
       )
         ? ""
         : rawExistingPath;
+      const existingDelaySeconds = Number(
+        node.commonProperties[delayPropertyIndex].CurrentFloat ?? 0,
+      );
+      if (!Number.isFinite(existingDelaySeconds)) {
+        throw new Error(
+          `台词节点 ${node.dialogueId} 的 DelayTime 无效`,
+        );
+      }
       writeSoundEffect =
         existingAssetPath.toLowerCase() !==
-        soundEffect.resolvedAssetPath.toLowerCase();
-      desiredCommonProperties[propertyIndex].CurrentPath =
+          soundEffect.resolvedAssetPath.toLowerCase() ||
+        Math.abs(existingDelaySeconds - soundEffect.delaySeconds) > 0.0001;
+      desiredCommonProperties[soundEffectPropertyIndex].CurrentPath =
         soundEffect.resolvedAssetPath;
+      desiredCommonProperties[delayPropertyIndex].CurrentFloat =
+        soundEffect.delaySeconds;
       soundEffectPreview = {
         ...soundEffect,
         existingAssetPath,
+        existingDelaySeconds,
         action: writeSoundEffect
           ? existingAssetPath
             ? "replace"

@@ -430,6 +430,7 @@ export const DirectorInputSchema = z.object({
     overlay_aspect_ratio: z.literal("21:9"),
     avoid_character_overlap: z.literal(true),
     preserve_input_formation: z.boolean().optional(),
+    lock_player_position: z.boolean().optional(),
     collect_revision_cases: z.boolean().optional(),
     supported_templates: z.array(z.enum(DIRECTOR_TEMPLATES)).min(1),
     supported_camera_movements: z
@@ -535,6 +536,7 @@ export interface DirectorInput {
     overlay_aspect_ratio: "21:9";
     avoid_character_overlap: true;
     preserve_input_formation?: boolean;
+    lock_player_position?: boolean;
     collect_revision_cases?: boolean;
     supported_templates: ReadonlyArray<(typeof DIRECTOR_TEMPLATES)[number]>;
     supported_camera_movements: ReadonlyArray<
@@ -572,6 +574,7 @@ export interface DirectorSoundEffectRecommendation {
   category: SoundEffectCategory;
   reason: string;
   description: string;
+  delaySeconds?: number;
 }
 
 export type ReadyDirectorResponse = Extract<
@@ -608,6 +611,7 @@ export function createDirectorInput(
   requestId = `${sequence.prefix}-${Date.now()}`,
   options: {
     preserveInputFormation?: boolean;
+    lockPlayerPosition?: boolean;
     collectRevisionCases?: boolean;
     soundEffectCatalog?: readonly SoundEffectCatalogEntry[];
   } = {},
@@ -631,6 +635,11 @@ export function createDirectorInput(
       return participant ? [participant.slot] : [];
     }),
   );
+  const preserveInputFormation =
+    options.preserveInputFormation ??
+    sequence.participants.every(
+      (participant) => participant.positionSource === "blueprint",
+    );
   return {
     request_id: requestId,
     schema_version: "shot-plan.v5",
@@ -721,11 +730,10 @@ export function createDirectorInput(
       primary_aspect_ratio: "16:9",
       overlay_aspect_ratio: "21:9",
       avoid_character_overlap: true,
-      preserve_input_formation:
-        options.preserveInputFormation ??
-        sequence.participants.every(
-          (participant) => participant.positionSource === "blueprint",
-        ),
+      preserve_input_formation: preserveInputFormation,
+      lock_player_position: preserveInputFormation
+        ? options.lockPlayerPosition ?? true
+        : false,
       collect_revision_cases: options.collectRevisionCases ?? true,
       supported_templates: DIRECTOR_TEMPLATES,
       supported_camera_movements: CAMERA_MOVEMENTS,

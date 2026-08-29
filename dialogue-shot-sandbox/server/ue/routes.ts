@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { basename } from "node:path";
 import type { Plugin, PreviewServer, ViteDevServer } from "vite";
 import { streamAudioFile } from "../audioStream";
 import { ueServices, type UeServices } from "./services";
@@ -43,7 +44,7 @@ export async function routeUeRequest(
         request,
         response,
         preview.filePath,
-        `${preview.assetName}.wav`,
+        basename(preview.filePath),
       );
     } catch (error) {
       sendJson(response, 400, {
