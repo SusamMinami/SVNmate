@@ -4618,6 +4618,7 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
     newNpc: { name: string; title: string } | null;
   }> = [];
   let registrationWriteScope = "";
+  let selectionReadRequests = 0;
   let targetUpdateItems: Array<{
     targetId: string;
     mapId: string;
@@ -4851,6 +4852,7 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
     });
   });
   await page.route("**/api/ue/selection/read", async (route) => {
+    selectionReadRequests += 1;
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -5130,6 +5132,7 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
       .getByText("UE 已选"),
   ).toBeVisible();
   await expect(dialog.getByText(/已选择 1 \/ 2 个目标物/)).toBeVisible();
+  expect(selectionReadRequests).toBe(1);
   await dialog.getByLabel("BP 文件名").fill("BP_Test");
   await dialog.getByRole("button", { name: "检查 BP 与对话模型" }).click();
   await expect(dialog.getByText("BP 尚未创建站位组件")).toBeVisible();
@@ -5200,8 +5203,10 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
   await expect(targetEditor.getByText("500001", { exact: true })).toBeVisible();
   await expect(
     targetEditor.getByRole("button", { name: "写入修改" }),
-  ).toBeDisabled();
-  await targetEditor.getByRole("button", { name: "读取 UE 选择" }).click();
+  ).toBeEnabled();
+  await expect(
+    targetEditor.getByRole("button", { name: "重新读取 UE 选择" }),
+  ).toBeVisible();
   await expect(targetEditor.getByLabel("目标物 500001 新位置")).toHaveValue(
     "(X=15.000000,Y=25.000000,Z=35.000000)",
   );
@@ -5217,6 +5222,7 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
   });
   await targetEditor.getByRole("button", { name: "写入修改" }).click();
   await expect(targetEditor.getByText(/修改 1 个目标物/)).toBeVisible();
+  expect(selectionReadRequests).toBe(1);
   expect(targetUpdateItems).toEqual([
     expect.objectContaining({
       targetId: "500001",
@@ -5685,6 +5691,12 @@ test("locks and registers every existing numeric Blueprint slot", async ({
     exact: true,
   });
   await workspace.getByLabel("BP 文件名").fill("7352");
+  await expect(
+    workspace.getByLabel("对话文件 ID（可选）"),
+  ).toHaveCount(0);
+  await workspace
+    .getByRole("button", { name: "展开对话文件 ID" })
+    .click();
   await workspace.getByLabel("对话文件 ID（可选）").fill("846500");
   await workspace
     .getByRole("button", { name: "检查 BP 与对话模型" })

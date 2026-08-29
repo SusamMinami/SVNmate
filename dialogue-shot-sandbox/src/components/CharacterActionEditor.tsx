@@ -1,5 +1,6 @@
 import {
   AlertTriangle,
+  ChevronDown,
   ChevronRight,
   GripVertical,
   LoaderCircle,
@@ -54,11 +55,47 @@ interface MontagePickerProps {
 }
 
 const MAX_VISIBLE_MONTAGES = 8;
+const MONTAGE_OPTION_HEIGHT = 25;
 const EMPTY_MONTAGE_ACTIONS: BlueprintMontageAction[] = [];
 const EMPTY_MONTAGE_ACTION_INDEX = new Map<
   string,
   BlueprintMontageAction
 >();
+
+export function matchingMontageActions(
+  actions: readonly BlueprintMontageAction[],
+  query: string,
+): BlueprintMontageAction[] {
+  const terms = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
+  return actions.filter((action) => {
+    if (terms.length === 0) {
+      return true;
+    }
+    const searchable =
+      `${action.name} ${action.assetPath}`.toLocaleLowerCase();
+    return terms.every((term) => searchable.includes(term));
+  });
+}
+
+export function montageActionWindow(
+  actions: readonly BlueprintMontageAction[],
+  requestedStart: number,
+): {
+  total: number;
+  start: number;
+  visible: BlueprintMontageAction[];
+} {
+  const maximumStart = Math.max(
+    0,
+    actions.length - MAX_VISIBLE_MONTAGES,
+  );
+  const start = Math.min(Math.max(0, requestedStart), maximumStart);
+  return {
+    total: actions.length,
+    start,
+    visible: actions.slice(start, start + MAX_VISIBLE_MONTAGES),
+  };
+}
 
 const MontagePicker = memo(function MontagePicker({
   actions,
@@ -73,29 +110,24 @@ const MontagePicker = memo(function MontagePicker({
 }: MontagePickerProps) {
   const listboxId = useId();
   const rootRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const listboxRef = useRef<HTMLDivElement>(null);
+  const scrollFrameRef = useRef<number | null>(null);
   const committedValueRef = useRef(value);
   const [query, setQuery] = useState(value);
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
+  const [visibleStart, setVisibleStart] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
   const deferredQuery = useDeferredValue(query.trim().toLocaleLowerCase());
+  const matchingActions = useMemo(
+    () =>
+      open ? matchingMontageActions(actions, deferredQuery) : [],
+    [actions, deferredQuery, open],
+  );
   const filtered = useMemo(() => {
-    if (!open) {
-      return { total: 0, visible: [] };
-    }
-    const terms = deferredQuery.split(/\s+/).filter(Boolean);
-    const matches = actions.filter((action) => {
-      if (terms.length === 0) {
-        return true;
-      }
-      const searchable =
-        `${action.name} ${action.assetPath}`.toLocaleLowerCase();
-      return terms.every((term) => searchable.includes(term));
-    });
-    return {
-      total: matches.length,
-      visible: matches.slice(0, MAX_VISIBLE_MONTAGES),
-    };
-  }, [actions, deferredQuery, open]);
+    return montageActionWindow(matchingActions, visibleStart);
+  }, [matchingActions, visibleStart]);
 
   useEffect(() => {
     if (value === committedValueRef.current) {
@@ -107,9 +139,23 @@ const MontagePicker = memo(function MontagePicker({
 
   useEffect(() => {
     setActiveIndex(0);
+    setVisibleStart(0);
+    if (listboxRef.current) {
+      listboxRef.current.scrollTop = 0;
+    }
   }, [deferredQuery]);
 
+  useEffect(
+    () => () => {
+      if (scrollFrameRef.current !== null) {
+        window.cancelAnimationFrame(scrollFrameRef.current);
+      }
+    },
+    [],
+  );
+
   function selectAction(action: BlueprintMontageAction) {
+    cancelPendingScrollFrame();
     committedValueRef.current = action.name;
     setQuery(action.name);
     setOpen(false);
@@ -119,8 +165,82 @@ const MontagePicker = memo(function MontagePicker({
   }
 
   function closeAndRestore() {
+    cancelPendingScrollFrame();
     setOpen(false);
     setQuery(committedValueRef.current);
+    setVisibleStart(0);
+    setActiveIndex(0);
+    setLoadingMore(false);
+  }
+
+  function showAllActions() {
+    cancelPendingScrollFrame();
+    setQuery("");
+    setVisibleStart(0);
+    setActiveIndex(0);
+    setOpen(true);
+    window.requestAnimationFrame(() => {
+      if (listboxRef.current) {
+        listboxRef.current.scrollTop = 0;
+      }
+      inputRef.current?.focus();
+    });
+  }
+
+  function cancelPendingScrollFrame() {
+    if (scrollFrameRef.current !== null) {
+      window.cancelAnimationFrame(scrollFrameRef.current);
+      scrollFrameRef.current = null;
+    }
+    setLoadingMore(false);
+  }
+
+  function updateVisibleWindow(scrollTop: number) {
+    const nextStart = Math.min(
+      Math.max(0, filtered.total - MAX_VISIBLE_MONTAGES),
+      Math.max(0, Math.floor(scrollTop / MONTAGE_OPTION_HEIGHT)),
+    );
+    if (nextStart === filtered.start) {
+      return;
+    }
+    setLoadingMore(true);
+    if (scrollFrameRef.current !== null) {
+      window.cancelAnimationFrame(scrollFrameRef.current);
+    }
+    scrollFrameRef.current = window.requestAnimationFrame(() => {
+      setVisibleStart(nextStart);
+      setActiveIndex(0);
+      scrollFrameRef.current = window.requestAnimationFrame(() => {
+        setLoadingMore(false);
+        scrollFrameRef.current = null;
+      });
+    });
+  }
+
+  function moveActiveSelection(direction: -1 | 1) {
+    if (filtered.total === 0) {
+      return;
+    }
+    const currentAbsolute = filtered.start + activeIndex;
+    const nextAbsolute = Math.max(
+      0,
+      Math.min(filtered.total - 1, currentAbsolute + direction),
+    );
+    const nextStart =
+      nextAbsolute < filtered.start
+        ? nextAbsolute
+        : nextAbsolute >= filtered.start + filtered.visible.length
+          ? Math.min(
+              nextAbsolute - MAX_VISIBLE_MONTAGES + 1,
+              Math.max(0, filtered.total - MAX_VISIBLE_MONTAGES),
+            )
+          : filtered.start;
+    setVisibleStart(nextStart);
+    setActiveIndex(nextAbsolute - nextStart);
+    if (listboxRef.current) {
+      listboxRef.current.scrollTop =
+        Math.max(0, nextStart) * MONTAGE_OPTION_HEIGHT;
+    }
   }
 
   const selectedAction = actionByName.get(value.toLocaleLowerCase());
@@ -140,99 +260,172 @@ const MontagePicker = memo(function MontagePicker({
         });
       }}
     >
-      <input
-        className="character-action-picker__input"
-        type="text"
-        role="combobox"
-        aria-label={label}
-        aria-autocomplete="list"
-        aria-controls={listboxId}
-        aria-expanded={open}
-        aria-invalid={queryIsInvalid}
-        aria-activedescendant={
-          open && filtered.visible[activeIndex]
-            ? `${listboxId}-${activeIndex}`
-            : undefined
-        }
-        autoComplete="off"
-        disabled={disabled}
-        placeholder="输入动作关键词"
-        title={selectedAction?.assetPath ?? ""}
-        value={query}
-        onFocus={() => setOpen(true)}
-        onChange={(event) => {
-          const nextQuery = event.target.value;
-          const exact = actionByName.get(
-            nextQuery.trim().toLocaleLowerCase(),
-          );
-          setQuery(nextQuery);
-          setOpen(true);
-          setActiveIndex(0);
-          if (exact) {
-            committedValueRef.current = exact.name;
-            if (exact.name !== value) {
+      <div className="character-action-picker__field">
+        <input
+          ref={inputRef}
+          className="character-action-picker__input"
+          type="text"
+          role="combobox"
+          aria-label={label}
+          aria-autocomplete="list"
+          aria-controls={listboxId}
+          aria-expanded={open}
+          aria-invalid={queryIsInvalid}
+          aria-activedescendant={
+            open && filtered.visible[activeIndex]
+              ? `${listboxId}-${filtered.start + activeIndex}`
+              : undefined
+          }
+          autoComplete="off"
+          disabled={disabled}
+          placeholder="输入动作关键词"
+          title={selectedAction?.assetPath ?? ""}
+          value={query}
+          onFocus={() => setOpen(true)}
+          onChange={(event) => {
+            cancelPendingScrollFrame();
+            const nextQuery = event.target.value;
+            const exact = actionByName.get(
+              nextQuery.trim().toLocaleLowerCase(),
+            );
+            setQuery(nextQuery);
+            setOpen(true);
+            setActiveIndex(0);
+            setVisibleStart(0);
+            if (exact) {
+              committedValueRef.current = exact.name;
+              if (exact.name !== value) {
+                onUpdate(dialogueId, modelIndex, actionId, {
+                  montageName: exact.name,
+                });
+              }
+            } else if (value) {
+              committedValueRef.current = "";
               onUpdate(dialogueId, modelIndex, actionId, {
-                montageName: exact.name,
+                montageName: "",
               });
             }
-          } else if (value) {
-            committedValueRef.current = "";
-            onUpdate(dialogueId, modelIndex, actionId, {
-              montageName: "",
-            });
-          }
-        }}
-        onKeyDown={(event) => {
-          if (event.key === "ArrowDown") {
-            event.preventDefault();
-            setOpen(true);
-            setActiveIndex((current) =>
-              filtered.visible.length === 0
-                ? 0
-                : Math.min(current + 1, filtered.visible.length - 1),
-            );
-          } else if (event.key === "ArrowUp") {
-            event.preventDefault();
-            setOpen(true);
-            setActiveIndex((current) => Math.max(0, current - 1));
-          } else if (event.key === "Enter" && open) {
-            const action = filtered.visible[activeIndex];
-            if (action) {
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "ArrowDown") {
               event.preventDefault();
-              selectAction(action);
+              setOpen(true);
+              moveActiveSelection(1);
+            } else if (event.key === "ArrowUp") {
+              event.preventDefault();
+              moveActiveSelection(-1);
+            } else if (event.key === "PageDown") {
+              event.preventDefault();
+              const nextStart = Math.min(
+                Math.max(0, filtered.total - MAX_VISIBLE_MONTAGES),
+                filtered.start + MAX_VISIBLE_MONTAGES,
+              );
+              setVisibleStart(nextStart);
+              setActiveIndex(0);
+              if (listboxRef.current) {
+                listboxRef.current.scrollTop =
+                  nextStart * MONTAGE_OPTION_HEIGHT;
+              }
+            } else if (event.key === "PageUp") {
+              event.preventDefault();
+              const nextStart = Math.max(
+                0,
+                filtered.start - MAX_VISIBLE_MONTAGES,
+              );
+              setVisibleStart(nextStart);
+              setActiveIndex(0);
+              if (listboxRef.current) {
+                listboxRef.current.scrollTop =
+                  nextStart * MONTAGE_OPTION_HEIGHT;
+              }
+            } else if (event.key === "Enter" && open) {
+              const action = filtered.visible[activeIndex];
+              if (action) {
+                event.preventDefault();
+                selectAction(action);
+              }
+            } else if (event.key === "Escape") {
+              event.preventDefault();
+              closeAndRestore();
             }
-          } else if (event.key === "Escape") {
-            event.preventDefault();
-            closeAndRestore();
-          }
-        }}
-      />
-      {open && (
-        <div
-          className="character-action-picker__menu"
-          id={listboxId}
-          role="listbox"
+          }}
+        />
+        <button
+          className="character-action-picker__toggle"
+          type="button"
+          aria-label={`${open ? "收起" : "展开"}${label}列表`}
+          aria-expanded={open}
+          disabled={disabled}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => (open ? closeAndRestore() : showAllActions())}
         >
-          {filtered.visible.map((action, index) => (
-            <button
-              type="button"
-              role="option"
-              id={`${listboxId}-${index}`}
-              aria-selected={action.name === value}
-              className={index === activeIndex ? "is-active" : ""}
-              key={action.name}
-              title={action.assetPath}
-              onMouseDown={(event) => event.preventDefault()}
-              onMouseEnter={() => setActiveIndex(index)}
-              onClick={() => selectAction(action)}
+          <ChevronDown size={13} />
+        </button>
+      </div>
+      {open && (
+        <div className="character-action-picker__menu">
+          <div
+            ref={listboxRef}
+            className="character-action-picker__options"
+            id={listboxId}
+            role="listbox"
+            aria-busy={loadingMore}
+            style={{
+              height: `${Math.max(
+                1,
+                Math.min(filtered.total, MAX_VISIBLE_MONTAGES),
+              ) * MONTAGE_OPTION_HEIGHT}px`,
+            }}
+            onScroll={(event) =>
+              updateVisibleWindow(event.currentTarget.scrollTop)
+            }
+          >
+            {filtered.total > 0 ? (
+              <div
+                className="character-action-picker__spacer"
+                style={{
+                  height: `${filtered.total * MONTAGE_OPTION_HEIGHT}px`,
+                }}
+              >
+                {filtered.visible.map((action, index) => (
+                  <button
+                    type="button"
+                    role="option"
+                    id={`${listboxId}-${filtered.start + index}`}
+                    aria-selected={action.name === value}
+                    className={index === activeIndex ? "is-active" : ""}
+                    key={action.name}
+                    title={action.assetPath}
+                    style={{
+                      top: `${
+                        (filtered.start + index) * MONTAGE_OPTION_HEIGHT
+                      }px`,
+                    }}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onMouseEnter={() => setActiveIndex(index)}
+                    onClick={() => selectAction(action)}
+                  >
+                    {action.name}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <span>没有匹配动作</span>
+            )}
+          </div>
+          {loadingMore && (
+            <span
+              className="character-action-picker__loading"
+              role="status"
             >
-              {action.name}
-            </button>
-          ))}
-          {filtered.total === 0 && <span>没有匹配动作</span>}
-          {filtered.total > filtered.visible.length && (
-            <small>
-              {filtered.visible.length} / {filtered.total}
+              <LoaderCircle className="spin" size={12} />
+              正在加载更多动作
+            </span>
+          )}
+          {filtered.total > MAX_VISIBLE_MONTAGES && (
+            <small className="character-action-picker__count">
+              {filtered.start + 1}-
+              {filtered.start + filtered.visible.length} / {filtered.total}
             </small>
           )}
         </div>

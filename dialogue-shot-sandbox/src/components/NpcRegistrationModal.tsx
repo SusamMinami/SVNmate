@@ -84,6 +84,60 @@ function transformChanged(
   );
 }
 
+function initialTargetEditState(
+  editRequest: MissionTargetEditRequest | undefined,
+): {
+  selection: SelectedLevelActorsResult | null;
+  drafts: Record<string, TargetTransformDraft>;
+  matchedCount: number;
+} {
+  if (!editRequest) {
+    return { selection: null, drafts: {}, matchedCount: 0 };
+  }
+  const selection =
+    editRequest.initialSelection &&
+    normalizedAssetPath(editRequest.initialSelection.mapAssetPath) ===
+      normalizedAssetPath(editRequest.mapAssetPath)
+      ? editRequest.initialSelection
+      : null;
+  const actorByRef = new Map(
+    (selection?.actors ?? []).map((actor) => [actor.actorRef, actor]),
+  );
+  const actorRefByTargetId = new Map(
+    (editRequest.initialMatches ?? []).map((match) => [
+      match.targetId,
+      match.actorRef,
+    ]),
+  );
+  let matchedCount = 0;
+  const drafts = Object.fromEntries(
+    editRequest.targets.map((target) => {
+      const actorRef = actorRefByTargetId.get(target.targetId) ?? "";
+      const actor = actorByRef.get(actorRef);
+      if (actor) {
+        matchedCount += 1;
+      }
+      return [
+        target.targetId,
+        {
+          actorRef: actor?.actorRef ?? "",
+          positionText: formatUnrealVector(
+            actor?.transform.location ?? target.transform.location,
+          ),
+          rotationText: formatUnrealRotator(
+            actor?.transform.rotation ?? target.transform.rotation,
+          ),
+        },
+      ];
+    }),
+  );
+  return {
+    selection: matchedCount > 0 ? selection : null,
+    drafts,
+    matchedCount,
+  };
+}
+
 function turnLabel(canTurn: boolean | null | undefined): string {
   if (canTurn === true) {
     return "可转身";
@@ -157,8 +211,9 @@ export function NpcRegistrationModal({
   const titleId = editMode
     ? "npc-target-edit-title"
     : "npc-registration-title";
+  const initialEditState = initialTargetEditState(editRequest);
   const [selection, setSelection] =
-    useState<SelectedLevelActorsResult | null>(null);
+    useState<SelectedLevelActorsResult | null>(initialEditState.selection);
   const [candidates, setCandidates] = useState<
     NpcRegistrationCandidate[]
   >([]);
@@ -179,24 +234,17 @@ export function NpcRegistrationModal({
   >({});
   const [editDrafts, setEditDrafts] = useState<
     Record<string, TargetTransformDraft>
-  >(() =>
-    Object.fromEntries(
-      (editRequest?.targets ?? []).map((target) => [
-        target.targetId,
-        {
-          actorRef: "",
-          positionText: formatUnrealVector(target.transform.location),
-          rotationText: formatUnrealRotator(target.transform.rotation),
-        },
-      ]),
-    ),
-  );
+  >(initialEditState.drafts);
   const [writtenTargetIds, setWrittenTargetIds] = useState<Set<string>>(
     new Set(),
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [status, setStatus] = useState("");
+  const [status, setStatus] = useState(
+    initialEditState.matchedCount > 0
+      ? `已复用首次读取的 ${initialEditState.matchedCount} 个 UE Actor 位置，无需再次读取`
+      : "",
+  );
   const selectedCandidates = candidates.filter((candidate) =>
     selectedActorRefs.has(candidate.actor.actorRef),
   );
@@ -252,9 +300,21 @@ export function NpcRegistrationModal({
   ).length;
 
   async function refreshSelection() {
+    const resetEditDrafts = editRequest
+      ? initialTargetEditState({
+          ...editRequest,
+          initialSelection: undefined,
+          initialMatches: undefined,
+        }).drafts
+      : null;
     setBusy(true);
     setError("");
     setStatus("");
+    if (resetEditDrafts) {
+      setSelection(null);
+      setEditDrafts(resetEditDrafts);
+      setWrittenTargetIds(new Set());
+    }
     try {
       if (editRequest) {
         const result = await readSelectedLevelActors();
@@ -268,7 +328,7 @@ export function NpcRegistrationModal({
         }
         const claimedActors = new Set<string>();
         let matchedCount = 0;
-        const nextDrafts = { ...editDrafts };
+        const nextDrafts = { ...resetEditDrafts! };
         setSelection(result);
         for (const target of editRequest.targets) {
           const identity =
@@ -972,7 +1032,7 @@ export function NpcRegistrationModal({
       ) : (
         <RefreshCw size={16} />
       )}
-      读取 UE 选择
+      {editMode && selection ? "重新读取 UE 选择" : "读取 UE 选择"}
     </button>
   );
   const returnButton = (

@@ -177,6 +177,7 @@ export function MissionTargetModal({
   const [taskId, setTaskId] = useState("");
   const [blueprintName, setBlueprintName] = useState("");
   const [dialogueId, setDialogueId] = useState("");
+  const [dialogueIdExpanded, setDialogueIdExpanded] = useState(false);
   const [plan, setPlan] = useState<MissionTargetPreviewPlan | null>(null);
   const [selectedTargetIds, setSelectedTargetIds] = useState<Set<string>>(
     new Set(),
@@ -1241,6 +1242,12 @@ export function MissionTargetModal({
     if (!plan || selectedCount === 0) {
       return;
     }
+    const initialMatches =
+      activeUeTargetSelectionReview?.classification.mapMatches
+        ? activeUeTargetSelectionReview.classification.matches.filter(
+            (match) => selectedTargetIds.has(match.targetId),
+          )
+        : [];
     setEditRequest({
       taskId: plan.taskId,
       mapId: plan.mapId,
@@ -1248,6 +1255,12 @@ export function MissionTargetModal({
       targets: plan.targets.filter((target) =>
         selectedTargetIds.has(target.targetId),
       ),
+      ...(initialMatches.length > 0 && activeUeTargetSelectionReview
+        ? {
+            initialSelection: activeUeTargetSelectionReview.selection,
+            initialMatches,
+          }
+        : {}),
     });
   }
 
@@ -1418,53 +1431,81 @@ export function MissionTargetModal({
             </button>
           </div>
           <label htmlFor="mission-blueprint-name">BP 文件名</label>
-          <div className="input-row">
-            <input
-              id="mission-blueprint-name"
-              value={blueprintName}
-              disabled={busy}
-              onChange={(event) => {
-                setBlueprintName(event.target.value);
-                setBlueprintInspection(null);
-                setError("");
-                setStatus("");
-              }}
-              placeholder="7351、BP_735100 或 /Game/.../BP_735100"
-              spellCheck={false}
-            />
+          <div
+            className="mission-target-blueprint-fields"
+            data-dialogue-expanded={dialogueIdExpanded}
+          >
+            <div className="input-row">
+              <input
+                id="mission-blueprint-name"
+                value={blueprintName}
+                disabled={busy}
+                onChange={(event) => {
+                  setBlueprintName(event.target.value);
+                  setBlueprintInspection(null);
+                  setError("");
+                  setStatus("");
+                }}
+                placeholder="7351、BP_735100 或 /Game/.../BP_735100"
+                spellCheck={false}
+              />
+              <button
+                className="icon-button"
+                type="button"
+                title="检查 BP 与对话模型"
+                aria-label="检查 BP 与对话模型"
+                onClick={() => void inspectBlueprint()}
+                disabled={busy || !blueprintName.trim()}
+              >
+                {busy ? (
+                  <LoaderCircle className="spin" size={18} />
+                ) : (
+                  <FileSearch size={18} />
+                )}
+              </button>
+            </div>
             <button
-              className="icon-button"
+              className="mission-target-dialogue-toggle"
               type="button"
-              title="检查 BP 与对话模型"
-              aria-label="检查 BP 与对话模型"
-              onClick={() => void inspectBlueprint()}
-              disabled={busy || !blueprintName.trim()}
+              aria-expanded={dialogueIdExpanded}
+              aria-controls="mission-dialogue-id"
+              aria-label={`${dialogueIdExpanded ? "收起" : "展开"}对话文件 ID`}
+              onClick={() =>
+                setDialogueIdExpanded((current) => !current)
+              }
             >
-              {busy ? (
-                <LoaderCircle className="spin" size={18} />
+              {dialogueIdExpanded ? (
+                <ChevronDown size={14} />
               ) : (
-                <FileSearch size={18} />
+                <ChevronRight size={14} />
+              )}
+              <span>对话 ID</span>
+              {!dialogueIdExpanded && dialogueId && (
+                <code>{dialogueId}</code>
               )}
             </button>
+            {dialogueIdExpanded && (
+              <input
+                id="mission-dialogue-id"
+                aria-label="对话文件 ID（可选）"
+                inputMode="numeric"
+                value={dialogueId}
+                disabled={busy}
+                onChange={(event) => {
+                  setDialogueId(
+                    event.target.value.replace(/\D/g, "").slice(0, 32),
+                  );
+                  setBlueprintInspection(null);
+                  setBackgroundPropPreview(null);
+                  setSelectedBackgroundActorRefs(new Set());
+                  setError("");
+                  setStatus("");
+                }}
+                placeholder="留空时从 BP 文件名推导"
+                autoFocus
+              />
+            )}
           </div>
-          <label htmlFor="mission-dialogue-id">对话文件 ID（可选）</label>
-          <input
-            id="mission-dialogue-id"
-            inputMode="numeric"
-            value={dialogueId}
-            disabled={busy}
-            onChange={(event) => {
-              setDialogueId(
-                event.target.value.replace(/\D/g, "").slice(0, 32),
-              );
-              setBlueprintInspection(null);
-              setBackgroundPropPreview(null);
-              setSelectedBackgroundActorRefs(new Set());
-              setError("");
-              setStatus("");
-            }}
-            placeholder="留空时从 BP 文件名推导，例如 735200"
-          />
         </form>
 
         {error && (

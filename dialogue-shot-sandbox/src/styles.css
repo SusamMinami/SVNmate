@@ -2564,12 +2564,50 @@ textarea:focus-visible {
   min-width: 0;
 }
 
+.character-action-picker__field {
+  position: relative;
+}
+
 .character-action-picker__input {
-  padding-right: 7px;
+  padding-right: 28px;
 }
 
 .character-action-picker__input[aria-invalid="true"] {
   border-color: var(--warning);
+}
+
+.character-action-picker__toggle {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  display: grid;
+  width: 27px;
+  height: 28px;
+  place-items: center;
+  padding: 0;
+  color: var(--text-muted);
+  background: transparent;
+  border: 0;
+  border-left: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.character-action-picker__toggle:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--surface-muted);
+}
+
+.character-action-picker__toggle:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.character-action-picker__toggle svg {
+  transition: transform 160ms ease;
+}
+
+.character-action-picker__toggle[aria-expanded="true"] svg {
+  transform: rotate(180deg);
 }
 
 .character-action-picker__menu {
@@ -2585,9 +2623,26 @@ textarea:focus-visible {
   box-shadow: 0 8px 20px rgb(32 38 42 / 14%);
 }
 
-.character-action-picker__menu button {
-  overflow: hidden;
+.character-action-picker__options {
+  position: relative;
   min-height: 25px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.character-action-picker__spacer {
+  position: relative;
+  min-width: 0;
+}
+
+.character-action-picker__spacer > button {
+  position: absolute;
+  right: 0;
+  left: 0;
+  overflow: hidden;
+  height: 25px;
   padding: 4px 6px;
   color: #303b44;
   background: transparent;
@@ -2599,21 +2654,39 @@ textarea:focus-visible {
   cursor: pointer;
 }
 
-.character-action-picker__menu button:hover,
-.character-action-picker__menu button.is-active {
+.character-action-picker__spacer > button:hover,
+.character-action-picker__spacer > button.is-active {
   color: #ffffff;
   background: var(--ink);
 }
 
-.character-action-picker__menu > span,
-.character-action-picker__menu > small {
+.character-action-picker__options > span {
   padding: 5px 6px;
   color: var(--text-muted);
   font-size: 8px;
 }
 
-.character-action-picker__menu > small {
+.character-action-picker__loading {
+  position: absolute;
+  z-index: 1;
+  right: 8px;
+  bottom: 24px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  color: #ffffff;
+  background: rgba(31, 38, 44, 0.88);
+  font-size: 8px;
+  pointer-events: none;
+}
+
+.character-action-picker__count {
+  display: block;
+  padding: 5px 6px;
+  color: var(--text-muted);
   border-top: 1px solid var(--border);
+  font: 8px/1 "Cascadia Code", Consolas, monospace;
   text-align: right;
 }
 
@@ -4500,7 +4573,7 @@ textarea:focus-visible {
 .mission-target-query {
   display: grid;
   flex: 0 0 auto;
-  grid-template-columns: 100px minmax(240px, 420px);
+  grid-template-columns: 100px minmax(240px, 1fr);
   align-items: end;
   gap: 10px;
   padding: 12px 18px;
@@ -4535,6 +4608,50 @@ textarea:focus-visible {
 
 .mission-target-query .input-row {
   min-width: 0;
+}
+
+.mission-target-query > .input-row {
+  width: min(420px, 100%);
+}
+
+.mission-target-blueprint-fields {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(240px, 420px) auto;
+  align-items: center;
+  gap: 7px;
+}
+
+.mission-target-blueprint-fields[data-dialogue-expanded="true"] {
+  grid-template-columns: minmax(240px, 420px) auto minmax(170px, 250px);
+}
+
+.mission-target-dialogue-toggle {
+  display: inline-flex;
+  min-width: 0;
+  height: 36px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  color: #4c5761;
+  background: #ffffff;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font: 9px/1 "Cascadia Code", Consolas, monospace;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.mission-target-dialogue-toggle:hover {
+  color: var(--ink);
+  border-color: var(--border-strong);
+}
+
+.mission-target-dialogue-toggle code {
+  overflow: hidden;
+  max-width: 96px;
+  color: var(--accent-strong);
+  text-overflow: ellipsis;
 }
 
 .mission-target-message {
@@ -6256,6 +6373,16 @@ textarea:focus-visible {
 
   .mission-target-query {
     grid-template-columns: 1fr;
+  }
+
+  .mission-target-blueprint-fields,
+  .mission-target-blueprint-fields[data-dialogue-expanded="true"] {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .mission-target-blueprint-fields[data-dialogue-expanded="true"]
+    > #mission-dialogue-id {
+    grid-column: 1 / -1;
   }
 
   .mission-target-summary {

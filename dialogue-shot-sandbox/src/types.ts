@@ -671,6 +671,11 @@ export interface MissionTargetEditRequest {
   mapId: string;
   mapAssetPath: string;
   targets: MissionTargetPreviewTarget[];
+  initialSelection?: SelectedLevelActorsResult;
+  initialMatches?: Array<{
+    actorRef: string;
+    targetId: string;
+  }>;
 }
 
 export interface MissionTargetUpdateItem {
