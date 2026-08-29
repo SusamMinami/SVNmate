@@ -28,6 +28,7 @@ interface WorkspaceStatusHubProps {
   onReorderPendingTasks: (requestIds: string[]) => Promise<void>;
   onDeletePendingTask: (requestId: string) => Promise<void>;
   onCancelTask: (requestId: string) => Promise<void>;
+  disabled?: boolean;
 }
 
 function larkConnectionLabel(
@@ -68,6 +69,7 @@ export function WorkspaceStatusHub({
   onReorderPendingTasks,
   onDeletePendingTask,
   onCancelTask,
+  disabled = false,
 }: WorkspaceStatusHubProps) {
   const [open, setOpen] = useState(false);
   const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);
@@ -121,6 +123,12 @@ export function WorkspaceStatusHub({
       : miraReady
         ? `飞书用户：${larkStatus?.userName || "已授权用户"}`
         : "不可用时会自动降级到规则导演";
+  useEffect(() => {
+    if (disabled) {
+      setOpen(false);
+    }
+  }, [disabled]);
+
   useEffect(() => {
     if (!open) {
       return;
@@ -220,7 +228,8 @@ export function WorkspaceStatusHub({
         type="button"
         aria-label="协作连接状态"
         aria-haspopup="dialog"
-        aria-expanded={open}
+        aria-expanded={!disabled && open}
+        disabled={disabled}
         onClick={() => setOpen((current) => !current)}
       >
         {providerLoading ? (
@@ -233,7 +242,7 @@ export function WorkspaceStatusHub({
         <span className="workspace-status-tooltip">{providerLabel}</span>
       </button>
 
-      {open && (
+      {open && !disabled && (
         <section
           className="workspace-status-popover"
           role="dialog"

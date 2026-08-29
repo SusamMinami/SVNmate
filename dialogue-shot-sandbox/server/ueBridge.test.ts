@@ -242,6 +242,38 @@ class FakeFormationConnection implements UnrealInvoker {
   }
 }
 
+class FakeSharedFormationConnection extends FakeFormationConnection {
+  readonly sharedBlueprintAssetPath =
+    "/Game/Seria/Task/Mod/Shared/BP_SharedFormation.BP_SharedFormation";
+  readonly blueprintRequests: string[] = [];
+
+  override async invoke(
+    action: string,
+    args: Record<string, unknown>,
+  ): Promise<unknown> {
+    if (action === "asset.asset_search") {
+      return String(args.Query).startsWith("BP_")
+        ? []
+        : ["736300 (SeriaDialogGraph) [/Game/Test/736300.736300]"];
+    }
+    if (action === "bp.get_blueprint_by_path") {
+      const assetPath = String(args.AssetPath);
+      this.blueprintRequests.push(assetPath);
+      return assetPath === this.sharedBlueprintAssetPath
+        ? "Blueprint_BP_SharedFormation"
+        : null;
+    }
+    if (
+      action === "reflect.read_object_property" &&
+      args.ThisPtr === "StartData" &&
+      args.PropertyName === "Formation"
+    ) {
+      return `BlueprintGeneratedClass'${this.sharedBlueprintAssetPath}_C'`;
+    }
+    return super.invoke(action, args);
+  }
+}
+
 class FakeBlueprintPopulateConnection implements UnrealInvoker {
   readonly calls: Array<{
     action: string;
@@ -510,9 +542,12 @@ class FakeDialogueRegistrationConnection implements UnrealInvoker {
   ): Promise<unknown> {
     this.calls.push({ action, args });
     if (action === "asset.asset_search") {
-      return String(args.Query).startsWith("BP_")
+      const query = String(args.Query);
+      return query.startsWith("BP_")
         ? [`BP_735200 [${this.blueprintAssetPath}]`]
-        : [`735200 [${this.dialogueAssetPath}]`];
+        : [
+            `${query} [/Game/Seria/Task/dialoggraph/Test/${query}.${query}]`,
+          ];
     }
     if (action === "bp.get_blueprint_by_path") {
       return "Blueprint_BP_735200";
@@ -1460,6 +1495,41 @@ describe("dialogue model registration", () => {
     ).toBe(false);
     expect(connection.closed).toBe(true);
   });
+
+  it("uses an explicit dialogue ID when a shared BP belongs to another dialogue", async () => {
+    const connection = new FakeDialogueRegistrationConnection();
+
+    const inspection = await inspectMissionTargetBlueprint(
+      { blueprintName: "7352", dialogueId: "846500" },
+      () => connection,
+    );
+    const result = await registerBlueprintDialogueModels(
+      {
+        blueprintName: "7352",
+        dialogueId: "846500",
+        selectedModelIndexes: [1, 2],
+      },
+      () => connection,
+    );
+
+    expect(inspection).toMatchObject({
+      dialogueId: "846500",
+      dialogueAssetPath:
+        "/Game/Seria/Task/dialoggraph/Test/846500.846500",
+    });
+    expect(result).toMatchObject({
+      dialogueId: "846500",
+      dialogueAssetPath:
+        "/Game/Seria/Task/dialoggraph/Test/846500.846500",
+    });
+    expect(
+      connection.calls.some(
+        (call) =>
+          call.action === "asset.asset_search" &&
+          call.args.Query === "846500",
+      ),
+    ).toBe(true);
+  });
 });
 
 describe("UE editor selection", () => {
@@ -1509,6 +1579,30 @@ describe("UE editor selection", () => {
 });
 
 describe("Blueprint formation lookup", () => {
+  it("falls back to the dialogue Formation when the matching BP name is absent", async () => {
+    const connection = new FakeSharedFormationConnection();
+
+    const result = await readBlueprintFormation(
+      {
+        dialogueId: "7363",
+        startId: "736300",
+      },
+      () => connection,
+    );
+
+    expect(result).toMatchObject({
+      status: "found",
+      snapshot: {
+        blueprintAssetPath: connection.sharedBlueprintAssetPath,
+        dialogueModels: ["player", "N103_Ansel"],
+      },
+    });
+    expect(connection.blueprintRequests).toContain(
+      connection.sharedBlueprintAssetPath,
+    );
+    expect(connection.closed).toBe(true);
+  });
+
   it("reads numeric slot rotations and dialogue model registration", async () => {
     const connection = new FakeFormationConnection();
 

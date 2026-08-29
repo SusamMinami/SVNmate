@@ -56,10 +56,11 @@ const UPDATE_PAGE =
 const DESKTOP_PORT = 43127;
 const DEFAULT_WINDOW_MIN_WIDTH = 1080;
 const DEFAULT_WINDOW_MIN_HEIGHT = 700;
-const CONFIGURATION_WINDOW_WIDTH = 360;
+const CONFIGURATION_WINDOW_WIDTH = 310;
 const CONFIGURATION_WINDOW_HEIGHT = 720;
-const CONFIGURATION_WINDOW_MIN_WIDTH = 320;
+const CONFIGURATION_WINDOW_MIN_WIDTH = 280;
 const CONFIGURATION_WINDOW_MIN_HEIGHT = 480;
+const CONFIGURATION_WINDOW_ANIMATION_MS = 220;
 const isMcpProcess = process.argv.includes("--storyboard-mcp");
 const contentTypes: Record<string, string> = {
   ".css": "text/css; charset=utf-8",
@@ -101,6 +102,11 @@ interface WindowRestoreState {
   fullScreen: boolean;
   alwaysOnTop: boolean;
   opacity: number;
+}
+
+interface ConfigurationWindowContentSize {
+  width?: unknown;
+  height?: unknown;
 }
 
 let mainWindow: BrowserWindow | null = null;
@@ -444,7 +450,68 @@ async function setConfigDocDirectory(directoryPath: unknown) {
   return setupStatus();
 }
 
-function setConfigurationWindowMode(enabled: boolean): boolean {
+function animateWindowBounds(
+  targetWindow: BrowserWindow,
+  targetBounds: Rectangle,
+): Promise<void> {
+  const startBounds = targetWindow.getBounds();
+  const startedAt = Date.now();
+  return new Promise((resolvePromise) => {
+    const updateBounds = () => {
+      if (targetWindow.isDestroyed()) {
+        resolvePromise();
+        return;
+      }
+      const progress = Math.min(
+        1,
+        (Date.now() - startedAt) / CONFIGURATION_WINDOW_ANIMATION_MS,
+      );
+      const eased =
+        progress < 0.5
+          ? 4 * progress * progress * progress
+          : 1 - Math.pow(-2 * progress + 2, 3) / 2;
+      targetWindow.setBounds({
+        x: Math.round(
+          startBounds.x + (targetBounds.x - startBounds.x) * eased,
+        ),
+        y: Math.round(
+          startBounds.y + (targetBounds.y - startBounds.y) * eased,
+        ),
+        width: Math.round(
+          startBounds.width +
+            (targetBounds.width - startBounds.width) * eased,
+        ),
+        height: Math.round(
+          startBounds.height +
+            (targetBounds.height - startBounds.height) * eased,
+        ),
+      });
+      if (progress < 1) {
+        setTimeout(updateBounds, 16);
+      } else {
+        resolvePromise();
+      }
+    };
+    updateBounds();
+  });
+}
+
+function numericWindowDimension(
+  value: unknown,
+  fallback: number,
+  minimum: number,
+): number {
+  const numericValue =
+    typeof value === "number" ? value : Number.parseFloat(String(value));
+  return Number.isFinite(numericValue)
+    ? Math.max(minimum, Math.round(numericValue))
+    : fallback;
+}
+
+async function setConfigurationWindowMode(
+  enabled: boolean,
+  requestedContentSize?: ConfigurationWindowContentSize,
+): Promise<boolean> {
   if (!mainWindow) {
     throw new Error("镜头沙盘窗口尚未就绪");
   }
@@ -466,49 +533,78 @@ function setConfigurationWindowMode(enabled: boolean): boolean {
       mainWindow.unmaximize();
     }
     const currentBounds = mainWindow.getBounds();
-    const workArea = screen.getDisplayMatching(currentBounds).workArea;
-    const width = Math.min(CONFIGURATION_WINDOW_WIDTH, workArea.width);
-    const height = Math.min(CONFIGURATION_WINDOW_HEIGHT, workArea.height);
+    const currentContentBounds = mainWindow.getContentBounds();
+    const workArea = screen.getDisplayMatching(
+      configurationWindowRestoreState.bounds,
+    ).workArea;
+    const frameWidth = Math.max(
+      0,
+      currentBounds.width - currentContentBounds.width,
+    );
+    const frameHeight = Math.max(
+      0,
+      currentBounds.height - currentContentBounds.height,
+    );
+    const requestedWidth = numericWindowDimension(
+      requestedContentSize?.width,
+      CONFIGURATION_WINDOW_WIDTH,
+      CONFIGURATION_WINDOW_MIN_WIDTH,
+    );
+    const requestedHeight = numericWindowDimension(
+      requestedContentSize?.height,
+      CONFIGURATION_WINDOW_HEIGHT,
+      CONFIGURATION_WINDOW_MIN_HEIGHT,
+    );
+    const width = Math.min(requestedWidth + frameWidth, workArea.width);
+    const height = Math.min(requestedHeight + frameHeight, workArea.height);
+    const restoreBounds = configurationWindowRestoreState.bounds;
     mainWindow.setMinimumSize(
       Math.min(CONFIGURATION_WINDOW_MIN_WIDTH, width),
       Math.min(CONFIGURATION_WINDOW_MIN_HEIGHT, height),
     );
-    mainWindow.setBounds(
-      {
-        x: Math.min(
-          Math.max(currentBounds.x + currentBounds.width - width, workArea.x),
-          workArea.x + workArea.width - width,
-        ),
-        y: Math.min(
-          Math.max(currentBounds.y, workArea.y),
-          workArea.y + workArea.height - height,
-        ),
-        width,
-        height,
-      },
-      true,
-    );
     mainWindow.setAlwaysOnTop(true, "floating");
     mainWindow.setOpacity(1);
+    await animateWindowBounds(mainWindow, {
+      x: Math.min(
+        Math.max(
+          restoreBounds.x + restoreBounds.width - width,
+          workArea.x,
+        ),
+        workArea.x + workArea.width - width,
+      ),
+      y: Math.min(
+        Math.max(restoreBounds.y, workArea.y),
+        workArea.y + workArea.height - height,
+      ),
+      width,
+      height,
+    });
     return true;
   }
 
   const restoreState = configurationWindowRestoreState;
   configurationWindowRestoreState = null;
-  mainWindow.setOpacity(restoreState?.opacity ?? 1);
-  mainWindow.setAlwaysOnTop(restoreState?.alwaysOnTop ?? false);
-  mainWindow.setMinimumSize(
-    restoreState?.minimumSize[0] ?? DEFAULT_WINDOW_MIN_WIDTH,
-    restoreState?.minimumSize[1] ?? DEFAULT_WINDOW_MIN_HEIGHT,
-  );
   if (restoreState) {
-    mainWindow.setBounds(restoreState.bounds, true);
+    await animateWindowBounds(mainWindow, restoreState.bounds);
+    mainWindow.setMinimumSize(
+      restoreState.minimumSize[0],
+      restoreState.minimumSize[1],
+    );
+    mainWindow.setOpacity(restoreState.opacity);
+    mainWindow.setAlwaysOnTop(restoreState.alwaysOnTop);
     if (restoreState.maximized) {
       mainWindow.maximize();
     }
     if (restoreState.fullScreen) {
       mainWindow.setFullScreen(true);
     }
+  } else {
+    mainWindow.setOpacity(1);
+    mainWindow.setAlwaysOnTop(false);
+    mainWindow.setMinimumSize(
+      DEFAULT_WINDOW_MIN_WIDTH,
+      DEFAULT_WINDOW_MIN_HEIGHT,
+    );
   }
   return false;
 }
@@ -611,8 +707,13 @@ function registerDesktopIpc(): void {
   });
   ipcMain.handle(
     "desktop:set-configuration-window-mode",
-    (_event, enabled: unknown) =>
-      setConfigurationWindowMode(enabled === true),
+    (_event, enabled: unknown, contentSize: unknown) =>
+      setConfigurationWindowMode(
+        enabled === true,
+        contentSize && typeof contentSize === "object"
+          ? contentSize as ConfigurationWindowContentSize
+          : undefined,
+      ),
   );
   ipcMain.handle(
     "desktop:get-configuration-window-mode",

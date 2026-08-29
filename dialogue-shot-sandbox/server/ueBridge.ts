@@ -192,8 +192,15 @@ const MissionTargetMapStatusRequestSchema = z.object({
   mapAssetPath: z.string().startsWith("/Game/"),
 });
 
+const DialogueAssetIdSchema = z
+  .string()
+  .trim()
+  .regex(/^\d{4,}$/)
+  .max(32);
+
 const MissionTargetBlueprintCreateRequestSchema = z.object({
   blueprintName: z.string().trim().min(1).max(512),
+  dialogueId: DialogueAssetIdSchema.optional(),
   plan: MissionTargetPreviewPlanSchema,
   selectedTargetIds: z.array(z.string().regex(/^\d+$/)).max(200).optional(),
   registerDialogue: z.boolean().optional(),
@@ -201,6 +208,7 @@ const MissionTargetBlueprintCreateRequestSchema = z.object({
 
 const MissionTargetBlueprintAppendRequestSchema = z.object({
   blueprintName: z.string().trim().min(1).max(512),
+  dialogueId: DialogueAssetIdSchema.optional(),
   plan: MissionTargetPreviewPlanSchema,
   selectedTargetIds: z
     .array(z.string().regex(/^\d+$/))
@@ -218,6 +226,7 @@ const MissionTargetTransformOverrideSchema = z.object({
 
 const MissionTargetBlueprintInspectionRequestSchema = z.object({
   blueprintName: z.string().trim().min(1).max(512),
+  dialogueId: DialogueAssetIdSchema.optional(),
   plan: MissionTargetPreviewPlanSchema.optional(),
   taskId: z.string().regex(/^\d+$/).optional(),
   targetOverrides: z
@@ -228,6 +237,7 @@ const MissionTargetBlueprintInspectionRequestSchema = z.object({
 
 const DialogueModelRegistrationRequestSchema = z.object({
   blueprintName: z.string().trim().min(1).max(512),
+  dialogueId: DialogueAssetIdSchema.optional(),
   selectedModelIndexes: z
     .array(z.number().int().positive())
     .max(200),
@@ -241,6 +251,7 @@ const DialogueModelRegistrationRequestSchema = z.object({
 
 const MissionTargetBlueprintSyncRequestSchema = z.object({
   blueprintName: z.string().trim().min(1).max(512),
+  dialogueId: DialogueAssetIdSchema.optional(),
   taskId: z.string().regex(/^\d+$/),
   selectedTargetIds: z
     .array(z.string().regex(/^\d+$/))
@@ -254,6 +265,7 @@ const MissionTargetBlueprintSyncRequestSchema = z.object({
 
 const BackgroundPropInspectRequestSchema = z.object({
   blueprintName: z.string().trim().min(1).max(512),
+  dialogueId: DialogueAssetIdSchema.optional(),
   actorRefs: z.array(z.string().min(1)).min(1).max(200).optional(),
 });
 
@@ -439,6 +451,17 @@ function blueprintClassPath(assetPath: string): string {
   return match ? `${match[1]}.${match[2]}_C` : `${assetPath}_C`;
 }
 
+function formationBlueprintAssetPath(value: unknown): string | null {
+  if (!hasUnrealObjectReference(value)) {
+    return null;
+  }
+  const text = unrealReferenceText(value).trim().replaceAll("\\", "/");
+  const referencedPath = text.match(/'([^']+)'/)?.[1] ?? text;
+  return referencedPath.startsWith("/Game/")
+    ? blueprintAssetPath(referencedPath)
+    : null;
+}
+
 function hasUnrealObjectReference(value: unknown): boolean {
   if (value === null || value === undefined || value === false) {
     return false;
@@ -560,8 +583,10 @@ async function resolveAssetPath(
   startId: string,
   formationClassPath: string,
 ): Promise<string | null> {
-  if (formationClassPath.trim()) {
-    return blueprintAssetPath(formationClassPath);
+  const configuredAssetPath =
+    formationBlueprintAssetPath(formationClassPath);
+  if (configuredAssetPath) {
+    return configuredAssetPath;
   }
   const result = await connection.invoke("asset.asset_search", {
     Query: `BP_${startId}`,
@@ -572,7 +597,31 @@ async function resolveAssetPath(
   const exact = (Array.isArray(result) ? result : [])
     .map((value) => assetPathFromSearch(String(value)))
     .find((value) => value?.endsWith(`/BP_${startId}.BP_${startId}`));
-  return exact ?? null;
+  if (exact) {
+    return exact;
+  }
+  try {
+    const dialogueAssets = await findDialogueAssetPath(connection, startId);
+    if (dialogueAssets.length !== 1) {
+      return null;
+    }
+    const dialogueAsset = await connection.invoke(
+      "asset.get_asset_by_path",
+      { AssetPath: dialogueAssets[0] },
+    );
+    if (!hasUnrealObjectReference(dialogueAsset)) {
+      return null;
+    }
+    const startNodeData = await findDialogueStartNodeData(
+      connection,
+      dialogueAssets[0],
+    );
+    return formationBlueprintAssetPath(
+      await readProperty(connection, startNodeData, "Formation"),
+    );
+  } catch {
+    return null;
+  }
 }
 
 async function readProperty(
@@ -1093,6 +1142,13 @@ export function compareDialogueModelOrder(
 
 function dialogueIdFromBlueprintPath(assetPath: string): string | null {
   return assetNameFromPath(assetPath).match(/^BP_(\d{4,})$/i)?.[1] ?? null;
+}
+
+function dialogueIdForBlueprint(
+  assetPath: string,
+  dialogueIdOverride?: string,
+): string | null {
+  return dialogueIdOverride?.trim() || dialogueIdFromBlueprintPath(assetPath);
 }
 
 function parseDialogueExport(text: string): {
@@ -3388,8 +3444,12 @@ async function readDialogueRegistrationContext(
   connection: UnrealInvoker,
   blueprintAssetPathValue: string,
   sourceSlots: DialogueModelSourceSlot[],
+  dialogueIdOverride?: string,
 ): Promise<DialogueRegistrationContext> {
-  const dialogueId = dialogueIdFromBlueprintPath(blueprintAssetPathValue);
+  const dialogueId = dialogueIdForBlueprint(
+    blueprintAssetPathValue,
+    dialogueIdOverride,
+  );
   if (!dialogueId) {
     throw new Error("BP 文件名中没有可用于查找对话资产的数字 ID");
   }
@@ -4036,6 +4096,7 @@ export async function inspectMissionTargetBlueprint(
     rawRequest,
   ) as {
     blueprintName: string;
+    dialogueId?: string;
     plan?: MissionTargetPreviewPlan;
     taskId?: string;
     targetOverrides?: Array<{
@@ -4118,6 +4179,7 @@ export async function inspectMissionTargetBlueprint(
       connection,
       resolved.assetPath,
       sourceSlots,
+      request.dialogueId,
     );
     const registeredCharacterCount = dialogue.slots.filter(
       (slot) => slot.status === "registered",
@@ -4244,6 +4306,7 @@ async function prepareMissionTargetBlueprintSync(
   connection: UnrealInvoker,
   request: {
     blueprintName: string;
+    dialogueId?: string;
     taskId: string;
     targetOverrides?: Array<{
       targetId: string;
@@ -4295,6 +4358,7 @@ async function prepareMissionTargetBlueprintSync(
       targetId: null,
       modelClassPath: component.childActorClass,
     })),
+    request.dialogueId,
   );
   const spatial = await readDialogueSpatialContext(
     connection,
@@ -4761,6 +4825,7 @@ export async function registerBlueprintDialogueModels(
       connection,
       resolved.assetPath,
       sourceSlots,
+      request.dialogueId,
     );
     const dialogueSpatial = await readDialogueSpatialContext(
       connection,
@@ -4891,6 +4956,7 @@ export async function inspectMissionTargetBlueprintCompatibility(
     rawRequest,
   ) as {
     blueprintName: string;
+    dialogueId?: string;
     plan: MissionTargetPreviewPlan;
     selectedTargetIds?: string[];
   };
@@ -4904,7 +4970,10 @@ export async function inspectMissionTargetBlueprintCompatibility(
     if (!resolved) {
       throw new Error(`BP 文件不存在：${request.blueprintName}`);
     }
-    const dialogueId = dialogueIdFromBlueprintPath(resolved.assetPath);
+    const dialogueId = dialogueIdForBlueprint(
+      resolved.assetPath,
+      request.dialogueId,
+    );
     const selectedTargets = missionTargetsInRequestedOrder(
       request.plan,
       request.selectedTargetIds,
@@ -5181,6 +5250,7 @@ export async function populateMissionTargetBlueprint(
     rawRequest,
   ) as {
     blueprintName: string;
+    dialogueId?: string;
     plan: MissionTargetPreviewPlan;
     selectedTargetIds?: string[];
     registerDialogue?: boolean;
@@ -5253,6 +5323,7 @@ export async function populateMissionTargetBlueprint(
               modelClassPath: target.modelClassPath,
             })),
           ],
+          request.dialogueId,
         )
       : null;
     if (dialogueContext) {
@@ -5399,6 +5470,7 @@ export async function appendMissionTargetBlueprint(
     rawRequest,
   ) as {
     blueprintName: string;
+    dialogueId?: string;
     plan: MissionTargetPreviewPlan;
     selectedTargetIds: string[];
   };
@@ -5471,6 +5543,7 @@ export async function appendMissionTargetBlueprint(
       connection,
       resolved.assetPath,
       existingSourceSlots,
+      request.dialogueId,
     );
     const dialogueSpatial = await readDialogueSpatialContext(
       connection,
@@ -6011,6 +6084,7 @@ async function prepareBackgroundPropImport(
   connection: UnrealInvoker,
   blueprintName: string,
   actorRefs?: string[],
+  dialogueIdOverride?: string,
 ): Promise<PreparedBackgroundPropImport> {
   const resolved = await resolveExistingBlueprint(
     connection,
@@ -6020,7 +6094,10 @@ async function prepareBackgroundPropImport(
     throw new Error(`BP 文件不存在：${blueprintName}`);
   }
   const blueprint = await readValidatedBlueprint(connection, resolved);
-  const dialogueId = dialogueIdFromBlueprintPath(resolved.assetPath);
+  const dialogueId = dialogueIdForBlueprint(
+    resolved.assetPath,
+    dialogueIdOverride,
+  );
   if (!dialogueId) {
     throw new Error("BP 文件名中没有可用于查找对话资产的数字 ID");
   }
@@ -6228,6 +6305,7 @@ export async function inspectBackgroundPropImport(
         connection,
         request.blueprintName,
         request.actorRefs,
+        request.dialogueId,
       )
     ).preview;
   } finally {
@@ -6259,6 +6337,7 @@ export async function applyBackgroundPropImport(
       connection,
       request.blueprintName,
       request.reviewedActorRefs,
+      request.dialogueId,
     );
     if (prepared.preview.reviewToken !== request.reviewToken) {
       throw new Error("UE 选择、Actor Transform 或 BP 内容已变化，请重新检查");

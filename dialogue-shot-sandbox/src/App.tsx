@@ -1304,6 +1304,8 @@ export default function App() {
     useState<InspectorTab>("direction");
   const [configurationMode, setConfigurationMode] = useState(false);
   const [configurationModeBusy, setConfigurationModeBusy] = useState(false);
+  const [configurationModeTransition, setConfigurationModeTransition] =
+    useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const directorySelectionKindRef = useRef<"live" | "config">("live");
   const dialogueEditorRef = useRef<HTMLDivElement>(null);
@@ -1379,6 +1381,7 @@ export default function App() {
     mode: storyboardExportMode,
     currentShotNumber: storyboardExportShotNumber,
     busy: storyboardExportBusy,
+    busyLabel: storyboardExportBusyLabel,
     error: storyboardExportError,
     result: storyboardExportResult,
     canExport: canExportStoryboard,
@@ -1387,6 +1390,7 @@ export default function App() {
     previewCurrent: previewStoryboardExport,
     previewCurrentSoundEffects: previewCurrentSoundEffectExport,
     previewAll: previewAllStoryboardExport,
+    refresh: refreshStoryboardExportPreview,
     confirm: confirmStoryboardExport,
     close: closeStoryboardExport,
   } = useStoryboardExport({
@@ -2504,14 +2508,41 @@ export default function App() {
     if (configurationModeBusy) {
       return;
     }
+    const rightPanelBounds = document
+      .querySelector<HTMLElement>(".right-panel")
+      ?.getBoundingClientRect();
+    const headerBounds = document
+      .querySelector<HTMLElement>(".app-header")
+      ?.getBoundingClientRect();
+    const contentSize =
+      enabled && rightPanelBounds
+        ? {
+            width: Math.round(rightPanelBounds.width),
+            height: Math.round(
+              rightPanelBounds.height + (headerBounds?.height ?? 54),
+            ),
+          }
+        : undefined;
     setConfigurationModeBusy(true);
+    setConfigurationModeTransition(true);
     setError("");
     try {
-      await window.shotSandboxDesktop?.setConfigurationWindowMode?.(enabled);
+      await new Promise<void>((resolve) =>
+        window.requestAnimationFrame(() => resolve()),
+      );
+      await window.shotSandboxDesktop?.setConfigurationWindowMode?.(
+        enabled,
+        contentSize,
+      );
       if (enabled && inspectorTab !== "audio" && inspectorTab !== "ue") {
         setInspectorTab("audio");
       }
       setConfigurationMode(enabled);
+      await new Promise<void>((resolve) =>
+        window.requestAnimationFrame(() =>
+          window.requestAnimationFrame(() => resolve()),
+        ),
+      );
     } catch (windowError) {
       if (!enabled) {
         setConfigurationMode(false);
@@ -2522,6 +2553,7 @@ export default function App() {
           : "无法切换配置小窗",
       );
     } finally {
+      setConfigurationModeTransition(false);
       setConfigurationModeBusy(false);
     }
   }
@@ -2933,6 +2965,7 @@ export default function App() {
       data-ark-depth="moderate"
       data-workspace-direction={workspaceDirection}
       data-configuration-mode={configurationMode}
+      data-configuration-transition={configurationModeTransition}
     >
       <input
         ref={(element) => {
@@ -3075,6 +3108,7 @@ export default function App() {
               onReorderPendingTasks={reorderPendingTasks}
               onDeletePendingTask={deletePendingTask}
               onCancelTask={cancelTraeTaskFromStatus}
+              disabled={configurationMode || configurationModeBusy}
             />
           )}
           <DataSourceStatus
@@ -3089,6 +3123,7 @@ export default function App() {
             onRefreshLark={() => void refreshLarkConnection(true)}
             onAuthorize={() => void beginAuthorization()}
             onCollectRevisionCasesChange={changeCaseCollection}
+            disabled={configurationMode || configurationModeBusy}
             onOpenSettings={
               window.shotSandboxDesktop
                 ? () => void openDesktopSetup()
@@ -3935,10 +3970,12 @@ export default function App() {
             mode={storyboardExportMode}
             currentShotNumber={storyboardExportShotNumber}
             busy={storyboardExportBusy}
+            busyLabel={storyboardExportBusyLabel}
             error={storyboardExportError}
             result={storyboardExportResult}
             onClose={closeStoryboardExport}
             onShowAll={() => void previewAllStoryboardExport()}
+            onRefresh={() => void refreshStoryboardExportPreview()}
             onConfirm={(
               selectedShotIndexes,
               selectedCharacterActionIndexes,

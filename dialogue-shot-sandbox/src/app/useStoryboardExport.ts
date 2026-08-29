@@ -96,6 +96,7 @@ export function useStoryboardExport({
   const [mode, setMode] = useState<StoryboardExportMode>("current");
   const [currentShotNumber, setCurrentShotNumber] = useState(1);
   const [busy, setBusy] = useState(false);
+  const [busyLabel, setBusyLabel] = useState("");
   const [error, setError] = useState("");
   const [result, setResult] = useState("");
 
@@ -185,6 +186,7 @@ export function useStoryboardExport({
 
   const previewCurrent = useCallback(async () => {
     setBusy(true);
+    setBusyLabel("读取中");
     setError("");
     setResult("");
     try {
@@ -218,6 +220,7 @@ export function useStoryboardExport({
       );
     } finally {
       setBusy(false);
+      setBusyLabel("");
     }
   }, [
     activeShot,
@@ -230,6 +233,7 @@ export function useStoryboardExport({
 
   const previewCurrentSoundEffects = useCallback(async () => {
     setBusy(true);
+    setBusyLabel("读取中");
     setError("");
     setResult("");
     try {
@@ -258,11 +262,13 @@ export function useStoryboardExport({
       );
     } finally {
       setBusy(false);
+      setBusyLabel("");
     }
   }, [activeShot, buildRequest, shots, soundEffects]);
 
   const previewAll = useCallback(async () => {
     setBusy(true);
+    setBusyLabel("读取中");
     setError("");
     setResult("");
     try {
@@ -279,8 +285,31 @@ export function useStoryboardExport({
       );
     } finally {
       setBusy(false);
+      setBusyLabel("");
     }
   }, [buildRequest]);
+
+  const refresh = useCallback(async () => {
+    if (!request) {
+      return;
+    }
+    setBusy(true);
+    setBusyLabel("刷新中");
+    setError("");
+    setResult("");
+    try {
+      setPreview(await inspectDialogueStoryboardExport(request));
+    } catch (exportError) {
+      setError(
+        exportError instanceof Error
+          ? exportError.message
+          : "无法刷新 UE 分镜写入预检",
+      );
+    } finally {
+      setBusy(false);
+      setBusyLabel("");
+    }
+  }, [request]);
 
   const confirm = useCallback(
     async (
@@ -293,6 +322,7 @@ export function useStoryboardExport({
         return;
       }
       setBusy(true);
+      setBusyLabel("写入中");
       setError("");
       try {
         const selectedIndexes = new Set(selectedShotIndexes);
@@ -361,6 +391,7 @@ export function useStoryboardExport({
         );
       } finally {
         setBusy(false);
+        setBusyLabel("");
       }
     },
     [onCharacterActionsExported, preview, request],
@@ -370,6 +401,7 @@ export function useStoryboardExport({
     setPreview(null);
     setRequest(null);
     setMode("current");
+    setBusyLabel("");
     setError("");
     setResult("");
   }, []);
@@ -380,6 +412,7 @@ export function useStoryboardExport({
     mode,
     currentShotNumber,
     busy,
+    busyLabel,
     error,
     result,
     canExport,
@@ -388,6 +421,7 @@ export function useStoryboardExport({
     previewCurrent,
     previewCurrentSoundEffects,
     previewAll,
+    refresh,
     confirm,
     close,
   };

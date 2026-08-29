@@ -23,6 +23,7 @@ interface DataSourceStatusProps {
   onRefreshLark: () => void;
   onAuthorize: () => void;
   onCollectRevisionCasesChange: (enabled: boolean) => void;
+  disabled?: boolean;
 }
 
 export function DataSourceStatus({
@@ -38,6 +39,7 @@ export function DataSourceStatus({
   onRefreshLark,
   onAuthorize,
   onCollectRevisionCasesChange,
+  disabled = false,
 }: DataSourceStatusProps) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -88,6 +90,12 @@ export function DataSourceStatus({
         : "数据源已就绪";
 
   useEffect(() => {
+    if (disabled) {
+      setOpen(false);
+    }
+  }, [disabled]);
+
+  useEffect(() => {
     if (!open) {
       return;
     }
@@ -120,14 +128,15 @@ export function DataSourceStatus({
         type="button"
         aria-label="数据源状态"
         aria-haspopup="dialog"
-        aria-expanded={open}
+        aria-expanded={!disabled && open}
+        disabled={disabled}
         onClick={() => setOpen((current) => !current)}
       >
         <Database size={17} />
         <span className="workspace-status-tooltip">{statusLabel}</span>
       </button>
 
-      {open && (
+      {open && !disabled && (
         <section
           className="workspace-status-popover data-source-status__popover"
           data-state={dataState}

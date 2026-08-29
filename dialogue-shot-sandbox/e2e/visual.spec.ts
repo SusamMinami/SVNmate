@@ -760,18 +760,24 @@ test("switches the main canvas between shot and blocking views", async ({
 test("keeps configuration mode active while switching shots", async ({
   page,
 }, testInfo) => {
-  const requestedWindowModes: boolean[] = [];
+  const requestedWindowModes: Array<{
+    enabled: boolean;
+    contentSize?: { width: number; height: number };
+  }> = [];
   await page.exposeFunction(
     "__recordConfigurationWindowMode",
-    (enabled: boolean) => {
-      requestedWindowModes.push(enabled);
+    (
+      enabled: boolean,
+      contentSize?: { width: number; height: number },
+    ) => {
+      requestedWindowModes.push({ enabled, contentSize });
     },
   );
   await page.addInitScript(() => {
     const setupStatus = {
       firstRun: false,
       setupCompleted: true,
-      version: "0.22.7",
+      version: "0.22.8",
       packaged: true,
       portable: false,
       runtimeBundled: true,
@@ -800,24 +806,50 @@ test("keeps configuration mode active while switching shots", async ({
     window.shotSandboxDesktop = {
       getSetupStatus: async () => setupStatus,
       getConfigurationWindowMode: async () => false,
-      setConfigurationWindowMode: async (enabled: boolean) => {
+      setConfigurationWindowMode: async (
+        enabled: boolean,
+        contentSize?: { width: number; height: number },
+      ) => {
         await (
           window as typeof window & {
             __recordConfigurationWindowMode: (
               value: boolean,
+              nextContentSize?: { width: number; height: number },
             ) => Promise<void>;
           }
-        ).__recordConfigurationWindowMode(enabled);
+        ).__recordConfigurationWindowMode(enabled, contentSize);
         return enabled;
       },
     } as unknown as NonNullable<Window["shotSandboxDesktop"]>;
   });
   await page.goto("/");
+  const fullPanelBounds = await page.locator(".right-panel").boundingBox();
+  const fullHeaderBounds = await page.locator(".app-header").boundingBox();
+  expect(fullPanelBounds).not.toBeNull();
+  expect(fullHeaderBounds).not.toBeNull();
   await page.getByRole("button", { name: "进入配置小窗" }).click();
-  await expect.poll(() => requestedWindowModes).toEqual([true]);
+  await expect.poll(() => requestedWindowModes.length).toBe(1);
+  expect(requestedWindowModes[0]).toEqual({
+    enabled: true,
+    contentSize: {
+      width: Math.round(fullPanelBounds!.width),
+      height: Math.round(fullPanelBounds!.height + fullHeaderBounds!.height),
+    },
+  });
 
   const appShell = page.locator(".app-shell");
   await expect(appShell).toHaveAttribute("data-configuration-mode", "true");
+  await expect(appShell).toHaveAttribute(
+    "data-configuration-transition",
+    "false",
+  );
+  await expect(page.locator(".app-header")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "协作连接状态" }),
+  ).toBeDisabled();
+  await expect(
+    page.getByRole("button", { name: "数据源状态" }),
+  ).toBeDisabled();
   await expect(page.locator(".left-panel")).toBeHidden();
   await expect(page.locator(".viewport-panel")).toBeHidden();
   await expect(page.getByRole("tab", { name: "导演" })).toHaveCount(0);
@@ -837,9 +869,14 @@ test("keeps configuration mode active while switching shots", async ({
   await page.getByRole("button", { name: "上一个镜头" }).click();
   await expect(page.locator(".inspector-header")).toContainText("SHOT 01 / 04");
 
-  await page.setViewportSize({ width: 360, height: 720 });
-  await expect(page.locator(".right-panel")).toHaveCSS("width", "360px");
-  await expect(page.locator(".right-panel")).toHaveCSS("height", "720px");
+  await page.setViewportSize({
+    width: Math.round(fullPanelBounds!.width),
+    height: Math.round(fullPanelBounds!.height + fullHeaderBounds!.height),
+  });
+  const compactPanelBounds = await page.locator(".right-panel").boundingBox();
+  expect(compactPanelBounds).not.toBeNull();
+  expect(compactPanelBounds!.width).toBeCloseTo(fullPanelBounds!.width, 1);
+  expect(compactPanelBounds!.height).toBeCloseTo(fullPanelBounds!.height, 1);
   await page.getByRole("tab", { name: "UE" }).click();
   await expect(page.getByRole("tab", { name: "UE" })).toHaveAttribute(
     "aria-selected",
@@ -879,7 +916,11 @@ test("keeps configuration mode active while switching shots", async ({
   });
 
   await page.getByRole("button", { name: "返回完整窗口" }).click();
-  await expect.poll(() => requestedWindowModes).toEqual([true, false]);
+  await expect.poll(() => requestedWindowModes.length).toBe(2);
+  expect(requestedWindowModes[1]).toEqual({
+    enabled: false,
+    contentSize: undefined,
+  });
   await expect(appShell).toHaveAttribute("data-configuration-mode", "false");
   await expect(page.getByRole("tab", { name: "导演" })).toBeVisible();
 });
@@ -2593,7 +2634,7 @@ test("guides first desktop launch to select live and config directories", async 
   await expect(page.getByLabel("四位数对话 ID 或对白内容")).toHaveValue("");
   await expect(page.getByText("等待对话", { exact: true }).first()).toBeVisible();
   await expect(page.getByRole("heading", { name: "分镜工作台" })).toBeVisible();
-  await expect(page.locator(".app-rail__brand")).toContainText("v0.22.7");
+  await expect(page.locator(".app-rail__brand")).toContainText("v0.22.8");
   await page.screenshot({
     path: testInfo.outputPath("desktop-workspace-ready-collapsed.png"),
   });
@@ -3447,10 +3488,15 @@ test("offers the detected Blueprint formation before designing shots", async ({
   const inspectedExportRequests: Record<string, unknown>[] = [];
   let exportedStoryboardRequest: Record<string, unknown> | null = null;
   let exportRequests = 0;
+  let formationDirty = true;
   let formationRequests = 0;
   let releaseFormation!: () => void;
   const formationGate = new Promise<void>((resolve) => {
     releaseFormation = resolve;
+  });
+  let releaseAllExportPreview!: () => void;
+  const allExportPreviewGate = new Promise<void>((resolve) => {
+    releaseAllExportPreview = resolve;
   });
   let releaseDirector!: () => void;
   const directorGate = new Promise<void>((resolve) => {
@@ -3709,6 +3755,9 @@ test("offers the detected Blueprint formation before designing shots", async ({
   await page.route("**/api/ue/storyboard/inspect", async (route) => {
     const request = route.request().postDataJSON();
     inspectedExportRequests.push(request);
+    if (inspectedExportRequests.length === 3) {
+      await allExportPreviewGate;
+    }
     const characterActions = (request.characterActions ?? []).map(
       (
         item: {
@@ -3776,7 +3825,9 @@ test("offers the detected Blueprint formation before designing shots", async ({
       body: JSON.stringify({
         ok: true,
         data: {
-          reviewToken: "a".repeat(64),
+          reviewToken: String(
+            inspectedExportRequests.length % 10,
+          ).repeat(64),
           dialogueId: "7350",
           startId: "735000",
           dialogueAssetPath:
@@ -3797,7 +3848,11 @@ test("offers the detected Blueprint formation before designing shots", async ({
           changedMusicCount: music.length,
           replacedMusicCount: 0,
           invalidShotCount: 1,
-          globalBlockedReasons: [],
+          globalBlockedReasons: formationDirty
+            ? [
+                "Formation BP /Game/Seria/Task/Mod/MainQuest/Cha9/BP_735000 存在未保存修改，请先在 UE 中保存或撤销",
+              ]
+            : [],
           characterActionBlockedReasons: [
             {
               modelIndex: 1,
@@ -3806,6 +3861,11 @@ test("offers the detected Blueprint formation before designing shots", async ({
             },
           ],
           blockedReasons: [
+            ...(formationDirty
+              ? [
+                  "Formation BP /Game/Seria/Task/Mod/MainQuest/Cha9/BP_735000 存在未保存修改，请先在 UE 中保存或撤销",
+                ]
+              : []),
             "角色 BP /Game/Test/BP_Guard 存在未保存修改，请先在 UE 中保存或撤销",
           ],
           warnings: ["1 个镜头的投影验收未通过，确认后仍可导出"],
@@ -4217,9 +4277,27 @@ test("offers the detected Blueprint formation before designing shots", async ({
   await expect(
     exportDialog.getByRole("heading", { name: "导出当前镜头 01" }),
   ).toBeVisible();
+  const currentShotCheckbox = exportDialog.getByRole("checkbox", {
+    name: "选择镜头 01",
+  });
+  await expect(currentShotCheckbox).toBeChecked();
+  await currentShotCheckbox.uncheck();
+  await expect(exportDialog.getByText("01 · 未选")).toBeVisible();
+  await currentShotCheckbox.check();
+  await expect(exportDialog.getByText("01 · 已选")).toBeVisible();
   await expect(
-    exportDialog.getByRole("checkbox", { name: "选择镜头 01" }),
+    exportDialog.getByText(/Formation BP .*存在未保存修改/),
+  ).toBeVisible();
+  formationDirty = false;
+  await exportDialog
+    .getByRole("button", {
+      name: "刷新 UE 未保存状态：Formation BP",
+    })
+    .click();
+  await expect(
+    exportDialog.getByText(/Formation BP .*存在未保存修改/),
   ).toHaveCount(0);
+  await expect(currentShotCheckbox).toBeChecked();
   await expect(exportDialog.getByText("覆盖", { exact: true })).toBeVisible();
   await expect(
     exportDialog.getByText("清空旧镜头", { exact: true }),
@@ -4287,9 +4365,35 @@ test("offers the detected Blueprint formation before designing shots", async ({
   });
   await exportDialog.getByRole("button", { name: "全部导出" }).click();
   await expect(
+    exportDialog.getByRole("button", { name: "读取中" }),
+  ).toBeVisible();
+  await expect(
+    exportDialog.getByText("写入中", { exact: true }),
+  ).toHaveCount(0);
+  releaseAllExportPreview();
+  await expect(
     exportDialog.getByRole("heading", { name: "导出全部分镜" }),
   ).toBeVisible();
-  expect(inspectedExportRequests).toHaveLength(2);
+  expect(inspectedExportRequests).toHaveLength(3);
+  const exportSections = ["镜头数据", "角色动作", "音效建议", "音乐建议"];
+  for (const sectionName of exportSections) {
+    const toggle = exportDialog.getByRole("button", {
+      name: new RegExp(sectionName),
+    });
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  }
+  await exportDialog.screenshot({
+    path: testInfo.outputPath("storyboard-export-collapsed.png"),
+  });
+  for (const sectionName of exportSections) {
+    const toggle = exportDialog.getByRole("button", {
+      name: new RegExp(sectionName),
+    });
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  }
   await exportDialog.screenshot({
     path: testInfo.outputPath("storyboard-export-preview.png"),
   });
@@ -5352,9 +5456,13 @@ test("locks and registers every existing numeric Blueprint slot", async ({
   page,
 }, testInfo) => {
   let registrationRequest: Record<string, unknown> | null = null;
+  const inspectionRequests: Array<Record<string, unknown>> = [];
   await page.route(
     "**/api/ue/mission-targets/inspect-blueprint",
     async (route) => {
+      const request = route.request().postDataJSON();
+      inspectionRequests.push(request);
+      const dialogueId = request.dialogueId ?? "735200";
       await route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -5368,9 +5476,9 @@ test("locks and registers every existing numeric Blueprint slot", async ({
               "/Game/Seria/Task/Mod/Test/BP_735200.BP_735200_C",
             parentClassPath:
               "/Game/Seria/Task/Mod/PositionMode/PositionModeBase.PositionModeBase_C",
-            dialogueId: "735200",
+            dialogueId,
             dialogueAssetPath:
-              "/Game/Seria/Task/dialoggraph/Test/735200.735200",
+              `/Game/Seria/Task/dialoggraph/Test/${dialogueId}.${dialogueId}`,
             formationClassPath: null,
             slots: [
               {
@@ -5431,9 +5539,9 @@ test("locks and registers every existing numeric Blueprint slot", async ({
             status: "registered",
             blueprintAssetPath:
               "/Game/Seria/Task/Mod/Test/BP_735200.BP_735200",
-            dialogueId: "735200",
+            dialogueId: registrationRequest?.dialogueId ?? "735200",
             dialogueAssetPath:
-              "/Game/Seria/Task/dialoggraph/Test/735200.735200",
+              `/Game/Seria/Task/dialoggraph/Test/${registrationRequest?.dialogueId ?? "735200"}.${registrationRequest?.dialogueId ?? "735200"}`,
             dialogueModels: ["player", "One", "Two", "None"],
             registeredCount: 2,
             characterCount: 3,
@@ -5454,6 +5562,7 @@ test("locks and registers every existing numeric Blueprint slot", async ({
     exact: true,
   });
   await workspace.getByLabel("BP 文件名").fill("7352");
+  await workspace.getByLabel("对话文件 ID（可选）").fill("846500");
   await workspace
     .getByRole("button", { name: "检查 BP 与对话模型" })
     .click();
@@ -5461,6 +5570,11 @@ test("locks and registers every existing numeric Blueprint slot", async ({
   await expect(
     workspace.getByText("BP 已有内容", { exact: true }),
   ).toBeVisible();
+  await expect(workspace.getByText("846500", { exact: true })).toBeVisible();
+  expect(inspectionRequests[0]).toMatchObject({
+    blueprintName: "7352",
+    dialogueId: "846500",
+  });
   await workspace
     .getByRole("button", { name: "收起 BP 已有内容" })
     .click();
@@ -5487,6 +5601,7 @@ test("locks and registers every existing numeric Blueprint slot", async ({
 
   expect(registrationRequest).toEqual({
     blueprintName: "7352",
+    dialogueId: "846500",
     selectedModelIndexes: [1, 2, 3],
     targetOverrides: [],
   });

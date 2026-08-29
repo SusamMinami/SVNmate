@@ -62,6 +62,7 @@ export interface StoryboardQueueItem {
 const PROCESSING_LEASE_MS = 5 * 60_000;
 const TASK_LOCK_TIMEOUT_MS = 5_000;
 const TASK_LOCK_STALE_MS = 30_000;
+const TASK_REPLACE_RETRY_DELAYS_MS = [10, 25, 50, 100, 200, 400];
 const QUEUE_LOCK_NAME = ".queue.lock";
 export const STORYBOARD_CACHE_POLICY =
   "shot-plan.v5:camera-language-v5-background-roles-sound-effects-v2";
@@ -129,7 +130,26 @@ async function writeTask(task: StoryboardTask): Promise<void> {
   const destination = taskPath(task.requestId);
   const temporary = `${destination}.${process.pid}.${randomUUID()}.tmp`;
   await writeFile(temporary, JSON.stringify(task, null, 2), "utf8");
-  await rename(temporary, destination);
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await rename(temporary, destination);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      const retryable =
+        code === "EPERM" || code === "EBUSY" || code === "EACCES";
+      if (!retryable || attempt >= TASK_REPLACE_RETRY_DELAYS_MS.length) {
+        await unlink(temporary).catch(() => undefined);
+        throw error;
+      }
+      await new Promise((resolvePromise) =>
+        setTimeout(
+          resolvePromise,
+          TASK_REPLACE_RETRY_DELAYS_MS[attempt],
+        ),
+      );
+    }
+  }
 }
 
 async function withTaskLock<T>(

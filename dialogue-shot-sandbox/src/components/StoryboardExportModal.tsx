@@ -1,15 +1,17 @@
 import {
   AlertTriangle,
   CheckCircle2,
+  ChevronDown,
   Layers3,
   LoaderCircle,
   Music2,
   PersonStanding,
+  RefreshCw,
   Upload,
   Volume2,
   X,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { DialogueStoryboardExportPreview } from "../types";
 
 interface StoryboardExportModalProps {
@@ -17,10 +19,12 @@ interface StoryboardExportModalProps {
   mode: "current" | "all" | "sound";
   currentShotNumber: number;
   busy: boolean;
+  busyLabel: string;
   error: string;
   result: string;
   onClose: () => void;
   onShowAll: () => void;
+  onRefresh: () => void;
   onConfirm: (
     selectedShotIndexes: number[],
     selectedCharacterActionIndexes: number[],
@@ -62,12 +66,21 @@ export function StoryboardExportModal({
   mode,
   currentShotNumber,
   busy,
+  busyLabel,
   error,
   result,
   onClose,
   onShowAll,
+  onRefresh,
   onConfirm,
 }: StoryboardExportModalProps) {
+  const [expandedSections, setExpandedSections] = useState({
+    shots: true,
+    characterActions: true,
+    soundEffects: true,
+    music: true,
+  });
+  const previousModeRef = useRef(mode);
   const [confirmed, setConfirmed] = useState(false);
   const [selectedShotIndexes, setSelectedShotIndexes] = useState<number[]>(
     () => Array.from({ length: preview.shotCount }, (_, index) => index),
@@ -176,20 +189,57 @@ export function StoryboardExportModal({
     selectedMusicIndexes.length > 0;
 
   useEffect(() => {
-    setSelectedShotIndexes(
+    const modeChanged = previousModeRef.current !== mode;
+    previousModeRef.current = mode;
+    const availableShots = new Set(
       Array.from({ length: preview.shotCount }, (_, index) => index),
     );
-    setSelectedSoundEffectIndexes(
-      previewSoundEffects.map(
-        (soundEffect) => soundEffect.soundEffectIndex,
-      ),
-    );
-    setSelectedCharacterActionIndexes(
+    const availableCharacterActions = new Set(
       previewCharacterActions.map((item) => item.characterActionIndex),
     );
-    setSelectedMusicIndexes(previewMusic.map((item) => item.musicIndex));
+    const availableSoundEffects = new Set(
+      previewSoundEffects.map((item) => item.soundEffectIndex),
+    );
+    const availableMusic = new Set(
+      previewMusic.map((item) => item.musicIndex),
+    );
+    setSelectedShotIndexes((current) =>
+      modeChanged
+        ? [...availableShots]
+        : current.filter((index) => availableShots.has(index)),
+    );
+    setSelectedCharacterActionIndexes((current) =>
+      modeChanged
+        ? [...availableCharacterActions]
+        : current.filter((index) => availableCharacterActions.has(index)),
+    );
+    setSelectedSoundEffectIndexes((current) =>
+      modeChanged
+        ? [...availableSoundEffects]
+        : current.filter((index) => availableSoundEffects.has(index)),
+    );
+    setSelectedMusicIndexes((current) =>
+      modeChanged
+        ? [...availableMusic]
+        : current.filter((index) => availableMusic.has(index)),
+    );
+    if (modeChanged) {
+      setExpandedSections({
+        shots: true,
+        characterActions: true,
+        soundEffects: true,
+        music: true,
+      });
+    }
     setConfirmed(false);
-  }, [preview.reviewToken]);
+  }, [mode, preview.reviewToken]);
+
+  function toggleSection(section: keyof typeof expandedSections) {
+    setExpandedSections((current) => ({
+      ...current,
+      [section]: !current[section],
+    }));
+  }
 
   function selectAllShots(checked: boolean) {
     setSelectedShotIndexes(
@@ -335,7 +385,9 @@ export function StoryboardExportModal({
                 {mode === "sound"
                   ? "不导出"
                   : mode === "current"
-                  ? String(currentShotNumber).padStart(2, "0")
+                  ? `${String(currentShotNumber).padStart(2, "0")} · ${
+                      selectedShotIndexes.length > 0 ? "已选" : "未选"
+                    }`
                   : `${selectedShotIndexes.length} / ${preview.shotCount}`}
               </dd>
             </div>
@@ -380,6 +432,29 @@ export function StoryboardExportModal({
               <p className="is-error" key={reason}>
                 <AlertTriangle size={14} />
                 <span>{reason}</span>
+                {reason.includes("存在未保存修改") && (
+                  <button
+                    className="storyboard-export-message__refresh"
+                    type="button"
+                    title="保存或撤销 UE 修改后重新检查"
+                    aria-label={`刷新 UE 未保存状态：${
+                      reason.startsWith("Formation BP")
+                        ? "Formation BP"
+                        : reason.startsWith("角色 BP")
+                          ? "角色 BP"
+                          : "对话资产"
+                    }`}
+                    disabled={busy || Boolean(result)}
+                    onClick={onRefresh}
+                  >
+                    {busy ? (
+                      <LoaderCircle className="spin" size={13} />
+                    ) : (
+                      <RefreshCw size={13} />
+                    )}
+                    刷新
+                  </button>
+                )}
               </p>
             ))}
             {selectedWarnings.map((warning) => (
@@ -405,45 +480,67 @@ export function StoryboardExportModal({
 
         <div className="storyboard-export-table-wrap">
           {preview.nodes.length > 0 && (
-            <section className="storyboard-export-table-section">
-            <div className="storyboard-export-table-section__title">
-              <Layers3 size={14} />
-              <strong>镜头数据</strong>
-              <small>{selectedShotIndexes.length} 项已选</small>
-            </div>
-            <table className="storyboard-export-table">
-              <thead>
-                <tr>
-                  {mode === "all" && (
-                    <th className="storyboard-export-table__select">
-                      <input
-                        type="checkbox"
-                        aria-label="选择全部镜头"
-                        title="选择全部镜头"
-                        checked={allSelected}
-                        disabled={busy || Boolean(result)}
-                        onChange={(event) =>
-                          selectAllShots(event.target.checked)
-                        }
-                      />
-                    </th>
-                  )}
-                  <th className="storyboard-export-table__shot">镜头</th>
-                  <th className="storyboard-export-table__dialogue">台词节点</th>
-                  <th className="storyboard-export-table__role">节点用途</th>
-                  <th className="storyboard-export-table__camera">当前相机</th>
-                  <th className="storyboard-export-table__camera">导出后</th>
-                  <th className="storyboard-export-table__action">处理</th>
-                </tr>
-              </thead>
-              <tbody>
-                {preview.nodes.map((node) => (
-                  <tr
-                    key={node.dialogueId}
-                    data-action={node.action}
-                    data-selected={selectedShots.has(node.shotIndex)}
-                  >
-                    {mode === "all" && (
+            <section
+              className="storyboard-export-table-section"
+              data-collapsed={!expandedSections.shots}
+            >
+              <button
+                className="storyboard-export-table-section__title"
+                type="button"
+                aria-expanded={expandedSections.shots}
+                aria-controls="storyboard-export-shots"
+                onClick={() => toggleSection("shots")}
+              >
+                <Layers3 size={14} />
+                <strong>镜头数据</strong>
+                <small>{selectedShotIndexes.length} 项已选</small>
+                <ChevronDown size={14} />
+              </button>
+              {expandedSections.shots && (
+                <table
+                  className="storyboard-export-table"
+                  id="storyboard-export-shots"
+                >
+                  <thead>
+                    <tr>
+                      {mode !== "sound" && (
+                        <th className="storyboard-export-table__select">
+                          <input
+                            type="checkbox"
+                            aria-label="选择全部镜头"
+                            title="选择全部镜头"
+                            checked={allSelected}
+                            disabled={busy || Boolean(result)}
+                            onChange={(event) =>
+                              selectAllShots(event.target.checked)
+                            }
+                          />
+                        </th>
+                      )}
+                      <th className="storyboard-export-table__shot">镜头</th>
+                      <th className="storyboard-export-table__dialogue">
+                        台词节点
+                      </th>
+                      <th className="storyboard-export-table__role">
+                        节点用途
+                      </th>
+                      <th className="storyboard-export-table__camera">
+                        当前相机
+                      </th>
+                      <th className="storyboard-export-table__camera">
+                        导出后
+                      </th>
+                      <th className="storyboard-export-table__action">处理</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {preview.nodes.map((node) => (
+                      <tr
+                        key={node.dialogueId}
+                        data-action={node.action}
+                        data-selected={selectedShots.has(node.shotIndex)}
+                      >
+                    {mode !== "sound" && (
                       <td className="storyboard-export-table__select">
                         {node.role === "shot_start" && (
                           <input
@@ -491,51 +588,66 @@ export function StoryboardExportModal({
                     </td>
                   </tr>
                 ))}
-              </tbody>
-            </table>
+                  </tbody>
+                </table>
+              )}
             </section>
           )}
 
           {previewCharacterActions.length > 0 && (
-            <section className="storyboard-export-table-section">
-              <div className="storyboard-export-table-section__title">
+            <section
+              className="storyboard-export-table-section"
+              data-collapsed={!expandedSections.characterActions}
+            >
+              <button
+                className="storyboard-export-table-section__title"
+                type="button"
+                aria-expanded={expandedSections.characterActions}
+                aria-controls="storyboard-export-character-actions"
+                onClick={() => toggleSection("characterActions")}
+              >
                 <PersonStanding size={14} />
                 <strong>角色动作</strong>
                 <small>
                   {selectedCharacterActionIndexes.length} 项已选
                 </small>
-              </div>
-              <table className="storyboard-export-table storyboard-export-action-table">
-                <thead>
-                  <tr>
-                    <th className="storyboard-export-table__select">
-                      <input
-                        type="checkbox"
-                        aria-label="选择全部角色动作"
-                        title="选择全部角色动作"
-                        checked={allCharacterActionsSelected}
-                        disabled={busy || Boolean(result)}
-                        onChange={(event) =>
-                          selectAllCharacterActions(event.target.checked)
-                        }
-                      />
-                    </th>
-                    <th>台词节点</th>
-                    <th>角色槽</th>
-                    <th>当前动作</th>
-                    <th>导出后</th>
-                    <th className="storyboard-export-table__action">处理</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {previewCharacterActions.map((item) => (
-                    <tr
-                      key={`${item.dialogueId}:${item.modelIndex}`}
-                      data-action={item.action}
-                      data-selected={selectedCharacterActions.has(
-                        item.characterActionIndex,
-                      )}
-                    >
+                <ChevronDown size={14} />
+              </button>
+              {expandedSections.characterActions && (
+                <table
+                  className="storyboard-export-table storyboard-export-action-table"
+                  id="storyboard-export-character-actions"
+                >
+                  <thead>
+                    <tr>
+                      <th className="storyboard-export-table__select">
+                        <input
+                          type="checkbox"
+                          aria-label="选择全部角色动作"
+                          title="选择全部角色动作"
+                          checked={allCharacterActionsSelected}
+                          disabled={busy || Boolean(result)}
+                          onChange={(event) =>
+                            selectAllCharacterActions(event.target.checked)
+                          }
+                        />
+                      </th>
+                      <th>台词节点</th>
+                      <th>角色槽</th>
+                      <th>当前动作</th>
+                      <th>导出后</th>
+                      <th className="storyboard-export-table__action">处理</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {previewCharacterActions.map((item) => (
+                      <tr
+                        key={`${item.dialogueId}:${item.modelIndex}`}
+                        data-action={item.action}
+                        data-selected={selectedCharacterActions.has(
+                          item.characterActionIndex,
+                        )}
+                      >
                       <td className="storyboard-export-table__select">
                         <input
                           type="checkbox"
@@ -590,50 +702,67 @@ export function StoryboardExportModal({
                           {CHARACTER_ACTION_LABELS[item.action]}
                         </span>
                       </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
             </section>
           )}
 
           {previewSoundEffects.length > 0 && (
-            <section className="storyboard-export-table-section">
-              <div className="storyboard-export-table-section__title">
+            <section
+              className="storyboard-export-table-section"
+              data-collapsed={!expandedSections.soundEffects}
+            >
+              <button
+                className="storyboard-export-table-section__title"
+                type="button"
+                aria-expanded={expandedSections.soundEffects}
+                aria-controls="storyboard-export-sound-effects"
+                onClick={() => toggleSection("soundEffects")}
+              >
                 <Volume2 size={14} />
                 <strong>音效建议</strong>
                 <small>{selectedSoundEffectIndexes.length} 项已选</small>
-              </div>
-              <table className="storyboard-export-table storyboard-export-sound-table">
-                <thead>
-                  <tr>
-                    <th className="storyboard-export-table__select">
-                      <input
-                        type="checkbox"
-                        aria-label="选择全部音效"
-                        title="选择全部音效"
-                        checked={allSoundEffectsSelected}
-                        disabled={busy || Boolean(result)}
-                        onChange={(event) =>
-                          selectAllSoundEffects(event.target.checked)
-                        }
-                      />
-                    </th>
-                    <th className="storyboard-export-table__dialogue">台词节点</th>
-                    <th>推荐资产</th>
-                    <th>当前音效</th>
-                    <th className="storyboard-export-table__action">处理</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {previewSoundEffects.map((soundEffect) => (
-                    <tr
-                      key={`${soundEffect.dialogueId}-${soundEffect.assetName}`}
-                      data-action={soundEffect.action}
-                      data-selected={selectedSoundEffects.has(
-                        soundEffect.soundEffectIndex,
-                      )}
-                    >
+                <ChevronDown size={14} />
+              </button>
+              {expandedSections.soundEffects && (
+                <table
+                  className="storyboard-export-table storyboard-export-sound-table"
+                  id="storyboard-export-sound-effects"
+                >
+                  <thead>
+                    <tr>
+                      <th className="storyboard-export-table__select">
+                        <input
+                          type="checkbox"
+                          aria-label="选择全部音效"
+                          title="选择全部音效"
+                          checked={allSoundEffectsSelected}
+                          disabled={busy || Boolean(result)}
+                          onChange={(event) =>
+                            selectAllSoundEffects(event.target.checked)
+                          }
+                        />
+                      </th>
+                      <th className="storyboard-export-table__dialogue">
+                        台词节点
+                      </th>
+                      <th>推荐资产</th>
+                      <th>当前音效</th>
+                      <th className="storyboard-export-table__action">处理</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {previewSoundEffects.map((soundEffect) => (
+                      <tr
+                        key={`${soundEffect.dialogueId}-${soundEffect.assetName}`}
+                        data-action={soundEffect.action}
+                        data-selected={selectedSoundEffects.has(
+                          soundEffect.soundEffectIndex,
+                        )}
+                      >
                       <td className="storyboard-export-table__select">
                         <input
                           type="checkbox"
@@ -671,66 +800,96 @@ export function StoryboardExportModal({
                           {SOUND_EFFECT_ACTION_LABELS[soundEffect.action]}
                         </span>
                       </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
             </section>
           )}
           {previewMusic.length > 0 && (
-            <section className="storyboard-export-table-section">
-              <div className="storyboard-export-table-section__title">
+            <section
+              className="storyboard-export-table-section"
+              data-collapsed={!expandedSections.music}
+            >
+              <button
+                className="storyboard-export-table-section__title"
+                type="button"
+                aria-expanded={expandedSections.music}
+                aria-controls="storyboard-export-music"
+                onClick={() => toggleSection("music")}
+              >
                 <Music2 size={14} />
                 <strong>音乐建议</strong>
                 <small>{selectedMusicIndexes.length} 项已选</small>
-              </div>
-              <table className="storyboard-export-table">
-                <thead>
-                  <tr>
-                    <th className="storyboard-export-table__select">
-                      <input
-                        type="checkbox"
-                        aria-label="选择全部音乐"
-                        title="选择全部音乐"
-                        checked={allMusicSelected}
-                        disabled={busy || Boolean(result)}
-                        onChange={(event) =>
-                          selectAllMusic(event.target.checked)
-                        }
-                      />
-                    </th>
-                    <th>台词节点</th>
-                    <th>推荐音乐</th>
-                    <th>当前状态</th>
-                    <th>目标状态</th>
-                    <th>处理</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {previewMusic.map((item) => (
-                    <tr
-                      key={`${item.dialogueId}-${item.stateId}`}
-                      data-action={item.action}
-                      data-selected={selectedMusic.has(item.musicIndex)}
-                    >
-                      <td className="storyboard-export-table__select">
+                <ChevronDown size={14} />
+              </button>
+              {expandedSections.music && (
+                <table
+                  className="storyboard-export-table"
+                  id="storyboard-export-music"
+                >
+                  <thead>
+                    <tr>
+                      <th className="storyboard-export-table__select">
                         <input
                           type="checkbox"
-                          aria-label={`选择音乐 ${item.musicName}`}
-                          checked={selectedMusic.has(item.musicIndex)}
+                          aria-label="选择全部音乐"
+                          title="选择全部音乐"
+                          checked={allMusicSelected}
                           disabled={busy || Boolean(result)}
-                          onChange={(event) => selectMusic(item.musicIndex, event.target.checked)}
+                          onChange={(event) =>
+                            selectAllMusic(event.target.checked)
+                          }
                         />
-                      </td>
-                      <td><code>{item.dialogueId}</code></td>
-                      <td>{item.musicName}</td>
-                      <td><code>{item.existingStateId}</code></td>
-                      <td><code>{item.stateName}</code></td>
-                      <td><span className={`export-action export-action--${item.action}`}>{SOUND_EFFECT_ACTION_LABELS[item.action]}</span></td>
+                      </th>
+                      <th>台词节点</th>
+                      <th>推荐音乐</th>
+                      <th>当前状态</th>
+                      <th>目标状态</th>
+                      <th>处理</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {previewMusic.map((item) => (
+                      <tr
+                        key={`${item.dialogueId}-${item.stateId}`}
+                        data-action={item.action}
+                        data-selected={selectedMusic.has(item.musicIndex)}
+                      >
+                        <td className="storyboard-export-table__select">
+                          <input
+                            type="checkbox"
+                            aria-label={`选择音乐 ${item.musicName}`}
+                            checked={selectedMusic.has(item.musicIndex)}
+                            disabled={busy || Boolean(result)}
+                            onChange={(event) =>
+                              selectMusic(item.musicIndex, event.target.checked)
+                            }
+                          />
+                        </td>
+                        <td>
+                          <code>{item.dialogueId}</code>
+                        </td>
+                        <td>{item.musicName}</td>
+                        <td>
+                          <code>{item.existingStateId}</code>
+                        </td>
+                        <td>
+                          <code>{item.stateName}</code>
+                        </td>
+                        <td>
+                          <span
+                            className={`export-action export-action--${item.action}`}
+                          >
+                            {SOUND_EFFECT_ACTION_LABELS[item.action]}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
             </section>
           )}
         </div>
@@ -788,7 +947,7 @@ export function StoryboardExportModal({
               ) : (
                 <Upload size={16} />
               )}
-              {busy ? "正在写入..." : "确认写入并保存"}
+              {busy ? busyLabel || "处理中" : "确认写入并保存"}
             </button>
           </div>
         </footer>

@@ -176,6 +176,7 @@ export function MissionTargetModal({
 }: MissionTargetModalProps) {
   const [taskId, setTaskId] = useState("");
   const [blueprintName, setBlueprintName] = useState("");
+  const [dialogueId, setDialogueId] = useState("");
   const [plan, setPlan] = useState<MissionTargetPreviewPlan | null>(null);
   const [selectedTargetIds, setSelectedTargetIds] = useState<Set<string>>(
     new Set(),
@@ -207,6 +208,7 @@ export function MissionTargetModal({
   const selectedCount =
     plan?.targets.filter((target) => selectedTargetIds.has(target.targetId))
       .length ?? 0;
+  const configuredDialogueId = dialogueId.trim() || undefined;
   const isDialogueRegistration =
     blueprintInspection?.blueprintState === "populated";
   const existingTargetIds = new Set(
@@ -372,6 +374,7 @@ export function MissionTargetModal({
           nextPlan,
           shouldRefresh ? nextPlan.taskId : undefined,
           targetOverrideItems,
+          configuredDialogueId,
         );
         applyBlueprintInspection(inspection);
       } else {
@@ -469,12 +472,14 @@ export function MissionTargetModal({
         plan?.taskId,
         targetOverrideItems,
         true,
+        configuredDialogueId,
       );
       const inspection = await inspectMissionTargetBlueprint(
         blueprintName.trim(),
         plan ?? undefined,
         plan?.taskId,
         targetOverrideItems,
+        configuredDialogueId,
       );
       applyBlueprintInspection(inspection, false);
       if (matchedTargetIds.length > 0) {
@@ -489,6 +494,7 @@ export function MissionTargetModal({
       const preview = await inspectBackgroundPropImport(
         blueprintName.trim(),
         reviewedActorRefs.length > 0 ? reviewedActorRefs : undefined,
+        configuredDialogueId,
       );
       setBackgroundPropPreview(preview);
       setSelectedBackgroundActorRefs((current) =>
@@ -718,6 +724,7 @@ export function MissionTargetModal({
       const preview = await inspectBackgroundPropImport(
         blueprintName.trim(),
         reviewedActorRefs,
+        configuredDialogueId,
       );
       setBackgroundPropPreview(preview);
       setBackgroundMatchedTargetIds(matchedTargetIds);
@@ -789,6 +796,7 @@ export function MissionTargetModal({
         backgroundPropPreview.reviewToken,
         Array.from(selectedBackgroundActorRefs),
         backgroundPropPreview.items.map((item) => item.actorRef),
+        configuredDialogueId,
       );
       setBackgroundPropPreview(null);
       setSelectedBackgroundActorRefs(new Set());
@@ -827,6 +835,7 @@ export function MissionTargetModal({
         plan ?? undefined,
         plan?.taskId,
         targetOverrideItems,
+        configuredDialogueId,
       );
       applyBlueprintInspection(inspection);
     } catch (inspectionError) {
@@ -861,6 +870,7 @@ export function MissionTargetModal({
         blueprintName.trim(),
         plan,
         selectedAssetTargetIds,
+        configuredDialogueId,
       );
       if (
         compatibility.status !== "matched" &&
@@ -876,6 +886,7 @@ export function MissionTargetModal({
         plan,
         selectedAssetTargetIds,
         true,
+        configuredDialogueId,
       );
       const registration = result.dialogueRegistration;
       const spatialMessage =
@@ -900,6 +911,7 @@ export function MissionTargetModal({
           plan,
           plan.taskId,
           targetOverrideItems,
+          configuredDialogueId,
         );
         applyBlueprintInspection(inspection, false);
       } catch {
@@ -948,6 +960,7 @@ export function MissionTargetModal({
         blueprintName.trim(),
         plan,
         selectedAppendTargets.map((target) => target.targetId),
+        configuredDialogueId,
       );
       const registration = result.dialogueRegistration;
       const unresolved = registration.unresolvedIndexes.length
@@ -961,6 +974,7 @@ export function MissionTargetModal({
         plan,
         plan.taskId,
         targetOverrideItems,
+        configuredDialogueId,
       );
       applyBlueprintInspection(inspection, false);
     } catch (appendError) {
@@ -990,6 +1004,8 @@ export function MissionTargetModal({
         blueprintModelSlots.map((slot) => slot.modelIndex),
         plan?.taskId,
         targetOverrideItems,
+        false,
+        configuredDialogueId,
       );
       const unresolved = result.unresolvedIndexes.length
         ? `；槽位 ${result.unresolvedIndexes.join("、")} 未在 DialogNPCTable 登记，保持 None`
@@ -1018,6 +1034,7 @@ export function MissionTargetModal({
         plan ?? undefined,
         plan?.taskId,
         targetOverrideItems,
+        configuredDialogueId,
       );
       applyBlueprintInspection(inspection, false);
     } catch (registrationError) {
@@ -1065,12 +1082,14 @@ export function MissionTargetModal({
         plan.taskId,
         selectedSyncMappings.map((mapping) => mapping.targetId),
         targetOverrideItems,
+        configuredDialogueId,
       );
       const inspection = await inspectMissionTargetBlueprint(
         blueprintName.trim(),
         plan,
         plan.taskId,
         targetOverrideItems,
+        configuredDialogueId,
       );
       applyBlueprintInspection(inspection, false);
       setStatus(
@@ -1121,6 +1140,7 @@ export function MissionTargetModal({
         plan.taskId,
         selectedSyncMappings.map((mapping) => mapping.targetId),
         targetOverrideItems,
+        configuredDialogueId,
       );
       applyTargetUpdates(result.items);
       const updates = new Map(
@@ -1427,6 +1447,24 @@ export function MissionTargetModal({
               )}
             </button>
           </div>
+          <label htmlFor="mission-dialogue-id">对话文件 ID（可选）</label>
+          <input
+            id="mission-dialogue-id"
+            inputMode="numeric"
+            value={dialogueId}
+            disabled={busy}
+            onChange={(event) => {
+              setDialogueId(
+                event.target.value.replace(/\D/g, "").slice(0, 32),
+              );
+              setBlueprintInspection(null);
+              setBackgroundPropPreview(null);
+              setSelectedBackgroundActorRefs(new Set());
+              setError("");
+              setStatus("");
+            }}
+            placeholder="留空时从 BP 文件名推导，例如 735200"
+          />
         </form>
 
         {error && (

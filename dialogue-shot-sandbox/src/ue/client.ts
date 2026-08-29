@@ -169,6 +169,7 @@ export function createMissionTargetBlueprint(
   plan: MissionTargetPreviewPlan,
   selectedTargetIds?: string[],
   registerDialogue = false,
+  dialogueId?: string,
 ): Promise<MissionTargetBlueprintCreateResult> {
   return postUe(
     "/api/ue/mission-targets/create-blueprint",
@@ -177,6 +178,7 @@ export function createMissionTargetBlueprint(
       plan,
       selectedTargetIds,
       registerDialogue,
+      dialogueId,
     },
     false,
   );
@@ -186,6 +188,7 @@ export function appendMissionTargetBlueprint(
   blueprintName: string,
   plan: MissionTargetPreviewPlan,
   selectedTargetIds: string[],
+  dialogueId?: string,
 ): Promise<MissionTargetBlueprintAppendResult> {
   return postUe(
     "/api/ue/mission-targets/append-blueprint",
@@ -193,6 +196,7 @@ export function appendMissionTargetBlueprint(
       blueprintName,
       plan,
       selectedTargetIds,
+      dialogueId,
     },
     false,
   );
@@ -205,12 +209,14 @@ export function inspectMissionTargetBlueprint(
   targetOverrides?: Array<
     Pick<MissionTargetUpdateItem, "targetId" | "transform">
   >,
+  dialogueId?: string,
 ): Promise<MissionTargetBlueprintInspection> {
   return postUe("/api/ue/mission-targets/inspect-blueprint", {
     blueprintName,
     plan,
     taskId,
     targetOverrides,
+    dialogueId,
   });
 }
 
@@ -221,10 +227,11 @@ export function updateMissionTargetBlueprintPositions(
   targetOverrides?: Array<
     Pick<MissionTargetUpdateItem, "targetId" | "transform">
   >,
+  dialogueId?: string,
 ): Promise<MissionTargetBlueprintUpdateResult> {
   return postUe(
     "/api/ue/mission-targets/update-blueprint",
-    { blueprintName, taskId, selectedTargetIds, targetOverrides },
+    { blueprintName, taskId, selectedTargetIds, targetOverrides, dialogueId },
     false,
   );
 }
@@ -236,10 +243,11 @@ export function updateMissionTargetsFromBlueprint(
   targetOverrides?: Array<
     Pick<MissionTargetUpdateItem, "targetId" | "transform">
   >,
+  dialogueId?: string,
 ): Promise<MissionTargetBlueprintToTargetsResult> {
   return postUe(
     "/api/ue/mission-targets/update-from-blueprint",
-    { blueprintName, taskId, selectedTargetIds, targetOverrides },
+    { blueprintName, taskId, selectedTargetIds, targetOverrides, dialogueId },
     false,
   );
 }
@@ -247,10 +255,12 @@ export function updateMissionTargetsFromBlueprint(
 export function inspectBackgroundPropImport(
   blueprintName: string,
   actorRefs?: string[],
+  dialogueId?: string,
 ): Promise<BackgroundPropImportPreview> {
   return postUe("/api/ue/mission-targets/background-props/inspect", {
     blueprintName,
     actorRefs,
+    dialogueId,
   });
 }
 
@@ -259,6 +269,7 @@ export function applyBackgroundPropImport(
   reviewToken: string,
   selectedActorRefs: string[],
   reviewedActorRefs?: string[],
+  dialogueId?: string,
 ): Promise<BackgroundPropImportResult> {
   return postUe(
     "/api/ue/mission-targets/background-props/apply",
@@ -267,6 +278,7 @@ export function applyBackgroundPropImport(
       reviewToken,
       selectedActorRefs,
       reviewedActorRefs,
+      dialogueId,
     },
     false,
   );
@@ -280,6 +292,7 @@ export function registerBlueprintDialogueModels(
     Pick<MissionTargetUpdateItem, "targetId" | "transform">
   >,
   preserveModels = false,
+  dialogueId?: string,
 ): Promise<DialogueModelRegistrationResult> {
   return postUe(
     "/api/ue/mission-targets/register-dialogue",
@@ -289,6 +302,7 @@ export function registerBlueprintDialogueModels(
       taskId,
       targetOverrides,
       ...(preserveModels ? { preserveModels: true } : {}),
+      dialogueId,
     },
     false,
   );
@@ -354,11 +368,13 @@ export function checkMissionTargetBlueprint(
   blueprintName: string,
   plan: MissionTargetPreviewPlan,
   selectedTargetIds?: string[],
+  dialogueId?: string,
 ): Promise<MissionTargetBlueprintCompatibility> {
   return postUe("/api/ue/mission-targets/check-blueprint", {
     blueprintName,
     plan,
     selectedTargetIds,
+    dialogueId,
   });
 }
 
