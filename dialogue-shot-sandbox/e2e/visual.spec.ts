@@ -1973,9 +1973,47 @@ test("opens the incremental Feishu authorization dialog", async ({ page }) => {
   expect(finishRequests).toBe(1);
 });
 
-test("guides first desktop launch to select a doc directory", async ({
+test("guides first desktop launch to select live and config directories", async ({
   page,
 }, testInfo) => {
+  await page.route("**/api/ue/config-data/read", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          dialogueText: [
+            "##&Dialog.id,Dialog.NPCID,Dialog.Content,Dialog.NextID,Dialog.End",
+            "##对话ID,人物,内容,下一ID,结束",
+            "735000,,,735001,false",
+            "735001,1,首次启动测试。,,true",
+          ].join("\n"),
+          startText: [
+            "##&DialogStart.id,DialogStart.Outline",
+            "##对话ID,剧情梗概",
+            "735000,首次启动目录",
+          ].join("\n"),
+          npcText: [
+            "##&NPC.id,NPC.name,NPC.npcintroduce,NPC.resource_id",
+            "##id,名称,介绍,资源",
+            "1,玩家,玩家,",
+          ].join("\n"),
+          sourceName:
+            "F:\\NarrativeData\\Game\\res + F:\\NarrativeData\\doc\\csvdir",
+          modelText: "",
+          missionText: [
+            "##&字段标记,Mission.id,Mission.Name,Mission.ShowNPC",
+            "##任务类型,任务ID,任务名称,显示目标物",
+          ].join("\n"),
+          dungeonMissionText: "",
+          missionPositionText: "",
+          mapConfigText: "",
+          mapResourceText: "",
+        },
+      }),
+    });
+  });
   await page.route("**/api/lark/status", async (route) => {
     await route.fulfill({
       status: 200,
@@ -2041,7 +2079,11 @@ test("guides first desktop launch to select a doc directory", async ({
       mcpVersion: null,
       expectedMcpVersion: "test",
       defaultDataReady: false,
-      dataCsvDirectory: "",
+      liveDataReady: false,
+      configDataReady: false,
+      liveCsvDirectory: "",
+      configCsvDirectory: "",
+      missionTargetTablePath: "",
       ueConnected: false,
       ueMcpHost: "127.0.0.1",
       ueMcpPort: 12031,
@@ -2055,16 +2097,31 @@ test("guides first desktop launch to select a doc directory", async ({
       openIntegrationFolder: async () => undefined,
       openTraeDownload: async () => undefined,
       setUeMcpPort: async () => status,
-      getPathForFile: () =>
-        "F:\\NarrativeData\\DialogueProject\\doc\\csvdir\\NPC表.csv",
-      setDataCsvDirectory: async (directoryPath: string) => {
+      getPathForFile: (file: File) =>
+        file.name === "对话表.csv"
+          ? "F:\\NarrativeData\\Game\\res\\对话表.csv"
+          : "F:\\NarrativeData\\doc\\csvdir\\NPC表.csv",
+      setLiveCsvDirectory: async (directoryPath: string) => {
         status = {
           ...status,
-          defaultDataReady: true,
-          dataCsvDirectory: directoryPath,
+          liveDataReady: true,
+          liveCsvDirectory: directoryPath,
+          defaultDataReady: status.configDataReady,
         };
         return status;
       },
+      setConfigCsvDirectory: async (directoryPath: string) => {
+        status = {
+          ...status,
+          configDataReady: true,
+          configCsvDirectory: directoryPath,
+          missionTargetTablePath:
+            "F:\\NarrativeData\\doc\\xlsdir\\r任务剧情\\m目标物表.xlsm",
+          defaultDataReady: status.liveDataReady,
+        };
+        return status;
+      },
+      restoreDataDirectories: async () => status,
       completeSetup: async () => {
         status = {
           ...status,
@@ -2081,8 +2138,8 @@ test("guides first desktop launch to select a doc directory", async ({
     };
   });
 
-  const fixtureRoot = testInfo.outputPath("first-run-doc");
-  await writeDirectoryFixture(`${fixtureRoot}/csvdir`, [
+  const liveFixtureRoot = testInfo.outputPath("first-run-live");
+  await writeDirectoryFixture(liveFixtureRoot, [
     {
       name: "对话表.csv",
       content: [
@@ -2101,6 +2158,16 @@ test("guides first desktop launch to select a doc directory", async ({
       ].join("\n"),
     },
     {
+      name: "任务表.csv",
+      content: [
+        "##&字段标记,Mission.id,Mission.Name,Mission.ShowNPC",
+        "##任务类型,任务ID,任务名称,显示目标物",
+      ].join("\n"),
+    },
+  ]);
+  const configFixtureRoot = testInfo.outputPath("first-run-config");
+  await writeDirectoryFixture(`${configFixtureRoot}/csvdir`, [
+    {
       name: "NPC表.csv",
       content: [
         "##&NPC.id,NPC.name,NPC.npcintroduce,NPC.resource_id",
@@ -2113,21 +2180,28 @@ test("guides first desktop launch to select a doc directory", async ({
   await page.goto("/");
 
   const setup = page.getByRole("dialog", {
-    name: "选择对话数据目录",
+    name: "配置项目数据目录",
   });
   await expect(setup).toBeVisible();
   const startButton = setup.getByRole("button", { name: "开始使用" });
   await expect(startButton).toBeDisabled();
-  await expect(setup.getByText("尚未选择目录")).toBeVisible();
+  await expect(setup.getByText("实时数据 · 待选择")).toBeVisible();
+  await expect(setup.getByText("配置文档 · 待选择")).toBeVisible();
   await setup.screenshot({
     path: testInfo.outputPath("desktop-first-run.png"),
   });
 
-  await page.locator('input[type="file"]').setInputFiles(fixtureRoot);
-  await expect(setup.getByText("对话数据已就绪")).toBeVisible();
+  await setup.getByRole("button", { name: "选择实时数据目录" }).click();
+  await page.locator('input[type="file"]').setInputFiles(liveFixtureRoot);
+  await expect(setup.getByText("实时数据 · 已就绪")).toBeVisible();
+  await expect(setup.getByText("配置文档 · 待选择")).toBeVisible();
+  await expect(startButton).toBeDisabled();
+  await setup.getByRole("button", { name: "选择配置文档目录" }).click();
+  await page.locator('input[type="file"]').setInputFiles(configFixtureRoot);
+  await expect(setup.getByText("配置文档 · 已就绪")).toBeVisible();
   await expect(
     setup.getByText(
-      "F:\\NarrativeData\\DialogueProject\\doc\\csvdir",
+      "F:\\NarrativeData\\doc\\csvdir",
       { exact: true },
     ),
   ).toBeVisible();
@@ -4135,6 +4209,9 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
     loadedTargetIds = request.plan.targets.map(
       (target: { targetId: string }) => target.targetId,
     );
+    if (request.mapMode === "auto") {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -4342,6 +4419,11 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
     .getByRole("alertdialog", { name: "选择地图加载方式" })
     .getByRole("button", { name: "软件自动切换" })
     .click();
+  await expect(
+    dialog.getByRole("alertdialog", {
+      name: "正在等待 UE 加载地图",
+    }),
+  ).toContainText("大型关卡可能需要数十秒");
   await expect(dialog.getByText(/已自动打开\s*上城区/)).toBeVisible();
   expect(loadRequests).toBe(2);
   expect(loadedMapMode).toBe("auto");
@@ -4445,7 +4527,13 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
     "placeholder",
     "头衔",
   );
-  await expect(registration.getByText("1204").first()).toBeVisible();
+  const previewMapSelect = registration.getByLabel("守卫预览 MapID");
+  const newActorMapSelect = registration.getByLabel("守卫新增 MapID");
+  await expect(previewMapSelect).toHaveValue("1204");
+  await expect(newActorMapSelect).toHaveValue("1204");
+  await expect(previewMapSelect.locator("option:checked")).toHaveText(
+    "1204 · 上城区",
+  );
   await registration.screenshot({
     path: testInfo.outputPath("npc-registration-selection.png"),
   });
@@ -4631,6 +4719,19 @@ test("applies one MapID to selected actors and writes reusable NPCs as targets o
     exact: true,
   });
   await registration.getByRole("button", { name: "读取 UE 选择" }).click();
+  const firstNpc = registration.getByLabel("批量守卫 A NPC 复用方式");
+  const secondNpc = registration.getByLabel("批量守卫 B NPC 复用方式");
+  await secondNpc.selectOption("new");
+  await registration
+    .getByRole("button", {
+      name: "将 批量守卫 A 的 NPC 应用到全部已选 Actor",
+    })
+    .click();
+  await expect(firstNpc).toHaveValue("101968");
+  await expect(secondNpc).toHaveValue("101968");
+  await expect(
+    registration.getByText(/已将 NPC 101968 应用到 2 个已选 Actor/),
+  ).toBeVisible();
   const firstMap = registration.getByLabel("批量守卫 A MapID");
   const secondMap = registration.getByLabel("批量守卫 B MapID");
   await firstMap.selectOption("1209");

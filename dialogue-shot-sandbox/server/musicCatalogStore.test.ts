@@ -31,7 +31,7 @@ describe("music catalog store", () => {
 
     await expect(
       loadMusicCatalog(undefined, { records: recordsPath }),
-    ).rejects.toThrow("尚未选择 doc 文件夹");
+    ).rejects.toThrow("尚未选择配置文档目录");
   });
 
   it("parses quoted CSV cells and maps Wwise state names to IDs", () => {

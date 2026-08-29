@@ -11,7 +11,8 @@ interface DesktopFirstRunModalProps {
   status: DesktopSetupStatus;
   busy: boolean;
   error: string;
-  onChooseDirectory: () => void;
+  onChooseLiveDirectory: () => void;
+  onChooseConfigDirectory: () => void;
   onComplete: () => void;
   onSkip: () => void;
 }
@@ -20,7 +21,8 @@ export function DesktopFirstRunModal({
   status,
   busy,
   error,
-  onChooseDirectory,
+  onChooseLiveDirectory,
+  onChooseConfigDirectory,
   onComplete,
   onSkip,
 }: DesktopFirstRunModalProps) {
@@ -50,47 +52,80 @@ export function DesktopFirstRunModal({
 
         <div className="desktop-first-run__body">
           <small>首次启动</small>
-          <h2 id="desktop-first-run-title">选择对话数据目录</h2>
+          <h2 id="desktop-first-run-title">配置项目数据目录</h2>
           <p>
-            选择项目的 doc 文件夹。它可以位于任意磁盘或目录，应用会读取其中的
-            csvdir。
+            实时数据可指向引擎导出的 res；配置文档指向稳定的 doc/csvdir，
+            用于 NPC、模型、目标物和地图数据及 Excel 写入。
           </p>
 
-          <button
-            className="button button--primary desktop-first-run__choose"
-            type="button"
-            disabled={busy}
-            onClick={onChooseDirectory}
-          >
-            {busy ? (
-              <LoaderCircle className="spin" size={17} />
-            ) : (
+          <div className="desktop-first-run__directory-actions">
+            <button
+              className="button button--primary"
+              type="button"
+              disabled={busy}
+              onClick={onChooseLiveDirectory}
+            >
+              {busy ? (
+                <LoaderCircle className="spin" size={17} />
+              ) : (
+                <FolderOpen size={17} />
+              )}
+              选择实时数据目录
+            </button>
+            <button
+              className="button"
+              type="button"
+              disabled={busy}
+              onClick={onChooseConfigDirectory}
+            >
               <FolderOpen size={17} />
-            )}
-            {busy ? "正在读取" : "选择 doc 文件夹"}
-          </button>
+              选择配置文档目录
+            </button>
+          </div>
 
-          <div
-            className={`desktop-first-run__selection ${
-              status.defaultDataReady ? "is-ready" : ""
-            }`}
-            role="status"
-          >
-            {status.defaultDataReady ? (
-              <Check size={17} />
-            ) : (
-              <CircleAlert size={17} />
-            )}
-            <span>
-              <strong>
-                {status.defaultDataReady ? "对话数据已就绪" : "尚未选择目录"}
-              </strong>
-              <small title={status.dataCsvDirectory || undefined}>
-                {status.defaultDataReady
-                  ? status.dataCsvDirectory
-                  : "也可以直接选择 csvdir 文件夹"}
-              </small>
-            </span>
+          <div className="desktop-first-run__selections">
+            {[
+              {
+                ready: status.liveDataReady ?? status.defaultDataReady,
+                title: "实时数据",
+                path:
+                  status.liveCsvDirectory ??
+                  status.dataCsvDirectory ??
+                  "",
+                fallback: "对话表、开始节点、任务表",
+              },
+              {
+                ready: status.configDataReady ?? status.defaultDataReady,
+                title: "配置文档",
+                path:
+                  status.configCsvDirectory ??
+                  status.dataCsvDirectory ??
+                  "",
+                fallback: "NPC、模型、目标物、地图表",
+              },
+            ].map((item) => (
+              <div
+                key={item.title}
+                className={`desktop-first-run__selection ${
+                  item.ready ? "is-ready" : ""
+                }`}
+                role="status"
+              >
+                {item.ready ? (
+                  <Check size={17} />
+                ) : (
+                  <CircleAlert size={17} />
+                )}
+                <span>
+                  <strong>
+                    {item.title} · {item.ready ? "已就绪" : "待选择"}
+                  </strong>
+                  <small title={item.path || undefined}>
+                    {item.path || item.fallback}
+                  </small>
+                </span>
+              </div>
+            ))}
           </div>
 
           {error && (
@@ -112,7 +147,7 @@ export function DesktopFirstRunModal({
             title={
               status.defaultDataReady
                 ? "保存目录并开始使用"
-                : "请先选择有效的 doc 文件夹"
+                : "请先完成两个数据目录"
             }
             onClick={onComplete}
           >

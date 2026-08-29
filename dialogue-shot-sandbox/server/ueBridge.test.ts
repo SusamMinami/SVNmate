@@ -26,6 +26,7 @@ class FakeUnrealConnection implements UnrealInvoker {
   readonly calls: Array<{
     action: string;
     args: Record<string, unknown>;
+    options?: { timeoutMs?: number };
   }> = [];
   connected = false;
   closed = false;
@@ -36,6 +37,7 @@ class FakeUnrealConnection implements UnrealInvoker {
   scriptExpressionResult: unknown;
   previewActors: string[];
   deleteVisibilityLagReads: number;
+  openLevelError: Error | null;
   pendingDeletedActors = new Set<string>();
 
   constructor(options?: {
@@ -46,6 +48,7 @@ class FakeUnrealConnection implements UnrealInvoker {
     scriptExpressionResult?: unknown;
     previewActors?: string[];
     deleteVisibilityLagReads?: number;
+    openLevelError?: Error;
   }) {
     this.currentMaps = options?.currentMaps ?? [
       "/Game/Seria/Maps/Test/Test",
@@ -59,6 +62,7 @@ class FakeUnrealConnection implements UnrealInvoker {
     this.scriptExpressionResult = options?.scriptExpressionResult;
     this.previewActors = [...(options?.previewActors ?? [])];
     this.deleteVisibilityLagReads = options?.deleteVisibilityLagReads ?? 0;
+    this.openLevelError = options?.openLevelError ?? null;
   }
 
   async connect(): Promise<void> {
@@ -68,8 +72,9 @@ class FakeUnrealConnection implements UnrealInvoker {
   async invoke(
     action: string,
     args: Record<string, unknown>,
+    options?: { timeoutMs?: number },
   ): Promise<unknown> {
-    this.calls.push({ action, args });
+    this.calls.push({ action, args, options });
     if (action === "editor.get_current_map_name") {
       return this.currentMaps.shift() ?? "/Game/Seria/Maps/Test/Test";
     }
@@ -128,6 +133,9 @@ class FakeUnrealConnection implements UnrealInvoker {
       const actor = `PersistentLevel.${String(args.ActorName)}`;
       this.previewActors.push(actor);
       return actor;
+    }
+    if (action === "world.open_level" && this.openLevelError) {
+      throw this.openLevelError;
     }
     if (action === "world.delete_actors") {
       const deleted = new Set((args.Actors as string[]) ?? []);
@@ -854,6 +862,10 @@ describe("mission target UE preview", () => {
         ?.args,
     ).toEqual({ LevelName: expectedMap });
     expect(
+      connection.calls.find((call) => call.action === "world.open_level")
+        ?.options?.timeoutMs,
+    ).toBe(180_000);
+    expect(
       connection.calls
         .filter((call) => call.action === "world.spawn_actor")
         .map((call) => call.args.ClassPath),
@@ -866,6 +878,20 @@ describe("mission target UE preview", () => {
         (call) => call.action === "reflect.write_object_property",
       ),
     ).toHaveLength(2);
+  });
+
+  it("explains that UE may still be loading when the map request disconnects", async () => {
+    const connection = new FakeUnrealConnection({
+      currentMaps: ["/Game/Seria/Maps/Old/Old"],
+      openLevelError: new Error("UE 编辑器连接已关闭"),
+    });
+
+    await expect(
+      loadMissionTargetPreview(
+        { plan: previewPlan(), mapMode: "auto" },
+        () => connection,
+      ),
+    ).rejects.toThrow("加载期间通信暂时不可用");
   });
 
   it("removes rediscovered previews before loading replacements", async () => {

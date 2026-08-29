@@ -147,6 +147,13 @@ export async function routeUeRequest(
       });
       return true;
     }
+    if (url.pathname === "/api/ue/config-data/read") {
+      sendJson(response, 200, {
+        ok: true,
+        data: await services.readConfiguredDialogueCsvPayload(),
+      });
+      return true;
+    }
     if (url.pathname === "/api/ue/mission-targets/resolve") {
       sendJson(response, 200, {
         ok: true,

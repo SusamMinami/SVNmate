@@ -43,8 +43,6 @@ interface ApiEnvelope<T> {
   error?: { message?: string };
 }
 
-const FORMATION_LOOKUP_TIMEOUT_MS = 10_000;
-
 async function fetchUe(
   path: string,
   init: RequestInit,
@@ -55,7 +53,7 @@ async function fetchUe(
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     const controller = timeoutMs ? new AbortController() : null;
     const timeout = controller
-      ? window.setTimeout(() => controller.abort(), timeoutMs)
+      ? globalThis.setTimeout(() => controller.abort(), timeoutMs)
       : null;
     try {
       return await fetch(path, {
@@ -68,11 +66,11 @@ async function fetchUe(
         throw error;
       }
       if (attempt + 1 < attempts) {
-        await new Promise((resolve) => window.setTimeout(resolve, 600));
+        await new Promise((resolve) => globalThis.setTimeout(resolve, 600));
       }
     } finally {
       if (timeout !== null) {
-        window.clearTimeout(timeout);
+        globalThis.clearTimeout(timeout);
       }
     }
   }
@@ -100,15 +98,11 @@ export async function getBlueprintFormation(input: {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(input),
       },
-      FORMATION_LOOKUP_TIMEOUT_MS,
     );
   } catch (error) {
     return {
       status: "unavailable",
-      message:
-        error instanceof DOMException && error.name === "AbortError"
-          ? "Blueprint 查询超时"
-          : bridgeUnavailableMessage(),
+      message: bridgeUnavailableMessage(),
     };
   }
   const body = (await response.json().catch(() => null)) as

@@ -4170,8 +4170,11 @@ textarea:focus-visible {
 
 .mission-target-ue-selection__list {
   display: grid;
-  gap: 1px;
-  overflow: hidden;
+  gap: 5px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  pointer-events: auto;
+  scrollbar-width: thin;
   background: #dbe7eb;
   border: 1px solid #dbe7eb;
   border-radius: 5px;
@@ -4943,11 +4946,11 @@ textarea:focus-visible {
 }
 
 .npc-registration-write-table th:nth-child(4) {
-  width: 360px;
+  width: 420px;
 }
 
 .npc-registration-write-table th:nth-child(5) {
-  width: 160px;
+  width: 220px;
 }
 
 .npc-registration-write-table th:nth-child(6),
@@ -5009,14 +5012,14 @@ textarea:focus-visible {
   font-size: 9px;
 }
 
-.npc-registration-map-choice {
+.npc-registration-bulk-choice {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 5px;
 }
 
-.npc-registration-map-choice > button {
+.npc-registration-bulk-choice > button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -5032,13 +5035,13 @@ textarea:focus-visible {
   cursor: pointer;
 }
 
-.npc-registration-map-choice > button:hover:not(:disabled) {
+.npc-registration-bulk-choice > button:hover:not(:disabled) {
   color: #ffffff;
   background: #315d70;
   border-color: #315d70;
 }
 
-.npc-registration-map-choice > button:disabled {
+.npc-registration-bulk-choice > button:disabled {
   color: #9aa2a7;
   background: #f3f4f3;
   border-color: #d9dcdd;
@@ -5287,9 +5290,17 @@ textarea:focus-visible {
   line-height: 19px;
 }
 
-.desktop-first-run__choose {
-  min-width: 176px;
+.desktop-first-run__directory-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
   margin-top: 22px;
+}
+
+.desktop-first-run__selections {
+  display: grid;
+  gap: 8px;
+  margin-top: 20px;
 }
 
 .desktop-first-run__selection {
@@ -5298,7 +5309,7 @@ textarea:focus-visible {
   align-items: center;
   min-height: 58px;
   gap: 10px;
-  margin-top: 20px;
+  margin-top: 0;
   padding: 0 12px;
   color: var(--warning);
   background: var(--surface-muted);

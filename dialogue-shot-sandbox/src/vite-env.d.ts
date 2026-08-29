@@ -15,7 +15,12 @@ interface DesktopSetupStatus {
   mcpVersion: string | null;
   expectedMcpVersion: string;
   defaultDataReady: boolean;
-  dataCsvDirectory: string;
+  liveDataReady: boolean;
+  configDataReady: boolean;
+  liveCsvDirectory: string;
+  configCsvDirectory: string;
+  missionTargetTablePath: string;
+  dataCsvDirectory?: string;
   ueConnected: boolean;
   ueMcpHost: string;
   ueMcpPort: number;
@@ -51,7 +56,17 @@ interface Window {
     openTraeDownload: () => Promise<void>;
     setUeMcpPort: (port: number) => Promise<DesktopSetupStatus>;
     getPathForFile: (file: File) => string;
-    setDataCsvDirectory: (
+    setLiveCsvDirectory?: (
+      directoryPath: string,
+    ) => Promise<DesktopSetupStatus>;
+    setConfigCsvDirectory?: (
+      directoryPath: string,
+    ) => Promise<DesktopSetupStatus>;
+    restoreDataDirectories?: (
+      liveCsvDirectory: string,
+      configCsvDirectory: string,
+    ) => Promise<DesktopSetupStatus>;
+    setDataCsvDirectory?: (
       directoryPath: string,
     ) => Promise<DesktopSetupStatus>;
     completeSetup: () => Promise<DesktopSetupStatus>;

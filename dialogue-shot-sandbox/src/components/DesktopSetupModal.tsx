@@ -29,7 +29,8 @@ interface DesktopSetupModalProps {
   musicCatalog: MusicCatalogSnapshot;
   dataLoading: boolean;
   dataError: string;
-  onChooseDataDirectory: () => void;
+  onChooseLiveDirectory: () => void;
+  onChooseConfigDirectory: () => void;
   onAuthorize: () => void;
   onRefreshLark: () => void;
   onSyncSoundEffectCatalog: () => Promise<SoundEffectCatalogSnapshot>;
@@ -66,7 +67,8 @@ export function DesktopSetupModal({
   musicCatalog: initialMusicCatalog,
   dataLoading,
   dataError,
-  onChooseDataDirectory,
+  onChooseLiveDirectory,
+  onChooseConfigDirectory,
   onAuthorize,
   onRefreshLark,
   onSyncSoundEffectCatalog,
@@ -234,26 +236,68 @@ export function DesktopSetupModal({
                 <small>已内置，无需安装 Node.js 或 npm</small>
               </span>
             </div>
-            <div className={status.defaultDataReady ? "" : "is-warning"}>
-              {status.defaultDataReady ? (
+            <div
+              className={
+                (status.liveDataReady ?? status.defaultDataReady)
+                  ? ""
+                  : "is-warning"
+              }
+            >
+              {(status.liveDataReady ?? status.defaultDataReady) ? (
                 <Check size={17} />
               ) : (
                 <CircleAlert size={17} />
               )}
               <span>
-                <strong>对话数据</strong>
+                <strong>实时数据</strong>
                 <small>
-                  {status.defaultDataReady
-                    ? `已找到 ${status.dataCsvDirectory}`
-                    : status.dataCsvDirectory
-                      ? `未找到 ${status.dataCsvDirectory}`
-                      : "尚未选择 doc 文件夹"}
+                  {status.liveCsvDirectory ||
+                    status.dataCsvDirectory ||
+                    "选择引擎 res 或其他实时 CSV 目录"}
                 </small>
               </span>
               <button
                 type="button"
                 disabled={dataLoading}
-                onClick={onChooseDataDirectory}
+                onClick={onChooseLiveDirectory}
+              >
+                {dataLoading ? (
+                  <LoaderCircle className="spin" size={14} />
+                ) : (
+                  <FolderOpen size={14} />
+                )}
+                {dataLoading ? "读取中" : "选择"}
+              </button>
+            </div>
+            <div
+              className={
+                (status.configDataReady ?? status.defaultDataReady)
+                  ? ""
+                  : "is-warning"
+              }
+            >
+              {(status.configDataReady ?? status.defaultDataReady) ? (
+                <Check size={17} />
+              ) : (
+                <CircleAlert size={17} />
+              )}
+              <span>
+                <strong>配置文档</strong>
+                <small>
+                  {status.configCsvDirectory ||
+                    status.dataCsvDirectory ||
+                    "选择 doc 或 doc/csvdir，Excel 路径由此推导"}
+                </small>
+                {status.missionTargetTablePath && (
+                  <small title={status.missionTargetTablePath}>
+                    目标物表：{status.missionTargetTablePath}
+                  </small>
+                )}
+              </span>
+              <button
+                type="button"
+                disabled={dataLoading}
+                onClick={onChooseConfigDirectory}
               >
                 {dataLoading ? (
                   <LoaderCircle className="spin" size={14} />

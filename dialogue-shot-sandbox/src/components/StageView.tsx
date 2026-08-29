@@ -656,7 +656,8 @@ function SceneCastRoster({
           const role = dialogueParticipantSlots.has(participant.slot)
             ? "对白"
             : "背景";
-          const roleLabel = role === "对白" ? "对白角色" : "背景 NPC";
+          const roleLabel =
+            role === "对白" ? "对白角色" : "背景 NPC";
           const source =
             participant.positionSource === "blueprint"
               ? `BP ${participant.modelIndex ?? "?"} · 初始朝向 ${participantFacingYawDegrees(participant).toFixed(0)}°`
@@ -667,19 +668,19 @@ function SceneCastRoster({
               : presence === "exited"
                 ? "已离场"
                 : "在场";
+          const detailLabel =
+            `${roleLabel} · ${presenceLabel} · ${source} · ` +
+            `登场 ${participant.entryDialogueId} · ` +
+            `离场 ${participant.exitDialogueId ?? "本场结束"}`;
           return (
             <div
               className="stage-cast__item"
               data-presence={presence}
               key={participant.instanceId}
               role="listitem"
-              aria-label={
-                `${participant.name} · ${roleLabel} · ${presenceLabel} · ` +
-                `${source} · 登场 ${participant.entryDialogueId} · ` +
-                `离场 ${participant.exitDialogueId ?? "本场结束"}`
-              }
+              aria-label={`${participant.name} · ${detailLabel}`}
               tabIndex={0}
-              title={`${roleLabel} · ${presenceLabel} · ${source} · 登场 ${participant.entryDialogueId} · 离场 ${participant.exitDialogueId ?? "本场结束"}`}
+              title={detailLabel}
             >
               <span style={{ backgroundColor: participant.color }}>
                 {participant.slot}

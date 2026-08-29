@@ -386,6 +386,35 @@ export function NpcRegistrationModal({
     );
   }
 
+  function applyNpcToSelected(source: NpcRegistrationCandidate) {
+    const npcId = npcChoices[source.actor.actorRef] ?? "";
+    if (!/^\d+$/.test(npcId)) {
+      return;
+    }
+    const applicableCandidates = selectedCandidates.filter((candidate) =>
+      registeredNpcIds[candidate.actor.actorRef] === undefined &&
+      candidate.npcOptions.some((npc) => String(npc.id) === npcId),
+    );
+    setNpcChoices((current) => ({
+      ...current,
+      ...Object.fromEntries(
+        applicableCandidates.map((candidate) => [
+          candidate.actor.actorRef,
+          npcId,
+        ]),
+      ),
+    }));
+    const skippedCount = selectedCandidateCount - applicableCandidates.length;
+    setError("");
+    setStatus(
+      `已将 NPC ${npcId} 应用到 ${applicableCandidates.length} 个已选 Actor${
+        skippedCount > 0
+          ? `，${skippedCount} 个 Actor 已锁定或模型不匹配`
+          : ""
+      }`,
+    );
+  }
+
   function applyMapToSelected(source: NpcRegistrationCandidate) {
     const mapId = mapChoices[source.actor.actorRef] ?? "";
     if (!mapId) {
@@ -1301,36 +1330,57 @@ export function NpcRegistrationModal({
                       </td>
                       <td>
                         {modelOptions.length > 0 && (
-                          <select
-                            value={choice}
-                            disabled={
-                              busy ||
-                              !selected ||
-                              registeredNpcId !== undefined
-                            }
-                            onChange={(event) =>
-                              setNpcChoices((current) => ({
-                                ...current,
-                                [actor.actorRef]: event.target.value,
-                              }))
-                            }
-                            aria-label={`${actor.label} NPC 复用方式`}
-                          >
-                            <option value="new">新建 NPC</option>
-                            {registeredNpcId !== undefined && (
-                              <option value={registeredNpcId}>
-                                {registeredNpcId} · 新增待保存
-                              </option>
-                            )}
-                            {npcOptions.length > 1 && (
-                              <option value="choose">请选择 NPC</option>
-                            )}
-                            {npcOptions.map((npc) => (
-                              <option key={npc.id} value={npc.id}>
-                                {npcReuseLabel(npc)}
-                              </option>
-                            ))}
-                          </select>
+                          <div className="npc-registration-bulk-choice">
+                            <select
+                              value={choice}
+                              disabled={
+                                busy ||
+                                !selected ||
+                                registeredNpcId !== undefined
+                              }
+                              onChange={(event) =>
+                                setNpcChoices((current) => ({
+                                  ...current,
+                                  [actor.actorRef]: event.target.value,
+                                }))
+                              }
+                              aria-label={`${actor.label} NPC 复用方式`}
+                            >
+                              <option value="new">新建 NPC</option>
+                              {registeredNpcId !== undefined && (
+                                <option value={registeredNpcId}>
+                                  {registeredNpcId} · 新增待保存
+                                </option>
+                              )}
+                              {npcOptions.length > 1 && (
+                                <option value="choose">请选择 NPC</option>
+                              )}
+                              {npcOptions.map((npc) => (
+                                <option key={npc.id} value={npc.id}>
+                                  {npcReuseLabel(npc)}
+                                </option>
+                              ))}
+                            </select>
+                            <button
+                              type="button"
+                              onClick={() => applyNpcToSelected(candidate)}
+                              disabled={
+                                busy ||
+                                !selected ||
+                                !/^\d+$/.test(choice) ||
+                                selectedCandidateCount < 2
+                              }
+                              title={
+                                /^\d+$/.test(choice)
+                                  ? `将 NPC ${choice} 应用到全部已选 Actor`
+                                  : "请先选择一个可复用 NPC"
+                              }
+                              aria-label={`将 ${actor.label} 的 NPC 应用到全部已选 Actor`}
+                            >
+                              <ListChecks size={12} />
+                              应用到已选
+                            </button>
+                          </div>
                         )}
                         {choice === "new" && (
                           <div className="npc-registration-new-fields">
@@ -1385,8 +1435,8 @@ export function NpcRegistrationModal({
                         )}
                       </td>
                       <td>
-                        {candidate.mapOptions.length > 1 ? (
-                          <div className="npc-registration-map-choice">
+                        {candidate.mapOptions.length > 0 ? (
+                          <div className="npc-registration-bulk-choice">
                             <select
                               value={mapChoices[actor.actorRef] ?? ""}
                               disabled={busy || !selected}
@@ -1426,14 +1476,9 @@ export function NpcRegistrationModal({
                               aria-label={`将 ${actor.label} 的 MapID 应用到全部已选 Actor`}
                             >
                               <ListChecks size={12} />
-                              全选
+                              应用到已选
                             </button>
                           </div>
-                        ) : candidate.mapId ? (
-                          <>
-                            <strong>{candidate.mapId}</strong>
-                            <small>{candidate.mapName}</small>
-                          </>
                         ) : (
                           <span className="registration-state is-warning">
                             地图未匹配

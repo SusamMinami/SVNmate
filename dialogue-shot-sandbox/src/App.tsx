@@ -59,6 +59,7 @@ import { StageView } from "./components/StageView";
 import { WorkspaceStatusHub } from "./components/WorkspaceStatusHub";
 import {
   findDocCsvFile,
+  loadConfiguredDatabase,
   loadDocDirectory,
   loadDocFiles,
 } from "./data/csvLoader";
@@ -1218,6 +1219,7 @@ export default function App() {
   const [inspectorTab, setInspectorTab] =
     useState<InspectorTab>("direction");
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const directorySelectionKindRef = useRef<"live" | "config">("live");
   const dialogueEditorRef = useRef<HTMLDivElement>(null);
   const directorRunRef = useRef(0);
   const formationRunRef = useRef(0);
@@ -1498,6 +1500,19 @@ export default function App() {
         setDesktopSetup(status);
         setShowDesktopFirstRun(needsDataSetup);
         setShowDesktopSetup(!needsDataSetup && status.firstRun);
+        if (status.liveDataReady && status.configDataReady) {
+          setLoading(true);
+          void loadConfiguredDatabase()
+            .then(useDatabase)
+            .catch((loadError) => {
+              setError(
+                loadError instanceof Error
+                  ? loadError.message
+                  : "已保存的数据目录读取失败",
+              );
+            })
+            .finally(() => setLoading(false));
+        }
       });
     }
   }, []);
@@ -1874,6 +1889,13 @@ export default function App() {
     }
 
     setFormationChecking(true);
+    const slowFormationNotice = window.setTimeout(() => {
+      if (formationRunId === formationRunRef.current) {
+        setFormationStatus(
+          "BP 结构较复杂，UE 仍在读取站位与对话模型...",
+        );
+      }
+    }, 8_000);
     let lookup: Awaited<ReturnType<typeof getBlueprintFormation>>;
     try {
       lookup = await getBlueprintFormation({
@@ -1895,6 +1917,7 @@ export default function App() {
       await applySequence(nextSequence, requestedMode);
       return;
     } finally {
+      window.clearTimeout(slowFormationNotice);
       if (formationRunId === formationRunRef.current) {
         setFormationChecking(false);
       }
@@ -1928,6 +1951,13 @@ export default function App() {
     setFormationChecking(true);
     setFormationStatus("正在重新读取 UE Blueprint 站位...");
     setError("");
+    const slowFormationNotice = window.setTimeout(() => {
+      if (formationRunId === formationRunRef.current) {
+        setFormationStatus(
+          "BP 结构较复杂，UE 仍在读取最新站位与对话模型...",
+        );
+      }
+    }, 8_000);
     try {
       const sourceSequence = findDialogueSequence(database, sequence.prefix);
       const lookup = await getBlueprintFormation({
@@ -1966,6 +1996,7 @@ export default function App() {
         ),
       );
     } finally {
+      window.clearTimeout(slowFormationNotice);
       if (formationRunId === formationRunRef.current) {
         setFormationChecking(false);
       }
@@ -2225,9 +2256,12 @@ export default function App() {
     }
   }
 
-  async function chooseDirectory() {
+  async function chooseDirectory(
+    kind: "live" | "config" = "live",
+  ) {
     setError("");
     if (window.shotSandboxDesktop) {
+      directorySelectionKindRef.current = kind;
       fileInputRef.current?.click();
       return;
     }
@@ -2304,32 +2338,79 @@ export default function App() {
     if (!files?.length) {
       return;
     }
+    const desktop = window.shotSandboxDesktop;
+    let previousSetup = desktopSetup;
+    let shouldRestoreDirectories = false;
     setLoading(true);
     try {
-      let nextDatabase = await loadDocFiles(files);
-      const desktop = window.shotSandboxDesktop;
       if (desktop) {
-        const npcFile = findDocCsvFile(
-          Array.from(files),
-          "NPC表.csv",
+        const supportsSplitDirectories = Boolean(
+          desktop.setLiveCsvDirectory &&
+            desktop.setConfigCsvDirectory,
         );
-        if (!npcFile) {
-          throw new Error("选择的目录中未找到 csvdir\\NPC表.csv");
+        if (!supportsSplitDirectories) {
+          const nextDatabase = await loadDocFiles(files);
+          const npcFile = findDocCsvFile(Array.from(files), "NPC表.csv");
+          if (!npcFile || !desktop.setDataCsvDirectory) {
+            throw new Error("选择的目录中未找到 csvdir\\NPC表.csv");
+          }
+          const npcPath = desktop.getPathForFile(npcFile);
+          const csvDirectory = npcPath.replace(/[\\/][^\\/]+$/, "");
+          const setup = await desktop.setDataCsvDirectory(csvDirectory);
+          setDesktopSetup(setup);
+          await useDatabase({
+            ...nextDatabase,
+            sourceName: csvDirectory,
+          });
+          return;
         }
-        const npcPath = desktop.getPathForFile(npcFile);
-        const csvDirectory = npcPath.replace(/[\\/][^\\/]+$/, "");
-        if (!csvDirectory || csvDirectory === npcPath) {
-          throw new Error("无法确定所选 csvdir 的本机路径");
+        previousSetup ??= await desktop.getSetupStatus();
+        const selectionKind = directorySelectionKindRef.current;
+        const representativeFile = findDocCsvFile(
+          Array.from(files),
+          selectionKind === "live" ? "对话表.csv" : "NPC表.csv",
+        );
+        if (!representativeFile) {
+          throw new Error(
+            selectionKind === "live"
+              ? "选择的目录中未找到对话表.csv"
+              : "选择的目录中未找到 NPC表.csv",
+          );
         }
-        const setup = await desktop.setDataCsvDirectory(csvDirectory);
+        const filePath = desktop.getPathForFile(representativeFile);
+        const csvDirectory = filePath.replace(/[\\/][^\\/]+$/, "");
+        if (!csvDirectory || csvDirectory === filePath) {
+          throw new Error("无法确定所选 CSV 目录的本机路径");
+        }
+        const setup =
+          selectionKind === "live"
+            ? await desktop.setLiveCsvDirectory!(csvDirectory)
+            : await desktop.setConfigCsvDirectory!(csvDirectory);
+        shouldRestoreDirectories = true;
         setDesktopSetup(setup);
-        nextDatabase = {
-          ...nextDatabase,
-          sourceName: csvDirectory,
-        };
+        if (setup.defaultDataReady) {
+          await useDatabase(await loadConfiguredDatabase());
+        }
+      } else {
+        await useDatabase(await loadDocFiles(files));
       }
-      await useDatabase(nextDatabase);
     } catch (fileError) {
+      if (
+        shouldRestoreDirectories &&
+        previousSetup &&
+        desktop?.restoreDataDirectories
+      ) {
+        try {
+          setDesktopSetup(
+            await desktop.restoreDataDirectories(
+              previousSetup.liveCsvDirectory ?? "",
+              previousSetup.configCsvDirectory ?? "",
+            ),
+          );
+        } catch {
+          // Preserve the original parse/load error shown below.
+        }
+      }
       setError(fileError instanceof Error ? fileError.message : "目录读取失败");
     } finally {
       setLoading(false);
@@ -2625,9 +2706,17 @@ export default function App() {
           <button
             className="app-rail__button app-rail__button--primary"
             type="button"
-            title="选择 doc 文件夹"
-            aria-label="选择 doc 文件夹"
-            onClick={() => void chooseDirectory()}
+            title={
+              window.shotSandboxDesktop
+                ? "配置实时数据与文档目录"
+                : "选择 doc 文件夹"
+            }
+            aria-label="选择数据目录"
+            onClick={() =>
+              window.shotSandboxDesktop
+                ? void openDesktopSetup()
+                : void chooseDirectory()
+            }
             disabled={loading}
           >
             {loading ? (
@@ -3572,7 +3661,8 @@ export default function App() {
             status={desktopSetup}
             busy={loading}
             error={error}
-            onChooseDirectory={() => void chooseDirectory()}
+            onChooseLiveDirectory={() => void chooseDirectory("live")}
+            onChooseConfigDirectory={() => void chooseDirectory("config")}
             onComplete={() => void completeDesktopFirstRun()}
             onSkip={() => setShowDesktopFirstRun(false)}
           />
@@ -3590,7 +3680,8 @@ export default function App() {
             musicCatalog={musicCatalog}
             dataLoading={loading}
             dataError={error}
-            onChooseDataDirectory={() => void chooseDirectory()}
+            onChooseLiveDirectory={() => void chooseDirectory("live")}
+            onChooseConfigDirectory={() => void chooseDirectory("config")}
             onAuthorize={() => void beginAuthorization()}
             onRefreshLark={() => void refreshLarkConnection(false)}
             onSyncSoundEffectCatalog={refreshSoundEffectCatalogFromLark}

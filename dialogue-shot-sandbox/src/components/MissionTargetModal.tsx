@@ -67,7 +67,7 @@ interface MissionTargetModalProps {
 interface MapLoadDecision {
   plan: MissionTargetPreviewPlan;
   currentMapAssetPath: string;
-  phase: "choose" | "manual";
+  phase: "choose" | "manual" | "auto";
   error: string;
 }
 
@@ -403,6 +403,11 @@ export function MissionTargetModal({
     setError("");
     setStatus("");
     setBackgroundPropError("");
+    if (mapMode === "auto") {
+      setMapLoadDecision((current) =>
+        current ? { ...current, phase: "auto", error: "" } : current,
+      );
+    }
     try {
       const result = await loadMissionTargetPreview(selectedPlan, mapMode);
       setMapLoadDecision(null);
@@ -413,8 +418,23 @@ export function MissionTargetModal({
           ? previewError.message
           : "目标物预览加载失败";
       if (mapLoadDecision) {
+        const canContinueAfterMapLoad =
+          mapMode === "auto" &&
+          /(?:正在加载|暂时无法读取关卡状态|尚未完成.*地图切换|加载期间通信暂时不可用)/.test(
+            message,
+          );
         setMapLoadDecision((current) =>
-          current ? { ...current, error: message } : current,
+          current
+            ? {
+                ...current,
+                phase: canContinueAfterMapLoad
+                  ? "manual"
+                  : mapMode === "auto"
+                    ? "choose"
+                    : current.phase,
+                error: message,
+              }
+            : current,
         );
       } else {
         setError(message);
@@ -2284,9 +2304,11 @@ export function MissionTargetModal({
                 <div>
                   <small>UE 当前关卡与任务地图不同</small>
                   <h3 id="mission-map-choice-title">
-                    {mapLoadDecision.phase === "manual"
-                      ? "等待手动切换地图"
-                      : "选择地图加载方式"}
+                    {mapLoadDecision.phase === "auto"
+                      ? "正在等待 UE 加载地图"
+                      : mapLoadDecision.phase === "manual"
+                        ? "等待手动切换地图"
+                        : "选择地图加载方式"}
                   </h3>
                 </div>
                 <button
@@ -2322,6 +2344,11 @@ export function MissionTargetModal({
                     请在 UE 中完成地图切换，再检查并加载目标物。
                   </p>
                 )}
+                {mapLoadDecision.phase === "auto" && (
+                  <p>
+                    UE 正在打开目标地图。大型关卡可能需要数十秒，加载完成后会继续生成目标物预览。
+                  </p>
+                )}
                 {mapLoadDecision.error && (
                   <div className="mission-map-choice__error" role="alert">
                     <AlertTriangle size={15} />
@@ -2331,7 +2358,16 @@ export function MissionTargetModal({
               </div>
 
               <footer>
-                {mapLoadDecision.phase === "choose" ? (
+                {mapLoadDecision.phase === "auto" ? (
+                  <button
+                    className="button button--primary"
+                    type="button"
+                    disabled
+                  >
+                    <LoaderCircle className="spin" size={15} />
+                    正在等待 UE 加载
+                  </button>
+                ) : mapLoadDecision.phase === "choose" ? (
                   <>
                     <button
                       className="button"

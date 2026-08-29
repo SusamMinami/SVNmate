@@ -4,6 +4,7 @@ import {
 } from "../excelRegistration";
 import {
   getConfigTablePaths,
+  readConfiguredDialogueCsvPayload,
   readConfiguredMissionTargetPlan,
 } from "../configRepository";
 import {
@@ -50,6 +51,7 @@ export const ueServices = {
   populateMissionTargetBlueprint,
   prepareSoundEffectPreview,
   readBlueprintFormation,
+  readConfiguredDialogueCsvPayload,
   readDialogueCharacterActions,
   readConfiguredMissionTargetPlan,
   readSelectedLevelActors,

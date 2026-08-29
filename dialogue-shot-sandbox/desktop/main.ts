@@ -23,10 +23,14 @@ import {
 import { routeLarkRequest } from "../server/larkBridge";
 import {
   configureConfigCsvDirectory,
+  configureLiveCsvDirectory,
+  getConfigTablePaths,
   getOptionalConfigCsvDirectory,
+  getOptionalLiveCsvDirectory,
 } from "../server/configRepository";
 import {
   isConfigCsvDirectoryReady,
+  isLiveCsvDirectoryReady,
 } from "../server/configDirectory";
 import { inspectUnrealMcpConnection } from "../server/ueBridge";
 import { routeUeRequest } from "../server/ue/routes";
@@ -64,7 +68,8 @@ const contentTypes: Record<string, string> = {
 interface DesktopState {
   setupCompleted: boolean;
   ueMcpPort: number;
-  dataCsvDirectory: string;
+  liveCsvDirectory: string;
+  configCsvDirectory: string;
 }
 
 interface UpdateSnapshot {
@@ -141,17 +146,21 @@ async function readDesktopState(): Promise<DesktopState> {
         Number(parsed.ueMcpPort) <= 65_535
           ? Number(parsed.ueMcpPort)
           : getUnrealMcpEndpoint().port,
-      dataCsvDirectory:
-        typeof parsed.dataCsvDirectory === "string" &&
-        parsed.dataCsvDirectory.trim()
-          ? parsed.dataCsvDirectory
+      liveCsvDirectory:
+        typeof parsed.liveCsvDirectory === "string"
+          ? parsed.liveCsvDirectory.trim()
+          : "",
+      configCsvDirectory:
+        typeof parsed.configCsvDirectory === "string"
+          ? parsed.configCsvDirectory.trim()
           : "",
     };
   } catch {
     return {
       setupCompleted: false,
       ueMcpPort: getUnrealMcpEndpoint().port,
-      dataCsvDirectory: "",
+      liveCsvDirectory: "",
+      configCsvDirectory: "",
     };
   }
 }
@@ -271,16 +280,21 @@ async function setupStatus() {
     traeExecutable,
     integration,
     presence,
-    defaultDataReady,
+    liveDataReady,
+    configDataReady,
     ueConnection,
   ] =
     await Promise.all([
       detectTrae(),
       integrationStatus(),
       getStoryboardMcpPresence(),
-      isConfigCsvDirectoryReady(state.dataCsvDirectory),
+      isLiveCsvDirectoryReady(state.liveCsvDirectory),
+      isConfigCsvDirectoryReady(state.configCsvDirectory),
       inspectUnrealMcpConnection(),
     ]);
+  const missionTargetTablePath = configDataReady
+    ? getConfigTablePaths().missionTarget
+    : "";
   return {
     firstRun:
       !state.setupCompleted ||
@@ -297,8 +311,12 @@ async function setupStatus() {
     mcpConnected: presence.connected && presence.compatible,
     mcpVersion: presence.serverVersion,
     expectedMcpVersion: STORYBOARD_MCP_VERSION,
-    defaultDataReady,
-    dataCsvDirectory: state.dataCsvDirectory,
+    defaultDataReady: liveDataReady && configDataReady,
+    liveDataReady,
+    configDataReady,
+    liveCsvDirectory: state.liveCsvDirectory,
+    configCsvDirectory: state.configCsvDirectory,
+    missionTargetTablePath,
     ueConnected: ueConnection.connected,
     ueMcpHost: ueConnection.host,
     ueMcpPort: ueConnection.port,
@@ -382,14 +400,42 @@ function registerDesktopIpc(): void {
   );
   ipcMain.handle("desktop:complete-setup", async () => {
     const state = await readDesktopState();
-    if (!(await isConfigCsvDirectoryReady(state.dataCsvDirectory))) {
-      throw new Error("请先选择包含有效 csvdir 的 doc 文件夹");
+    if (!(await isLiveCsvDirectoryReady(state.liveCsvDirectory))) {
+      throw new Error("请先选择包含对话表、开始节点和任务表的实时数据目录");
+    }
+    if (!(await isConfigCsvDirectoryReady(state.configCsvDirectory))) {
+      throw new Error("请先选择包含 NPC、模型、目标物和地图 CSV 的 doc 文件夹");
     }
     await writeDesktopState({ ...state, setupCompleted: true });
     return setupStatus();
   });
   ipcMain.handle(
-    "desktop:set-data-directory",
+    "desktop:set-live-data-directory",
+    async (_event, directoryPath: unknown) => {
+      const previousDirectory = getOptionalLiveCsvDirectory();
+      let selectedDirectory = "";
+      try {
+        configureLiveCsvDirectory(String(directoryPath ?? ""));
+        selectedDirectory = getOptionalLiveCsvDirectory() ?? "";
+        if (!(await isLiveCsvDirectoryReady(selectedDirectory))) {
+          throw new Error(
+            `所选位置缺少对话表、开始节点或任务表：${selectedDirectory || String(directoryPath ?? "")}`,
+          );
+        }
+        const state = await readDesktopState();
+        await writeDesktopState({
+          ...state,
+          liveCsvDirectory: selectedDirectory,
+        });
+        return setupStatus();
+      } catch (error) {
+        configureLiveCsvDirectory(previousDirectory ?? "");
+        throw error;
+      }
+    },
+  );
+  ipcMain.handle(
+    "desktop:set-config-directory",
     async (_event, directoryPath: unknown) => {
       const previousDirectory = getOptionalConfigCsvDirectory();
       let selectedDirectory = "";
@@ -398,19 +444,43 @@ function registerDesktopIpc(): void {
         selectedDirectory = getOptionalConfigCsvDirectory() ?? "";
         if (!(await isConfigCsvDirectoryReady(selectedDirectory))) {
           throw new Error(
-            `所选位置缺少必需的对话 CSV：${selectedDirectory || String(directoryPath ?? "")}`,
+            `所选位置缺少 NPC、模型、目标物或地图 CSV：${selectedDirectory || String(directoryPath ?? "")}`,
           );
         }
         const state = await readDesktopState();
         await writeDesktopState({
           ...state,
-          dataCsvDirectory: selectedDirectory,
+          configCsvDirectory: selectedDirectory,
         });
         return setupStatus();
       } catch (error) {
         configureConfigCsvDirectory(previousDirectory ?? "");
         throw error;
       }
+    },
+  );
+  ipcMain.handle(
+    "desktop:restore-data-directories",
+    async (
+      _event,
+      directories: {
+        liveCsvDirectory?: unknown;
+        configCsvDirectory?: unknown;
+      },
+    ) => {
+      const state = await readDesktopState();
+      const liveDirectory = String(directories?.liveCsvDirectory ?? "");
+      const configDirectory = String(
+        directories?.configCsvDirectory ?? "",
+      );
+      configureLiveCsvDirectory(liveDirectory);
+      configureConfigCsvDirectory(configDirectory);
+      await writeDesktopState({
+        ...state,
+        liveCsvDirectory: liveDirectory,
+        configCsvDirectory: getOptionalConfigCsvDirectory() ?? "",
+      });
+      return setupStatus();
     },
   );
   ipcMain.handle("desktop:set-ue-port", async (_event, port: unknown) => {
@@ -541,8 +611,11 @@ async function runDesktop(): Promise<void> {
   configureRuntimeEnvironment();
   const desktopState = await readDesktopState();
   configureUnrealMcpPort(desktopState.ueMcpPort);
-  if (desktopState.dataCsvDirectory) {
-    configureConfigCsvDirectory(desktopState.dataCsvDirectory);
+  if (desktopState.liveCsvDirectory) {
+    configureLiveCsvDirectory(desktopState.liveCsvDirectory);
+  }
+  if (desktopState.configCsvDirectory) {
+    configureConfigCsvDirectory(desktopState.configCsvDirectory);
   }
   await installTraeIntegration();
   registerDesktopIpc();

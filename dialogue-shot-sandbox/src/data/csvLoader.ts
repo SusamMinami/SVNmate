@@ -16,6 +16,12 @@ type DialogueCsvWorkerResponse =
   | { ok: true; database: DialogueDatabase }
   | { ok: false; message: string };
 
+interface ApiEnvelope<T> {
+  ok: boolean;
+  data?: T;
+  error?: { message?: string };
+}
+
 function parseDialogueDatabase(
   payload: DialogueCsvPayload,
 ): Promise<DialogueDatabase> {
@@ -105,14 +111,31 @@ export async function loadDocDirectory(
   });
 }
 
+export async function loadConfiguredDatabase(): Promise<DialogueDatabase> {
+  const response = await fetch("/api/ue/config-data/read", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{}",
+  });
+  const result = (await response.json().catch(() => null)) as
+    | ApiEnvelope<DialogueCsvPayload>
+    | null;
+  if (!response.ok || !result?.ok || !result.data) {
+    throw new Error(
+      result?.error?.message ||
+        `已保存的数据目录读取失败（HTTP ${response.status}）`,
+    );
+  }
+  return parseDialogueDatabase(result.data);
+}
+
 export function findDocCsvFile(
   files: File[],
   filename: string,
 ): File | null {
   const normalizedSuffix = `/csvdir/${filename}`.toLowerCase();
   const directDirectoryPath = `csvdir/${filename}`.toLowerCase();
-  return (
-    files.find((file) => {
+  const configured = files.find((file) => {
       const relativePath = (file.webkitRelativePath || file.name)
         .replaceAll("\\", "/")
         .toLowerCase();
@@ -121,7 +144,23 @@ export function findDocCsvFile(
         relativePath === directDirectoryPath ||
         relativePath === filename.toLowerCase()
       );
-    }) ?? null
+    });
+  if (configured) {
+    return configured;
+  }
+  return (
+    files
+      .filter((file) =>
+        (file.webkitRelativePath || file.name)
+          .replaceAll("\\", "/")
+          .toLowerCase()
+          .endsWith(`/${filename.toLowerCase()}`),
+      )
+      .sort(
+        (left, right) =>
+          (left.webkitRelativePath || left.name).split(/[\\/]/).length -
+          (right.webkitRelativePath || right.name).split(/[\\/]/).length,
+      )[0] ?? null
   );
 }
 

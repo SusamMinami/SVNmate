@@ -1,9 +1,55 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MissionTargetPreviewPlan } from "../types";
-import { refreshMissionTargetPlan } from "./client";
+import { getBlueprintFormation, refreshMissionTargetPlan } from "./client";
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
+});
+
+describe("getBlueprintFormation", () => {
+  it("keeps waiting when a complex Blueprint takes longer than ten seconds", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      (_input, init) =>
+        new Promise((resolve, reject) => {
+          const timer = setTimeout(
+            () =>
+              resolve(
+                new Response(
+                  JSON.stringify({
+                    ok: true,
+                    data: {
+                      status: "not_found",
+                      message: "未找到测试 BP",
+                    },
+                  }),
+                  {
+                    status: 200,
+                    headers: { "Content-Type": "application/json" },
+                  },
+                ),
+              ),
+            11_000,
+          );
+          init?.signal?.addEventListener("abort", () => {
+            clearTimeout(timer);
+            reject(new DOMException("Aborted", "AbortError"));
+          });
+        }),
+    );
+
+    const lookup = getBlueprintFormation({
+      dialogueId: "7350",
+      startId: "735000",
+    });
+    await vi.advanceTimersByTimeAsync(11_000);
+
+    await expect(lookup).resolves.toMatchObject({
+      status: "not_found",
+      message: "未找到测试 BP",
+    });
+  });
 });
 
 describe("refreshMissionTargetPlan", () => {

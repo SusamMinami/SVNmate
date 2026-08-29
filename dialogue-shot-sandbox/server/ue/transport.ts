@@ -15,7 +15,7 @@ let ueMcpPort =
     : DEFAULT_UE_MCP_PORT;
 
 const CONNECT_TIMEOUT_MS = 1_500;
-const REQUEST_TIMEOUT_MS = 8_000;
+const REQUEST_TIMEOUT_MS = 20_000;
 const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 
 interface UnrealResponse {
@@ -27,7 +27,11 @@ interface UnrealResponse {
 
 export interface UnrealInvoker {
   connect(): Promise<void>;
-  invoke(action: string, args: Record<string, unknown>): Promise<unknown>;
+  invoke(
+    action: string,
+    args: Record<string, unknown>,
+    options?: { timeoutMs?: number },
+  ): Promise<unknown>;
   close(): void;
 }
 
@@ -77,12 +81,20 @@ export class UnrealMcpConnection implements UnrealInvoker {
     );
   }
 
-  async invoke(action: string, args: Record<string, unknown>): Promise<unknown> {
-    const response = await this.request({
-      proto_type: "tool_call",
-      tool_name: "unreal_invoke",
-      tool_args: { action, args },
-    });
+  async invoke(
+    action: string,
+    args: Record<string, unknown>,
+    options: { timeoutMs?: number } = {},
+  ): Promise<unknown> {
+    const response = await this.request(
+      {
+        proto_type: "tool_call",
+        tool_name: "unreal_invoke",
+        tool_args: { action, args },
+      },
+      options.timeoutMs,
+      action,
+    );
     if (response.success === false) {
       throw new Error(response.errorLogs || `UE 操作失败：${action}`);
     }
@@ -93,15 +105,23 @@ export class UnrealMcpConnection implements UnrealInvoker {
     this.socket.end();
   }
 
-  private request(payload: Record<string, unknown>): Promise<UnrealResponse> {
+  private request(
+    payload: Record<string, unknown>,
+    timeoutMs = REQUEST_TIMEOUT_MS,
+    action = "UE 操作",
+  ): Promise<UnrealResponse> {
     const body = Buffer.from(JSON.stringify(payload), "utf8");
     const header = Buffer.alloc(4);
     header.writeUInt32BE(body.length);
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
-        reject(new Error("UE 编辑器响应超时"));
+        reject(
+          new Error(
+            `UE 编辑器执行 ${action} 超时（${Math.ceil(timeoutMs / 1_000)} 秒）`,
+          ),
+        );
         this.socket.destroy();
-      }, REQUEST_TIMEOUT_MS);
+      }, timeoutMs);
       this.waiters.push({ resolve, reject, timer });
       this.socket.write(Buffer.concat([header, body]));
     });

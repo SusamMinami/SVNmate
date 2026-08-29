@@ -69,6 +69,7 @@ import {
 const PREVIEW_MARKER_CLASS = "/Script/Engine.TargetPoint";
 const PREVIEW_ACTOR_PREFIX = "ShotSandboxMissionTargetPreview";
 const PREVIEW_DELETE_RETRY_DELAYS_MS = [50, 100, 200, 400, 800, 1_200];
+const LEVEL_OPEN_TIMEOUT_MS = 3 * 60_000;
 const BLUEPRINT_SEARCH_PATH = "/Game/Seria/Task/Mod";
 const POSITION_MODE_BASE_CLASS =
   "/Game/Seria/Task/Mod/PositionMode/PositionModeBase.PositionModeBase_C";
@@ -5049,28 +5050,30 @@ export async function readBlueprintFormation(
         node,
         "InternalVariableName",
       );
+      if (!/^\d+$/.test(String(variableName))) {
+        continue;
+      }
       const componentClass = await readProperty(
         connection,
         node,
         "ComponentClass",
       );
+      if (!String(componentClass).endsWith("ChildActorComponent")) {
+        continue;
+      }
       const componentTemplate = await readProperty(
         connection,
         node,
         "ComponentTemplate",
       );
+      if (!hasUnrealObjectReference(componentTemplate)) {
+        continue;
+      }
       const componentGuid = await readProperty(
         connection,
         node,
         "VariableGuid",
       );
-      if (
-        !/^\d+$/.test(String(variableName)) ||
-        !String(componentClass).endsWith("ChildActorComponent") ||
-        !hasUnrealObjectReference(componentTemplate)
-      ) {
-        continue;
-      }
       const location = await readProperty(
         connection,
         String(componentTemplate),
@@ -6782,13 +6785,31 @@ export async function loadMissionTargetPreview(
       }
       activeMissionPreviewActors = [];
       activeMissionPreviewMap = "";
-      await connection.invoke("world.open_level", {
-        LevelName: plan.mapAssetPath,
-      });
-      currentMap = normalizeLevelPath(await currentMapName(connection));
+      try {
+        await connection.invoke(
+          "world.open_level",
+          { LevelName: plan.mapAssetPath },
+          { timeoutMs: LEVEL_OPEN_TIMEOUT_MS },
+        );
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "UE 地图加载失败";
+        throw new Error(
+          message.includes("超时") || message.includes("连接已关闭")
+            ? `UE 正在加载 ${plan.mapName}，加载期间通信暂时不可用；请等待引擎完成后选择“检查并加载”`
+            : `UE 自动切换到 ${plan.mapName} 失败：${message}`,
+        );
+      }
+      try {
+        currentMap = normalizeLevelPath(await currentMapName(connection));
+      } catch {
+        throw new Error(
+          `UE 已开始加载 ${plan.mapName}，但暂时无法读取关卡状态；请等待引擎完成后选择“检查并加载”`,
+        );
+      }
       if (!sameLevelPath(currentMap, expectedMap)) {
         throw new Error(
-          `自动打开地图失败：期望 ${plan.mapAssetPath}，当前 ${currentMap}`,
+          `UE 尚未完成 ${plan.mapName} 的地图切换；请等待引擎完成后选择“检查并加载”`,
         );
       }
       autoOpenedMap = true;
