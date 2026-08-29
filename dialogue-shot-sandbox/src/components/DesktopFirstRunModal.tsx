@@ -1,7 +1,6 @@
 import {
   Check,
   CircleAlert,
-  Clapperboard,
   FolderOpen,
   LoaderCircle,
   X,
@@ -34,28 +33,22 @@ export function DesktopFirstRunModal({
         aria-modal="true"
         aria-labelledby="desktop-first-run-title"
       >
-        <header>
-          <div className="desktop-first-run__brand" aria-hidden="true">
-            <Clapperboard size={19} />
-            <span>SHOT SANDBOX</span>
-          </div>
-          <button
-            className="icon-button"
-            type="button"
-            title="暂时跳过"
-            aria-label="暂时跳过首次设置"
-            onClick={onSkip}
-          >
-            <X size={17} />
-          </button>
-        </header>
+        <button
+          className="icon-button desktop-first-run__close"
+          type="button"
+          title="暂时跳过"
+          aria-label="暂时跳过首次设置"
+          onClick={onSkip}
+        >
+          <X size={17} />
+        </button>
 
         <div className="desktop-first-run__body">
           <small>首次启动</small>
           <h2 id="desktop-first-run-title">配置项目数据目录</h2>
           <p>
-            实时数据可指向引擎导出的 res；配置文档指向稳定的 doc/csvdir，
-            用于 NPC、模型、目标物和地图数据及 Excel 写入。
+            选择项目的 res 和 doc 根目录。实时 CSV 与配置 CSV
+            会按项目统一结构自动定位。
           </p>
 
           <div className="desktop-first-run__directory-actions">
@@ -70,7 +63,7 @@ export function DesktopFirstRunModal({
               ) : (
                 <FolderOpen size={17} />
               )}
-              选择实时数据目录
+              选择 res 目录
             </button>
             <button
               className="button"
@@ -79,7 +72,7 @@ export function DesktopFirstRunModal({
               onClick={onChooseConfigDirectory}
             >
               <FolderOpen size={17} />
-              选择配置文档目录
+              选择 doc 目录
             </button>
           </div>
 
@@ -87,21 +80,17 @@ export function DesktopFirstRunModal({
             {[
               {
                 ready: status.liveDataReady ?? status.defaultDataReady,
-                title: "实时数据",
+                title: "res 实时数据",
                 path:
-                  status.liveCsvDirectory ??
-                  status.dataCsvDirectory ??
-                  "",
-                fallback: "对话表、开始节点、任务表",
+                  status.liveResDirectory ?? "",
+                fallback: "固定读取 Content\\Seria\\Tables\\csvdir",
               },
               {
                 ready: status.configDataReady ?? status.defaultDataReady,
-                title: "配置文档",
+                title: "doc 配置文档",
                 path:
-                  status.configCsvDirectory ??
-                  status.dataCsvDirectory ??
-                  "",
-                fallback: "NPC、模型、目标物、地图表",
+                  status.configDocDirectory ?? "",
+                fallback: "固定读取 csvdir，并从 xlsdir 写入 Excel",
               },
             ].map((item) => (
               <div

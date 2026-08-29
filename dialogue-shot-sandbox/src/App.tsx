@@ -10,7 +10,6 @@ import {
   ChevronRight,
   Clapperboard,
   ExternalLink,
-  FolderOpen,
   LoaderCircle,
   LocateFixed,
   MapPinned,
@@ -49,6 +48,7 @@ import type {
 } from "./components/BlueprintFormationModal";
 import type { DialogueTextEditorItem } from "./components/DialogueTextEditorModal";
 import { CharacterActionEditor } from "./components/CharacterActionEditor";
+import { DataSourceStatus } from "./components/DataSourceStatus";
 import { DirectorControl } from "./components/DirectorControl";
 import { LaunchScreen } from "./components/LaunchScreen";
 import { MissionTargetModal } from "./components/MissionTargetModal";
@@ -182,8 +182,36 @@ const initial = buildSequence(
   "2048",
   initialSoundEffectCatalog.entries,
 );
+const emptySequence: DialogueSequence = {
+  prefix: "",
+  startId: "",
+  outline: "",
+  rows: [],
+  ignoredDialogueNodeCount: 0,
+  participants: [],
+  adjacentContext: {
+    previous: null,
+    next: null,
+  },
+  warnings: [],
+  formation: null,
+};
 const APP_VERSION = `v${packageMetadata.version}`;
 const LAUNCH_SCREEN_STORAGE_KEY = "shot-sandbox.launch-screen-seen";
+
+function rootDirectoryFromFile(
+  filePath: string,
+  relativeFilePath: string,
+): string {
+  const normalizedPath = filePath.replaceAll("/", "\\");
+  const normalizedSuffix = `\\${relativeFilePath.replaceAll("/", "\\")}`;
+  if (
+    !normalizedPath.toLowerCase().endsWith(normalizedSuffix.toLowerCase())
+  ) {
+    throw new Error(`所选目录不符合项目结构：缺少 ${relativeFilePath}`);
+  }
+  return normalizedPath.slice(0, -normalizedSuffix.length);
+}
 
 interface PendingDirectorPresentation {
   sequence: DialogueSequence;
@@ -1321,6 +1349,7 @@ export default function App() {
   const activeDialogueRow = sequence.rows.find(
     (row) => row.id === activeDialogueId,
   );
+  const hasLoadedDialogue = sequence.rows.length > 0;
   const queryIsDialogueId = /^\d{4}$/.test(query.trim());
   const dialogueSummary = `${sequence.rows.length} 句台词${
     sequence.ignoredDialogueNodeCount > 0
@@ -1434,13 +1463,15 @@ export default function App() {
   const availableFormationOptionCount = formationChoice
     ? 2 + Number(Boolean(formationChoice.ai))
     : 1;
-  const shotPreparationMessage = formationChecking
-    ? "正在查询 UE Blueprint 站位"
-    : formationChoiceMode === "initial"
-      ? "BP 占位已读取，等待选择"
-      : directorLoading
-        ? `${directorLabel(directorLoadingMode ?? directorMode)}正在生成镜头`
-        : "镜头方案尚未生成";
+  const shotPreparationMessage = !hasLoadedDialogue
+    ? "请输入对话 ID 或对白内容"
+    : formationChecking
+      ? "正在查询 UE Blueprint 站位"
+      : formationChoiceMode === "initial"
+        ? "BP 占位已读取，等待选择"
+        : directorLoading
+          ? `${directorLabel(directorLoadingMode ?? directorMode)}正在生成镜头`
+          : "镜头方案尚未生成";
   const traeWaitHeading =
     (traeStatus?.stats.processing ?? 0) > 0
       ? "TRAE 正在生成分镜"
@@ -2159,16 +2190,33 @@ export default function App() {
     }
   }
 
-  async function useDatabase(nextDatabase: DialogueDatabase) {
-    const firstPrefix = nextDatabase.starts[0]?.id.slice(0, 4);
-    if (!firstPrefix) {
+  function useDatabase(nextDatabase: DialogueDatabase) {
+    if (!nextDatabase.starts.some((start) => /^\d{4}/.test(start.id))) {
       throw new Error("开始节点表中没有可用的四位数对话 ID");
     }
     setDatabase(nextDatabase);
     setContentSearch(null);
     setDesignedStoryboards(new Map());
-    setQuery(firstPrefix);
-    await applySearch(nextDatabase, firstPrefix);
+    setQuery("");
+    setSequence(emptySequence);
+    setShots([]);
+    setActiveIndex(0);
+    setSelectedDialogueId("");
+    setFormationChoice(null);
+    setFormationChoiceMode(null);
+    setFormationChecking(false);
+    setFormationStatus("");
+    setPendingDirectorResult(null);
+    setSharedComparison(null);
+    setDirectorLoading(false);
+    setDirectorLoadingMode(null);
+    setFallbackReason(null);
+    setDirectorAnalysis(undefined);
+    replaceSoundEffectRecommendations([]);
+    setActiveFormationSource("generated");
+    setActiveFormationVariant("generated");
+    setAppliedDirector("rule");
+    setError("");
   }
 
   function changeDirectorMode(mode: DirectorMode) {
@@ -2260,7 +2308,43 @@ export default function App() {
     kind: "live" | "config" = "live",
   ) {
     setError("");
-    if (window.shotSandboxDesktop) {
+    const desktop = window.shotSandboxDesktop;
+    if (desktop?.chooseDataDirectory) {
+      const previousSetup = desktopSetup ?? await desktop.getSetupStatus();
+      setLoading(true);
+      try {
+        const setup = await desktop.chooseDataDirectory(kind);
+        if (!setup) {
+          return;
+        }
+        setDesktopSetup(setup);
+        if (setup.defaultDataReady) {
+          useDatabase(await loadConfiguredDatabase());
+        }
+      } catch (directoryError) {
+        if (previousSetup && desktop.restoreDataDirectories) {
+          try {
+            setDesktopSetup(
+              await desktop.restoreDataDirectories(
+                previousSetup.liveResDirectory,
+                previousSetup.configDocDirectory,
+              ),
+            );
+          } catch {
+            // Preserve the original selection or parse error shown below.
+          }
+        }
+        setError(
+          directoryError instanceof Error
+            ? directoryError.message
+            : "无法读取所选目录",
+        );
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+    if (desktop) {
       directorySelectionKindRef.current = kind;
       fileInputRef.current?.click();
       return;
@@ -2344,25 +2428,11 @@ export default function App() {
     setLoading(true);
     try {
       if (desktop) {
-        const supportsSplitDirectories = Boolean(
-          desktop.setLiveCsvDirectory &&
-            desktop.setConfigCsvDirectory,
-        );
-        if (!supportsSplitDirectories) {
-          const nextDatabase = await loadDocFiles(files);
-          const npcFile = findDocCsvFile(Array.from(files), "NPC表.csv");
-          if (!npcFile || !desktop.setDataCsvDirectory) {
-            throw new Error("选择的目录中未找到 csvdir\\NPC表.csv");
-          }
-          const npcPath = desktop.getPathForFile(npcFile);
-          const csvDirectory = npcPath.replace(/[\\/][^\\/]+$/, "");
-          const setup = await desktop.setDataCsvDirectory(csvDirectory);
-          setDesktopSetup(setup);
-          await useDatabase({
-            ...nextDatabase,
-            sourceName: csvDirectory,
-          });
-          return;
+        if (
+          !desktop.setLiveResDirectory ||
+          !desktop.setConfigDocDirectory
+        ) {
+          throw new Error("当前桌面版不支持 res/doc 双目录设置");
         }
         previousSetup ??= await desktop.getSetupStatus();
         const selectionKind = directorySelectionKindRef.current;
@@ -2378,21 +2448,27 @@ export default function App() {
           );
         }
         const filePath = desktop.getPathForFile(representativeFile);
-        const csvDirectory = filePath.replace(/[\\/][^\\/]+$/, "");
-        if (!csvDirectory || csvDirectory === filePath) {
-          throw new Error("无法确定所选 CSV 目录的本机路径");
-        }
+        const rootDirectory =
+          selectionKind === "live"
+            ? rootDirectoryFromFile(
+                filePath,
+                "Content\\Seria\\Tables\\csvdir\\对话表.csv",
+              )
+            : rootDirectoryFromFile(
+                filePath,
+                "csvdir\\NPC表.csv",
+              );
         const setup =
           selectionKind === "live"
-            ? await desktop.setLiveCsvDirectory!(csvDirectory)
-            : await desktop.setConfigCsvDirectory!(csvDirectory);
+            ? await desktop.setLiveResDirectory(rootDirectory)
+            : await desktop.setConfigDocDirectory(rootDirectory);
         shouldRestoreDirectories = true;
         setDesktopSetup(setup);
         if (setup.defaultDataReady) {
-          await useDatabase(await loadConfiguredDatabase());
+          useDatabase(await loadConfiguredDatabase());
         }
       } else {
-        await useDatabase(await loadDocFiles(files));
+        useDatabase(await loadDocFiles(files));
       }
     } catch (fileError) {
       if (
@@ -2403,8 +2479,8 @@ export default function App() {
         try {
           setDesktopSetup(
             await desktop.restoreDataDirectories(
-              previousSetup.liveCsvDirectory ?? "",
-              previousSetup.configCsvDirectory ?? "",
+              previousSetup.liveResDirectory,
+              previousSetup.configDocDirectory,
             ),
           );
         } catch {
@@ -2643,7 +2719,9 @@ export default function App() {
       <nav className="app-rail" aria-label="全局工具">
         <div className="app-rail__brand" aria-hidden="true">
           <Clapperboard size={22} strokeWidth={2} />
-          <span>镜头沙盘</span>
+          <span>
+            镜头沙盘 <small>{APP_VERSION}</small>
+          </span>
         </div>
         <div className="app-rail__tools">
           <button
@@ -2689,42 +2767,31 @@ export default function App() {
         </div>
         <div className="app-rail__tools app-rail__tools--bottom">
           <button
-            className="app-rail__button"
-            type="button"
-            title={
-              window.shotSandboxDesktop
-                ? "桌面版设置与更新"
-                : "设置仅在桌面版可用"
-            }
-            aria-label="桌面版设置与更新"
-            disabled={!window.shotSandboxDesktop}
-            onClick={() => void openDesktopSetup()}
-          >
-            <Settings size={19} />
-            <span>设置与更新</span>
-          </button>
-          <button
             className="app-rail__button app-rail__button--primary"
             type="button"
             title={
               window.shotSandboxDesktop
-                ? "配置实时数据与文档目录"
-                : "选择 doc 文件夹"
+                ? "桌面版设置与更新"
+                : "选择数据目录"
             }
-            aria-label="选择数据目录"
+            aria-label={
+              window.shotSandboxDesktop
+                ? "桌面版设置与更新"
+                : "选择数据目录"
+            }
+            disabled={loading}
             onClick={() =>
               window.shotSandboxDesktop
                 ? void openDesktopSetup()
                 : void chooseDirectory()
             }
-            disabled={loading}
           >
             {loading ? (
               <LoaderCircle className="spin" size={19} />
             ) : (
-              <FolderOpen size={19} />
+              <Settings size={19} />
             )}
-            <span>{loading ? "读取中..." : "选择数据目录"}</span>
+            <span>{loading ? "读取中..." : "设置与更新"}</span>
           </button>
         </div>
       </nav>
@@ -2736,7 +2803,7 @@ export default function App() {
         >
           <span className="workspace-identity__mark" aria-hidden="true">
             {activeWorkspace === "storyboard" ? (
-              <Clapperboard size={18} />
+              <Camera size={18} />
             ) : activeWorkspace === "npc" ? (
               <UserRoundPlus size={18} />
             ) : (
@@ -2746,7 +2813,7 @@ export default function App() {
           <div>
             <h1>
               {activeWorkspace === "storyboard"
-                ? "镜头沙盘"
+                ? "分镜工作台"
                 : activeWorkspace === "npc"
                   ? "注册 NPC"
                   : "任务目标物"}
@@ -2759,7 +2826,6 @@ export default function App() {
                   : "MISSION TARGET & BLUEPRINT"}
             </p>
           </div>
-          <span className="version">{APP_VERSION}</span>
         </div>
 
         <div className="app-header__status">
@@ -2782,13 +2848,17 @@ export default function App() {
               onDeletePendingTask={deletePendingTask}
             />
           )}
-          <div className="source-status">
-            <span className="source-status__dot" />
-            <div>
-              <small>当前数据源</small>
-              <strong>{database.sourceName}</strong>
-            </div>
-          </div>
+          <DataSourceStatus
+            sourceName={database.sourceName}
+            dialogueCount={sourceStats.dialogues}
+            npcCount={sourceStats.npcs}
+            setupStatus={desktopSetup}
+            onOpenSettings={
+              window.shotSandboxDesktop
+                ? () => void openDesktopSetup()
+                : undefined
+            }
+          />
         </div>
       </header>
 
@@ -2948,7 +3018,7 @@ export default function App() {
             )}
           </section>
 
-          {!activeShot && (
+          {!activeShot && hasLoadedDialogue && (
             <section className="panel-section cast-section">
               <div className="section-label">
                 <span>场景角色</span>
@@ -2993,7 +3063,9 @@ export default function App() {
                   ? "文字搜索"
                   : activeShot
                     ? "镜头列表"
-                    : "对话文本"}
+                    : hasLoadedDialogue
+                      ? "对话文本"
+                      : "等待查询"}
               </span>
               <small>
                 {contentSearch ? (
@@ -3015,8 +3087,10 @@ export default function App() {
                       ? ` · 已忽略 ${sequence.ignoredDialogueNodeCount} 个关闭 UI 节点`
                       : ""}
                   </>
-                ) : (
+                ) : hasLoadedDialogue ? (
                   `${dialogueSummary} · ${shotPreparationMessage}`
+                ) : (
+                  "目录已就绪"
                 )}
               </small>
             </div>
@@ -3365,8 +3439,14 @@ export default function App() {
               <div className="viewport-toolbar">
                 <div>
                   <Camera size={16} />
-                  <span>对话 {sequence.prefix}</span>
-                  <small>{dialogueSummary}已加载</small>
+                  <span>
+                    {hasLoadedDialogue
+                      ? `对话 ${sequence.prefix}`
+                      : "等待选择对话"}
+                  </span>
+                  <small>
+                    {hasLoadedDialogue ? `${dialogueSummary}已加载` : "数据目录已就绪"}
+                  </small>
                 </div>
                 <div className="axis-status">
                   {formationChecking || directorLoading ? (
@@ -3378,30 +3458,38 @@ export default function App() {
                 </div>
               </div>
               <div className="dialogue-preview" role="status">
-                {sequence.rows.map((row) => (
-                  <div className="dialogue-preview__row" key={row.id}>
-                    <span
-                      className="dialogue-strip__slot"
-                      data-slot={row.speakerSlot ?? undefined}
-                      style={{
-                        backgroundColor: row.speakerSlot
-                          ? participantColorsBySlot.get(row.speakerSlot)
-                          : undefined,
-                      }}
-                    >
-                      {row.speakerSlot ?? "?"}
-                    </span>
-                    <div>
-                      <strong>
-                        {row.speakerSlot
-                          ? participantNamesBySlot.get(row.speakerSlot)
-                          : "未知角色"}
-                      </strong>
-                      <p>{row.content}</p>
+                {hasLoadedDialogue ? (
+                  sequence.rows.map((row) => (
+                    <div className="dialogue-preview__row" key={row.id}>
+                      <span
+                        className="dialogue-strip__slot"
+                        data-slot={row.speakerSlot ?? undefined}
+                        style={{
+                          backgroundColor: row.speakerSlot
+                            ? participantColorsBySlot.get(row.speakerSlot)
+                            : undefined,
+                        }}
+                      >
+                        {row.speakerSlot ?? "?"}
+                      </span>
+                      <div>
+                        <strong>
+                          {row.speakerSlot
+                            ? participantNamesBySlot.get(row.speakerSlot)
+                            : "未知角色"}
+                        </strong>
+                        <p>{row.content}</p>
+                      </div>
+                      <small>{row.id}</small>
                     </div>
-                    <small>{row.id}</small>
+                  ))
+                ) : (
+                  <div className="dialogue-preview__empty">
+                    <Search size={22} />
+                    <strong>等待对话</strong>
+                    <small>数据目录已就绪</small>
                   </div>
-                ))}
+                )}
               </div>
               <div className="dialogue-preparation-status">
                 {formationChecking || directorLoading ? (
@@ -3449,13 +3537,13 @@ export default function App() {
               <section className="inspector-header">
                 <div>
                   <small>当前进度</small>
-                  <h2>对话已加载</h2>
+                  <h2>{hasLoadedDialogue ? "对话已加载" : "等待对话"}</h2>
                 </div>
               </section>
               <section className="inspector-section">
                 <div className="section-label">
                   <span>镜头准备</span>
-                  <small>{dialogueSummary}</small>
+                  <small>{hasLoadedDialogue ? dialogueSummary : "尚未选择"}</small>
                 </div>
                 <p>{shotPreparationMessage}</p>
               </section>
@@ -3472,10 +3560,13 @@ export default function App() {
               <footer className="inspector-footer">
                 <Users size={15} />
                 <span>
-                  {participantRoles.dialogue.length} 位对白角色
-                  {participantRoles.background.length > 0
-                    ? ` · ${participantRoles.background.length} 位背景 NPC`
-                    : ""}
+                  {hasLoadedDialogue
+                    ? `${participantRoles.dialogue.length} 位对白角色${
+                        participantRoles.background.length > 0
+                          ? ` · ${participantRoles.background.length} 位背景 NPC`
+                          : ""
+                      }`
+                    : "等待加载角色"}
                 </span>
               </footer>
             </>

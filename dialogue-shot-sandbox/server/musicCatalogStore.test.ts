@@ -7,12 +7,12 @@ import {
   musicAttachmentPath,
   parseMusicStateMap,
 } from "./musicCatalogStore";
-import { configureConfigCsvDirectory } from "./configRepository";
+import { configureConfigDocDirectory } from "./configRepository";
 
 let temporaryRoot = "";
 
 afterEach(async () => {
-  configureConfigCsvDirectory("");
+  configureConfigDocDirectory("");
   if (temporaryRoot) {
     await rm(temporaryRoot, { recursive: true, force: true });
     temporaryRoot = "";

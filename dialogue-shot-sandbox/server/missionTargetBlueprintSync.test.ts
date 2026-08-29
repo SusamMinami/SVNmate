@@ -3,7 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { MissionTargetPreviewPlan } from "../src/types";
-import { configureConfigCsvDirectory } from "./configRepository";
+import {
+  configureConfigDocDirectory,
+  configureLiveResDirectory,
+} from "./configRepository";
 import {
   appendMissionTargetBlueprint,
   applyBackgroundPropImport,
@@ -546,7 +549,18 @@ class VirtualGatedBlueprintSyncConnection extends BlueprintSyncConnection {
 async function writeConfigFixture() {
   temporaryRoot = await mkdtemp(join(tmpdir(), "shot-sandbox-sync-"));
   const csvDirectory = join(temporaryRoot, "csvdir");
-  await mkdir(csvDirectory, { recursive: true });
+  const resDirectory = join(temporaryRoot, "Game", "res");
+  const liveCsvDirectory = join(
+    resDirectory,
+    "Content",
+    "Seria",
+    "Tables",
+    "csvdir",
+  );
+  await Promise.all([
+    mkdir(csvDirectory, { recursive: true }),
+    mkdir(liveCsvDirectory, { recursive: true }),
+  ]);
   await Promise.all([
     writeFile(
       join(csvDirectory, "NPC表.csv"),
@@ -567,7 +581,7 @@ async function writeConfigFixture() {
       "utf8",
     ),
     writeFile(
-      join(csvDirectory, "任务表.csv"),
+      join(liveCsvDirectory, "任务表.csv"),
       [
         "##&字段标记,Mission.id,Mission.Name,Mission.ShowNPC",
         "##任务类型,任务ID,任务名称,显示目标物",
@@ -603,7 +617,8 @@ async function writeConfigFixture() {
       "utf8",
     ),
   ]);
-  configureConfigCsvDirectory(temporaryRoot);
+  configureLiveResDirectory(resDirectory);
+  configureConfigDocDirectory(temporaryRoot);
 }
 
 function appendPlan(): MissionTargetPreviewPlan {
@@ -657,11 +672,13 @@ function appendPlan(): MissionTargetPreviewPlan {
 }
 
 beforeEach(() => {
-  configureConfigCsvDirectory("F:\\ProjectData\\doc");
+  configureLiveResDirectory("F:\\ProjectData\\Game\\res");
+  configureConfigDocDirectory("F:\\ProjectData\\doc");
 });
 
 afterEach(async () => {
-  configureConfigCsvDirectory("");
+  configureLiveResDirectory("");
+  configureConfigDocDirectory("");
   if (temporaryRoot) {
     await rm(temporaryRoot, { recursive: true, force: true });
     temporaryRoot = "";

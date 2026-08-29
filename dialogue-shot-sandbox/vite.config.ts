@@ -7,10 +7,10 @@ import { ueBridgePlugin } from "./server/ue/routes";
 
 export default defineConfig(async () => {
   await restoreDevelopmentConfigDirectories({
-    environmentLiveDirectory:
-      process.env.SHOT_SANDBOX_LIVE_CSV_DIRECTORY,
-    environmentConfigDirectory:
-      process.env.SHOT_SANDBOX_CONFIG_CSV_DIRECTORY,
+    environmentResDirectory:
+      process.env.SHOT_SANDBOX_RES_DIRECTORY,
+    environmentDocDirectory:
+      process.env.SHOT_SANDBOX_DOC_DIRECTORY,
     appDataDirectory: process.env.APPDATA,
   });
   return {

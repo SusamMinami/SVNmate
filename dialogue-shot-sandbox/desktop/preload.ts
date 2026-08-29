@@ -11,17 +11,19 @@ contextBridge.exposeInMainWorld("shotSandboxDesktop", {
   setUeMcpPort: (port: number) =>
     ipcRenderer.invoke("desktop:set-ue-port", port),
   getPathForFile: (file: File) => webUtils.getPathForFile(file),
-  setLiveCsvDirectory: (directoryPath: string) =>
+  chooseDataDirectory: (kind: "live" | "config") =>
+    ipcRenderer.invoke("desktop:choose-data-directory", kind),
+  setLiveResDirectory: (directoryPath: string) =>
     ipcRenderer.invoke("desktop:set-live-data-directory", directoryPath),
-  setConfigCsvDirectory: (directoryPath: string) =>
+  setConfigDocDirectory: (directoryPath: string) =>
     ipcRenderer.invoke("desktop:set-config-directory", directoryPath),
   restoreDataDirectories: (
-    liveCsvDirectory: string,
-    configCsvDirectory: string,
+    liveResDirectory: string,
+    configDocDirectory: string,
   ) =>
     ipcRenderer.invoke("desktop:restore-data-directories", {
-      liveCsvDirectory,
-      configCsvDirectory,
+      liveResDirectory,
+      configDocDirectory,
     }),
   completeSetup: () => ipcRenderer.invoke("desktop:complete-setup"),
   checkForUpdates: () => ipcRenderer.invoke("desktop:check-update"),

@@ -279,7 +279,7 @@ test("keeps rail icons fixed and slides between workspace levels", async ({
   await page.getByRole("button", { name: "分镜工作台", exact: true }).click({
     position: { x: 22, y: 22 },
   });
-  await expect(page.getByRole("heading", { name: "镜头沙盘" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "分镜工作台" })).toBeVisible();
   await expect(page.locator(".app-shell")).toHaveAttribute(
     "data-workspace-direction",
     "down",
@@ -302,7 +302,7 @@ test("renders nonblank shot and blocking canvases without horizontal overflow", 
   page,
 }, testInfo) => {
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "镜头沙盘" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "分镜工作台" })).toBeVisible();
   await page.locator(".shot-row").nth(1).click();
   await expect(page.locator(".stage-transition")).toHaveCSS(
     "animation-name",
@@ -2081,6 +2081,8 @@ test("guides first desktop launch to select live and config directories", async 
       defaultDataReady: false,
       liveDataReady: false,
       configDataReady: false,
+      liveResDirectory: "",
+      configDocDirectory: "",
       liveCsvDirectory: "",
       configCsvDirectory: "",
       missionTargetTablePath: "",
@@ -2099,22 +2101,24 @@ test("guides first desktop launch to select live and config directories", async 
       setUeMcpPort: async () => status,
       getPathForFile: (file: File) =>
         file.name === "对话表.csv"
-          ? "F:\\NarrativeData\\Game\\res\\对话表.csv"
+          ? "F:\\NarrativeData\\Game\\res\\Content\\Seria\\Tables\\csvdir\\对话表.csv"
           : "F:\\NarrativeData\\doc\\csvdir\\NPC表.csv",
-      setLiveCsvDirectory: async (directoryPath: string) => {
+      setLiveResDirectory: async (directoryPath: string) => {
         status = {
           ...status,
           liveDataReady: true,
-          liveCsvDirectory: directoryPath,
+          liveResDirectory: directoryPath,
+          liveCsvDirectory: `${directoryPath}\\Content\\Seria\\Tables\\csvdir`,
           defaultDataReady: status.configDataReady,
         };
         return status;
       },
-      setConfigCsvDirectory: async (directoryPath: string) => {
+      setConfigDocDirectory: async (directoryPath: string) => {
         status = {
           ...status,
           configDataReady: true,
-          configCsvDirectory: directoryPath,
+          configDocDirectory: directoryPath,
+          configCsvDirectory: `${directoryPath}\\csvdir`,
           missionTargetTablePath:
             "F:\\NarrativeData\\doc\\xlsdir\\r任务剧情\\m目标物表.xlsm",
           defaultDataReady: status.liveDataReady,
@@ -2138,8 +2142,10 @@ test("guides first desktop launch to select live and config directories", async 
     };
   });
 
-  const liveFixtureRoot = testInfo.outputPath("first-run-live");
-  await writeDirectoryFixture(liveFixtureRoot, [
+  const liveFixtureRoot = testInfo.outputPath("first-run-res");
+  await writeDirectoryFixture(
+    `${liveFixtureRoot}/Content/Seria/Tables/csvdir`,
+    [
     {
       name: "对话表.csv",
       content: [
@@ -2164,7 +2170,8 @@ test("guides first desktop launch to select live and config directories", async 
         "##任务类型,任务ID,任务名称,显示目标物",
       ].join("\n"),
     },
-  ]);
+    ],
+  );
   const configFixtureRoot = testInfo.outputPath("first-run-config");
   await writeDirectoryFixture(`${configFixtureRoot}/csvdir`, [
     {
@@ -2178,6 +2185,8 @@ test("guides first desktop launch to select live and config directories", async 
   ]);
 
   await page.goto("/");
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".launch-screen")).toHaveCount(0);
 
   const setup = page.getByRole("dialog", {
     name: "配置项目数据目录",
@@ -2185,29 +2194,43 @@ test("guides first desktop launch to select live and config directories", async 
   await expect(setup).toBeVisible();
   const startButton = setup.getByRole("button", { name: "开始使用" });
   await expect(startButton).toBeDisabled();
-  await expect(setup.getByText("实时数据 · 待选择")).toBeVisible();
-  await expect(setup.getByText("配置文档 · 待选择")).toBeVisible();
+  await expect(setup.getByText("res 实时数据 · 待选择")).toBeVisible();
+  await expect(setup.getByText("doc 配置文档 · 待选择")).toBeVisible();
+  await expect(setup.getByText("SHOT SANDBOX")).toHaveCount(0);
   await setup.screenshot({
     path: testInfo.outputPath("desktop-first-run.png"),
   });
 
-  await setup.getByRole("button", { name: "选择实时数据目录" }).click();
+  await setup.getByRole("button", { name: "选择 res 目录" }).click();
   await page.locator('input[type="file"]').setInputFiles(liveFixtureRoot);
-  await expect(setup.getByText("实时数据 · 已就绪")).toBeVisible();
-  await expect(setup.getByText("配置文档 · 待选择")).toBeVisible();
+  await expect(setup.getByText("res 实时数据 · 已就绪")).toBeVisible();
+  await expect(setup.getByText("doc 配置文档 · 待选择")).toBeVisible();
   await expect(startButton).toBeDisabled();
-  await setup.getByRole("button", { name: "选择配置文档目录" }).click();
+  await setup.getByRole("button", { name: "选择 doc 目录" }).click();
   await page.locator('input[type="file"]').setInputFiles(configFixtureRoot);
-  await expect(setup.getByText("配置文档 · 已就绪")).toBeVisible();
+  await expect(setup.getByText("doc 配置文档 · 已就绪")).toBeVisible();
   await expect(
     setup.getByText(
-      "F:\\NarrativeData\\doc\\csvdir",
+      "F:\\NarrativeData\\doc",
       { exact: true },
     ),
   ).toBeVisible();
+  await expect(setup.getByRole("alert")).toHaveCount(0);
   await expect(startButton).toBeEnabled();
   await startButton.click();
   await expect(setup).toHaveCount(0);
+  await expect(page.getByLabel("四位数对话 ID 或对白内容")).toHaveValue("");
+  await expect(page.getByText("等待对话", { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("heading", { name: "分镜工作台" })).toBeVisible();
+  await expect(page.locator(".app-rail__brand")).toContainText("v0.22.6");
+  await page.screenshot({
+    path: testInfo.outputPath("desktop-workspace-ready-collapsed.png"),
+  });
+  await page.locator(".app-rail").hover();
+  await page.waitForTimeout(320);
+  await page.screenshot({
+    path: testInfo.outputPath("desktop-workspace-ready.png"),
+  });
 });
 
 test("manually syncs the sound and music catalogs from settings", async ({
@@ -2362,7 +2385,15 @@ test("manually syncs the sound and music catalogs from settings", async ({
       mcpVersion: "test",
       expectedMcpVersion: "test",
       defaultDataReady: true,
-      dataCsvDirectory: "C:\\Test\\doc\\csvdir",
+      liveDataReady: true,
+      configDataReady: true,
+      liveResDirectory: "C:\\Test\\Game\\res",
+      configDocDirectory: "C:\\Test\\doc",
+      liveCsvDirectory:
+        "C:\\Test\\Game\\res\\Content\\Seria\\Tables\\csvdir",
+      configCsvDirectory: "C:\\Test\\doc\\csvdir",
+      missionTargetTablePath:
+        "C:\\Test\\doc\\xlsdir\\r任务剧情\\m目标物表.xlsm",
       ueConnected: true,
       ueMcpHost: "127.0.0.1",
       ueMcpPort: 12031,
@@ -2377,7 +2408,8 @@ test("manually syncs the sound and music catalogs from settings", async ({
       openTraeDownload: async () => undefined,
       setUeMcpPort: async () => status,
       getPathForFile: () => "C:\\Test\\doc\\csvdir\\NPC表.csv",
-      setDataCsvDirectory: async () => status,
+      setLiveResDirectory: async () => status,
+      setConfigDocDirectory: async () => status,
       completeSetup: async () => ({
         ...status,
         firstRun: false,
@@ -2396,20 +2428,42 @@ test("manually syncs the sound and music catalogs from settings", async ({
   const setup = page.getByRole("dialog", {
     name: "运行环境与数据协作",
   });
+  const soundEffectStatus = setup
+    .locator(".setup-status-list > div")
+    .filter({ hasText: "音效资料库" });
+  const musicStatus = setup
+    .locator(".setup-status-list > div")
+    .filter({ hasText: "音乐资料库" });
+  const statusItem = (label: string) =>
+    setup
+      .locator(".setup-status-list > div")
+      .filter({ hasText: label })
+      .first();
+  for (const [leftLabel, rightLabel] of [
+    ["res 实时数据", "doc 配置文档"],
+    ["音效资料库", "音乐资料库"],
+    ["TRAE", "分镜 MCP"],
+  ]) {
+    const [leftBox, rightBox] = await Promise.all([
+      statusItem(leftLabel).boundingBox(),
+      statusItem(rightLabel).boundingBox(),
+    ]);
+    expect(leftBox?.y).toBe(rightBox?.y);
+  }
   await expect(setup.getByText("98 项 · 内置版本")).toBeVisible();
   await setup
     .getByRole("button", { name: "从飞书同步音效资料库" })
     .click();
   await expect.poll(() => syncRequests).toBe(1);
-  await expect(setup.getByText("已同步 1 项，文档版本 50")).toBeVisible();
+  await expect(soundEffectStatus).toContainText("已同步 1 项，文档版本 50");
   await expect(setup.getByText("120 首 · 119 首已分析 · 版本 206 · 2 条未映射"))
     .toBeVisible();
   await setup
     .getByRole("button", { name: "从飞书同步音乐资料库" })
     .click();
   await expect.poll(() => musicSyncRequests).toBe(1);
-  await expect(setup.getByText("1 首 · 1 首已分析 · 版本 207")).toBeVisible();
-  await expect(setup.getByText("已同步 1 首音乐")).toBeVisible();
+  await expect(musicStatus).toContainText("已同步 1 首音乐");
+  await expect(soundEffectStatus).toContainText("已同步 1 项，文档版本 50");
   await setup.screenshot({
     path: testInfo.outputPath("media-catalog-sync.png"),
   });
@@ -2418,13 +2472,50 @@ test("manually syncs the sound and music catalogs from settings", async ({
 test("syncs the selected desktop doc path for registration data", async ({
   page,
 }, testInfo) => {
-  let selectedCsvDirectory = "";
+  let selectedDocDirectory = "";
   await page.exposeFunction(
-    "__recordDataCsvDirectory",
+    "__recordDocDirectory",
     (directoryPath: string) => {
-      selectedCsvDirectory = directoryPath;
+      selectedDocDirectory = directoryPath;
     },
   );
+  await page.route("**/api/ue/config-data/read", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          dialogueText: [
+            "##&Dialog.id,Dialog.NPCID,Dialog.Content,Dialog.NextID,Dialog.End",
+            "##对话ID,人物,内容,下一ID,结束",
+            "735000,,,735001,false",
+            "735001,1,你来了。,735002,false",
+            "735002,101968,请止步。,,true",
+          ].join("\n"),
+          startText: [
+            "##&DialogStart.id,DialogStart.Outline",
+            "##对话ID,剧情梗概",
+            "735000,自定义目录测试",
+          ].join("\n"),
+          npcText: [
+            "##&NPC.id,NPC.name,NPC.npcintroduce,NPC.resource_id",
+            "##id,名称,介绍,资源",
+            "1,玩家,玩家,",
+            "101968,商会安保,守卫,200135",
+          ].join("\n"),
+          sourceName:
+            "C:\\trunk\\Game\\res + D:\\TeamProject\\doc",
+          modelText: "",
+          missionText: "",
+          dungeonMissionText: "",
+          missionPositionText: "",
+          mapConfigText: "",
+          mapResourceText: "",
+        },
+      }),
+    });
+  });
   await page.route("**/api/ue/formation/read", async (route) => {
     await route.fulfill({
       status: 200,
@@ -2439,7 +2530,7 @@ test("syncs the selected desktop doc path for registration data", async ({
     });
   });
   await page.addInitScript(() => {
-    const status = {
+    let status = {
       firstRun: false,
       setupCompleted: true,
       version: "0.17.2",
@@ -2454,7 +2545,15 @@ test("syncs the selected desktop doc path for registration data", async ({
       mcpVersion: null,
       expectedMcpVersion: "0.17.2",
       defaultDataReady: true,
-      dataCsvDirectory: "C:\\trunk\\doc\\csvdir",
+      liveDataReady: true,
+      configDataReady: true,
+      liveResDirectory: "C:\\trunk\\Game\\res",
+      configDocDirectory: "C:\\trunk\\doc",
+      liveCsvDirectory:
+        "C:\\trunk\\Game\\res\\Content\\Seria\\Tables\\csvdir",
+      configCsvDirectory: "C:\\trunk\\doc\\csvdir",
+      missionTargetTablePath:
+        "C:\\trunk\\doc\\xlsdir\\r任务剧情\\m目标物表.xlsm",
       ueConnected: false,
       ueMcpHost: "127.0.0.1",
       ueMcpPort: 12031,
@@ -2469,24 +2568,35 @@ test("syncs the selected desktop doc path for registration data", async ({
       openTraeDownload: async () => undefined,
       setUeMcpPort: async () => status,
       getPathForFile: (file: File) =>
-        file.webkitRelativePath.replaceAll("\\", "/").includes(
-          "/csvspecial/",
-        )
+        file.webkitRelativePath.includes("invalid-doc")
+          ? "D:\\Invalid\\doc\\csvdir\\NPC表.csv"
+          : file.webkitRelativePath.replaceAll("\\", "/").includes(
+                "/csvspecial/",
+              )
           ? "D:\\TeamProject\\doc\\csvspecial\\NPC表.csv"
           : "D:\\TeamProject\\doc\\csvdir\\NPC表.csv",
-      setDataCsvDirectory: async (directoryPath: string) => {
+      setLiveResDirectory: async () => status,
+      setConfigDocDirectory: async (directoryPath: string) => {
+        if (directoryPath === "D:\\Invalid\\doc") {
+          throw new Error(
+            "所选 doc 目录中缺少 csvdir 下的 NPC、模型、目标物或地图 CSV",
+          );
+        }
         await (
           window as typeof window & {
-            __recordDataCsvDirectory: (
+            __recordDocDirectory: (
               value: string,
             ) => Promise<void>;
           }
-        ).__recordDataCsvDirectory(directoryPath);
-        return {
+        ).__recordDocDirectory(directoryPath);
+        status = {
           ...status,
-          dataCsvDirectory: directoryPath,
+          configDocDirectory: directoryPath,
+          configCsvDirectory: `${directoryPath}\\csvdir`,
         };
+        return status;
       },
+      restoreDataDirectories: async () => status,
       completeSetup: async () => status,
       checkForUpdates: async () => ({ state: "idle" }),
       getUpdateSnapshot: async () => ({ state: "idle" }),
@@ -2556,6 +2666,11 @@ test("syncs the selected desktop doc path for registration data", async ({
   });
   await expect(settingsButton).toBeVisible();
   await expect(settingsButton).toBeEnabled();
+  await expect(
+    page
+      .getByRole("navigation", { name: "全局工具" })
+      .getByRole("button", { name: "选择数据目录" }),
+  ).toHaveCount(0);
   await settingsButton.click();
   const settingsDialog = page.getByRole("dialog", {
     name: "运行环境与数据协作",
@@ -2578,27 +2693,35 @@ test("syncs the selected desktop doc path for registration data", async ({
   await expect(
     settingsDialog.getByRole("button", { name: "同步配置与 Skill" }),
   ).toBeVisible();
+  await settingsDialog.getByRole("button", { name: "选择 doc 目录" }).click();
   await page.locator('input[type="file"]').setInputFiles(invalidFixtureRoot);
   await expect(settingsDialog.getByRole("alert")).toContainText(
-    "未找到 csvdir\\对话表.csv",
+    "所选 doc 目录中缺少 csvdir",
   );
-  await settingsDialog.getByRole("button", { name: "关闭桌面版设置" }).click();
 
+  await settingsDialog.getByRole("button", { name: "选择 doc 目录" }).click();
   await page.locator('input[type="file"]').setInputFiles(fixtureRoot);
-  await expect(page.getByLabel("四位数对话 ID 或对白内容")).toHaveValue(
-    "7350",
-  );
+  await expect(page.getByLabel("四位数对话 ID 或对白内容")).toHaveValue("");
+  await settingsDialog.getByRole("button", { name: "关闭桌面版设置" }).click();
+  await page.getByLabel("四位数对话 ID 或对白内容").fill("7350");
+  await page.getByRole("button", { name: "分析对话与站位" }).click();
   const outlineToggle = page.getByRole("button", { name: /剧情梗概/ });
   await expect(outlineToggle).toHaveAttribute("aria-expanded", "false");
   await outlineToggle.click();
   await expect(page.getByText("自定义目录测试", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "数据源状态" }).click();
+  const sourceDialog = page.getByRole("dialog", { name: "数据源配置" });
   await expect(
-    page.locator(".source-status").getByText(
-      "D:\\TeamProject\\doc\\csvdir",
-      { exact: true },
-    ),
+    sourceDialog.getByText("C:\\trunk\\Game\\res + D:\\TeamProject\\doc", {
+      exact: true,
+    }),
   ).toBeVisible();
-  expect(selectedCsvDirectory).toBe("D:\\TeamProject\\doc\\csvdir");
+  const sourceDialogBox = await sourceDialog.boundingBox();
+  expect(sourceDialogBox).not.toBeNull();
+  expect(
+    (sourceDialogBox?.x ?? 0) + (sourceDialogBox?.width ?? 0),
+  ).toBeLessThanOrEqual(page.viewportSize()?.width ?? 0);
+  expect(selectedDocDirectory).toBe("D:\\TeamProject\\doc");
 });
 
 test("excludes close-UI node content from visible dialogue analysis", async ({
@@ -2653,6 +2776,8 @@ test("excludes close-UI node content from visible dialogue analysis", async ({
 
   await page.goto("/");
   await page.locator('input[type="file"]').setInputFiles(fixtureDirectory);
+  await page.getByLabel("四位数对话 ID 或对白内容").fill("7350");
+  await page.getByRole("button", { name: "分析对话与站位" }).click();
 
   await expect(page.getByText("不可见的重复台词", { exact: true }))
     .toHaveCount(0);
@@ -2779,6 +2904,8 @@ test("edits the active dialogue, cancels on outside click and saves to UE", asyn
 
   await page.goto("/");
   await page.locator('input[type="file"]').setInputFiles(fixtureDirectory);
+  await page.getByLabel("四位数对话 ID 或对白内容").fill("7352");
+  await page.getByRole("button", { name: "分析对话与站位" }).click();
   await expect(page.getByRole("button", { name: "编辑当前对白" })).toBeEnabled();
 
   await page.getByRole("button", { name: "编辑当前对白" }).click();
@@ -3418,6 +3545,8 @@ test("offers the detected Blueprint formation before designing shots", async ({
     ],
   );
   await page.locator('input[type="file"]').setInputFiles(fixtureDirectory);
+  await page.getByLabel("四位数对话 ID 或对白内容").fill("7350");
+  await page.getByRole("button", { name: "分析对话与站位" }).click();
   await expect(
     page.getByRole("button", { name: "分析对话与站位" }),
   ).toBeDisabled();
@@ -4312,9 +4441,8 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
 
   await page.goto("/");
   await page.locator('input[type="file"]').setInputFiles(fixtureDirectory);
-  await expect(page.getByLabel("四位数对话 ID 或对白内容")).toHaveValue(
-    "7350",
-  );
+  await page.getByLabel("四位数对话 ID 或对白内容").fill("7350");
+  await page.getByRole("button", { name: "分析对话与站位" }).click();
   const outlineToggle = page.getByRole("button", { name: /剧情梗概/ });
   await expect(outlineToggle).toHaveAttribute("aria-expanded", "false");
   await outlineToggle.click();

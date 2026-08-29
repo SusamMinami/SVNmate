@@ -6,13 +6,14 @@ import {
   isConfigCsvDirectoryReady,
   isLiveCsvDirectoryReady,
   normalizeConfigCsvDirectory,
+  normalizeLiveCsvDirectory,
 } from "./configDirectory";
 import {
-  configureConfigCsvDirectory,
-  configureLiveCsvDirectory,
+  configureConfigDocDirectory,
+  configureLiveResDirectory,
   getConfigCsvDirectory,
   getConfigCsvPaths,
-  getOptionalConfigCsvDirectory,
+  getOptionalConfigDocDirectory,
   getConfigTablePaths,
   readConfiguredMissionTargetPlan,
   restoreDevelopmentConfigDirectories,
@@ -55,8 +56,8 @@ class SelectedActorConnection implements UnrealInvoker {
 }
 
 afterEach(async () => {
-  configureLiveCsvDirectory("");
-  configureConfigCsvDirectory("");
+  configureLiveResDirectory("");
+  configureConfigDocDirectory("");
   if (temporaryRoot) {
     await rm(temporaryRoot, { recursive: true, force: true });
     temporaryRoot = "";
@@ -65,18 +66,28 @@ afterEach(async () => {
 
 describe("config data directory", () => {
   it("rejects config access until the user selects a doc directory", () => {
-    configureConfigCsvDirectory("");
+    configureConfigDocDirectory("");
 
-    expect(getOptionalConfigCsvDirectory()).toBeNull();
+    expect(getOptionalConfigDocDirectory()).toBeNull();
     expect(() => getConfigCsvDirectory()).toThrow("尚未选择配置文档目录");
     expect(() => getConfigCsvPaths()).toThrow("尚未选择配置文档目录");
     expect(() => getConfigTablePaths()).toThrow("尚未选择配置文档目录");
   });
 
-  it("accepts a doc directory outside a trunk workspace", () => {
+  it("derives the fixed CSV paths from res and doc roots", () => {
+    expect(normalizeLiveCsvDirectory("F:\\project-data\\Game\\res")).toBe(
+      join(
+        "F:\\project-data\\Game\\res",
+        "Content",
+        "Seria",
+        "Tables",
+        "csvdir",
+      ),
+    );
     expect(normalizeConfigCsvDirectory("F:\\project-data\\doc")).toBe(
       join("F:\\project-data\\doc", "csvdir"),
     );
+    expect(normalizeLiveCsvDirectory("")).toBe("");
     expect(normalizeConfigCsvDirectory("")).toBe("");
   });
 
@@ -109,32 +120,35 @@ describe("config data directory", () => {
   it("restores the development server directory from desktop state", async () => {
     temporaryRoot = await mkdtemp(join(tmpdir(), "shot-sandbox-state-"));
     const docDirectory = join(temporaryRoot, "project", "doc");
-    const csvDirectory = join(docDirectory, "csvdir");
+    const configCsvDirectory = join(docDirectory, "csvdir");
+    const resDirectory = join(temporaryRoot, "project", "Game", "res");
+    const liveCsvDirectory = normalizeLiveCsvDirectory(resDirectory);
     const appDataDirectory = join(temporaryRoot, "app-data");
     await Promise.all([
-      mkdir(csvDirectory, { recursive: true }),
+      mkdir(configCsvDirectory, { recursive: true }),
+      mkdir(liveCsvDirectory, { recursive: true }),
       mkdir(join(appDataDirectory, "Shot Sandbox"), {
         recursive: true,
       }),
     ]);
     await Promise.all([
+      ...["对话表.csv", "对话表_开始节点.csv", "任务表.csv"].map(
+        (filename) => writeFile(join(liveCsvDirectory, filename), "", "utf8"),
+      ),
       ...[
-        "对话表.csv",
-        "对话表_开始节点.csv",
-        "任务表.csv",
         "NPC表.csv",
         "m模型资源表.csv",
         "m目标物表.csv",
         "d地图配置表.csv",
         "d地图资源表.csv",
       ].map(
-        (filename) => writeFile(join(csvDirectory, filename), "", "utf8"),
+        (filename) => writeFile(join(configCsvDirectory, filename), "", "utf8"),
       ),
       writeFile(
         join(appDataDirectory, "Shot Sandbox", "desktop-state.json"),
         JSON.stringify({
-          liveCsvDirectory: csvDirectory,
-          configCsvDirectory: csvDirectory,
+          liveResDirectory: resDirectory,
+          configDocDirectory: docDirectory,
         }),
         "utf8",
       ),
@@ -145,19 +159,20 @@ describe("config data directory", () => {
         appDataDirectory,
       }),
     ).toEqual({
-      liveCsvDirectory: csvDirectory,
-      configCsvDirectory: csvDirectory,
+      liveResDirectory: resDirectory,
+      configDocDirectory: docDirectory,
     });
-    expect(getConfigCsvDirectory()).toBe(csvDirectory);
+    expect(getConfigCsvDirectory()).toBe(configCsvDirectory);
   });
 
   it("scans NPC registration data from the selected doc directory", async () => {
     temporaryRoot = await mkdtemp(join(tmpdir(), "shot-sandbox-doc-"));
     const csvDirectory = join(temporaryRoot, "csvdir");
-    const liveDirectory = join(temporaryRoot, "engine", "res");
+    const liveResDirectory = join(temporaryRoot, "engine", "res");
+    const liveCsvDirectory = normalizeLiveCsvDirectory(liveResDirectory);
     await Promise.all([
       mkdir(csvDirectory, { recursive: true }),
-      mkdir(liveDirectory, { recursive: true }),
+      mkdir(liveCsvDirectory, { recursive: true }),
     ]);
     await Promise.all([
       writeFile(
@@ -188,7 +203,7 @@ describe("config data directory", () => {
         "utf8",
       ),
       writeFile(
-        join(liveDirectory, "任务表.csv"),
+        join(liveCsvDirectory, "任务表.csv"),
         [
           "##&字段标记,Mission.id,Mission.Name,Mission.ShowNPC",
           "##任务类型,任务ID,任务名称,显示目标物",
@@ -216,15 +231,15 @@ describe("config data directory", () => {
       ),
     ]);
 
-    configureLiveCsvDirectory(liveDirectory);
-    configureConfigCsvDirectory(temporaryRoot);
+    configureLiveResDirectory(liveResDirectory);
+    configureConfigDocDirectory(temporaryRoot);
     const result = await scanSelectedNpcRegistration(
       () => new SelectedActorConnection(),
     );
 
     expect(getConfigCsvDirectory()).toBe(csvDirectory);
     expect(getConfigCsvPaths()).toMatchObject({
-      mission: join(liveDirectory, "任务表.csv"),
+      mission: join(liveCsvDirectory, "任务表.csv"),
       npc: join(csvDirectory, "NPC表.csv"),
       missionTarget: join(csvDirectory, "m目标物表.csv"),
     });

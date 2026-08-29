@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import type { MissionTargetPreviewPlan } from "../src/types";
 import {
   parseMissionTargetDatabase,
@@ -10,17 +10,22 @@ import {
   isConfigCsvDirectoryReady,
   isLiveCsvDirectoryReady,
   normalizeConfigCsvDirectory,
+  normalizeLiveCsvDirectory,
 } from "./configDirectory";
 
+let liveResDirectory = "";
 let liveCsvDirectory = "";
+let configDocDirectory = "";
 let configCsvDirectory = "";
 
-export function configureLiveCsvDirectory(directoryPath: string): void {
-  liveCsvDirectory = directoryPath.trim();
+export function configureLiveResDirectory(directoryPath: string): void {
+  liveResDirectory = directoryPath.trim();
+  liveCsvDirectory = normalizeLiveCsvDirectory(liveResDirectory);
 }
 
-export function configureConfigCsvDirectory(directoryPath: string): void {
-  configCsvDirectory = normalizeConfigCsvDirectory(directoryPath);
+export function configureConfigDocDirectory(directoryPath: string): void {
+  configDocDirectory = directoryPath.trim();
+  configCsvDirectory = normalizeConfigCsvDirectory(configDocDirectory);
 }
 
 export function getLiveCsvDirectory(): string {
@@ -37,23 +42,23 @@ export function getConfigCsvDirectory(): string {
   return configCsvDirectory;
 }
 
-export function getOptionalLiveCsvDirectory(): string | null {
-  return liveCsvDirectory || null;
+export function getOptionalLiveResDirectory(): string | null {
+  return liveResDirectory || null;
 }
 
-export function getOptionalConfigCsvDirectory(): string | null {
-  return configCsvDirectory || null;
+export function getOptionalConfigDocDirectory(): string | null {
+  return configDocDirectory || null;
 }
 
 export async function restoreDevelopmentConfigDirectories(
   options: {
-    environmentLiveDirectory?: string;
-    environmentConfigDirectory?: string;
+    environmentResDirectory?: string;
+    environmentDocDirectory?: string;
     appDataDirectory?: string;
   } = {},
-): Promise<{ liveCsvDirectory: string; configCsvDirectory: string } | null> {
-  let liveCandidate = options.environmentLiveDirectory?.trim() ?? "";
-  let configCandidate = options.environmentConfigDirectory?.trim() ?? "";
+): Promise<{ liveResDirectory: string; configDocDirectory: string } | null> {
+  let liveCandidate = options.environmentResDirectory?.trim() ?? "";
+  let configCandidate = options.environmentDocDirectory?.trim() ?? "";
   if (options.appDataDirectory?.trim()) {
     try {
       const state = JSON.parse(
@@ -66,57 +71,44 @@ export async function restoreDevelopmentConfigDirectories(
           "utf8",
         ),
       ) as {
-        liveCsvDirectory?: unknown;
-        configCsvDirectory?: unknown;
+        liveResDirectory?: unknown;
+        configDocDirectory?: unknown;
       };
       if (
         !liveCandidate &&
-        typeof state.liveCsvDirectory === "string"
+        typeof state.liveResDirectory === "string"
       ) {
-        liveCandidate = state.liveCsvDirectory.trim();
+        liveCandidate = state.liveResDirectory.trim();
       }
       if (
         !configCandidate &&
-        typeof state.configCsvDirectory === "string"
+        typeof state.configDocDirectory === "string"
       ) {
-        configCandidate = state.configCsvDirectory.trim();
+        configCandidate = state.configDocDirectory.trim();
       }
     } catch {
       // A development server can still run without persisted desktop state.
     }
   }
+  const normalizedLive = normalizeLiveCsvDirectory(liveCandidate);
   const normalizedConfig = normalizeConfigCsvDirectory(configCandidate);
   if (
-    !(await isLiveCsvDirectoryReady(liveCandidate)) ||
+    !(await isLiveCsvDirectoryReady(normalizedLive)) ||
     !(await isConfigCsvDirectoryReady(normalizedConfig))
   ) {
     return null;
   }
-  configureLiveCsvDirectory(liveCandidate);
-  configureConfigCsvDirectory(normalizedConfig);
+  configureLiveResDirectory(liveCandidate);
+  configureConfigDocDirectory(configCandidate);
   return {
-    liveCsvDirectory: liveCandidate,
-    configCsvDirectory: normalizedConfig,
+    liveResDirectory: liveCandidate,
+    configDocDirectory: configCandidate,
   };
-}
-
-export async function restoreDevelopmentConfigCsvDirectory(
-  options: {
-    environmentDirectory?: string;
-    appDataDirectory?: string;
-  } = {},
-): Promise<string | null> {
-  const restored = await restoreDevelopmentConfigDirectories({
-    environmentLiveDirectory: options.environmentDirectory,
-    environmentConfigDirectory: options.environmentDirectory,
-    appDataDirectory: options.appDataDirectory,
-  });
-  return restored?.configCsvDirectory ?? null;
 }
 
 export function getConfigCsvPaths() {
   const configDirectory = getConfigCsvDirectory();
-  const liveDirectory = liveCsvDirectory || configDirectory;
+  const liveDirectory = getLiveCsvDirectory();
   return {
     dialogue: join(liveDirectory, "对话表.csv"),
     start: join(liveDirectory, "对话表_开始节点.csv"),
@@ -131,7 +123,10 @@ export function getConfigCsvPaths() {
 }
 
 export function getConfigTablePaths() {
-  const xlsDirectory = join(dirname(getConfigCsvDirectory()), "xlsdir");
+  if (!configDocDirectory) {
+    throw new Error("尚未选择配置文档目录");
+  }
+  const xlsDirectory = join(configDocDirectory, "xlsdir");
   return {
     missionTarget: join(xlsDirectory, "r任务剧情", "m目标物表.xlsm"),
     npc: join(xlsDirectory, "NPC表.xlsm"),
@@ -177,7 +172,7 @@ export async function readConfiguredDialogueCsvPayload(): Promise<DialogueCsvPay
     dialogueText,
     startText,
     npcText,
-    sourceName: `${liveCsvDirectory} + ${configCsvDirectory}`,
+    sourceName: `${liveResDirectory} + ${configDocDirectory}`,
     modelText,
     missionText,
     dungeonMissionText,
@@ -216,7 +211,7 @@ export async function readConfiguredMissionTargetPlan(
     missionTargetText,
     mapText,
     sceneText,
-    `${liveCsvDirectory} + ${configCsvDirectory}`,
+    `${liveResDirectory} + ${configDocDirectory}`,
   );
   return resolveMissionTargets(database, taskId);
 }

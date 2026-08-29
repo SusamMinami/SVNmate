@@ -86,9 +86,12 @@ export function DesktopSetupModal({
     initialSoundEffectCatalog,
   );
   const [musicCatalog, setMusicCatalog] = useState(initialMusicCatalog);
-  const [catalogBusy, setCatalogBusy] = useState(false);
-  const [catalogStatus, setCatalogStatus] = useState("");
-  const [catalogError, setCatalogError] = useState("");
+  const [soundEffectCatalogBusy, setSoundEffectCatalogBusy] = useState(false);
+  const [soundEffectCatalogStatus, setSoundEffectCatalogStatus] = useState("");
+  const [soundEffectCatalogError, setSoundEffectCatalogError] = useState("");
+  const [musicCatalogBusy, setMusicCatalogBusy] = useState(false);
+  const [musicCatalogStatus, setMusicCatalogStatus] = useState("");
+  const [musicCatalogError, setMusicCatalogError] = useState("");
   const baseMissingScopes =
     larkStatus?.baseMissingScopes ?? larkStatus?.missingScopes ?? [];
   const docsMissingScopes =
@@ -169,37 +172,40 @@ export function DesktopSetupModal({
       onAuthorize();
       return;
     }
-    setCatalogBusy(true);
-    setCatalogStatus("");
-    setCatalogError("");
+    setSoundEffectCatalogBusy(true);
+    setSoundEffectCatalogStatus("");
+    setSoundEffectCatalogError("");
     try {
       const snapshot = await onSyncSoundEffectCatalog();
       setSoundEffectCatalog(snapshot);
-      setCatalogStatus(
+      setSoundEffectCatalogStatus(
         `已同步 ${snapshot.entries.length} 项，文档版本 ${snapshot.revisionId}`,
       );
     } catch (catalogSyncError) {
-      setCatalogError(
+      setSoundEffectCatalogError(
         catalogSyncError instanceof Error
           ? catalogSyncError.message
           : "音效资料库同步失败",
       );
     } finally {
-      setCatalogBusy(false);
+      setSoundEffectCatalogBusy(false);
     }
   }
 
   async function updateMusicCatalog() {
-    setCatalogBusy(true);
-    setCatalogError("");
+    setMusicCatalogBusy(true);
+    setMusicCatalogStatus("");
+    setMusicCatalogError("");
     try {
       const snapshot = await onSyncMusicCatalog();
       setMusicCatalog(snapshot);
-      setCatalogStatus(`已同步 ${snapshot.entries.length} 首音乐`);
+      setMusicCatalogStatus(`已同步 ${snapshot.entries.length} 首音乐`);
     } catch (error) {
-      setCatalogError(error instanceof Error ? error.message : "音乐资料库同步失败");
+      setMusicCatalogError(
+        error instanceof Error ? error.message : "音乐资料库同步失败",
+      );
     } finally {
-      setCatalogBusy(false);
+      setMusicCatalogBusy(false);
     }
   }
 
@@ -229,7 +235,7 @@ export function DesktopSetupModal({
 
         <div className="desktop-setup-modal__body">
           <section className="setup-status-list" aria-label="环境检查">
-            <div>
+            <div className="setup-status-item--wide">
               <Check size={17} />
               <span>
                 <strong>应用运行时</strong>
@@ -249,15 +255,15 @@ export function DesktopSetupModal({
                 <CircleAlert size={17} />
               )}
               <span>
-                <strong>实时数据</strong>
+                <strong>res 实时数据</strong>
                 <small>
-                  {status.liveCsvDirectory ||
-                    status.dataCsvDirectory ||
-                    "选择引擎 res 或其他实时 CSV 目录"}
+                  {status.liveResDirectory ||
+                    "选择项目 res 目录，固定读取 Content\\Seria\\Tables\\csvdir"}
                 </small>
               </span>
               <button
                 type="button"
+                aria-label="选择 res 目录"
                 disabled={dataLoading}
                 onClick={onChooseLiveDirectory}
               >
@@ -266,7 +272,7 @@ export function DesktopSetupModal({
                 ) : (
                   <FolderOpen size={14} />
                 )}
-                {dataLoading ? "读取中" : "选择"}
+                {dataLoading ? "读取中" : "选择 res"}
               </button>
             </div>
             <div
@@ -282,11 +288,10 @@ export function DesktopSetupModal({
                 <CircleAlert size={17} />
               )}
               <span>
-                <strong>配置文档</strong>
+                <strong>doc 配置文档</strong>
                 <small>
-                  {status.configCsvDirectory ||
-                    status.dataCsvDirectory ||
-                    "选择 doc 或 doc/csvdir，Excel 路径由此推导"}
+                  {status.configDocDirectory ||
+                    "选择项目 doc 目录，固定读取 csvdir"}
                 </small>
                 {status.missionTargetTablePath && (
                   <small title={status.missionTargetTablePath}>
@@ -296,6 +301,7 @@ export function DesktopSetupModal({
               </span>
               <button
                 type="button"
+                aria-label="选择 doc 目录"
                 disabled={dataLoading}
                 onClick={onChooseConfigDirectory}
               >
@@ -304,10 +310,14 @@ export function DesktopSetupModal({
                 ) : (
                   <FolderOpen size={14} />
                 )}
-                {dataLoading ? "读取中" : "选择"}
+                {dataLoading ? "读取中" : "选择 doc"}
               </button>
             </div>
-            <div className={larkReady ? "" : "is-warning"}>
+            <div
+              className={`setup-status-item--wide ${
+                larkReady ? "" : "is-warning"
+              }`}
+            >
               {larkLoading ? (
                 <LoaderCircle className="spin" size={17} />
               ) : larkReady ? (
@@ -345,7 +355,7 @@ export function DesktopSetupModal({
               </button>
             </div>
             <div className={docsReady ? "" : "is-warning"}>
-              {catalogBusy ? (
+              {soundEffectCatalogBusy ? (
                 <LoaderCircle className="spin" size={17} />
               ) : docsReady ? (
                 <Database size={17} />
@@ -354,12 +364,12 @@ export function DesktopSetupModal({
               )}
               <span>
                 <strong>音效资料库</strong>
-                <small>
-                  {catalogBusy
+                <small aria-live="polite">
+                  {soundEffectCatalogBusy
                     ? "正在从飞书文档同步"
-                    : catalogError
-                      ? catalogError
-                      : catalogStatus ||
+                    : soundEffectCatalogError
+                      ? soundEffectCatalogError
+                      : soundEffectCatalogStatus ||
                         `${soundEffectCatalog.entries.length} 项 · ${
                           soundEffectCatalog.source === "lark"
                             ? `飞书版本 ${soundEffectCatalog.revisionId}`
@@ -372,10 +382,10 @@ export function DesktopSetupModal({
                 aria-label={
                   docsReady ? "从飞书同步音效资料库" : "授权音效资料库"
                 }
-                disabled={catalogBusy || larkLoading}
+                disabled={soundEffectCatalogBusy || larkLoading}
                 onClick={() => void updateSoundEffectCatalog()}
               >
-                {catalogBusy ? (
+                {soundEffectCatalogBusy ? (
                   <LoaderCircle className="spin" size={14} />
                 ) : docsReady ? (
                   <RefreshCw size={14} />
@@ -386,20 +396,32 @@ export function DesktopSetupModal({
               </button>
             </div>
             <div className={larkReady ? "" : "is-warning"}>
-              <Music2 size={17} />
+              {musicCatalogBusy ? (
+                <LoaderCircle className="spin" size={17} />
+              ) : (
+                <Music2 size={17} />
+              )}
               <span>
                 <strong>音乐资料库</strong>
-                <small>
-                  {musicCatalog.entries.length > 0
-                    ? `${musicCatalog.entries.length} 首${
-                        musicCatalog.analyzedCount > 0
-                          ? ` · ${musicCatalog.analyzedCount} 首已分析`
-                          : ""
-                      } · 版本 ${musicCatalog.revision}`
-                    : "尚未同步"}
-                  {musicCatalog.unmappedCount > 0
-                    ? ` · ${musicCatalog.unmappedCount} 条未映射`
-                    : ""}
+                <small aria-live="polite">
+                  {musicCatalogBusy
+                    ? "正在从飞书多维表格同步"
+                    : musicCatalogError
+                      ? musicCatalogError
+                      : musicCatalogStatus ||
+                        `${
+                          musicCatalog.entries.length > 0
+                            ? `${musicCatalog.entries.length} 首${
+                                musicCatalog.analyzedCount > 0
+                                  ? ` · ${musicCatalog.analyzedCount} 首已分析`
+                                  : ""
+                              } · 版本 ${musicCatalog.revision}`
+                            : "尚未同步"
+                        }${
+                          musicCatalog.unmappedCount > 0
+                            ? ` · ${musicCatalog.unmappedCount} 条未映射`
+                            : ""
+                        }`}
                 </small>
               </span>
               <button
@@ -410,10 +432,14 @@ export function DesktopSetupModal({
                     ? "从飞书多维表格同步音乐资料库"
                     : "需先完成飞书多维表格授权"
                 }
-                disabled={catalogBusy || !larkReady}
+                disabled={musicCatalogBusy || !larkReady}
                 onClick={() => void updateMusicCatalog()}
               >
-                <RefreshCw size={14} />
+                {musicCatalogBusy ? (
+                  <LoaderCircle className="spin" size={14} />
+                ) : (
+                  <RefreshCw size={14} />
+                )}
                 同步
               </button>
             </div>
@@ -458,7 +484,11 @@ export function DesktopSetupModal({
                 </small>
               </span>
             </div>
-            <div className={status.ueConnected ? "" : "is-warning"}>
+            <div
+              className={`setup-status-item--wide ${
+                status.ueConnected ? "" : "is-warning"
+              }`}
+            >
               {status.ueConnected ? (
                 <Check size={17} />
               ) : (

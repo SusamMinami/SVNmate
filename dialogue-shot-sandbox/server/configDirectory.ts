@@ -1,5 +1,5 @@
 import { access } from "node:fs/promises";
-import { basename, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 
 const REQUIRED_LIVE_FILENAMES = [
   "对话表.csv",
@@ -15,15 +15,16 @@ const REQUIRED_CONFIG_FILENAMES = [
   "d地图资源表.csv",
 ];
 
+export function normalizeLiveCsvDirectory(directoryPath: string): string {
+  const selected = directoryPath.trim();
+  return selected
+    ? join(resolve(selected), "Content", "Seria", "Tables", "csvdir")
+    : "";
+}
+
 export function normalizeConfigCsvDirectory(directoryPath: string): string {
   const selected = directoryPath.trim();
-  if (!selected) {
-    return "";
-  }
-  const normalized = resolve(selected);
-  return basename(normalized).toLowerCase() === "csvdir"
-    ? normalized
-    : join(normalized, "csvdir");
+  return selected ? join(resolve(selected), "csvdir") : "";
 }
 
 async function hasRequiredFiles(
