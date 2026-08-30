@@ -685,6 +685,12 @@ export function NpcRegistrationModal({
     return {
       actorRef,
       label: candidate.actor.label,
+      targetDescription:
+        (existingNpc && existingNpc.hasConfiguredName !== false
+          ? existingNpc.name.trim()
+          : "") ||
+        draft.name.trim() ||
+        candidate.actor.label,
       classPath: candidate.actor.classPath,
       transform: candidate.actor.transform,
       mapId,

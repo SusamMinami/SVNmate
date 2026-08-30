@@ -3485,6 +3485,155 @@ test("batch edits text search results without requiring a storyboard", async ({
   });
 });
 
+test("reviews missing NPC models before continuing storyboard design", async ({
+  page,
+}, testInfo) => {
+  let formationReady = false;
+  let formationRequests = 0;
+  await page.route("**/api/ue/formation/read", async (route) => {
+    formationRequests += 1;
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          status: "found",
+          message: "已读取 2 个 BP 站位槽",
+          snapshot: {
+            dialogueId: "8800",
+            blueprintAssetPath: "/Game/Test/BP_880000.BP_880000",
+            blueprintClassPath: "/Game/Test/BP_880000.BP_880000_C",
+            dialogueModels: [
+              "player",
+              formationReady ? "Im" : "Wrong",
+            ],
+            warnings: [],
+            slots: [
+              {
+                modelIndex: 0,
+                componentName: "ChildActorComponent_0_GEN_VARIABLE",
+                componentGuid: "player-guid",
+                modelClassPath:
+                  "/Game/Seria/Characters/Eric/BP_Eric.BP_Eric_C",
+                transform: {
+                  location: { x: -150, y: 0, z: 92 },
+                  rotation: { pitch: 0, yaw: -90, roll: 0 },
+                  scale: { x: 1, y: 1, z: 1 },
+                },
+              },
+              {
+                modelIndex: 1,
+                componentName: "ChildActorComponent_1_GEN_VARIABLE",
+                componentGuid: "npc-guid",
+                modelClassPath: formationReady
+                  ? "/Game/Test/BP_Im.BP_Im_C"
+                  : "/Game/Test/BP_Wrong.BP_Wrong_C",
+                transform: {
+                  location: { x: 150, y: 0, z: 92 },
+                  rotation: { pitch: 0, yaw: 90, roll: 0 },
+                  scale: { x: 1, y: 1, z: 1 },
+                },
+              },
+            ],
+          },
+        },
+      }),
+    });
+  });
+  const fixtureDirectory = await writeDirectoryFixture(
+    testInfo.outputPath("missing-npc-model", "csvdir"),
+    [
+      {
+        name: "对话表.csv",
+        content: [
+          "##&Dialog.id,Dialog.NPCID,Dialog.Content,Dialog.NextID,Dialog.End",
+          "##对话ID,人物,内容,下一ID,结束",
+          "880000,,,880001,false",
+          "880001,102101,只有声音，不需要出现在镜头中。,880002,false",
+          "880002,1,我听见了。,,true",
+        ].join("\n"),
+      },
+      {
+        name: "对话表_开始节点.csv",
+        content: [
+          "##&DialogStart.id,DialogStart.Outline,DialogStart.Formation,DialogStart.Model",
+          "##对话ID,剧情梗概,模板,模型",
+          "880000,画外通讯,/Game/Test/BP_880000.BP_880000_C,player;Wrong",
+        ].join("\n"),
+      },
+      {
+        name: "NPC表.csv",
+        content: [
+          "##&NPC.id,NPC.name,NPC.npcintroduce,NPC.resource_id",
+          "##id,名称,介绍,资源",
+          "1,玩家,玩家,",
+          "102101,伊姆,画外通讯,200526",
+        ].join("\n"),
+      },
+      {
+        name: "m模型资源表.csv",
+        content: [
+          "##&Model.id,,Model.path",
+          "##id,配置填写在此列，Model.path保存时自动生成，由程序调用,生成路径",
+          "200526,/Game/Test/BP_Im,/Game/Test/BP_Im.BP_Im_C",
+        ].join("\n"),
+      },
+    ],
+  );
+
+  await page.goto("/");
+  await page.locator('input[type="file"]').setInputFiles(fixtureDirectory);
+  const searchInput = page.getByLabel("四位数对话 ID 或对白内容");
+  await searchInput.fill("8800");
+  await page.getByRole("button", { name: "分析对话与站位" }).click();
+
+  const missingModal = page.getByRole("dialog", {
+    name: "确认缺失模型 NPC",
+  });
+  await expect(missingModal).toBeVisible();
+  await expect(missingModal).toContainText("伊姆");
+  await expect(missingModal).toContainText("102101");
+  await expect(missingModal).toContainText("当前 BP 没有对应的角色模型槽");
+  const ignoreNpc = missingModal.getByRole("checkbox", {
+    name: "忽略 NPC 伊姆 的模型缺失",
+  });
+  await ignoreNpc.check();
+  await missingModal.screenshot({
+    path: testInfo.outputPath("missing-npc-model-review.png"),
+  });
+
+  await missingModal.getByRole("button", { name: "刷新 BP" }).click();
+  await expect.poll(() => formationRequests).toBe(2);
+  await expect(ignoreNpc).toBeChecked();
+  await expect(missingModal).toContainText("刷新后仍有 1 个");
+
+  formationReady = true;
+  await missingModal.getByRole("button", { name: "刷新 BP" }).click();
+  await expect(missingModal).toBeHidden();
+  const formationModal = page.getByRole("dialog", {
+    name: "选择镜头分析使用的占位",
+  });
+  await expect(formationModal).toBeVisible();
+  await formationModal.getByRole("button", { name: "关闭占位选择" }).click();
+
+  formationReady = false;
+  await page.getByRole("button", { name: "分析对话与站位" }).click();
+  await expect(missingModal).toBeVisible();
+  await expect(
+    missingModal.getByRole("button", { name: "忽略并继续" }),
+  ).toBeDisabled();
+  await missingModal
+    .getByRole("checkbox", { name: "忽略 NPC 伊姆 的模型缺失" })
+    .check();
+  await missingModal.getByRole("button", { name: "忽略并继续" }).click();
+  await expect(missingModal).toBeHidden();
+  await expect(page.locator(".shot-row")).not.toHaveCount(0);
+  await expect(page.locator(".formation-status")).toContainText(
+    "已忽略 1 个缺失 BP 模型的 NPC",
+  );
+});
+
 test("offers the detected Blueprint formation before designing shots", async ({
   page,
 }, testInfo) => {
@@ -5340,6 +5489,7 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
   expect(targetOnlyWriteItems).toEqual([
     expect.objectContaining({
       actorRef: "BP_Guard_C_1",
+      targetDescription: "守卫新增",
       existingModelId: 200135,
       existingNpcId: 101999,
       mapId: "1204",
@@ -5565,6 +5715,7 @@ test("applies one MapID to selected actors and writes reusable NPCs as targets o
     items: [
       {
         actorRef: "BP_Guard_C_0",
+        targetDescription: "批量守卫",
         mapId: "1209",
         existingModelId: 200135,
         existingNpcId: 101968,
@@ -5572,6 +5723,7 @@ test("applies one MapID to selected actors and writes reusable NPCs as targets o
       },
       {
         actorRef: "BP_Guard_C_1",
+        targetDescription: "批量守卫",
         mapId: "1209",
         existingModelId: 200135,
         existingNpcId: 101968,
@@ -5694,10 +5846,26 @@ test("locks and registers every existing numeric Blueprint slot", async ({
   await expect(
     workspace.getByLabel("对话文件 ID（可选）"),
   ).toHaveCount(0);
-  await workspace
-    .getByRole("button", { name: "展开对话文件 ID" })
-    .click();
-  await workspace.getByLabel("对话文件 ID（可选）").fill("846500");
+  const dialogueIdToggle = workspace.getByRole("button", {
+    name: "展开对话文件 ID",
+  });
+  await expect(dialogueIdToggle).toHaveText("");
+  expect((await dialogueIdToggle.boundingBox())?.width).toBeLessThanOrEqual(36);
+  await dialogueIdToggle.click();
+  const dialogueIdInput = workspace.getByLabel("对话文件 ID（可选）");
+  expect((await dialogueIdInput.boundingBox())?.width).toBeLessThanOrEqual(160);
+  await dialogueIdInput.fill("846500");
+  const collapseDialogueId = workspace.getByRole("button", {
+    name: "收起对话文件 ID",
+  });
+  await expect(collapseDialogueId).toHaveText("");
+  await collapseDialogueId.click();
+  await expect(dialogueIdInput).toHaveCount(0);
+  await expect(
+    workspace.getByRole("button", {
+      name: "展开对话文件 ID，当前 846500",
+    }),
+  ).toBeVisible();
   await workspace
     .getByRole("button", { name: "检查 BP 与对话模型" })
     .click();

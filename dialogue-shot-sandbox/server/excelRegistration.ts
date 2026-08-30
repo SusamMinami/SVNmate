@@ -40,6 +40,7 @@ const RegistrationWriteSchema = z
         z.object({
           actorRef: z.string().min(1),
           label: z.string().min(1),
+          targetDescription: z.string().trim().default(""),
           classPath: z.string().startsWith("/Game/"),
           transform: z.object({
             location: VectorSchema,
@@ -69,6 +70,13 @@ const RegistrationWriteSchema = z
   })
   .superRefine((request, context) => {
     request.items.forEach((item, index) => {
+      if (request.scope !== "npc_only" && !item.targetDescription) {
+        context.addIssue({
+          code: "custom",
+          path: ["items", index, "targetDescription"],
+          message: "目标物写入必须提供描述",
+        });
+      }
       if (request.scope === "all" && !/^\d+$/.test(item.mapId)) {
         context.addIssue({
           code: "custom",
@@ -893,7 +901,7 @@ try {
       Add-BlankRow $targetSheet $row 33
       Set-NewCell $targetSheet $row 1 0
       Set-NewCell $targetSheet $row 2 $nextTargetId
-      Set-NewCell $targetSheet $row 4 $item.label
+      Set-NewCell $targetSheet $row 4 $item.targetDescription
       Set-NewCell $targetSheet $row 5 1
       Set-NewCell $targetSheet $row 6 $npcByActor[$item.actorRef]
       Set-NewCell $targetSheet $row 7 0

@@ -20,6 +20,15 @@ export interface AppliedBlueprintFormation {
   mappedSlotCount: number;
 }
 
+export interface MissingBlueprintNpcModel {
+  npcId: number;
+  npcName: string;
+  dialogueIds: string[];
+  resourceId: number | null;
+  expectedModelClassPath: string;
+  reason: string;
+}
+
 function normalizedAssetPath(value: string): string {
   const normalized = value.trim().replaceAll("\\", "/").toLowerCase();
   const withoutClass = normalized.endsWith("_c")
@@ -184,6 +193,90 @@ function profileMatchesSlot(
       ? undefined
       : database.models.get(profile.resourceId),
   );
+}
+
+export function findMissingBlueprintNpcModels(
+  database: DialogueDatabase,
+  sequence: DialogueSequence,
+  snapshot: BlueprintFormationSnapshot,
+): MissingBlueprintNpcModel[] {
+  const modelNames =
+    snapshot.dialogueModels && snapshot.dialogueModels.length > 0
+      ? snapshot.dialogueModels
+      : sequence.formation?.modelNames ?? [];
+  const activeSlots = snapshot.slots.filter((slot) => {
+    if (modelNames.length === 0 || slot.modelIndex === 0) {
+      return true;
+    }
+    const modelName = (modelNames[slot.modelIndex] ?? "").toLowerCase();
+    return !["", "none", "null"].includes(modelName);
+  });
+  const rowsByNpcId = new Map<number, string[]>();
+  for (const row of sequence.rows) {
+    if (row.npcId === null || row.npcId === 1) {
+      continue;
+    }
+    rowsByNpcId.set(row.npcId, [
+      ...(rowsByNpcId.get(row.npcId) ?? []),
+      row.id,
+    ]);
+  }
+  return Array.from(rowsByNpcId, ([npcId, dialogueIds]) => {
+    const profile = npcProfile(database, sequence, npcId);
+    const resource =
+      profile?.resourceId === null || profile?.resourceId === undefined
+        ? undefined
+        : database.models.get(profile.resourceId);
+    const expectedModelClassPath =
+      resource?.generatedClassPath.trim() ||
+      resource?.configuredPath.trim() ||
+      "";
+    const issue = (reason: string): MissingBlueprintNpcModel => ({
+      npcId,
+      npcName: profile?.name ?? `NPC ${npcId}`,
+      dialogueIds,
+      resourceId: profile?.resourceId ?? null,
+      expectedModelClassPath,
+      reason,
+    });
+    if (!profile || !database.npcs.has(npcId)) {
+      return issue("NPC 表中没有该角色");
+    }
+    if (profile.resourceId === null) {
+      return issue("NPC 未配置模型资源 ID");
+    }
+    if (!resource) {
+      return issue(`模型资源表中没有 ID ${profile.resourceId}`);
+    }
+    const explicitModelIndexes = new Set(
+      sequence.rows.flatMap((row) =>
+        row.npcId === npcId && row.speakerModelIndex !== null
+          ? [row.speakerModelIndex]
+          : [],
+      ),
+    );
+    for (const modelIndex of explicitModelIndexes) {
+      const explicitSlot = activeSlots.find(
+        (slot) => slot.modelIndex === modelIndex,
+      );
+      if (
+        explicitSlot &&
+        !profileMatchesSlot(database, profile, explicitSlot)
+      ) {
+        return issue(
+          `AM_Talk 指向 BP 槽位 ${modelIndex}，但该槽模型与 NPC 不一致`,
+        );
+      }
+    }
+    if (
+      activeSlots.some((slot) =>
+        profileMatchesSlot(database, profile, slot),
+      )
+    ) {
+      return null;
+    }
+    return issue("当前 BP 没有对应的角色模型槽");
+  }).filter((issue): issue is MissingBlueprintNpcModel => issue !== null);
 }
 
 function distanceSquared(

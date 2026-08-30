@@ -78,8 +78,22 @@ function parseTargetIds(taskId: string, rawValue: string): string[] {
     );
   }
   const ids = rawIds.map((value) => value.trim());
-  if (new Set(ids).size !== ids.length) {
-    throw new Error(`任务节点 ${taskId} 的显示目标物存在重复 ID`);
+  const seenIds = new Set<string>();
+  const duplicateIds = Array.from(
+    new Set(
+      ids.filter((id) => {
+        if (seenIds.has(id)) {
+          return true;
+        }
+        seenIds.add(id);
+        return false;
+      }),
+    ),
+  );
+  if (duplicateIds.length > 0) {
+    throw new Error(
+      `任务节点 ${taskId} 的显示目标物存在重复 ID：${duplicateIds.join("、")}`,
+    );
   }
   return ids;
 }

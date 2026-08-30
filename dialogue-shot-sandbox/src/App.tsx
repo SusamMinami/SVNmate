@@ -55,6 +55,7 @@ import { CharacterActionEditor } from "./components/CharacterActionEditor";
 import { DataSourceStatus } from "./components/DataSourceStatus";
 import { DirectorControl } from "./components/DirectorControl";
 import { LaunchScreen } from "./components/LaunchScreen";
+import { MissingNpcModelModal } from "./components/MissingNpcModelModal";
 import { MissionTargetModal } from "./components/MissionTargetModal";
 import { NpcRegistrationModal } from "./components/NpcRegistrationModal";
 import { MusicRecommendations } from "./components/MusicRecommendations";
@@ -67,7 +68,11 @@ import {
   loadDocDirectory,
   loadDocFiles,
 } from "./data/csvLoader";
-import { applyBlueprintFormation } from "./data/blueprintFormation";
+import {
+  applyBlueprintFormation,
+  findMissingBlueprintNpcModels,
+  type MissingBlueprintNpcModel,
+} from "./data/blueprintFormation";
 import { demoDatabase } from "./data/demo";
 import {
   participantSlotLabel,
@@ -245,6 +250,15 @@ interface FormationChoicePresentation {
   requestedMode: DirectorMode;
   sourceSequence: DialogueSequence;
   playerPositionLocked: boolean;
+}
+
+interface MissingNpcModelReview {
+  database: DialogueDatabase;
+  sourceSequence: DialogueSequence;
+  requestedMode: DirectorMode;
+  issues: MissingBlueprintNpcModel[];
+  ignoredNpcIds: Set<number>;
+  error: string;
 }
 
 function createFormationChoice(
@@ -1265,6 +1279,8 @@ export default function App() {
   const [formationChoiceMode, setFormationChoiceMode] = useState<
     "initial" | "switch" | "director-request" | null
   >(null);
+  const [missingNpcModelReview, setMissingNpcModelReview] =
+    useState<MissingNpcModelReview | null>(null);
   const [formationChecking, setFormationChecking] = useState(false);
   const [formationStatus, setFormationStatus] = useState("");
   const [activeFormationSource, setActiveFormationSource] = useState<
@@ -2274,6 +2290,7 @@ export default function App() {
     setSelectedDialogueId(nextSequence.rows[0]?.id ?? "");
     setFormationChoice(null);
     setFormationChoiceMode(null);
+    setMissingNpcModelReview(null);
     setPendingDirectorResult(null);
     setSharedComparison(null);
     setDirectorLoading(false);
@@ -2334,6 +2351,25 @@ export default function App() {
       return;
     }
     if (lookup.status === "found" && lookup.snapshot) {
+      const missingModels = findMissingBlueprintNpcModels(
+        nextDatabase,
+        nextSequence,
+        lookup.snapshot,
+      );
+      if (missingModels.length > 0) {
+        setMissingNpcModelReview({
+          database: nextDatabase,
+          sourceSequence: nextSequence,
+          requestedMode,
+          issues: missingModels,
+          ignoredNpcIds: new Set(),
+          error: "",
+        });
+        setFormationStatus(
+          `检测到 ${missingModels.length} 个对话 NPC 缺少可用 BP 模型，等待确认`,
+        );
+        return;
+      }
       try {
         const choice = createFormationChoice(
           nextDatabase,
@@ -2365,6 +2401,172 @@ export default function App() {
     await applySequence(nextSequence, requestedMode, {
       applyResultImmediately: requestedMode === "trae",
     });
+  }
+
+  function toggleIgnoredMissingNpc(npcId: number) {
+    setMissingNpcModelReview((current) => {
+      if (!current) {
+        return current;
+      }
+      const ignoredNpcIds = new Set(current.ignoredNpcIds);
+      if (ignoredNpcIds.has(npcId)) {
+        ignoredNpcIds.delete(npcId);
+      } else {
+        ignoredNpcIds.add(npcId);
+      }
+      return { ...current, ignoredNpcIds, error: "" };
+    });
+  }
+
+  function toggleAllMissingNpcs() {
+    setMissingNpcModelReview((current) => {
+      if (!current) {
+        return current;
+      }
+      const allIgnored = current.issues.every((issue) =>
+        current.ignoredNpcIds.has(issue.npcId),
+      );
+      return {
+        ...current,
+        ignoredNpcIds: allIgnored
+          ? new Set()
+          : new Set(current.issues.map((issue) => issue.npcId)),
+        error: "",
+      };
+    });
+  }
+
+  async function continueWithoutMissingNpcModels() {
+    const review = missingNpcModelReview;
+    if (
+      !review ||
+      review.issues.some(
+        (issue) => !review.ignoredNpcIds.has(issue.npcId),
+      )
+    ) {
+      return;
+    }
+    setMissingNpcModelReview(null);
+    setFormationStatus(
+      `已忽略 ${review.issues.length} 个缺失 BP 模型的 NPC，使用规则占位继续分镜`,
+    );
+    await applySequence(review.sourceSequence, review.requestedMode, {
+      applyResultImmediately: review.requestedMode === "trae",
+    });
+  }
+
+  async function refreshMissingNpcModels() {
+    const review = missingNpcModelReview;
+    if (!review || formationChecking) {
+      return;
+    }
+    const formationRunId = ++formationRunRef.current;
+    setFormationChecking(true);
+    setFormationStatus("正在重新读取 UE Blueprint 站位与模型...");
+    setMissingNpcModelReview((current) =>
+      current ? { ...current, error: "" } : current,
+    );
+    try {
+      const lookup = await getBlueprintFormation({
+        dialogueId: review.sourceSequence.prefix,
+        startId: review.sourceSequence.startId,
+        formationClassPath: review.sourceSequence.formation?.classPath,
+      });
+      if (formationRunId !== formationRunRef.current) {
+        return;
+      }
+      if (lookup.status !== "found" || !lookup.snapshot) {
+        setMissingNpcModelReview((current) =>
+          current
+            ? {
+                ...current,
+                error: lookup.message,
+              }
+            : current,
+        );
+        setFormationStatus(skippedBlueprintMessage(lookup.message));
+        return;
+      }
+      const issues = findMissingBlueprintNpcModels(
+        review.database,
+        review.sourceSequence,
+        lookup.snapshot,
+      );
+      if (issues.length > 0) {
+        setMissingNpcModelReview((current) =>
+          current
+            ? {
+                ...current,
+                issues,
+                ignoredNpcIds: new Set(
+                  issues
+                    .filter((issue) =>
+                      current.ignoredNpcIds.has(issue.npcId),
+                    )
+                    .map((issue) => issue.npcId),
+                ),
+                error: "",
+              }
+            : current,
+        );
+        setFormationStatus(
+          `刷新后仍有 ${issues.length} 个对话 NPC 缺少可用 BP 模型`,
+        );
+        return;
+      }
+      try {
+        const choice = createFormationChoice(
+          review.database,
+          review.sourceSequence,
+          lookup.snapshot,
+          review.requestedMode,
+          soundEffectCatalog.entries,
+        );
+        setMissingNpcModelReview(null);
+        setFormationChoice(choice);
+        setFormationStatus(`${lookup.message}，缺失模型已补齐`);
+        setFormationChoiceMode(
+          review.requestedMode === "trae"
+            ? "director-request"
+            : "initial",
+        );
+      } catch (mappingError) {
+        setMissingNpcModelReview(null);
+        setFormationStatus(
+          skippedBlueprintMessage(
+            mappingError instanceof Error
+              ? mappingError.message
+              : "BP 角色与对话 NPC 不匹配",
+          ),
+        );
+        await applySequence(
+          review.sourceSequence,
+          review.requestedMode,
+          {
+            applyResultImmediately: review.requestedMode === "trae",
+          },
+        );
+      }
+    } catch (formationError) {
+      if (formationRunId !== formationRunRef.current) {
+        return;
+      }
+      setMissingNpcModelReview((current) =>
+        current
+          ? {
+              ...current,
+              error:
+                formationError instanceof Error
+                  ? formationError.message
+                  : "BP 站位重新读取失败",
+            }
+          : current,
+      );
+    } finally {
+      if (formationRunId === formationRunRef.current) {
+        setFormationChecking(false);
+      }
+    }
   }
 
   async function refreshBlueprintFormation() {
@@ -2619,6 +2821,7 @@ export default function App() {
     setSelectedDialogueId(dialogueNodeId);
     setFormationChoice(cached?.formationChoice ?? null);
     setFormationChoiceMode(null);
+    setMissingNpcModelReview(null);
     setPendingDirectorResult(null);
     setSharedComparison(null);
     setFormationChecking(false);
@@ -2688,6 +2891,7 @@ export default function App() {
     setSelectedDialogueId("");
     setFormationChoice(null);
     setFormationChoiceMode(null);
+    setMissingNpcModelReview(null);
     setFormationChecking(false);
     setFormationStatus("");
     setPendingDirectorResult(null);
@@ -4295,6 +4499,24 @@ export default function App() {
             busy={sharedComparisonBusy}
             error={sharedComparisonError}
             onChoose={(choice) => void chooseSharedPlan(choice)}
+          />
+        )}
+
+        {missingNpcModelReview && !sharedComparison && (
+          <MissingNpcModelModal
+            issues={missingNpcModelReview.issues}
+            ignoredNpcIds={missingNpcModelReview.ignoredNpcIds}
+            busy={formationChecking}
+            status={formationStatus}
+            error={missingNpcModelReview.error}
+            onToggle={toggleIgnoredMissingNpc}
+            onToggleAll={toggleAllMissingNpcs}
+            onRefresh={() => void refreshMissingNpcModels()}
+            onContinue={() => void continueWithoutMissingNpcModels()}
+            onClose={() => {
+              setMissingNpcModelReview(null);
+              setFormationStatus("已取消缺失模型确认");
+            }}
           />
         )}
 

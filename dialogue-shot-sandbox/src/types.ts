@@ -44,6 +44,7 @@ export interface DialogueStart {
 export interface NpcProfile {
   id: number;
   name: string;
+  hasConfiguredName?: boolean;
   note: string;
   introduction: string;
   resourceId: number | null;
@@ -634,6 +635,7 @@ export interface NpcRegistrationScanResult {
 export interface NpcRegistrationWriteItem {
   actorRef: string;
   label: string;
+  targetDescription: string;
   classPath: string;
   transform: UnrealTransform;
   mapId: string;

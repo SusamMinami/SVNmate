@@ -92,6 +92,7 @@ describe("dialogue CSV parsing", () => {
       "##id,名称,资源,半身像,头像,头衔,介绍,复杂闲话,冒泡对白,转身",
       "101968,商会安保,200135,144,0,安保,测试 NPC,704000,,TRUE",
       "101969,普通守卫,200135,0,,守卫,测试 NPC,,,FALSE",
+      "101970,,200135,0,,守卫,测试 NPC,,,TRUE",
     ].join("\n");
 
     const database = parseDialogueDatabase(
@@ -108,6 +109,10 @@ describe("dialogue CSV parsing", () => {
     expect(database.npcs.get(101969)).toMatchObject({
       hasDialogue: false,
       hasAvatar: false,
+    });
+    expect(database.npcs.get(101970)).toMatchObject({
+      name: "NPC 101970",
+      hasConfiguredName: false,
     });
   });
 });

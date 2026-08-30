@@ -23,12 +23,13 @@ Wwise Short ID 使用 Wwise 的小写 FNV-1 32 位算法计算。Event JSON 是�
 ## 试听流程
 
 1. 设置页同步音效目录时同时缓存远端音效资产表。
-2. 导演页优先检查远端记录；有试听附件时下载到本地缓存后直接播放。
+2. 导演页优先检查远端记录；有试听附件时按原扩展名下载到本地缓存后直接播放。
 3. 远端没有附件时检查当前 UE/Wwise Event JSON 和媒体文件。
 4. 首次本地提取使用 `tools/vgmstream/vgmstream-cli.exe` 将第一个 WEM 解码为
    WAV，并在后台回传远端记录。
 5. Event 或媒体缺失时禁用播放按钮，并在悬停提示中显示原因。
-6. 本地 API 通过 HTTP Range 返回 WAV，支持浏览器渐进播放。
+6. 本地 API 通过 HTTP Range 返回 WAV、MP3、M4A、AAC、OGG 或 FLAC，
+   支持浏览器渐进播放。
 
 批量补齐或资源更新后运行：
 

@@ -210,6 +210,7 @@ describe("registrationWriteScope", () => {
   const reusableItem: NpcRegistrationWriteItem = {
     actorRef: "BP_Guard_C_1",
     label: "守卫",
+    targetDescription: "守卫长",
     classPath: "/Game/Test/BP_Guard.BP_Guard_C",
     transform: {
       location: { x: 1, y: 2, z: 3 },

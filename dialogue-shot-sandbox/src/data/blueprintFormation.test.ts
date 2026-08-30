@@ -3,7 +3,10 @@ import type { BlueprintFormationSnapshot } from "../types";
 import { participantFacingYawDegrees } from "../director/actorActionPlanner";
 import { createDirectorInput } from "../director/contracts";
 import { createShotPreview } from "../director/shotPlanner";
-import { applyBlueprintFormation } from "./blueprintFormation";
+import {
+  applyBlueprintFormation,
+  findMissingBlueprintNpcModels,
+} from "./blueprintFormation";
 import { parseDialogueDatabase } from "./csv";
 import { findDialogueSequence } from "./dialogueRepository";
 
@@ -423,6 +426,18 @@ describe("applyBlueprintFormation", () => {
       warnings: [],
     };
 
+    expect(
+      findMissingBlueprintNpcModels(database, sequence, snapshot),
+    ).toEqual([
+      {
+        npcId: 102101,
+        npcName: "伊姆",
+        dialogueIds: ["880001"],
+        resourceId: 200526,
+        expectedModelClassPath: "/Game/Test/BP_Im.BP_Im_C",
+        reason: "当前 BP 没有对应的角色模型槽",
+      },
+    ]);
     expect(() =>
       applyBlueprintFormation(database, sequence, snapshot),
     ).toThrow("BP 未找到与对话 NPC 伊姆（102101）模型一致的角色槽");
@@ -463,6 +478,15 @@ describe("applyBlueprintFormation", () => {
       warnings: [],
     };
 
+    expect(
+      findMissingBlueprintNpcModels(database, sequence, snapshot),
+    ).toEqual([
+      expect.objectContaining({
+        npcId: 101968,
+        reason:
+          "AM_Talk 指向 BP 槽位 4，但该槽模型与 NPC 不一致",
+      }),
+    ]);
     expect(() =>
       applyBlueprintFormation(database, sequence, snapshot),
     ).toThrow("与 AM_Talk 指向的 BP 槽位 4 模型不一致");

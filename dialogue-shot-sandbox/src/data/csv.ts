@@ -321,9 +321,11 @@ function parseNpcs(text: string): Map<number, NpcProfile> {
       if (id === null || id <= 0) {
         return;
       }
+      const configuredName = valueAt(row, indexes, "NPC.name");
       npcs.set(id, {
         id,
-        name: valueAt(row, indexes, "NPC.name") || `NPC ${id}`,
+        name: configuredName || `NPC ${id}`,
+        hasConfiguredName: Boolean(configuredName),
         note: "",
         introduction: valueAt(row, indexes, "NPC.npcintroduce"),
         resourceId: optionalInteger(optionalValueAt(row, resourceIndex)),

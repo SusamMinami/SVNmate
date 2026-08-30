@@ -74,6 +74,7 @@ describe("Excel PowerShell errors", () => {
 
     expect(request.scope).toBe("npc_only");
     expect(request.items[0].mapId).toBe("");
+    expect(request.items[0].targetDescription).toBe("");
     expect(request.items[0].newNpc?.name).toBe("");
   });
 
@@ -86,6 +87,7 @@ describe("Excel PowerShell errors", () => {
           {
             actorRef: "BP_Guard_C_1",
             label: "守卫新增",
+            targetDescription: "新增守卫",
             classPath: "/Game/Test/BP_Guard.BP_Guard_C",
             transform: {
               location: { x: 1, y: 2, z: 3 },
@@ -120,6 +122,12 @@ describe("Excel PowerShell errors", () => {
     ).toBeGreaterThan(10);
     expect(EXCEL_REGISTRATION_SCRIPT).toContain(
       'if ($scope -eq "all")',
+    );
+    expect(EXCEL_REGISTRATION_SCRIPT).toContain(
+      "Set-NewCell $targetSheet $row 4 $item.targetDescription",
+    );
+    expect(EXCEL_REGISTRATION_SCRIPT).not.toContain(
+      "Set-NewCell $targetSheet $row 4 $item.label",
     );
   });
 
@@ -183,6 +191,7 @@ describe("Excel PowerShell errors", () => {
         {
           actorRef: "BP_Guard_C_1",
           label: "守卫新增",
+          targetDescription: "守卫队长",
           classPath: "/Game/Test/BP_Guard.BP_Guard_C",
           transform: {
             location: { x: 1, y: 2, z: 3 },
@@ -201,6 +210,7 @@ describe("Excel PowerShell errors", () => {
 
     expect(request.scope).toBe("target_only");
     expect(request.items[0].existingNpcId).toBe(101999);
+    expect(request.items[0].targetDescription).toBe("守卫队长");
     expect(request.paths.npc).toBe(
       "D:\\Project\\doc\\xlsdir\\NPC表.xlsm",
     );
@@ -214,6 +224,7 @@ describe("Excel PowerShell errors", () => {
         {
           actorRef: "BP_Guard_C_1",
           label: "守卫新增",
+          targetDescription: "守卫队长",
           classPath: "/Game/Test/BP_Guard.BP_Guard_C",
           transform: {
             location: { x: 1, y: 2, z: 3 },
@@ -269,6 +280,7 @@ describe("Excel PowerShell errors", () => {
         {
           actorRef: "BP_Guard_C_1",
           label: "守卫新增",
+          targetDescription: "守卫队长",
           classPath: "/Game/Test/BP_Guard.BP_Guard_C",
           transform: {
             location: { x: 1, y: 2, z: 3 },

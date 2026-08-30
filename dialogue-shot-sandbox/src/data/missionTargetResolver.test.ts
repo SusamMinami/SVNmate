@@ -120,6 +120,29 @@ describe("resolveMissionTargets", () => {
     );
   });
 
+  it("lists the duplicated target IDs in the error", () => {
+    const brokenMissions = missions.replace(
+      '"500001,500002,500003"',
+      '"500001,500002,500001,500002,500001"',
+    );
+    const broken = parseDialogueDatabase(
+      dialogues,
+      starts,
+      npcs,
+      "test",
+      models,
+      brokenMissions,
+      "",
+      positions,
+      maps,
+      scenes,
+    );
+
+    expect(() => resolveMissionTargets(broken, "900001")).toThrow(
+      "任务节点 900001 的显示目标物存在重复 ID：500001、500002",
+    );
+  });
+
   it("orders BP targets by visible dialogue frequency and keeps ties stable", () => {
     const source = database();
     const row = source.dialogueRows[0];

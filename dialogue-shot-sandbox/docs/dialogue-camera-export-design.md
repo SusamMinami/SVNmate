@@ -27,8 +27,8 @@
 - `DialogBlendCameraData` 默认使用 `ECutShot`。首版不修改该字段。
 - 音效位于 `CommonDialogGraphProperties` 的 `Alias="SoundEffect"`，
   类型为 `softobjectpath`，实际值写入 `CurrentPath`。
-- 音效延迟位于 `Alias="DelayTime"` 的 `CurrentFloat`；推荐与导出流程不配置
-  该值，始终保留 UE 节点中的现有延迟。
+- 音效延迟位于 `Alias="DelayTime"` 的 `CurrentFloat`；音效建议可选择目标
+  台词节点并设置 `0-120s` 延迟，导出预检会同时展示和写入该值。
 - 音乐状态位于 `Alias="BackgroundMusic"` 的 `CurrentUint32`。状态 ID 来自
   `d对话音乐状态映射表.csv` 中
   `DialogMusicState.WwiseState -> DialogMusicState.id` 的映射。
@@ -106,7 +106,8 @@ FOV = 2 * atan(35 / (2 * focalLength))
 6. 全量页面中每个镜头可独立勾选；同一镜头覆盖的起点和延续节点作为一个整体处理，
    未勾选镜头不写入也不清空。
 7. 角色动作、音效与音乐分别在独立列表中勾选，可与镜头一起导出，也可取消全部
-   镜头后单独导出；当前镜头模式只包含该镜头覆盖节点的数据。
+   镜头后单独导出；当前镜头模式只包含该镜头覆盖节点的数据。音效资源和延迟
+   作为同一项接受预检与回读。
 8. 对话资产、Formation BP 或动作来源 NPC BP 已有未保存修改时阻断导出，
    避免保存无关改动或使用随后可能被撤销的配置。
 9. 投影验收失败只显示警告，不阻断用户确认。

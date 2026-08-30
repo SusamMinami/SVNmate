@@ -1442,6 +1442,7 @@ export function MissionTargetModal({
                 disabled={busy}
                 onChange={(event) => {
                   setBlueprintName(event.target.value);
+                  setDialogueId("");
                   setBlueprintInspection(null);
                   setError("");
                   setStatus("");
@@ -1467,9 +1468,15 @@ export function MissionTargetModal({
             <button
               className="mission-target-dialogue-toggle"
               type="button"
+              data-has-value={Boolean(dialogueId)}
               aria-expanded={dialogueIdExpanded}
               aria-controls="mission-dialogue-id"
-              aria-label={`${dialogueIdExpanded ? "收起" : "展开"}对话文件 ID`}
+              aria-label={`${dialogueIdExpanded ? "收起" : "展开"}对话文件 ID${
+                dialogueId ? `，当前 ${dialogueId}` : ""
+              }`}
+              title={`${dialogueIdExpanded ? "收起" : "展开"}对话文件 ID${
+                dialogueId ? `（当前 ${dialogueId}）` : ""
+              }`}
               onClick={() =>
                 setDialogueIdExpanded((current) => !current)
               }
@@ -1478,10 +1485,6 @@ export function MissionTargetModal({
                 <ChevronDown size={14} />
               ) : (
                 <ChevronRight size={14} />
-              )}
-              <span>对话 ID</span>
-              {!dialogueIdExpanded && dialogueId && (
-                <code>{dialogueId}</code>
               )}
             </button>
             {dialogueIdExpanded && (
@@ -1501,7 +1504,7 @@ export function MissionTargetModal({
                   setError("");
                   setStatus("");
                 }}
-                placeholder="留空时从 BP 文件名推导"
+                placeholder="可选对话 ID"
                 autoFocus
               />
             )}
