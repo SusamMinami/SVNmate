@@ -249,11 +249,13 @@ interface FormationChoicePresentation {
   requestedMode: DirectorMode;
   sourceSequence: DialogueSequence;
   playerPositionLocked: boolean;
+  ignoredNpcCount: number;
 }
 
 interface MissingNpcModelReview {
   database: DialogueDatabase;
   sourceSequence: DialogueSequence;
+  snapshot: BlueprintFormationSnapshot;
   requestedMode: DirectorMode;
   issues: MissingBlueprintNpcModel[];
   ignoredNpcIds: Set<number>;
@@ -268,8 +270,14 @@ function createFormationChoice(
   soundEffectCatalog: SoundEffectCatalogSnapshot["entries"],
   ai?: PendingDirectorPresentation,
   playerPositionLocked = false,
+  ignoredNpcIds: ReadonlySet<number> = new Set(),
 ): FormationChoicePresentation {
-  const imported = applyBlueprintFormation(database, sourceSequence, snapshot);
+  const imported = applyBlueprintFormation(
+    database,
+    sourceSequence,
+    snapshot,
+    { ignoredNpcIds },
+  );
   return {
     blueprint: createShotPreview(imported.sequence, {
       preserveInputPositions: true,
@@ -288,6 +296,7 @@ function createFormationChoice(
     requestedMode,
     sourceSequence,
     playerPositionLocked,
+    ignoredNpcCount: ignoredNpcIds.size,
   };
 }
 
@@ -445,10 +454,16 @@ function blueprintDisplayName(assetPath: string): string {
   );
 }
 
-function blueprintFormationStatus(playerPositionLocked: boolean): string {
-  return playerPositionLocked
+function blueprintFormationStatus(
+  playerPositionLocked: boolean,
+  ignoredNpcCount = 0,
+): string {
+  const base = playerPositionLocked
     ? "保留 UE Formation 的全部初始位置与朝向，0 号玩家固定"
     : "保留 UE Formation 的其他角色位置，0 号玩家由导演调整";
+  return ignoredNpcCount > 0
+    ? `${base}；${ignoredNpcCount} 位缺失模型角色使用规则临时占位`
+    : base;
 }
 
 function shotSizeLabel(shotSize: ShotSize): string {
@@ -2181,11 +2196,13 @@ export default function App() {
     sourceSequence: DialogueSequence,
     result: DirectorRunResult,
   ) {
-    const usesBlueprintFormation = result.participants.every(
-      (participant) => participant.positionSource === "blueprint",
-    );
     const preservesInputFormation =
       result.input.constraints.preserve_input_formation === true;
+    const usesBlueprintFormation =
+      preservesInputFormation &&
+      result.participants.some(
+        (participant) => participant.positionSource === "blueprint",
+      );
     const playerPositionLocked =
       result.input.constraints.lock_player_position !== false;
     setSequence({
@@ -2220,7 +2237,10 @@ export default function App() {
     setFormationStatus(
       result.appliedMode === "rule"
         ? usesBlueprintFormation
-          ? blueprintFormationStatus(playerPositionLocked)
+          ? blueprintFormationStatus(
+              playerPositionLocked,
+              formationChoice?.ignoredNpcCount,
+            )
           : "使用规则导演自动安排的角色位置"
         : usesBlueprintFormation
           ? `${directorLabel(result.appliedMode)} 分镜沿用 BP 占位，0 号玩家${
@@ -2355,6 +2375,7 @@ export default function App() {
         setMissingNpcModelReview({
           database: nextDatabase,
           sourceSequence: nextSequence,
+          snapshot: lookup.snapshot,
           requestedMode,
           issues: missingModels,
           ignoredNpcIds: new Set(),
@@ -2431,7 +2452,7 @@ export default function App() {
     });
   }
 
-  async function continueWithoutMissingNpcModels() {
+  function continueWithoutMissingNpcModels() {
     const review = missingNpcModelReview;
     if (
       !review ||
@@ -2441,13 +2462,40 @@ export default function App() {
     ) {
       return;
     }
-    setMissingNpcModelReview(null);
-    setFormationStatus(
-      `已忽略 ${review.issues.length} 个缺失 BP 模型的 NPC，使用规则占位继续分镜`,
-    );
-    await applySequence(review.sourceSequence, review.requestedMode, {
-      applyResultImmediately: review.requestedMode === "trae",
-    });
+    try {
+      const choice = createFormationChoice(
+        review.database,
+        review.sourceSequence,
+        review.snapshot,
+        review.requestedMode,
+        soundEffectCatalog.entries,
+        undefined,
+        false,
+        review.ignoredNpcIds,
+      );
+      setMissingNpcModelReview(null);
+      setFormationChoice(choice);
+      setFormationChoiceMode(
+        review.requestedMode === "trae"
+          ? "director-request"
+          : "initial",
+      );
+      setFormationStatus(
+        `已忽略 ${review.issues.length} 个缺失 BP 模型的 NPC，请选择 BP 或规则占位`,
+      );
+    } catch (mappingError) {
+      setMissingNpcModelReview((current) =>
+        current
+          ? {
+              ...current,
+              error:
+                mappingError instanceof Error
+                  ? mappingError.message
+                  : "无法生成忽略缺失角色后的 BP 占位",
+            }
+          : current,
+      );
+    }
   }
 
   async function refreshMissingNpcModels() {
@@ -2482,16 +2530,18 @@ export default function App() {
         setFormationStatus(skippedBlueprintMessage(lookup.message));
         return;
       }
+      const refreshedSnapshot = lookup.snapshot;
       const issues = findMissingBlueprintNpcModels(
         review.database,
         review.sourceSequence,
-        lookup.snapshot,
+        refreshedSnapshot,
       );
       if (issues.length > 0) {
         setMissingNpcModelReview((current) =>
           current
             ? {
                 ...current,
+                snapshot: refreshedSnapshot,
                 issues,
                 ignoredNpcIds: new Set(
                   issues
@@ -2701,7 +2751,10 @@ export default function App() {
       setActiveFormationVariant(useBlueprint ? "blueprint" : "generated");
       setFormationStatus(
         useBlueprint
-          ? blueprintFormationStatus(playerPositionLocked)
+          ? blueprintFormationStatus(
+              playerPositionLocked,
+              nextFormationChoice.ignoredNpcCount,
+            )
           : "TRAE 将自主设计全部角色占位",
       );
       void applySequence(selectedSequence, "trae", {
@@ -2742,7 +2795,10 @@ export default function App() {
       setActiveFormationVariant(choice);
       setFormationStatus(
         choice === "blueprint"
-          ? blueprintFormationStatus(playerPositionLocked)
+          ? blueprintFormationStatus(
+              playerPositionLocked,
+              nextFormationChoice.ignoredNpcCount,
+            )
           : "使用规则导演自动安排的角色位置",
       );
       focusPlanShot(selectedPreview.shots, selectedPreview.sequence, true);
@@ -2757,7 +2813,10 @@ export default function App() {
     setActiveFormationVariant(choice);
     setFormationStatus(
       useBlueprint
-        ? blueprintFormationStatus(playerPositionLocked)
+        ? blueprintFormationStatus(
+            playerPositionLocked,
+            nextFormationChoice.ignoredNpcCount,
+          )
         : nextFormationChoice.requestedMode === "trae"
           ? "TRAE 将自主设计全部角色占位"
           : "使用规则导演自动安排的角色位置",
@@ -2982,6 +3041,7 @@ export default function App() {
         activeFormationSource === "blueprint"
           ? blueprintFormationStatus(
               formationChoice?.playerPositionLocked ?? true,
+              formationChoice?.ignoredNpcCount,
             )
           : "使用规则导演自动安排的角色位置",
       );

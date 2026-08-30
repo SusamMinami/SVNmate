@@ -84,11 +84,11 @@ export function MissionTargetDialoguePreview({
   return (
     <section
       className="mission-target-dialogue-preview"
-      aria-label="对话最终站位俯视图"
+      aria-label="对话节点站位俯视图"
     >
       <header>
         <span>
-          <strong>对话最终站位</strong>
+          <strong>对话节点站位</strong>
           <small>
             节点 {timeline.finalDialogueId} · {timeline.nodeCount} 个节点
           </small>
@@ -104,7 +104,7 @@ export function MissionTargetDialoguePreview({
         <svg
           viewBox={`0 0 ${VIEW_WIDTH} ${VIEW_HEIGHT}`}
           role="img"
-          aria-label={`对话 ${plan.taskId} 最终站位俯视图`}
+          aria-label={`对话 ${plan.taskId} 节点站位俯视图`}
         >
           <defs>
             <pattern

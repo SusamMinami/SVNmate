@@ -103,10 +103,13 @@ function modelAssetName(classPath: string): string {
 function loadSummary(
   plan: MissionTargetPreviewPlan,
   result: MissionTargetPreviewLoadResult,
+  currentMap = false,
 ): string {
-  const mapStatus = result.autoOpenedMap
-    ? `已自动打开 ${plan.mapName}`
-    : `当前已是 ${plan.mapName}`;
+  const mapStatus = currentMap
+    ? "已加载到当前 UE 关卡"
+    : result.autoOpenedMap
+      ? `已自动打开 ${plan.mapName}`
+      : `当前已是 ${plan.mapName}`;
   return `${mapStatus}，加载 ${result.assetCount} 个资产和 ${result.markerCount} 个定位标记${
     plan.dialogueTimeline
       ? `，已选中 ${result.selectedActorCount ?? 0} 个变更角色供 NPC 注册`
@@ -217,18 +220,47 @@ export function MissionTargetModal({
       .length ?? 0;
   const blueprintDialoguePreviewPlan =
     blueprintInspection?.dialoguePreviewPlan ?? null;
-  const configuredDialogueId = dialogueId.trim() || undefined;
-  const configuredDialogueTimeline = useMemo(
-    () =>
-      configuredDialogueId
-        ? findDialogueTimeline(database, configuredDialogueId).map((row) => ({
-            id: row.id,
-            characterBehaviourString: row.characterBehaviourString,
-            relativeTransformsString: row.relativeTransformsString,
-          }))
-        : undefined,
-    [configuredDialogueId, database],
+  const dialogueInput = dialogueId.trim();
+  const dialoguePreviewNodeId = /^\d{6}$/.test(dialogueInput)
+    ? dialogueInput
+    : undefined;
+  const dialogueNodeInputValid =
+    !dialogueInput || Boolean(dialoguePreviewNodeId);
+  const blueprintInputIsDialogueNode = /^\d{6}$/.test(
+    blueprintName.trim(),
   );
+  const dialoguePreviewRequest = useMemo(
+    () => {
+      if (!dialoguePreviewNodeId) {
+        return null;
+      }
+      const fullTimeline = findDialogueTimeline(
+        database,
+        dialoguePreviewNodeId,
+      );
+      const targetIndex = fullTimeline.findIndex(
+        (row) => row.id === dialoguePreviewNodeId,
+      );
+      return {
+        dialogueAssetId:
+          fullTimeline[0]?.id ??
+          `${dialoguePreviewNodeId.slice(0, 4)}00`,
+        timeline:
+          targetIndex >= 0
+            ? fullTimeline.slice(0, targetIndex + 1).map((row) => ({
+                id: row.id,
+                characterBehaviourString: row.characterBehaviourString,
+                relativeTransformsString: row.relativeTransformsString,
+              }))
+            : [],
+      };
+    },
+    [database, dialoguePreviewNodeId],
+  );
+  const configuredDialogueId =
+    dialoguePreviewRequest?.dialogueAssetId;
+  const configuredDialogueTimeline =
+    dialoguePreviewRequest?.timeline;
   const isDialogueRegistration =
     blueprintInspection?.blueprintState === "populated";
   const existingTargetIds = new Set(
@@ -549,7 +581,11 @@ export function MissionTargetModal({
   }
 
   async function loadPreview() {
-    if (plan ? selectedCount === 0 : !blueprintName.trim()) {
+    if (
+      plan
+        ? selectedCount === 0
+        : !blueprintName.trim() || !dialoguePreviewNodeId
+    ) {
       return;
     }
     setBusy(true);
@@ -586,14 +622,22 @@ export function MissionTargetModal({
           );
         }
         selectedPlan = inspection.dialoguePreviewPlan;
-        if (configuredDialogueId) {
+        if (dialoguePreviewNodeId) {
           setStatus(
             inspection.dialoguePreviewPlan.dialogueTimeline
-              ? "已统计对话最终站位，请确认俯视图后加载到 UE"
-              : "本地对话时间线不可用，请确认 BP 原始站位后加载到 UE",
+              ? `已推演至节点 ${dialoguePreviewNodeId}，请确认俯视图后加载到 UE`
+              : `本地对话表中未找到节点 ${dialoguePreviewNodeId}`,
           );
           return;
         }
+      }
+      if (!plan) {
+        const result = await loadMissionTargetPreview(
+          selectedPlan,
+          "current",
+        );
+        setStatus(loadSummary(selectedPlan, result, true));
+        return;
       }
       const mapStatus = await inspectMissionTargetMap(
         selectedPlan.mapAssetPath,
@@ -1395,17 +1439,26 @@ export function MissionTargetModal({
       className={embedded ? "button workspace-floating-command" : "button"}
       type="button"
       onClick={() => void inspectBackgroundProps()}
-      disabled={busy || (!taskId.trim() && !blueprintName.trim())}
+      disabled={
+        busy ||
+        (!taskId.trim() && !blueprintName.trim()) ||
+        blueprintInputIsDialogueNode ||
+        !dialogueNodeInputValid
+      }
       title={
-        taskId.trim()
-          ? plan
-            ? blueprintName.trim()
-              ? "读取 UE 当前选择，匹配任务目标物并审核未匹配资源"
-              : "读取 UE 当前选择并识别任务目标物"
-            : "解析任务节点并识别 UE 当前选择"
-          : blueprintName.trim()
-            ? "读取 UE 当前选择，审核后直接写入当前 BP"
-            : "请先输入任务节点或填写 BP 文件名"
+        blueprintInputIsDialogueNode
+          ? "六位对话节点 ID 请填写到 BP 右侧的展开输入框"
+          : !dialogueNodeInputValid
+            ? "对话节点 ID 必须为六位数字"
+            : taskId.trim()
+              ? plan
+                ? blueprintName.trim()
+                  ? "读取 UE 当前选择，匹配任务目标物并审核未匹配资源"
+                  : "读取 UE 当前选择并识别任务目标物"
+                : "解析任务节点并识别 UE 当前选择"
+              : blueprintName.trim()
+                ? "读取 UE 当前选择，审核后直接写入当前 BP"
+                : "请先输入任务节点或填写 BP 文件名"
       }
     >
       {busy ? (
@@ -1480,7 +1533,12 @@ export function MissionTargetModal({
               type="submit"
               title="解析任务目标物"
               aria-label="解析任务目标物"
-              disabled={busy || !taskId}
+              disabled={
+                busy ||
+                !taskId ||
+                blueprintInputIsDialogueNode ||
+                !dialogueNodeInputValid
+              }
             >
               {busy ? (
                 <LoaderCircle className="spin" size={18} />
@@ -1500,22 +1558,39 @@ export function MissionTargetModal({
                 value={blueprintName}
                 disabled={busy}
                 onChange={(event) => {
-                  setBlueprintName(event.target.value);
+                  const value = event.target.value;
+                  setBlueprintName(value);
                   setDialogueId("");
                   setBlueprintInspection(null);
-                  setError("");
+                  setError(
+                    /^\d{6}$/.test(value.trim())
+                      ? "六位对话节点 ID 请填写到 BP 右侧的展开输入框"
+                      : "",
+                  );
                   setStatus("");
                 }}
-                placeholder="7351、BP_735100 或 /Game/.../BP_735100"
+                placeholder="7370、BP_737000 或 /Game/.../BP_737000"
                 spellCheck={false}
+                aria-invalid={blueprintInputIsDialogueNode}
               />
               <button
                 className="icon-button"
                 type="button"
-                title="检查 BP 与对话模型"
                 aria-label="检查 BP 与对话模型"
                 onClick={() => void inspectBlueprint()}
-                disabled={busy || !blueprintName.trim()}
+                disabled={
+                  busy ||
+                  !blueprintName.trim() ||
+                  blueprintInputIsDialogueNode ||
+                  !dialogueNodeInputValid
+                }
+                title={
+                  blueprintInputIsDialogueNode
+                    ? "六位对话节点 ID 请填写到右侧展开输入框"
+                    : !dialogueNodeInputValid
+                      ? "对话节点 ID 必须为六位数字"
+                      : "检查 BP 与对话模型"
+                }
               >
                 {busy ? (
                   <LoaderCircle className="spin" size={18} />
@@ -1530,10 +1605,10 @@ export function MissionTargetModal({
               data-has-value={Boolean(dialogueId)}
               aria-expanded={dialogueIdExpanded}
               aria-controls="mission-dialogue-id"
-              aria-label={`${dialogueIdExpanded ? "收起" : "展开"}对话文件 ID${
+              aria-label={`${dialogueIdExpanded ? "收起" : "展开"}对话节点 ID${
                 dialogueId ? `，当前 ${dialogueId}` : ""
               }`}
-              title={`${dialogueIdExpanded ? "收起" : "展开"}对话文件 ID${
+              title={`${dialogueIdExpanded ? "收起" : "展开"}对话节点 ID${
                 dialogueId ? `（当前 ${dialogueId}）` : ""
               }`}
               onClick={() =>
@@ -1549,13 +1624,13 @@ export function MissionTargetModal({
             {dialogueIdExpanded && (
               <input
                 id="mission-dialogue-id"
-                aria-label="对话文件 ID（可选）"
+                aria-label="对话节点 ID（可选）"
                 inputMode="numeric"
                 value={dialogueId}
                 disabled={busy}
                 onChange={(event) => {
                   setDialogueId(
-                    event.target.value.replace(/\D/g, "").slice(0, 32),
+                    event.target.value.replace(/\D/g, "").slice(0, 6),
                   );
                   setBlueprintInspection(null);
                   setBackgroundPropPreview(null);
@@ -1563,7 +1638,8 @@ export function MissionTargetModal({
                   setError("");
                   setStatus("");
                 }}
-                placeholder="可选对话 ID"
+                placeholder="输入 6 位节点 ID"
+                aria-invalid={!dialogueNodeInputValid}
                 autoFocus
               />
             )}
@@ -1597,15 +1673,13 @@ export function MissionTargetModal({
                     <dd>{blueprintInspection.dialogueId}</dd>
                   </div>
                   <div>
-                    <dt>{plan ? "注册策略" : "坐标来源"}</dt>
+                    <dt>{plan ? "注册策略" : "当前流程"}</dt>
                     <dd>
                       {plan
                         ? "保留现有并按序追加"
                         : blueprintDialoguePreviewPlan?.dialogueTimeline
-                          ? "对话最终站位"
-                          : blueprintDialoguePreviewPlan
-                            ? "对话初始站位"
-                          : "尚未解析"}
+                          ? `调度至 ${blueprintDialoguePreviewPlan.dialogueTimeline.finalDialogueId}`
+                          : "BP 注册到对话"}
                     </dd>
                   </div>
                   <div>
@@ -1717,6 +1791,7 @@ export function MissionTargetModal({
           )}
           {!plan &&
             isDialogueRegistration &&
+            Boolean(dialoguePreviewNodeId) &&
             (blueprintInspection.dialoguePreviewBlockedReasons?.length ??
               0) > 0 && (
               <section className="mission-target-warnings">
@@ -2128,9 +2203,9 @@ export function MissionTargetModal({
                 ? `BP 已有 ${blueprintRegistrationSlots.length} 个固定角色位；待追加 ${selectedAppendTargets.length} / ${selectableTargetRows.length} 个目标物`
                 : blueprintDialoguePreviewPlan
                   ? blueprintDialoguePreviewPlan.dialogueTimeline
-                    ? `对话 ${blueprintDialoguePreviewPlan.taskId} 最终节点 ${blueprintDialoguePreviewPlan.dialogueTimeline.finalDialogueId}；${blueprintDialoguePreviewPlan.dialogueTimeline.adjustedCharacterCount} 位角色发生调度`
-                    : `已按对话 ${blueprintDialoguePreviewPlan.taskId} 解析 ${blueprintDialoguePreviewPlan.targets.length} 个 BP 模型`
-                  : `BP 已有 ${blueprintRegistrationSlots.length} 个固定角色位；对话坐标不可用`
+                    ? `对话 ${blueprintDialoguePreviewPlan.taskId} 已推演至节点 ${blueprintDialoguePreviewPlan.dialogueTimeline.finalDialogueId}；${blueprintDialoguePreviewPlan.dialogueTimeline.adjustedCharacterCount} 位角色发生调度`
+                    : `BP 已有 ${blueprintRegistrationSlots.length} 个固定角色位`
+                  : `BP 已有 ${blueprintRegistrationSlots.length} 个固定角色位；可注册到对话`
               : plan
               ? `已选择 ${selectedCount} / ${plan.targets.length} 个目标物，MapID ${plan.mapId}`
               : "检查 BP 不会修改对话或 UE 资产"}
@@ -2193,47 +2268,39 @@ export function MissionTargetModal({
                 目标物 → BP
               </button>
             )}
-            <button
-              className="button"
-              type="button"
-              onClick={() => void loadPreview()}
-              disabled={
-                busy ||
-                (plan
-                  ? selectedCount === 0
-                  : !blueprintName.trim())
-              }
-              title={
-                plan
-                  ? "按任务目标物坐标加载所选预览"
-                  : blueprintName.trim()
-                    ? !configuredDialogueId
-                      ? "按 BP 文件中的原始模型位置直接加载到 UE"
-                      : blueprintDialoguePreviewPlan?.dialogueTimeline
-                        ? "把俯视图中的最终站位加载到 UE，并自动选中变更角色"
-                        : blueprintDialoguePreviewPlan
-                          ? "把 BP 原始站位加载到 UE"
-                          : "读取 BP 和对话调度并生成最终站位俯视图"
-                    : "请先输入任务节点或 BP 文件名"
-              }
-            >
-              {busy ? (
-                <LoaderCircle className="spin" size={16} />
-              ) : (
-                <MapPinned size={16} />
-              )}
-              {busy
-                ? "正在处理..."
-                : plan
-                  ? "加载到 UE"
-                  : !configuredDialogueId
-                    ? "加载 BP 到 UE"
+            {(plan || dialoguePreviewNodeId) && (
+              <button
+                className="button"
+                type="button"
+                onClick={() => void loadPreview()}
+                disabled={
+                  busy ||
+                  (plan
+                    ? selectedCount === 0
+                    : !blueprintName.trim())
+                }
+                title={
+                  plan
+                    ? "按任务目标物坐标加载所选预览"
                     : blueprintDialoguePreviewPlan?.dialogueTimeline
-                      ? "加载最终站位"
-                      : blueprintDialoguePreviewPlan
-                        ? "加载 BP 原位"
-                        : "计算最终站位"}
-            </button>
+                      ? "把俯视图中的节点站位加载到当前 UE 关卡，并自动选中变更角色"
+                      : "读取 BP 和对话调度并生成指定节点站位俯视图"
+                }
+              >
+                {busy ? (
+                  <LoaderCircle className="spin" size={16} />
+                ) : (
+                  <MapPinned size={16} />
+                )}
+                {busy
+                  ? "正在处理..."
+                  : plan
+                    ? "加载到 UE"
+                    : blueprintDialoguePreviewPlan?.dialogueTimeline
+                      ? "加载节点站位"
+                      : "计算节点站位"}
+              </button>
+            )}
             <button
               className="button button--primary"
               type="button"
@@ -2247,6 +2314,8 @@ export function MissionTargetModal({
               disabled={
                 busy ||
                 !blueprintName.trim() ||
+                blueprintInputIsDialogueNode ||
+                !dialogueNodeInputValid ||
                 !blueprintInspection ||
                 (isDialogueRegistration
                   ? blueprintRegistrationSlots.length === 0

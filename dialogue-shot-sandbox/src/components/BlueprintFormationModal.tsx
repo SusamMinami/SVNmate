@@ -111,6 +111,10 @@ export function BlueprintFormationModal({
   const usesBlueprintStrategy =
     selected === "blueprint" ||
     (selected === "current" && currentUsesBlueprint);
+  const blueprintHasFallbackActors =
+    blueprint?.sequence.participants.some(
+      (participant) => participant.positionSource !== "blueprint",
+    ) ?? false;
   const sourceLabel =
     aiSource === "shared-library"
       ? "飞书共享方案"
@@ -328,9 +332,13 @@ export function BlueprintFormationModal({
                   : "保留其他 BP 角色，允许导演调整 0 号玩家位置"
                 : "保留当前角色占位，由 AI 重新规划镜头"
               : selected === "blueprint"
-              ? playerPositionLocked
-                ? "保留全部 UE 角色位置，0 号玩家也保持固定；背景 NPC 只参与构图"
-                : "保留其他 UE 角色，0 号玩家可按导演需要调整；背景 NPC 只参与构图"
+              ? blueprintHasFallbackActors
+                ? playerPositionLocked
+                  ? "保留可用 BP 角色位置；缺失模型角色使用规则临时占位，0 号玩家固定"
+                  : "保留可用 BP 角色位置；缺失模型角色使用规则临时占位，0 号玩家可调整"
+                : playerPositionLocked
+                  ? "保留全部 UE 角色位置，0 号玩家也保持固定；背景 NPC 只参与构图"
+                  : "保留其他 UE 角色，0 号玩家可按导演需要调整；背景 NPC 只参与构图"
               : selected === "ai"
                 ? isDirectorRequest
                   ? "由 TRAE 一次完成角色占位、朝向关系与分镜"
@@ -369,7 +377,9 @@ export function BlueprintFormationModal({
                     : "TRAE 将沿用其他 BP 角色，只调整 0 号玩家并一次生成最终方案。"
                   : "TRAE 将自主规划全部角色占位并一次生成最终方案。"
               : mode === "initial"
-              ? "确认后仅按对白角色生成关系轴；背景 NPC 保留在镜头构图中。"
+              ? blueprintHasFallbackActors && selected === "blueprint"
+                ? "确认后沿用可用 BP 槽位；缺失模型角色保留对白并使用临时占位。"
+                : "确认后仅按对白角色生成关系轴；背景 NPC 保留在镜头构图中。"
               : "切换后将载入该占位对应的完整分镜，无需重新分析。"}
           </span>
           <button

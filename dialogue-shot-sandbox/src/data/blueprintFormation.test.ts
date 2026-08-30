@@ -443,6 +443,86 @@ describe("applyBlueprintFormation", () => {
     ).toThrow("BP 未找到与对话 NPC 伊姆（102101）模型一致的角色槽");
   });
 
+  it("keeps BP slots and gives ignored missing NPCs temporary rule positions", () => {
+    const database = parseDialogueDatabase(
+      [
+        "##&Dialog.id,Dialog.NPCID,Dialog.Content,Dialog.NextID,Dialog.End",
+        "##对话ID,人物,内容,下一ID,结束",
+        "737000,,,737001,false",
+        "737001,102101,伊姆说话,737002,false",
+        "737002,1,玩家说话,,true",
+      ].join("\n"),
+      [
+        "##&DialogStart.id,DialogStart.Outline,DialogStart.Formation,DialogStart.Model",
+        "##对话ID,剧情梗概,模板,模型",
+        "737000,缺失模型测试,/Game/Test/BP_737000.BP_737000_C,player;Wrong",
+      ].join("\n"),
+      [
+        "##&NPC.id,NPC.name,NPC.npcintroduce,NPC.resource_id",
+        "##id,名称,介绍,资源",
+        "1,玩家,玩家,",
+        "102101,伊姆,士兵,200526",
+      ].join("\n"),
+      "test",
+      [
+        "##&Model.id,,Model.path",
+        "##id,配置路径,生成路径",
+        "200526,/Game/Test/BP_Im,/Game/Test/BP_Im.BP_Im_C",
+      ].join("\n"),
+    );
+    const sequence = findDialogueSequence(database, "7370");
+    const snapshot: BlueprintFormationSnapshot = {
+      dialogueId: "7370",
+      blueprintAssetPath: "/Game/Test/BP_737000.BP_737000",
+      blueprintClassPath: "/Game/Test/BP_737000.BP_737000_C",
+      slots: [
+        slot(0, "/Game/Seria/Characters/Eric/BP_Eric.BP_Eric_C", 0, 0, 0),
+        slot(1, "/Game/Test/BP_Wrong.BP_Wrong_C", 100, 0, 90),
+      ],
+      dialogueModels: ["player", "Wrong"],
+      warnings: [],
+    };
+
+    const applied = applyBlueprintFormation(
+      database,
+      sequence,
+      snapshot,
+      { ignoredNpcIds: new Set([102101]) },
+    );
+    const player = applied.sequence.participants.find(
+      (participant) => participant.id === 1,
+    );
+    const ignored = applied.sequence.participants.find(
+      (participant) => participant.id === 102101,
+    );
+    const existingBpActor = applied.sequence.participants.find(
+      (participant) => participant.modelIndex === 1,
+    );
+
+    expect(player).toMatchObject({
+      modelIndex: 0,
+      positionSource: "blueprint",
+      position: [0, 0, 0.5],
+    });
+    expect(existingBpActor).toMatchObject({
+      modelIndex: 1,
+      positionSource: "blueprint",
+      position: [0, 0, -0.5],
+    });
+    expect(ignored).toMatchObject({
+      modelIndex: null,
+      positionSource: "generated",
+      position: [1.35, 0, 0],
+    });
+    expect(
+      applied.sequence.rows.find((row) => row.id === "737001")
+        ?.speakerSlot,
+    ).toBe(ignored?.slot);
+    expect(applied.sequence.warnings).toContain(
+      "已忽略 1 位缺失 BP 模型角色；其余角色保留 BP 站位，缺失角色使用规则占位",
+    );
+  });
+
   it("rejects an explicit AM_Talk slot whose model belongs to another NPC", () => {
     const database = parseDialogueDatabase(
       dialogues,

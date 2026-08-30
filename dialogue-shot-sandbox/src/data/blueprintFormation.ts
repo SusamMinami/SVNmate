@@ -292,15 +292,16 @@ function distanceSquared(
 function selectFormationSlots(
   resolvedSlots: ResolvedFormationSlot[],
   warnings: string[],
+  maximumSlots: number = MAX_DIALOGUE_PARTICIPANTS,
 ): ResolvedFormationSlot[] {
-  if (resolvedSlots.length <= MAX_DIALOGUE_PARTICIPANTS) {
+  if (resolvedSlots.length <= maximumSlots) {
     return resolvedSlots;
   }
 
   const required = resolvedSlots.filter((item) => item.required);
-  if (required.length > MAX_DIALOGUE_PARTICIPANTS) {
+  if (required.length > maximumSlots) {
     throw new Error(
-      `BP 中需要保留 ${required.length} 个对话角色实例，超过当前支持的 ${MAX_DIALOGUE_PARTICIPANTS} 位上限`,
+      `BP 中需要保留 ${required.length} 个对话角色实例，但忽略缺失模型后只剩 ${maximumSlots} 个可用槽位`,
     );
   }
   const background = resolvedSlots
@@ -319,7 +320,7 @@ function selectFormationSlots(
   const selected = [
     ...required,
     ...background
-      .slice(0, MAX_DIALOGUE_PARTICIPANTS - required.length)
+      .slice(0, maximumSlots - required.length)
       .map(({ item }) => item),
   ].sort((left, right) => left.slot.modelIndex - right.slot.modelIndex);
   const omittedCount = resolvedSlots.length - selected.length;
@@ -333,7 +334,11 @@ export function applyBlueprintFormation(
   database: DialogueDatabase,
   sequence: DialogueSequence,
   snapshot: BlueprintFormationSnapshot,
+  options: {
+    ignoredNpcIds?: ReadonlySet<number>;
+  } = {},
 ): AppliedBlueprintFormation {
+  const ignoredNpcIds = options.ignoredNpcIds ?? new Set<number>();
   const modelNames =
     snapshot.dialogueModels && snapshot.dialogueModels.length > 0
       ? snapshot.dialogueModels
@@ -361,7 +366,11 @@ export function applyBlueprintFormation(
   );
   const requiredProfiles = new Map<number, NpcProfile>();
   for (const row of sequence.rows) {
-    if (row.npcId === null || requiredProfiles.has(row.npcId)) {
+    if (
+      row.npcId === null ||
+      ignoredNpcIds.has(row.npcId) ||
+      requiredProfiles.has(row.npcId)
+    ) {
       continue;
     }
     const profile = npcProfile(database, sequence, row.npcId);
@@ -386,13 +395,19 @@ export function applyBlueprintFormation(
       )[0],
   );
   for (const [modelIndex, npcIds] of explicitNpcIds) {
-    if (npcIds.size !== 1) {
+    const requiredNpcIds = Array.from(npcIds).filter(
+      (npcId) => !ignoredNpcIds.has(npcId),
+    );
+    if (requiredNpcIds.length === 0) {
+      continue;
+    }
+    if (requiredNpcIds.length !== 1) {
       throw new Error(
         `BP 槽位 ${modelIndex} 同时被多个 NPC 的 AM_Talk 引用，无法确认说话角色`,
       );
     }
     const slot = activeSlotByIndex.get(modelIndex);
-    const npcId = Array.from(npcIds)[0];
+    const npcId = requiredNpcIds[0];
     const profile = npcProfile(database, sequence, npcId);
     if (!slot) {
       warnings.push(
@@ -492,7 +507,15 @@ export function applyBlueprintFormation(
       required: requiredProfile !== undefined,
     };
   });
-  const mapped = selectFormationSlots(resolvedSlots, warnings);
+  const ignoredParticipants = sequence.participants.filter(
+    (participant) =>
+      participant.id !== 1 && ignoredNpcIds.has(participant.id),
+  );
+  const mapped = selectFormationSlots(
+    resolvedSlots,
+    warnings,
+    MAX_DIALOGUE_PARTICIPANTS - ignoredParticipants.length,
+  );
   for (const { slot, profile } of mapped) {
     if (profile.id >= 2_000_000_000) {
       const modelName = modelNames[slot.modelIndex] ?? "";
@@ -500,10 +523,6 @@ export function applyBlueprintFormation(
         `BP 槽位 ${slot.modelIndex}（${modelName || slot.modelClassPath}）无法映射 NPC 表，已作为场内未识别角色保留`,
       );
     }
-  }
-
-  if (mapped.length < 2) {
-    throw new Error("BP 中可映射到当前对话的有效角色不足两位");
   }
 
   const rawPositions = mapped.map(({ slot }) =>
@@ -521,7 +540,7 @@ export function applyBlueprintFormation(
   }
   const duplicateOrdinal = new Map<number, number>();
 
-  const participants: DialogueParticipant[] = mapped.map(
+  const blueprintParticipants: DialogueParticipant[] = mapped.map(
     ({ slot: formationSlot, profile }, index) => {
       const positionValue = rawPositions[index];
       const position: Vec3 = [
@@ -560,6 +579,68 @@ export function applyBlueprintFormation(
       };
     },
   );
+  const occupiedPositions = blueprintParticipants.map(
+    (participant) => participant.position,
+  );
+  const fallbackParticipants = ignoredParticipants.map(
+    (participant, index): DialogueParticipant => {
+      let position = participant.position;
+      for (let offset = 0; offset <= MAX_DIALOGUE_PARTICIPANTS; offset += 1) {
+        const direction = offset % 2 === 0 ? 1 : -1;
+        const distance = Math.ceil(offset / 2) * 1.35;
+        const candidate: Vec3 = [
+          participant.position[0] + direction * distance,
+          participant.position[1],
+          participant.position[2],
+        ];
+        if (
+          occupiedPositions.every(
+            (occupied) =>
+              Math.hypot(
+                candidate[0] - occupied[0],
+                candidate[2] - occupied[2],
+              ) >= 1.1,
+          )
+        ) {
+          position = candidate;
+          break;
+        }
+      }
+      const offsetX = position[0] - participant.position[0];
+      const offsetZ = position[2] - participant.position[2];
+      occupiedPositions.push(position);
+      return {
+        ...participant,
+        instanceId: `ignored:${participant.id}`,
+        slot: PARTICIPANT_SLOTS[
+          blueprintParticipants.length + index
+        ] as ParticipantSlot,
+        color:
+          PARTICIPANT_COLORS[blueprintParticipants.length + index],
+        position,
+        facingTarget: [
+          participant.facingTarget[0] + offsetX,
+          participant.facingTarget[1],
+          participant.facingTarget[2] + offsetZ,
+        ],
+        modelIndex: null,
+        modelClassPath: undefined,
+        positionSource: "generated",
+      };
+    },
+  );
+  const participants = [
+    ...blueprintParticipants,
+    ...fallbackParticipants,
+  ];
+  if (participants.length < 2) {
+    throw new Error("BP 中可映射到当前对话的有效角色不足两位");
+  }
+  if (fallbackParticipants.length > 0) {
+    warnings.push(
+      `已忽略 ${fallbackParticipants.length} 位缺失 BP 模型角色；其余角色保留 BP 站位，缺失角色使用规则占位`,
+    );
+  }
 
   const participantByModelIndex = new Map(
     participants.map((participant) => [participant.modelIndex, participant]),

@@ -518,6 +518,7 @@ class FakeDialogueRegistrationConnection implements UnrealInvoker {
     "/Game/Seria/Task/dialoggraph/Test/735200.735200";
   dialogueModels = ["player", "One_Sit", "None", "OldThree"];
   formationClassPath = this.blueprintClassPath;
+  previewLevel = "/Game/Test/Maps/TestMap.TestMap";
   commonProperties = [
     { Alias: "Virtual", CurrentBool: true },
     {
@@ -660,7 +661,7 @@ class FakeDialogueRegistrationConnection implements UnrealInvoker {
         object.endsWith("SeriaDialogGraphNodeData_0") &&
         propertyName === "PreviewLevel"
       ) {
-        return "/Game/Test/Maps/TestMap.TestMap";
+        return this.previewLevel;
       }
     }
     if (
@@ -1034,6 +1035,29 @@ describe("mission target UE preview", () => {
     ).toBe(false);
     expect(
       connection.calls.some((call) => call.action === "world.spawn_actor"),
+    ).toBe(false);
+  });
+
+  it("loads dialogue positions into the current map without checking PreviewLevel", async () => {
+    const connection = new FakeUnrealConnection({
+      currentMaps: ["/Game/Seria/Maps/Current/Current"],
+    });
+    const plan = previewPlan();
+    plan.mapName = "当前 UE 关卡";
+    plan.mapAssetPath = "/Game/CurrentLevel";
+
+    const result = await loadMissionTargetPreview(
+      { plan, mapMode: "current" },
+      () => connection,
+    );
+
+    expect(result).toMatchObject({
+      mapAssetPath: "/Game/Seria/Maps/Current/Current",
+      autoOpenedMap: false,
+      spawnedCount: 2,
+    });
+    expect(
+      connection.calls.some((call) => call.action === "world.open_level"),
     ).toBe(false);
   });
 
@@ -1473,27 +1497,8 @@ describe("dialogue model registration", () => {
           status: "unmapped",
         },
       ],
-      dialoguePreviewPlan: {
-        taskId: "735200",
-        mapId: "735200",
-        mapName: "TestMap",
-        mapAssetPath: "/Game/Test/Maps/TestMap",
-      },
+      dialoguePreviewPlan: undefined,
       dialoguePreviewBlockedReasons: [],
-    });
-    expect(inspection.dialoguePreviewPlan?.targets[0]).toMatchObject({
-      targetId: "0",
-      transform: {
-        location: { x: 10, y: 20, z: 130 },
-        rotation: { pitch: 0, yaw: 90, roll: 0 },
-      },
-    });
-    expect(inspection.dialoguePreviewPlan?.targets[1]).toMatchObject({
-      targetId: "1",
-      transform: {
-        location: { x: 10, y: 120, z: 130 },
-        rotation: { pitch: 0, yaw: 105, roll: 0 },
-      },
     });
     expect(
       connection.calls.find(
@@ -1545,7 +1550,7 @@ describe("dialogue model registration", () => {
     expect(connection.closed).toBe(true);
   });
 
-  it("explains why dialogue coordinates cannot be used for a BP-only preview", async () => {
+  it("does not inspect spatial fields for the four-digit registration flow", async () => {
     const connection = new FakeDialogueRegistrationConnection();
     connection.commonProperties = connection.commonProperties.map(
       (property) =>
@@ -1560,14 +1565,24 @@ describe("dialogue model registration", () => {
     );
 
     expect(inspection.dialoguePreviewPlan).toBeUndefined();
-    expect(inspection.dialoguePreviewBlockedReasons).toContain(
-      "对话尚未配置玩家初始位置",
-    );
-    expect(inspection.message).toContain("暂不能加载模型");
+    expect(inspection.dialoguePreviewBlockedReasons).toEqual([]);
+    expect(inspection.message).not.toContain("暂不能加载模型");
   });
 
-  it("applies the complete dialogue timeline to BP preview positions", async () => {
+  it("rejects a six-digit dialogue node in the BP input", async () => {
     const connection = new FakeDialogueRegistrationConnection();
+
+    await expect(
+      inspectMissionTargetBlueprint(
+        { blueprintName: "735201" },
+        () => connection,
+      ),
+    ).rejects.toThrow("六位对话节点 ID 请填写到展开的对话节点输入框");
+  });
+
+  it("applies dialogue actions through the requested six-digit node without requiring PreviewLevel", async () => {
+    const connection = new FakeDialogueRegistrationConnection();
+    connection.previewLevel = "None";
     const inspection = await inspectMissionTargetBlueprint(
       {
         blueprintName: "7352",
@@ -1598,6 +1613,10 @@ describe("dialogue model registration", () => {
       movementActionCount: 1,
       rotationActionCount: 1,
     });
+    expect(inspection.dialoguePreviewPlan).toMatchObject({
+      mapName: "当前 UE 关卡",
+      mapAssetPath: "/Game/CurrentLevel",
+    });
     expect(inspection.dialoguePreviewPlan?.targets[1]).toMatchObject({
       targetId: "1",
       transform: {
@@ -1622,6 +1641,13 @@ describe("dialogue model registration", () => {
       location: { x: 10, y: 120, z: 130 },
       rotation: { pitch: 0, yaw: 105, roll: 0 },
     });
+    expect(
+      connection.calls.find(
+        (call) =>
+          call.action === "asset.asset_search" &&
+          String(call.args.Query).startsWith("BP_"),
+      )?.args.Query,
+    ).toBe("BP_735200");
   });
 
   it("uses an explicit dialogue ID when a shared BP belongs to another dialogue", async () => {

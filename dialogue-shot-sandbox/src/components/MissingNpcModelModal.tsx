@@ -67,7 +67,7 @@ export function MissingNpcModelModal({
 
         <div className="missing-npc-model-modal__body">
           <p>
-            以下对白角色无法映射到当前 BP。勾选允许忽略的角色后，可改用规则占位继续分镜设计。
+            以下对白角色无法映射到当前 BP。勾选允许忽略的角色后，可继续选择沿用其余 BP 站位或改用规则占位。
           </p>
           <label className="missing-npc-model-modal__all">
             <input
@@ -127,7 +127,7 @@ export function MissingNpcModelModal({
         <footer>
           <span>
             {allIgnored
-              ? "将保留对白，并使用规则占位继续设计"
+              ? "缺失角色将使用临时占位，下一步选择整体占位方案"
               : "未勾选的缺失角色仍会阻止继续"}
           </span>
           <div>
@@ -151,7 +151,7 @@ export function MissingNpcModelModal({
               onClick={onContinue}
             >
               <ArrowRight size={15} />
-              忽略并继续
+              忽略并选择占位
             </button>
           </div>
         </footer>

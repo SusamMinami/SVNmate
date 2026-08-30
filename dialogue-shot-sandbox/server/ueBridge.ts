@@ -213,7 +213,7 @@ const MissionTargetPreviewPlanSchema = z.object({
 
 const MissionTargetPreviewLoadRequestSchema = z.object({
   plan: MissionTargetPreviewPlanSchema,
-  mapMode: z.enum(["require-current", "auto"]),
+  mapMode: z.enum(["require-current", "auto", "current"]),
 });
 
 const MissionTargetMapStatusRequestSchema = z.object({
@@ -854,6 +854,11 @@ function blueprintNameFromInput(input: string): string {
   const rawName = assetNameFromPath(
     normalized.split("/").at(-1) ?? normalized,
   );
+  if (/^\d+$/.test(rawName) && !/^\d{4}$/.test(rawName)) {
+    throw new Error(
+      "BP 输入框只接受四位 BP ID；六位对话节点 ID 请填写到展开的对话节点输入框",
+    );
+  }
   const name = /^\d{4}$/.test(rawName)
     ? `BP_${rawName}00`
     : rawName;
@@ -3838,14 +3843,6 @@ function dialogueSpatialMetadataComplete(
   );
 }
 
-function dialoguePreviewLevelPackagePath(value: string): string {
-  return objectReferencePath(value)
-    .trim()
-    .replaceAll("\\", "/")
-    .replace(/\.umap$/i, "")
-    .split(".")[0];
-}
-
 function transformPositionDistance(
   left: UnrealTransform,
   right: UnrealTransform,
@@ -3889,20 +3886,17 @@ function buildBlueprintDialoguePreviewPlan(
       (left, right) =>
         Number(left.variableName) - Number(right.variableName),
     );
-  const mapAssetPath = dialoguePreviewLevelPackagePath(
-    spatial.previewLevel,
-  );
   if (numericComponents.length === 0) {
     blockedReasons.push("BP 中没有可加载的数字模型槽位");
+  }
+  if (!dialogueTimeline || dialogueTimeline.length === 0) {
+    blockedReasons.push("本地对话表中未找到指定节点");
   }
   if (!spatial.root.explicit) {
     blockedReasons.push("对话尚未配置玩家初始位置");
   }
   if (!spatial.forwardExplicit) {
     blockedReasons.push("对话尚未配置玩家初始朝向");
-  }
-  if (!mapAssetPath.startsWith("/Game/")) {
-    blockedReasons.push("对话尚未配置有效的 Preview Level");
   }
   if (
     Math.abs(spatial.root.transform.rotation.pitch) > 0.000_001 ||
@@ -3937,10 +3931,12 @@ function buildBlueprintDialoguePreviewPlan(
   const timelineRows = timelineMatchesDialogue
     ? dialogueTimeline ?? []
     : [];
-  if (dialogueTimeline && dialogueTimeline.length === 0) {
-    warnings.push("本地对话表中未找到对应节点，当前仅显示 BP 原始站位");
-  } else if (dialogueTimeline && !timelineMatchesDialogue) {
-    warnings.push("本地对话时间线与 UE 对话 ID 不一致，当前仅显示 BP 原始站位");
+  if (!timelineMatchesDialogue) {
+    return {
+      blockedReasons: [
+        "本地对话时间线与 UE 对话 ID 不一致",
+      ],
+    };
   }
   const finalStates = resolveDialogueFinalTransforms(
     numericComponents.map((component) => ({
@@ -4037,8 +4033,8 @@ function buildBlueprintDialoguePreviewPlan(
       taskName: `${assetNameFromPath(blueprintAssetPathValue)} 对话模型`,
       taskSource: "任务表",
       mapId: dialogue.dialogueId,
-      mapName: mapAssetPath.split("/").at(-1) ?? mapAssetPath,
-      mapAssetPath,
+      mapName: "当前 UE 关卡",
+      mapAssetPath: "/Game/CurrentLevel",
       targets,
       warnings,
       ...(timelineRows.length > 0
@@ -4603,21 +4599,26 @@ export async function inspectMissionTargetBlueprint(
     let dialoguePreviewPlan: MissionTargetPreviewPlan | undefined;
     let dialoguePreviewBlockedReasons: string[] = [];
     let dialogueSpatial: DialogueSpatialContext | null = null;
-    if (blueprintState === "populated") {
+    if (
+      blueprintState === "populated" &&
+      (refreshedPlan || request.dialogueTimeline !== undefined)
+    ) {
       try {
         dialogueSpatial = await readDialogueSpatialContext(
           connection,
           dialogue.startNodeData,
         );
-        const preview = buildBlueprintDialoguePreviewPlan(
-          resolved.assetPath,
-          numericComponents,
-          dialogue,
-          dialogueSpatial,
-          request.dialogueTimeline,
-        );
-        dialoguePreviewPlan = preview.plan;
-        dialoguePreviewBlockedReasons = preview.blockedReasons;
+        if (request.dialogueTimeline !== undefined) {
+          const preview = buildBlueprintDialoguePreviewPlan(
+            resolved.assetPath,
+            numericComponents,
+            dialogue,
+            dialogueSpatial,
+            request.dialogueTimeline,
+          );
+          dialoguePreviewPlan = preview.plan;
+          dialoguePreviewBlockedReasons = preview.blockedReasons;
+        }
       } catch (previewError) {
         if (refreshedPlan) {
           throw previewError;
@@ -7272,7 +7273,7 @@ export async function loadMissionTargetPreview(
 ): Promise<MissionTargetPreviewLoadResult> {
   const request = MissionTargetPreviewLoadRequestSchema.parse(rawRequest) as {
     plan: MissionTargetPreviewPlan;
-    mapMode: "require-current" | "auto";
+    mapMode: "require-current" | "auto" | "current";
   };
   const plan = request.plan;
   assertSinglePreviewMap(plan);
@@ -7296,10 +7297,14 @@ export async function loadMissionTargetPreview(
       }
     }
 
+    const currentMapAssetPath = await currentMapName(connection);
     const expectedMap = normalizeLevelPath(plan.mapAssetPath);
-    let currentMap = normalizeLevelPath(await currentMapName(connection));
+    let currentMap = normalizeLevelPath(currentMapAssetPath);
     let autoOpenedMap = false;
-    if (!sameLevelPath(currentMap, expectedMap)) {
+    if (
+      request.mapMode !== "current" &&
+      !sameLevelPath(currentMap, expectedMap)
+    ) {
       if (request.mapMode === "require-current") {
         throw new Error(
           `UE 尚未切换到 ${plan.mapName}，当前关卡为 ${currentMap}`,
@@ -7405,12 +7410,18 @@ export async function loadMissionTargetPreview(
       await selectMissionPreviewActors(connection, selectedActors);
     }
     activeMissionPreviewActors = spawnedActors;
-    activeMissionPreviewMap = plan.mapAssetPath;
+    activeMissionPreviewMap =
+      request.mapMode === "current"
+        ? currentMapAssetPath
+        : plan.mapAssetPath;
     return {
       status: "loaded",
       taskId: plan.taskId,
       mapId: plan.mapId,
-      mapAssetPath: plan.mapAssetPath,
+      mapAssetPath:
+        request.mapMode === "current"
+          ? currentMapAssetPath
+          : plan.mapAssetPath,
       autoOpenedMap,
       spawnedCount: spawnedActors.length,
       assetCount: plan.targets.filter(

@@ -3485,7 +3485,7 @@ test("batch edits text search results without requiring a storyboard", async ({
   });
 });
 
-test("reviews missing NPC models before continuing storyboard design", async ({
+test("offers BP or rule placement after ignored missing models", async ({
   page,
 }, testInfo) => {
   let formationReady = false;
@@ -3501,9 +3501,9 @@ test("reviews missing NPC models before continuing storyboard design", async ({
           status: "found",
           message: "已读取 2 个 BP 站位槽",
           snapshot: {
-            dialogueId: "8800",
-            blueprintAssetPath: "/Game/Test/BP_880000.BP_880000",
-            blueprintClassPath: "/Game/Test/BP_880000.BP_880000_C",
+            dialogueId: "7370",
+            blueprintAssetPath: "/Game/Test/BP_737000.BP_737000",
+            blueprintClassPath: "/Game/Test/BP_737000.BP_737000_C",
             dialogueModels: [
               "player",
               formationReady ? "Im" : "Wrong",
@@ -3549,9 +3549,9 @@ test("reviews missing NPC models before continuing storyboard design", async ({
         content: [
           "##&Dialog.id,Dialog.NPCID,Dialog.Content,Dialog.NextID,Dialog.End",
           "##对话ID,人物,内容,下一ID,结束",
-          "880000,,,880001,false",
-          "880001,102101,只有声音，不需要出现在镜头中。,880002,false",
-          "880002,1,我听见了。,,true",
+          "737000,,,737001,false",
+          "737001,102101,只有声音，不需要出现在镜头中。,737002,false",
+          "737002,1,我听见了。,,true",
         ].join("\n"),
       },
       {
@@ -3559,7 +3559,7 @@ test("reviews missing NPC models before continuing storyboard design", async ({
         content: [
           "##&DialogStart.id,DialogStart.Outline,DialogStart.Formation,DialogStart.Model",
           "##对话ID,剧情梗概,模板,模型",
-          "880000,画外通讯,/Game/Test/BP_880000.BP_880000_C,player;Wrong",
+          "737000,画外通讯,/Game/Test/BP_737000.BP_737000_C,player;Wrong",
         ].join("\n"),
       },
       {
@@ -3585,7 +3585,7 @@ test("reviews missing NPC models before continuing storyboard design", async ({
   await page.goto("/");
   await page.locator('input[type="file"]').setInputFiles(fixtureDirectory);
   const searchInput = page.getByLabel("四位数对话 ID 或对白内容");
-  await searchInput.fill("8800");
+  await searchInput.fill("7370");
   await page.getByRole("button", { name: "分析对话与站位" }).click();
 
   const missingModal = page.getByRole("dialog", {
@@ -3621,17 +3621,54 @@ test("reviews missing NPC models before continuing storyboard design", async ({
   await page.getByRole("button", { name: "分析对话与站位" }).click();
   await expect(missingModal).toBeVisible();
   await expect(
-    missingModal.getByRole("button", { name: "忽略并继续" }),
+    missingModal.getByRole("button", { name: "忽略并选择占位" }),
   ).toBeDisabled();
   await missingModal
     .getByRole("checkbox", { name: "忽略 NPC 伊姆 的模型缺失" })
     .check();
-  await missingModal.getByRole("button", { name: "忽略并继续" }).click();
+  await missingModal
+    .getByRole("button", { name: "忽略并选择占位" })
+    .click();
   await expect(missingModal).toBeHidden();
+  await expect(formationModal).toBeVisible();
+  await expect(
+    formationModal.getByRole("button", { name: "BP_737000" }),
+  ).toBeVisible();
+  await expect(
+    formationModal.getByRole("button", { name: "规则占位" }),
+  ).toBeVisible();
+  await expect(formationModal).toContainText(
+    "缺失模型角色使用规则临时占位",
+  );
+  await formationModal.screenshot({
+    path: testInfo.outputPath("missing-model-formation-choice.png"),
+  });
+  await formationModal
+    .getByRole("button", { name: "规则占位" })
+    .click();
+  await formationModal.getByRole("button", { name: "使用此占位" }).click();
+  await expect(page.locator(".formation-status")).toContainText(
+    "使用规则导演自动安排的角色位置",
+  );
+  await page.getByRole("button", { name: "切换占位方案" }).click();
+  const switchModal = page.getByRole("dialog", {
+    name: "切换占位方案",
+  });
+  await switchModal
+    .getByRole("button", { name: "BP_737000" })
+    .click();
+  await switchModal.getByRole("button", { name: "使用此占位" }).click();
+  await expect(switchModal).toBeHidden();
   await expect(page.locator(".shot-row")).not.toHaveCount(0);
   await expect(page.locator(".formation-status")).toContainText(
-    "已忽略 1 个缺失 BP 模型的 NPC",
+    "保留 UE Formation",
   );
+  await expect(page.locator(".formation-status")).toContainText(
+    "1 位缺失模型角色使用规则临时占位",
+  );
+  await expect(
+    page.locator(".stage-cast__item", { hasText: "伊姆" }),
+  ).toBeVisible();
 });
 
 test("offers the detected Blueprint formation before designing shots", async ({
@@ -5403,8 +5440,8 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
   await dialog.getByRole("button", { name: "解析任务目标物" }).click();
   await expect.poll(() => refreshedTaskRequests).toBe(1);
   await expect(
-    dialog.getByRole("button", { name: "加载 BP 到 UE" }),
-  ).toBeEnabled();
+    dialog.getByRole("button", { name: /加载|计算.*站位/ }),
+  ).toHaveCount(0);
   expect(loadRequests).toBe(2);
 
   await dialog.getByRole("button", { name: "返回分镜工作台" }).click();
@@ -5848,26 +5885,26 @@ test("locks and registers every existing numeric Blueprint slot", async ({
   });
   await workspace.getByLabel("BP 文件名").fill("7352");
   await expect(
-    workspace.getByLabel("对话文件 ID（可选）"),
+    workspace.getByLabel("对话节点 ID（可选）"),
   ).toHaveCount(0);
   const dialogueIdToggle = workspace.getByRole("button", {
-    name: "展开对话文件 ID",
+    name: "展开对话节点 ID",
   });
   await expect(dialogueIdToggle).toHaveText("");
   expect((await dialogueIdToggle.boundingBox())?.width).toBeLessThanOrEqual(36);
   await dialogueIdToggle.click();
-  const dialogueIdInput = workspace.getByLabel("对话文件 ID（可选）");
+  const dialogueIdInput = workspace.getByLabel("对话节点 ID（可选）");
   expect((await dialogueIdInput.boundingBox())?.width).toBeLessThanOrEqual(160);
   await dialogueIdInput.fill("846500");
   const collapseDialogueId = workspace.getByRole("button", {
-    name: "收起对话文件 ID",
+    name: "收起对话节点 ID",
   });
   await expect(collapseDialogueId).toHaveText("");
   await collapseDialogueId.click();
   await expect(dialogueIdInput).toHaveCount(0);
   await expect(
     workspace.getByRole("button", {
-      name: "展开对话文件 ID，当前 846500",
+      name: "展开对话节点 ID，当前 846500",
     }),
   ).toBeVisible();
   await workspace
@@ -5917,18 +5954,19 @@ test("locks and registers every existing numeric Blueprint slot", async ({
   ).toBeVisible();
 });
 
-test("loads Blueprint models from dialogue coordinates without a task ID", async ({
+test("separates four-digit registration from six-digit node positioning", async ({
   page,
 }, testInfo) => {
   let inspectionRequests = 0;
+  let mapStatusRequests = 0;
   let loadedRequest: Record<string, any> | null = null;
   const dialoguePreviewPlan = {
     taskId: "735200",
     taskName: "BP_735200 对话模型",
     taskSource: "任务表",
     mapId: "735200",
-    mapName: "TestMap",
-    mapAssetPath: "/Game/Test/Maps/TestMap",
+    mapName: "当前 UE 关卡",
+    mapAssetPath: "/Game/CurrentLevel",
     targets: [
       {
         targetId: "0",
@@ -5963,7 +6001,7 @@ test("loads Blueprint models from dialogue coordinates without a task ID", async
         previewKind: "asset",
         transform: {
           location: { x: 350, y: 450, z: 300 },
-          rotation: { pitch: 0, yaw: 150, roll: 0 },
+          rotation: { pitch: 0, yaw: 105, roll: 0 },
           scale: { x: 1, y: 1, z: 1 },
         },
         dialogueAdjustment: {
@@ -5973,43 +6011,21 @@ test("loads Blueprint models from dialogue coordinates without a task ID", async
             scale: { x: 1, y: 1, z: 1 },
           },
           movementActionCount: 1,
-          rotationActionCount: 1,
+          rotationActionCount: 0,
           positionDelta: 291.548,
-          rotationDelta: 45,
-          lastAdjustedDialogueId: "735299",
+          rotationDelta: 0,
+          lastAdjustedDialogueId: "735201",
         },
       },
     ],
     warnings: [],
     dialogueTimeline: {
-      nodeCount: 3,
-      finalDialogueId: "735299",
+      nodeCount: 2,
+      finalDialogueId: "735201",
       adjustedCharacterCount: 1,
       movementActionCount: 1,
-      rotationActionCount: 1,
+      rotationActionCount: 0,
     },
-  };
-  const blueprintPreviewPlan = {
-    taskId: dialoguePreviewPlan.taskId,
-    taskName: dialoguePreviewPlan.taskName,
-    taskSource: dialoguePreviewPlan.taskSource,
-    mapId: dialoguePreviewPlan.mapId,
-    mapName: dialoguePreviewPlan.mapName,
-    mapAssetPath: dialoguePreviewPlan.mapAssetPath,
-    targets: dialoguePreviewPlan.targets.map((target) => {
-      if (!target.dialogueAdjustment) {
-        return target;
-      }
-      const {
-        dialogueAdjustment,
-        ...targetWithoutAdjustment
-      } = target;
-      return {
-        ...targetWithoutAdjustment,
-        transform: dialogueAdjustment.initialTransform,
-      };
-    }),
-    warnings: dialoguePreviewPlan.warnings,
   };
 
   await page.route("**/api/ue/formation/read", async (route) => {
@@ -6027,9 +6043,9 @@ test("loads Blueprint models from dialogue coordinates without a task ID", async
     async (route) => {
       inspectionRequests += 1;
       const request = route.request().postDataJSON();
-      expect(request.blueprintName).toBe("7352");
       if (request.dialogueId) {
         expect(request).toMatchObject({
+          blueprintName: "7352",
           dialogueId: "735200",
           dialogueTimeline: [
             { id: "735200" },
@@ -6037,20 +6053,12 @@ test("loads Blueprint models from dialogue coordinates without a task ID", async
               id: "735201",
               characterBehaviourString: expect.stringContaining("AM_Walk"),
             },
-            {
-              id: "735299",
-              characterBehaviourString: expect.stringContaining(
-                "AM_TurnRight45",
-              ),
-            },
           ],
         });
       } else {
+        expect(request.blueprintName).toBe("7352");
         expect(request.dialogueTimeline).toBeUndefined();
       }
-      const responsePlan = request.dialogueId
-        ? dialoguePreviewPlan
-        : blueprintPreviewPlan;
       await route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -6069,7 +6077,7 @@ test("loads Blueprint models from dialogue coordinates without a task ID", async
               "/Game/Seria/Task/dialoggraph/Test/735200.735200",
             formationClassPath:
               "/Game/Seria/Task/Mod/Test/BP_735200.BP_735200_C",
-            slots: responsePlan.targets.map((target) => ({
+            slots: dialoguePreviewPlan.targets.map((target) => ({
               modelIndex: target.blueprintModelId,
               targetId: null,
               modelClassPath: target.modelClassPath,
@@ -6078,9 +6086,13 @@ test("loads Blueprint models from dialogue coordinates without a task ID", async
               candidateModelNames: [target.npcName],
               status: "registered",
             })),
-            dialoguePreviewPlan: responsePlan,
+            dialoguePreviewPlan: request.dialogueTimeline
+              ? dialoguePreviewPlan
+              : undefined,
             dialoguePreviewBlockedReasons: [],
-            message: "已按对话坐标解析 2 个模型",
+            message: request.dialogueTimeline
+              ? "已按对话坐标解析 2 个模型"
+              : "BP 已识别 2 个角色位（含 0 号玩家）",
           },
         }),
       });
@@ -6089,15 +6101,15 @@ test("loads Blueprint models from dialogue coordinates without a task ID", async
   await page.route(
     "**/api/ue/mission-targets/map-status",
     async (route) => {
+      mapStatusRequests += 1;
       const request = route.request().postDataJSON();
-      expect(request.mapAssetPath).toBe("/Game/Test/Maps/TestMap");
       await route.fulfill({
         status: 200,
         contentType: "application/json",
         body: JSON.stringify({
           ok: true,
           data: {
-            currentMapAssetPath: request.mapAssetPath,
+            currentMapAssetPath: "/Game/Test/Maps/OpenMap",
             expectedMapAssetPath: request.mapAssetPath,
             matches: true,
           },
@@ -6116,7 +6128,7 @@ test("loads Blueprint models from dialogue coordinates without a task ID", async
           status: "loaded",
           taskId: "735200",
           mapId: "735200",
-          mapAssetPath: "/Game/Test/Maps/TestMap",
+          mapAssetPath: "/Game/Test/Maps/OpenMap",
           autoOpenedMap: false,
           spawnedCount: 2,
           assetCount: 2,
@@ -6175,47 +6187,62 @@ test("loads Blueprint models from dialogue coordinates without a task ID", async
     exact: true,
   });
   await workspace.getByLabel("BP 文件名").fill("7352");
-  await workspace.getByRole("button", { name: "加载 BP 到 UE" }).click();
   await expect(
-    workspace.getByText("当前已是 TestMap，加载 2 个资产和 0 个定位标记"),
-  ).toBeVisible();
+    workspace.getByRole("button", { name: /加载|计算.*站位/ }),
+  ).toHaveCount(0);
+  await workspace
+    .getByRole("button", { name: "检查 BP 与对话模型" })
+    .click();
+  await expect(
+    workspace.getByRole("button", { name: "按 BP 注册到对话" }),
+  ).toBeEnabled();
   expect(inspectionRequests).toBe(1);
-  expect(loadedRequest).toMatchObject({
-    plan: blueprintPreviewPlan,
-    mapMode: "require-current",
-  });
+  expect(loadedRequest).toBeNull();
 
-  loadedRequest = null;
+  await workspace.getByLabel("BP 文件名").fill("735201");
+  await expect(
+    workspace.getByText(
+      "六位对话节点 ID 请填写到 BP 右侧的展开输入框",
+    ),
+  ).toBeVisible();
+  await expect(
+    workspace.getByRole("button", { name: "检查 BP 与对话模型" }),
+  ).toBeDisabled();
+
+  await workspace.getByLabel("BP 文件名").fill("7352");
   await workspace.getByRole("button", {
-    name: "展开对话文件 ID",
+    name: "展开对话节点 ID",
   }).click();
-  await workspace.getByLabel("对话文件 ID（可选）").fill("735200");
-  await workspace.getByRole("button", { name: "计算最终站位" }).click();
+  await workspace.getByLabel("对话节点 ID（可选）").fill("735201");
+  await workspace.getByRole("button", { name: "计算节点站位" }).click();
   const dialoguePreview = workspace.getByRole("region", {
-    name: "对话最终站位俯视图",
+    name: "对话节点站位俯视图",
   });
-  await expect(dialoguePreview).toContainText("节点 735299 · 3 个节点");
+  await expect(dialoguePreview).toContainText("节点 735201 · 2 个节点");
   await expect(dialoguePreview).toContainText(
-    "1 位变化 · 1 次走位 · 1 次旋转",
+    "1 位变化 · 1 次走位 · 0 次旋转",
   );
   await expect(
     dialoguePreview.locator('[data-target-id="1"]'),
   ).toHaveAttribute("data-position-delta", "291.548");
   await dialoguePreview.screenshot({
-    path: testInfo.outputPath("dialogue-final-position-preview.png"),
+    path: testInfo.outputPath("dialogue-node-position-preview.png"),
   });
   expect(loadedRequest).toBeNull();
-  await workspace.getByRole("button", { name: "加载最终站位" }).click();
+  await workspace.getByRole("button", { name: "加载节点站位" }).click();
   await expect(
-    workspace.getByText("当前已是 TestMap，加载 2 个资产和 0 个定位标记"),
+    workspace.getByText(
+      "已加载到当前 UE 关卡，加载 2 个资产和 0 个定位标记",
+    ),
   ).toBeVisible();
   await expect(workspace.getByText(/已选中 1 个变更角色供 NPC 注册/))
     .toBeVisible();
   expect(inspectionRequests).toBe(2);
   expect(loadedRequest).toMatchObject({
     plan: dialoguePreviewPlan,
-    mapMode: "require-current",
+    mapMode: "current",
   });
+  expect(mapStatusRequests).toBe(0);
 });
 
 test("offers bidirectional position sync for a registered Blueprint", async ({
