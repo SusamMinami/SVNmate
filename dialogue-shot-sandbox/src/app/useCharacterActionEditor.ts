@@ -57,7 +57,6 @@ export interface CharacterActionEditorController {
     sourceIndex: number,
     targetIndex: number,
   ) => void;
-  turnDegreesByModelIndex: (dialogueIds: string[]) => Map<number, number>;
   commitExported: (
     items: NonNullable<StoryboardExportRequest["characterActions"]>,
   ) => void;
@@ -390,50 +389,6 @@ export function useCharacterActionEditor({
     [tracks],
   );
 
-  const turnDegreesByModelIndex = useCallback(
-    (dialogueIds: string[]) => {
-      const selectedDialogueIds = new Set(dialogueIds);
-      const result = new Map<number, number>();
-      const addTurn = (
-        modelIndex: number,
-        action: DialogueCharacterActionItem,
-        existing: boolean,
-      ) => {
-        const turnDegrees = turnDegreesFromMontageName(
-          action.montageName,
-        );
-        const isRotate = existing
-          ? action.behaviourType?.toLowerCase() === "erotate"
-          : turnDegrees !== null;
-        if (!isRotate || turnDegrees === null) {
-          return;
-        }
-        result.set(
-          modelIndex,
-          (result.get(modelIndex) ?? 0) + turnDegrees,
-        );
-      };
-      for (const track of existingTracks) {
-        if (!selectedDialogueIds.has(track.dialogueId)) {
-          continue;
-        }
-        for (const action of track.actions) {
-          addTurn(track.modelIndex, action, true);
-        }
-      }
-      for (const track of tracks) {
-        if (!selectedDialogueIds.has(track.dialogueId)) {
-          continue;
-        }
-        for (const action of track.actions) {
-          addTurn(track.modelIndex, action, false);
-        }
-      }
-      return result;
-    },
-    [existingTracks, tracks],
-  );
-
   const commitExported = useCallback(
     (items: NonNullable<StoryboardExportRequest["characterActions"]>) => {
       const exportedKeys = new Set(
@@ -497,7 +452,6 @@ export function useCharacterActionEditor({
     removeAction,
     updateAction,
     reorderAction,
-    turnDegreesByModelIndex,
     commitExported,
   };
 }

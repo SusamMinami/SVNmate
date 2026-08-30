@@ -6,6 +6,7 @@ import { parseDialogueDatabase } from "./csv";
 import { demoDatabase } from "./demo";
 import {
   findDialogueSequence,
+  findDialogueTimeline,
   searchDialogueContent,
 } from "./dialogueRepository";
 
@@ -146,6 +147,16 @@ describe("findDialogueSequence", () => {
       result.rows.filter((row) => row.content === "第一句可见台词。"),
     ).toHaveLength(1);
     expect(result.ignoredDialogueNodeCount).toBe(2);
+    expect(
+      findDialogueTimeline(database, "880000").map((row) => row.id),
+    ).toEqual([
+      "880000",
+      "880001",
+      "880002",
+      "880003",
+      "880004",
+      "880005",
+    ]);
     expect(input.dialogue.map((row) => row.dialogue_id)).toEqual([
       "880002",
       "880004",

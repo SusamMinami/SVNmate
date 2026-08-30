@@ -526,7 +526,7 @@ class FakeDialogueRegistrationConnection implements UnrealInvoker {
     },
     {
       Alias: "PlayerForward",
-      CurrentRotator: { Pitch: 0, Yaw: 0, Roll: 0 },
+      CurrentRotator: { Pitch: 0, Yaw: 90, Roll: 0 },
     },
   ];
   connected = false;
@@ -605,6 +605,17 @@ class FakeDialogueRegistrationConnection implements UnrealInvoker {
           "/Game/Test/BP_Two.BP_Two_C",
           "/Game/Test/BP_Three.BP_Three_C",
         ][Number(object.slice("Template_".length))];
+      }
+      if (object.startsWith("Template_") && propertyName === "RelativeLocation") {
+        const modelIndex = Number(object.slice("Template_".length));
+        return { X: modelIndex * 100, Y: 0, Z: 100 };
+      }
+      if (object.startsWith("Template_") && propertyName === "RelativeRotation") {
+        const modelIndex = Number(object.slice("Template_".length));
+        return { Pitch: 0, Yaw: modelIndex * 15, Roll: 0 };
+      }
+      if (object.startsWith("Template_") && propertyName === "RelativeScale3D") {
+        return { X: 1, Y: 1, Z: 1 };
       }
       if (object.endsWith(":Dialog Graph") && propertyName === "Nodes") {
         return ["SeriaEdDialogGraphNode_0", "EdGraphNode_Comment_0"];
@@ -913,6 +924,53 @@ describe("mission target UE preview", () => {
         (call) => call.action === "reflect.write_object_property",
       ),
     ).toHaveLength(2);
+  });
+
+  it("selects dialogue-position preview actors for NPC registration", async () => {
+    const plan = previewPlan();
+    plan.dialogueTimeline = {
+      nodeCount: 4,
+      finalDialogueId: "900004",
+      adjustedCharacterCount: 1,
+      movementActionCount: 2,
+      rotationActionCount: 1,
+    };
+    plan.targets[0].blueprintModelId = 1;
+    plan.targets[0].dialogueAdjustment = {
+      initialTransform: {
+        location: { x: 0, y: 0, z: 30 },
+        rotation: { pitch: 0, yaw: 0, roll: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+      },
+      movementActionCount: 2,
+      rotationActionCount: 1,
+      positionDelta: 22.361,
+      rotationDelta: 90,
+      lastAdjustedDialogueId: "900004",
+    };
+    const connection = new FakeUnrealConnection({
+      currentMaps: [plan.mapAssetPath],
+    });
+
+    const result = await loadMissionTargetPreview(
+      { plan, mapMode: "require-current" },
+      () => connection,
+    );
+
+    expect(result.selectedActorCount).toBe(1);
+    expect(
+      connection.calls.some(
+        (call) =>
+          call.action === "script.eval_python_expression" &&
+          String(call.args.Expression).includes(
+            "set_selected_level_actors",
+          ) &&
+          String(call.args.Expression).includes(
+            "ShotSandboxMissionTargetPreview_900001_500001",
+          ) &&
+          !String(call.args.Expression).includes("destroy_actor"),
+      ),
+    ).toBe(true);
   });
 
   it("explains that UE may still be loading when the map request disconnects", async () => {
@@ -1415,6 +1473,27 @@ describe("dialogue model registration", () => {
           status: "unmapped",
         },
       ],
+      dialoguePreviewPlan: {
+        taskId: "735200",
+        mapId: "735200",
+        mapName: "TestMap",
+        mapAssetPath: "/Game/Test/Maps/TestMap",
+      },
+      dialoguePreviewBlockedReasons: [],
+    });
+    expect(inspection.dialoguePreviewPlan?.targets[0]).toMatchObject({
+      targetId: "0",
+      transform: {
+        location: { x: 10, y: 20, z: 130 },
+        rotation: { pitch: 0, yaw: 90, roll: 0 },
+      },
+    });
+    expect(inspection.dialoguePreviewPlan?.targets[1]).toMatchObject({
+      targetId: "1",
+      transform: {
+        location: { x: 10, y: 120, z: 130 },
+        rotation: { pitch: 0, yaw: 105, roll: 0 },
+      },
     });
     expect(
       connection.calls.find(
@@ -1464,6 +1543,85 @@ describe("dialogue model registration", () => {
       ),
     ).toBe(false);
     expect(connection.closed).toBe(true);
+  });
+
+  it("explains why dialogue coordinates cannot be used for a BP-only preview", async () => {
+    const connection = new FakeDialogueRegistrationConnection();
+    connection.commonProperties = connection.commonProperties.map(
+      (property) =>
+        property.Alias === "PlayerInitPosition"
+          ? { Alias: "PlayerInitPosition" }
+          : property,
+    );
+
+    const inspection = await inspectMissionTargetBlueprint(
+      { blueprintName: "7352" },
+      () => connection,
+    );
+
+    expect(inspection.dialoguePreviewPlan).toBeUndefined();
+    expect(inspection.dialoguePreviewBlockedReasons).toContain(
+      "对话尚未配置玩家初始位置",
+    );
+    expect(inspection.message).toContain("暂不能加载模型");
+  });
+
+  it("applies the complete dialogue timeline to BP preview positions", async () => {
+    const connection = new FakeDialogueRegistrationConnection();
+    const inspection = await inspectMissionTargetBlueprint(
+      {
+        blueprintName: "7352",
+        dialogueId: "735200",
+        dialogueTimeline: [
+          {
+            id: "735200",
+            characterBehaviourString: "",
+            relativeTransformsString:
+              "0|1,0,0,0,0,0,0;1|1,0,0,0,0,0,0",
+          },
+          {
+            id: "735201",
+            characterBehaviourString:
+              ";0,AM_Walk,2,100,0,100,200,100,100,0|0,AM_TurnRight45,1,0,0,0,0,0,0,0",
+            relativeTransformsString:
+              "0|1,0,0,0,0,0,0;1|1,0,0,0,0,0,0",
+          },
+        ],
+      },
+      () => connection,
+    );
+
+    expect(inspection.dialoguePreviewPlan?.dialogueTimeline).toEqual({
+      nodeCount: 2,
+      finalDialogueId: "735201",
+      adjustedCharacterCount: 1,
+      movementActionCount: 1,
+      rotationActionCount: 1,
+    });
+    expect(inspection.dialoguePreviewPlan?.targets[1]).toMatchObject({
+      targetId: "1",
+      transform: {
+        location: { x: -90, y: 220, z: 130 },
+        rotation: { pitch: 0, yaw: 180, roll: 0 },
+      },
+      dialogueAdjustment: {
+        movementActionCount: 1,
+        rotationActionCount: 1,
+        rotationDelta: 75,
+        lastAdjustedDialogueId: "735201",
+      },
+    });
+    expect(
+      inspection.dialoguePreviewPlan?.targets[1].dialogueAdjustment
+        ?.positionDelta,
+    ).toBeCloseTo(141.421, 3);
+    expect(
+      inspection.dialoguePreviewPlan?.targets[1].dialogueAdjustment
+        ?.initialTransform,
+    ).toMatchObject({
+      location: { x: 10, y: 120, z: 130 },
+      rotation: { pitch: 0, yaw: 105, roll: 0 },
+    });
   });
 
   it("uses an explicit dialogue ID when a shared BP belongs to another dialogue", async () => {

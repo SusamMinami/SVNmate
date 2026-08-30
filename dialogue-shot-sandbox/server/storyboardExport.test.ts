@@ -474,7 +474,7 @@ describe("dialogue storyboard export", () => {
     ).rejects.toThrow("至少两个 UE Blueprint 站位");
   });
 
-  it("reads BP Montages and existing node actions for the editor", async () => {
+  it("reads BP Montages and spatial node actions for the editor", async () => {
     const connection = new FakeStoryboardExportConnection();
     connection.behavioursByData.set("ActionData1", [
       {
@@ -483,6 +483,13 @@ describe("dialogue storyboard export", () => {
             StartTime: 0.25,
             MontageName: "AM_Wave",
             CharacterBehaviourType: "ENone",
+          },
+          {
+            StartTime: 0.5,
+            MontageName: "None",
+            CharacterBehaviourType: "EStateMachineWalk",
+            StartLocation: { X: 100, Y: 200, Z: 5 },
+            EndLocation: { X: 300, Y: 500, Z: 5 },
           },
         ],
         bStop: false,
@@ -521,7 +528,16 @@ describe("dialogue storyboard export", () => {
         {
           dialogueId: "735201",
           modelIndex: 0,
-          actions: [{ montageName: "AM_Wave", delaySeconds: 0.25 }],
+          actions: [
+            { montageName: "AM_Wave", delaySeconds: 0.25 },
+            {
+              montageName: "None",
+              delaySeconds: 0.5,
+              behaviourType: "EStateMachineWalk",
+              startLocation: { x: 100, y: 200, z: 5 },
+              endLocation: { x: 300, y: 500, z: 5 },
+            },
+          ],
           preservedComplexActionCount: 0,
         },
       ],

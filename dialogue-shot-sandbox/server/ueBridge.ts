@@ -22,6 +22,7 @@ import type {
   DialogueStoryboardExportResult,
   DialogueModelRegistrationResult,
   DialogueModelRegistrationSlot,
+  DialoguePositionTimelineRow,
   MissionTargetBlueprintSyncState,
   MissionTargetBlueprintToTargetsResult,
   MissionTargetBlueprintAppendResult,
@@ -45,11 +46,15 @@ import type {
   UnrealTransform,
 } from "../src/types";
 import { parseNpcRegistrationDatabase } from "../src/data/csv";
-import { behaviourTypeForMontageName } from "../src/data/characterActions";
+import {
+  behaviourTypeForMontageName,
+  resolveDialogueFinalTransforms,
+} from "../src/data/characterActions";
 import {
   blueprintTransformFromWorld,
   buildMissionTargetBlueprintSync,
   missionTargetBlueprintRootForCreation,
+  worldTransformFromBlueprint,
   type MissionTargetBlueprintRoot,
 } from "../src/data/missionTargetBlueprintSync";
 import { buildNpcRegistrationCandidates } from "../src/data/npcRegistration";
@@ -178,9 +183,32 @@ const MissionTargetPreviewPlanSchema = z.object({
         rotation: RotatorSchema,
         scale: VectorSchema,
       }),
+      dialogueAdjustment: z
+        .object({
+          initialTransform: z.object({
+            location: VectorSchema,
+            rotation: RotatorSchema,
+            scale: VectorSchema,
+          }),
+          movementActionCount: z.number().int().nonnegative(),
+          rotationActionCount: z.number().int().nonnegative(),
+          positionDelta: z.number().finite().nonnegative(),
+          rotationDelta: z.number().finite().nonnegative(),
+          lastAdjustedDialogueId: z.string().nullable(),
+        })
+        .optional(),
     }),
   ).min(1).max(200),
   warnings: z.array(z.string()),
+  dialogueTimeline: z
+    .object({
+      nodeCount: z.number().int().nonnegative(),
+      finalDialogueId: z.string(),
+      adjustedCharacterCount: z.number().int().nonnegative(),
+      movementActionCount: z.number().int().nonnegative(),
+      rotationActionCount: z.number().int().nonnegative(),
+    })
+    .optional(),
 });
 
 const MissionTargetPreviewLoadRequestSchema = z.object({
@@ -232,6 +260,16 @@ const MissionTargetBlueprintInspectionRequestSchema = z.object({
   targetOverrides: z
     .array(MissionTargetTransformOverrideSchema)
     .max(200)
+    .optional(),
+  dialogueTimeline: z
+    .array(
+      z.object({
+        id: z.string().regex(/^\d+$/),
+        characterBehaviourString: z.string().max(100_000),
+        relativeTransformsString: z.string().max(100_000),
+      }),
+    )
+    .max(5_000)
     .optional(),
 });
 
@@ -1230,6 +1268,8 @@ interface ReflectedCharacterBehaviourItem {
   StartTime?: unknown;
   MontageName?: unknown;
   CharacterBehaviourType?: unknown;
+  StartLocation?: unknown;
+  EndLocation?: unknown;
   [key: string]: unknown;
 }
 
@@ -1291,7 +1331,7 @@ function clonedValue<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
-function isConfiguredMontageItem(
+function isReadableCharacterActionItem(
   value: unknown,
 ): value is ReflectedCharacterBehaviourItem {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -1299,7 +1339,19 @@ function isConfiguredMontageItem(
   }
   const item = value as ReflectedCharacterBehaviourItem;
   const montageName = String(item.MontageName ?? "");
-  return /^AM_[A-Za-z0-9_]+$/.test(montageName);
+  const behaviourType = String(
+    item.CharacterBehaviourType ?? "ENone",
+  ).toLowerCase();
+  return (
+    /^AM_[A-Za-z0-9_]+$/.test(montageName) ||
+    [
+      "erotate",
+      "ewalk",
+      "estatemachinewalk",
+      "machinewalk",
+      "emachinewalk",
+    ].includes(behaviourType)
+  );
 }
 
 function configuredCharacterActions(
@@ -1308,17 +1360,32 @@ function configuredCharacterActions(
   const items = Array.isArray(value?.CharacterBehaviourItems)
     ? value.CharacterBehaviourItems
     : [];
-  return items.flatMap((item) =>
-    isConfiguredMontageItem(item)
-      ? [{
-          montageName: String(item.MontageName),
-          delaySeconds: rounded(Number(item.StartTime ?? 0)),
-          behaviourType: String(
-            item.CharacterBehaviourType ?? "ENone",
-          ),
-        }]
-      : [],
-  );
+  return items.flatMap((item) => {
+    if (!isReadableCharacterActionItem(item)) {
+      return [];
+    }
+    const behaviourType = String(
+      item.CharacterBehaviourType ?? "ENone",
+    );
+    const spatial = [
+      "erotate",
+      "ewalk",
+      "estatemachinewalk",
+      "machinewalk",
+      "emachinewalk",
+    ].includes(behaviourType.toLowerCase());
+    return [{
+      montageName: String(item.MontageName ?? "None") || "None",
+      delaySeconds: rounded(Number(item.StartTime ?? 0)),
+      behaviourType,
+      ...(spatial
+        ? {
+            startLocation: vector(item.StartLocation),
+            endLocation: vector(item.EndLocation),
+          }
+        : {}),
+    }];
+  });
 }
 
 function complexCharacterActionCount(
@@ -1327,7 +1394,7 @@ function complexCharacterActionCount(
   const items = Array.isArray(value?.CharacterBehaviourItems)
     ? value.CharacterBehaviourItems
     : [];
-  return items.filter((item) => !isConfiguredMontageItem(item)).length;
+  return items.filter((item) => !isReadableCharacterActionItem(item)).length;
 }
 
 function newCharacterBehaviourItem(
@@ -3771,6 +3838,224 @@ function dialogueSpatialMetadataComplete(
   );
 }
 
+function dialoguePreviewLevelPackagePath(value: string): string {
+  return objectReferencePath(value)
+    .trim()
+    .replaceAll("\\", "/")
+    .replace(/\.umap$/i, "")
+    .split(".")[0];
+}
+
+function transformPositionDistance(
+  left: UnrealTransform,
+  right: UnrealTransform,
+): number {
+  return Math.hypot(
+    left.location.x - right.location.x,
+    left.location.y - right.location.y,
+    left.location.z - right.location.z,
+  );
+}
+
+function normalizedAngleDistance(left: number, right: number): number {
+  return Math.abs(((left - right + 540) % 360) - 180);
+}
+
+function transformRotationDistance(
+  left: UnrealTransform,
+  right: UnrealTransform,
+): number {
+  return Math.max(
+    normalizedAngleDistance(left.rotation.pitch, right.rotation.pitch),
+    normalizedAngleDistance(left.rotation.yaw, right.rotation.yaw),
+    normalizedAngleDistance(left.rotation.roll, right.rotation.roll),
+  );
+}
+
+function buildBlueprintDialoguePreviewPlan(
+  blueprintAssetPathValue: string,
+  components: BlueprintComponentInfo[],
+  dialogue: DialogueRegistrationContext,
+  spatial: DialogueSpatialContext,
+  dialogueTimeline?: DialoguePositionTimelineRow[],
+): {
+  plan?: MissionTargetPreviewPlan;
+  blockedReasons: string[];
+} {
+  const blockedReasons: string[] = [];
+  const numericComponents = components
+    .filter((component) => /^\d+$/.test(component.variableName))
+    .sort(
+      (left, right) =>
+        Number(left.variableName) - Number(right.variableName),
+    );
+  const mapAssetPath = dialoguePreviewLevelPackagePath(
+    spatial.previewLevel,
+  );
+  if (numericComponents.length === 0) {
+    blockedReasons.push("BP 中没有可加载的数字模型槽位");
+  }
+  if (!spatial.root.explicit) {
+    blockedReasons.push("对话尚未配置玩家初始位置");
+  }
+  if (!spatial.forwardExplicit) {
+    blockedReasons.push("对话尚未配置玩家初始朝向");
+  }
+  if (!mapAssetPath.startsWith("/Game/")) {
+    blockedReasons.push("对话尚未配置有效的 Preview Level");
+  }
+  if (
+    Math.abs(spatial.root.transform.rotation.pitch) > 0.000_001 ||
+    Math.abs(spatial.root.transform.rotation.roll) > 0.000_001
+  ) {
+    blockedReasons.push(
+      "对话根旋转包含 Pitch 或 Roll，暂不支持模型坐标换算",
+    );
+  }
+  if (blockedReasons.length > 0) {
+    return { blockedReasons };
+  }
+
+  const registrationByIndex = new Map(
+    dialogue.slots.map((slot) => [slot.modelIndex, slot]),
+  );
+  const warnings: string[] = [];
+  if (
+    !dialogue.formationClassPath ||
+    normalizeObjectPath(dialogue.formationClassPath) !==
+      normalizeObjectPath(blueprintClassPath(blueprintAssetPathValue))
+  ) {
+    warnings.push("对话 Formation 未指向当前 BP；本次仍按输入的 BP 预览");
+  }
+  if (!spatial.virtualEnabled || !spatial.specialVirtualEnabled) {
+    warnings.push("对话尚未完整启用虚拟场景；本次仅生成编辑器预览");
+  }
+  const dialoguePrefix = dialogue.dialogueId.slice(0, 4);
+  const timelineMatchesDialogue =
+    dialogueTimeline?.every((row) => row.id.startsWith(dialoguePrefix)) ??
+    false;
+  const timelineRows = timelineMatchesDialogue
+    ? dialogueTimeline ?? []
+    : [];
+  if (dialogueTimeline && dialogueTimeline.length === 0) {
+    warnings.push("本地对话表中未找到对应节点，当前仅显示 BP 原始站位");
+  } else if (dialogueTimeline && !timelineMatchesDialogue) {
+    warnings.push("本地对话时间线与 UE 对话 ID 不一致，当前仅显示 BP 原始站位");
+  }
+  const finalStates = resolveDialogueFinalTransforms(
+    numericComponents.map((component) => ({
+      modelIndex: Number(component.variableName),
+      transform: component.transform,
+    })),
+    timelineRows,
+  );
+  let movementActionCount = 0;
+  let rotationActionCount = 0;
+  let adjustedCharacterCount = 0;
+  const targets = numericComponents.map((component) => {
+    const modelIndex = Number(component.variableName);
+    const registration = registrationByIndex.get(modelIndex);
+    const modelClassPath = objectReferencePath(
+      component.childActorClass,
+    );
+    const initialWorldTransform: UnrealTransform = {
+      ...worldTransformFromBlueprint(
+        component.transform,
+        spatial.root.transform,
+      ),
+      scale: { ...component.transform.scale },
+    };
+    const finalState = finalStates.get(modelIndex);
+    const finalLocalTransform = finalState?.transform ?? component.transform;
+    const finalWorldTransform: UnrealTransform = {
+      ...worldTransformFromBlueprint(
+        finalLocalTransform,
+        spatial.root.transform,
+      ),
+      scale: { ...finalLocalTransform.scale },
+    };
+    const positionDelta = rounded(
+      transformPositionDistance(
+        initialWorldTransform,
+        finalWorldTransform,
+      ),
+    );
+    const rotationDelta = rounded(
+      transformRotationDistance(
+        initialWorldTransform,
+        finalWorldTransform,
+      ),
+    );
+    const adjusted = positionDelta > 0.01 || rotationDelta > 0.01;
+    if (adjusted) {
+      adjustedCharacterCount += 1;
+    }
+    movementActionCount += finalState?.movementActionCount ?? 0;
+    rotationActionCount += finalState?.rotationActionCount ?? 0;
+    const dialogueModelName =
+      registration?.existingModelName !== "None"
+        ? registration?.existingModelName
+        : registration?.suggestedModelName;
+    return {
+      targetId: String(modelIndex),
+      type: 1,
+      description: `BP 槽位 ${modelIndex}`,
+      npcId: null,
+      npcName:
+        dialogueModelName ||
+        assetNameFromPath(modelClassPath) ||
+        `槽位 ${modelIndex}`,
+      modelId: null,
+      modelClassPath,
+      itemId: null,
+      blueprintModelId: modelIndex,
+      mapId: dialogue.dialogueId,
+      previewKind: "asset" as const,
+      transform: finalWorldTransform,
+      ...(timelineRows.length > 0
+        ? {
+            dialogueAdjustment: {
+              initialTransform: initialWorldTransform,
+              movementActionCount:
+                finalState?.movementActionCount ?? 0,
+              rotationActionCount:
+                finalState?.rotationActionCount ?? 0,
+              positionDelta,
+              rotationDelta,
+              lastAdjustedDialogueId:
+                finalState?.lastAdjustedDialogueId ?? null,
+            },
+          }
+        : {}),
+    };
+  });
+
+  return {
+    blockedReasons,
+    plan: {
+      taskId: dialogue.dialogueId,
+      taskName: `${assetNameFromPath(blueprintAssetPathValue)} 对话模型`,
+      taskSource: "任务表",
+      mapId: dialogue.dialogueId,
+      mapName: mapAssetPath.split("/").at(-1) ?? mapAssetPath,
+      mapAssetPath,
+      targets,
+      warnings,
+      ...(timelineRows.length > 0
+        ? {
+            dialogueTimeline: {
+              nodeCount: timelineRows.length,
+              finalDialogueId: timelineRows.at(-1)!.id,
+              adjustedCharacterCount,
+              movementActionCount,
+              rotationActionCount,
+            },
+          }
+        : {}),
+    },
+  };
+}
+
 function mapObjectPath(value: string): string {
   const packagePath = value.trim().replaceAll("\\", "/").split(".")[0];
   const assetName = packagePath.split("/").at(-1) ?? "";
@@ -4230,6 +4515,7 @@ export async function inspectMissionTargetBlueprint(
         rotation: { pitch: number; yaw: number; roll: number };
       };
     }>;
+    dialogueTimeline?: DialoguePositionTimelineRow[];
   };
   const refreshedPlan = request.taskId
     ? withMissionTargetOverrides(
@@ -4314,11 +4600,40 @@ export async function inspectMissionTargetBlueprint(
         normalizeObjectPath(blueprint.blueprintClassPath);
     let sync: MissionTargetBlueprintSyncState | undefined;
     let appendSlots: DialogueModelRegistrationSlot[] | undefined;
-    if (blueprintState === "populated" && refreshedPlan) {
-      const spatial = await readDialogueSpatialContext(
-        connection,
-        dialogue.startNodeData,
-      );
+    let dialoguePreviewPlan: MissionTargetPreviewPlan | undefined;
+    let dialoguePreviewBlockedReasons: string[] = [];
+    let dialogueSpatial: DialogueSpatialContext | null = null;
+    if (blueprintState === "populated") {
+      try {
+        dialogueSpatial = await readDialogueSpatialContext(
+          connection,
+          dialogue.startNodeData,
+        );
+        const preview = buildBlueprintDialoguePreviewPlan(
+          resolved.assetPath,
+          numericComponents,
+          dialogue,
+          dialogueSpatial,
+          request.dialogueTimeline,
+        );
+        dialoguePreviewPlan = preview.plan;
+        dialoguePreviewBlockedReasons = preview.blockedReasons;
+      } catch (previewError) {
+        if (refreshedPlan) {
+          throw previewError;
+        }
+        dialoguePreviewBlockedReasons = [
+          previewError instanceof Error
+            ? previewError.message
+            : "无法解析对话空间坐标",
+        ];
+      }
+    }
+    if (
+      blueprintState === "populated" &&
+      refreshedPlan &&
+      dialogueSpatial
+    ) {
       sync = buildMissionTargetBlueprintSync(
         refreshedPlan.targets,
         numericComponents.map((component) => ({
@@ -4326,7 +4641,7 @@ export async function inspectMissionTargetBlueprint(
           modelClassPath: component.childActorClass,
           transform: component.transform,
         })),
-        spatial.root,
+        dialogueSpatial.root,
         getConfigCsvDirectory(),
       );
       const registrationByIndex = new Map(
@@ -4397,6 +4712,8 @@ export async function inspectMissionTargetBlueprint(
       formationClassPath: dialogue.formationClassPath,
       slots: dialogue.slots,
       appendSlots,
+      dialoguePreviewPlan,
+      dialoguePreviewBlockedReasons,
       message: `${
         blueprintState === "empty"
           ? "BP 尚未创建站位组件"
@@ -4407,6 +4724,14 @@ export async function inspectMissionTargetBlueprint(
         sync
           ? `；匹配 ${sync.mappings.length} 个任务目标物`
           : ""
+      }${
+        dialoguePreviewPlan
+          ? dialoguePreviewPlan.dialogueTimeline
+            ? `；已统计 ${dialoguePreviewPlan.dialogueTimeline.nodeCount} 个对话节点，${dialoguePreviewPlan.dialogueTimeline.adjustedCharacterCount} 个角色最终站位发生变化`
+            : `；已按对话坐标解析 ${dialoguePreviewPlan.targets.length} 个模型`
+          : dialoguePreviewBlockedReasons.length > 0
+            ? `；暂不能加载模型：${dialoguePreviewBlockedReasons.join("；")}`
+            : ""
       }`,
       refreshedPlan,
       sync,
@@ -7063,6 +7388,22 @@ export async function loadMissionTargetPreview(
       });
     }
 
+    const changedDialogueActorIndexes = plan.dialogueTimeline
+      ? plan.targets.flatMap((target, index) =>
+          target.blueprintModelId !== null &&
+          target.blueprintModelId > 0 &&
+          ((target.dialogueAdjustment?.positionDelta ?? 0) > 0.01 ||
+            (target.dialogueAdjustment?.rotationDelta ?? 0) > 0.01)
+            ? [index]
+            : [],
+        )
+      : [];
+    const selectedActors = changedDialogueActorIndexes.map(
+      (index) => spawnedActors[index],
+    );
+    if (plan.dialogueTimeline) {
+      await selectMissionPreviewActors(connection, selectedActors);
+    }
     activeMissionPreviewActors = spawnedActors;
     activeMissionPreviewMap = plan.mapAssetPath;
     return {
@@ -7078,6 +7419,7 @@ export async function loadMissionTargetPreview(
       markerCount: plan.targets.filter(
         (target) => target.previewKind === "marker",
       ).length,
+      selectedActorCount: selectedActors.length,
     };
   } catch (error) {
     if (spawnedActors.length > 0) {

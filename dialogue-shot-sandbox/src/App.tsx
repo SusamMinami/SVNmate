@@ -73,6 +73,7 @@ import {
   findMissingBlueprintNpcModels,
   type MissingBlueprintNpcModel,
 } from "./data/blueprintFormation";
+import { resolveDialogueCharacterStage } from "./data/characterActions";
 import { demoDatabase } from "./data/demo";
 import {
   participantSlotLabel,
@@ -130,7 +131,6 @@ import type {
   DialogueContentSearchContext,
   DialogueContentSearchResult,
   DialogueDatabase,
-  DialogueParticipant,
   DialogueRow,
   DialogueSequence,
   CompositionMode,
@@ -141,7 +141,6 @@ import type {
   ShotCoverage,
   ShotPlan,
   ShotSize,
-  Vec3,
 } from "./types";
 
 const LazyBlueprintFormationModal = lazy(() =>
@@ -545,23 +544,6 @@ function actorTurnLabel(angleDegrees: number): string {
     return "转身 180°";
   }
   return `${angleDegrees > 0 ? "右转" : "左转"} ${Math.abs(angleDegrees)}°`;
-}
-
-function facingTargetAfterTurn(
-  participant: Pick<
-    DialogueParticipant,
-    "position" | "facingTarget"
-  >,
-  turnDegrees: number,
-): Vec3 {
-  const yawDegrees =
-    participantFacingYawDegrees(participant) + turnDegrees;
-  const radians = (yawDegrees * Math.PI) / 180;
-  return [
-    participant.position[0] + Math.sin(radians) * 2,
-    participant.position[1],
-    participant.position[2] - Math.cos(radians) * 2,
-  ];
 }
 
 function lensIntentLabel(intent: LensIntent): string {
@@ -1400,37 +1382,50 @@ export default function App() {
       inspectorTab === "ue" &&
       Boolean(activeShot),
   });
-  const stageShot = useMemo(() => {
+  const characterActionStage = useMemo(() => {
     if (!activeShot) {
+      return {
+        participants: sequence.participants,
+        affectedModelIndexes: new Set<number>(),
+      };
+    }
+    return resolveDialogueCharacterStage(
+      sequence.participants,
+      sequence.rows,
+      activeShot.dialogueEndIndex,
+      characterActionEditor.existingTracks,
+      characterActionEditor.tracks,
+    );
+  }, [
+    activeShot,
+    characterActionEditor.existingTracks,
+    characterActionEditor.tracks,
+    sequence.participants,
+    sequence.rows,
+  ]);
+  const stageShot = useMemo(() => {
+    if (
+      !activeShot ||
+      characterActionStage.affectedModelIndexes.size === 0
+    ) {
       return undefined;
     }
-    const turns = characterActionEditor.turnDegreesByModelIndex(
-      sequence.rows
-        .slice(0, activeShot.dialogueEndIndex + 1)
-        .map((row) => row.id),
-    );
-    if (turns.size === 0) {
-      return activeShot;
-    }
     const facingOverrides = { ...activeShot.facingOverrides };
-    for (const participant of sequence.participants) {
-      if (participant.modelIndex === null) {
+    for (const participant of characterActionStage.participants) {
+      if (
+        participant.modelIndex === null ||
+        !characterActionStage.affectedModelIndexes.has(
+          participant.modelIndex,
+        )
+      ) {
         continue;
       }
-      const turnDegrees = turns.get(participant.modelIndex);
-      if (turnDegrees === undefined) {
-        continue;
-      }
-      facingOverrides[participant.slot] = facingTargetAfterTurn(
-        participant,
-        turnDegrees,
-      );
+      facingOverrides[participant.slot] = participant.facingTarget;
     }
     return { ...activeShot, facingOverrides };
   }, [
     activeShot,
-    characterActionEditor.turnDegreesByModelIndex,
-    sequence.participants,
+    characterActionStage,
   ]);
   const generatedMusicRecommendations = useMemo(
     () =>
@@ -4077,7 +4072,7 @@ export default function App() {
                 </div>
               </div>
               <StageView
-                participants={sequence.participants}
+                participants={characterActionStage.participants}
                 dialogueParticipantSlots={dialogueParticipantSlotSet}
                 showCastRoster
                 shot={stageShot ?? activeShot}

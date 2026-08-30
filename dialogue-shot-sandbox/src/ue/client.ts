@@ -10,6 +10,7 @@ import type {
   DialogueStoryboardExportPreview,
   DialogueStoryboardExportResult,
   DialogueModelRegistrationResult,
+  DialoguePositionTimelineRow,
   MissionTargetBlueprintToTargetsResult,
   MissionTargetBlueprintAppendResult,
   MissionTargetBlueprintCreateResult,
@@ -210,6 +211,7 @@ export function inspectMissionTargetBlueprint(
     Pick<MissionTargetUpdateItem, "targetId" | "transform">
   >,
   dialogueId?: string,
+  dialogueTimeline?: DialoguePositionTimelineRow[],
 ): Promise<MissionTargetBlueprintInspection> {
   return postUe("/api/ue/mission-targets/inspect-blueprint", {
     blueprintName,
@@ -217,6 +219,7 @@ export function inspectMissionTargetBlueprint(
     taskId,
     targetOverrides,
     dialogueId,
+    dialogueTimeline,
   });
 }
 

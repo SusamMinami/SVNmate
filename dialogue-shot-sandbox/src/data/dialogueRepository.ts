@@ -84,12 +84,14 @@ function followDialogueChain(
   prefix: string,
 ): {
   rows: DialogueRow[];
+  timelineRows: DialogueRow[];
   ignoredDialogueNodeCount: number;
   warnings: string[];
 } {
   const index = getDialogueDatabaseIndex(database);
 
   const rows: DialogueRow[] = [];
+  const timelineRows: DialogueRow[] = [];
   let ignoredDialogueNodeCount = 0;
   const warnings: string[] = [];
   const visited = new Set<string>();
@@ -106,6 +108,7 @@ function followDialogueChain(
       warnings.push(`NextID ${currentId} 在对话表中不存在`);
       break;
     }
+    timelineRows.push(row);
     if (row.state === 4) {
       ignoredDialogueNodeCount += 1;
     } else if (row.content && row.npcId !== null && row.npcId > 0) {
@@ -128,14 +131,42 @@ function followDialogueChain(
       );
     if (fallback.length > 0) {
       warnings.push("开始节点无法形成链路，已按对话 ID 顺序预览");
-      ignoredDialogueNodeCount = (
-        index.dialogueRowsByPrefix.get(prefix) ?? []
-      ).filter((row) => row.state === 4).length;
-      return { rows: fallback, ignoredDialogueNodeCount, warnings };
+      const fallbackTimeline =
+        index.dialogueRowsByPrefix.get(prefix) ?? [];
+      ignoredDialogueNodeCount = fallbackTimeline.filter(
+        (row) => row.state === 4,
+      ).length;
+      return {
+        rows: fallback,
+        timelineRows: fallbackTimeline,
+        ignoredDialogueNodeCount,
+        warnings,
+      };
     }
   }
 
-  return { rows, ignoredDialogueNodeCount, warnings };
+  return { rows, timelineRows, ignoredDialogueNodeCount, warnings };
+}
+
+export function findDialogueTimeline(
+  database: DialogueDatabase,
+  rawDialogueId: string,
+): DialogueRow[] {
+  const dialogueId = rawDialogueId.trim();
+  if (!/^\d{4,}$/.test(dialogueId)) {
+    return [];
+  }
+  const prefix = dialogueId.slice(0, 4);
+  const index = getDialogueDatabaseIndex(database);
+  const starts = index.startsByPrefix.get(prefix) ?? [];
+  const startId =
+    starts.find((start) => start.id === dialogueId)?.id ??
+    starts[0]?.id ??
+    index.dialogueRowsById.get(dialogueId)?.id ??
+    index.dialogueRowsByPrefix.get(prefix)?.[0]?.id;
+  return startId
+    ? followDialogueChain(database, startId, prefix).timelineRows
+    : [];
 }
 
 function adjacentPrefix(prefix: string, offset: -1 | 1): string | null {

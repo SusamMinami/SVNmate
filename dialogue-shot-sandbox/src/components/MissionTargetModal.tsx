@@ -20,8 +20,10 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { type FormEvent, useRef, useState } from "react";
+import { type FormEvent, useMemo, useRef, useState } from "react";
+import { MissionTargetDialoguePreview } from "./MissionTargetDialoguePreview";
 import { NpcRegistrationModal } from "./NpcRegistrationModal";
+import { findDialogueTimeline } from "../data/dialogueRepository";
 import {
   resolveMissionTargets,
   sortMissionTargetsByDialogueFrequency,
@@ -105,7 +107,11 @@ function loadSummary(
   const mapStatus = result.autoOpenedMap
     ? `已自动打开 ${plan.mapName}`
     : `当前已是 ${plan.mapName}`;
-  return `${mapStatus}，加载 ${result.assetCount} 个资产和 ${result.markerCount} 个定位标记`;
+  return `${mapStatus}，加载 ${result.assetCount} 个资产和 ${result.markerCount} 个定位标记${
+    plan.dialogueTimeline
+      ? `，已选中 ${result.selectedActorCount ?? 0} 个变更角色供 NPC 注册`
+      : ""
+  }`;
 }
 
 function dialogueModelLabel(
@@ -209,7 +215,20 @@ export function MissionTargetModal({
   const selectedCount =
     plan?.targets.filter((target) => selectedTargetIds.has(target.targetId))
       .length ?? 0;
+  const blueprintDialoguePreviewPlan =
+    blueprintInspection?.dialoguePreviewPlan ?? null;
   const configuredDialogueId = dialogueId.trim() || undefined;
+  const configuredDialogueTimeline = useMemo(
+    () =>
+      configuredDialogueId
+        ? findDialogueTimeline(database, configuredDialogueId).map((row) => ({
+            id: row.id,
+            characterBehaviourString: row.characterBehaviourString,
+            relativeTransformsString: row.relativeTransformsString,
+          }))
+        : undefined,
+    [configuredDialogueId, database],
+  );
   const isDialogueRegistration =
     blueprintInspection?.blueprintState === "populated";
   const existingTargetIds = new Set(
@@ -376,6 +395,7 @@ export function MissionTargetModal({
           shouldRefresh ? nextPlan.taskId : undefined,
           targetOverrideItems,
           configuredDialogueId,
+          configuredDialogueTimeline,
         );
         applyBlueprintInspection(inspection);
       } else {
@@ -481,6 +501,7 @@ export function MissionTargetModal({
         plan?.taskId,
         targetOverrideItems,
         configuredDialogueId,
+        configuredDialogueTimeline,
       );
       applyBlueprintInspection(inspection, false);
       if (matchedTargetIds.length > 0) {
@@ -528,19 +549,52 @@ export function MissionTargetModal({
   }
 
   async function loadPreview() {
-    if (!plan || selectedCount === 0) {
+    if (plan ? selectedCount === 0 : !blueprintName.trim()) {
       return;
     }
-    const selectedPlan = {
-      ...plan,
-      targets: plan.targets.filter((target) =>
-        selectedTargetIds.has(target.targetId),
-      ),
-    };
     setBusy(true);
     setError("");
     setStatus("");
     try {
+      let selectedPlan: MissionTargetPreviewPlan;
+      if (plan) {
+        selectedPlan = {
+          ...plan,
+          targets: plan.targets.filter((target) =>
+            selectedTargetIds.has(target.targetId),
+          ),
+        };
+      } else if (blueprintDialoguePreviewPlan) {
+        selectedPlan = blueprintDialoguePreviewPlan;
+      } else {
+        const inspection = await inspectMissionTargetBlueprint(
+          blueprintName.trim(),
+          undefined,
+          undefined,
+          undefined,
+          configuredDialogueId,
+          configuredDialogueTimeline,
+        );
+        applyBlueprintInspection(inspection, false);
+        if (inspection.blueprintState !== "populated") {
+          throw new Error("当前 BP 中没有可加载的数字模型槽位");
+        }
+        if (!inspection.dialoguePreviewPlan) {
+          throw new Error(
+            inspection.dialoguePreviewBlockedReasons?.join("；") ||
+              "无法从对应对话解析 BP 模型坐标",
+          );
+        }
+        selectedPlan = inspection.dialoguePreviewPlan;
+        if (configuredDialogueId) {
+          setStatus(
+            inspection.dialoguePreviewPlan.dialogueTimeline
+              ? "已统计对话最终站位，请确认俯视图后加载到 UE"
+              : "本地对话时间线不可用，请确认 BP 原始站位后加载到 UE",
+          );
+          return;
+        }
+      }
       const mapStatus = await inspectMissionTargetMap(
         selectedPlan.mapAssetPath,
       );
@@ -837,6 +891,7 @@ export function MissionTargetModal({
         plan?.taskId,
         targetOverrideItems,
         configuredDialogueId,
+        configuredDialogueTimeline,
       );
       applyBlueprintInspection(inspection);
     } catch (inspectionError) {
@@ -913,6 +968,7 @@ export function MissionTargetModal({
           plan.taskId,
           targetOverrideItems,
           configuredDialogueId,
+          configuredDialogueTimeline,
         );
         applyBlueprintInspection(inspection, false);
       } catch {
@@ -976,6 +1032,7 @@ export function MissionTargetModal({
         plan.taskId,
         targetOverrideItems,
         configuredDialogueId,
+        configuredDialogueTimeline,
       );
       applyBlueprintInspection(inspection, false);
     } catch (appendError) {
@@ -1036,6 +1093,7 @@ export function MissionTargetModal({
         plan?.taskId,
         targetOverrideItems,
         configuredDialogueId,
+        configuredDialogueTimeline,
       );
       applyBlueprintInspection(inspection, false);
     } catch (registrationError) {
@@ -1091,6 +1149,7 @@ export function MissionTargetModal({
         plan.taskId,
         targetOverrideItems,
         configuredDialogueId,
+        configuredDialogueTimeline,
       );
       applyBlueprintInspection(inspection, false);
       setStatus(
@@ -1538,8 +1597,16 @@ export function MissionTargetModal({
                     <dd>{blueprintInspection.dialogueId}</dd>
                   </div>
                   <div>
-                    <dt>注册策略</dt>
-                    <dd>保留现有并按序追加</dd>
+                    <dt>{plan ? "注册策略" : "坐标来源"}</dt>
+                    <dd>
+                      {plan
+                        ? "保留现有并按序追加"
+                        : blueprintDialoguePreviewPlan?.dialogueTimeline
+                          ? "对话最终站位"
+                          : blueprintDialoguePreviewPlan
+                            ? "对话初始站位"
+                          : "尚未解析"}
+                    </dd>
                   </div>
                   <div>
                     <dt>角色位 / 已注册</dt>
@@ -1557,6 +1624,11 @@ export function MissionTargetModal({
                   {blueprintInspection.dialogueAssetPath}
                 </code>
               </section>
+              {blueprintDialoguePreviewPlan && (
+                <MissionTargetDialoguePreview
+                  plan={blueprintDialoguePreviewPlan}
+                />
+              )}
               <button
                 className="mission-target-section-label mission-target-section-toggle"
                 type="button"
@@ -1643,6 +1715,33 @@ export function MissionTargetModal({
               )}
             </>
           )}
+          {!plan &&
+            isDialogueRegistration &&
+            (blueprintInspection.dialoguePreviewBlockedReasons?.length ??
+              0) > 0 && (
+              <section className="mission-target-warnings">
+                {blueprintInspection.dialoguePreviewBlockedReasons?.map(
+                  (warning) => (
+                    <p key={warning}>
+                      <AlertTriangle size={14} />
+                      <span>{warning}</span>
+                    </p>
+                  ),
+                )}
+              </section>
+            )}
+          {!plan &&
+            blueprintDialoguePreviewPlan &&
+            blueprintDialoguePreviewPlan.warnings.length > 0 && (
+              <section className="mission-target-warnings">
+                {blueprintDialoguePreviewPlan.warnings.map((warning) => (
+                  <p key={warning}>
+                    <AlertTriangle size={14} />
+                    <span>{warning}</span>
+                  </p>
+                ))}
+              </section>
+            )}
           {plan ? (
             <>
               <section className="mission-target-summary">
@@ -2025,11 +2124,13 @@ export function MissionTargetModal({
         <footer>
           <span>
             {isDialogueRegistration
-              ? `BP 已有 ${blueprintRegistrationSlots.length} 个固定角色位${
-                  plan
-                    ? `；待追加 ${selectedAppendTargets.length} / ${selectableTargetRows.length} 个目标物`
-                    : ""
-                }`
+              ? plan
+                ? `BP 已有 ${blueprintRegistrationSlots.length} 个固定角色位；待追加 ${selectedAppendTargets.length} / ${selectableTargetRows.length} 个目标物`
+                : blueprintDialoguePreviewPlan
+                  ? blueprintDialoguePreviewPlan.dialogueTimeline
+                    ? `对话 ${blueprintDialoguePreviewPlan.taskId} 最终节点 ${blueprintDialoguePreviewPlan.dialogueTimeline.finalDialogueId}；${blueprintDialoguePreviewPlan.dialogueTimeline.adjustedCharacterCount} 位角色发生调度`
+                    : `已按对话 ${blueprintDialoguePreviewPlan.taskId} 解析 ${blueprintDialoguePreviewPlan.targets.length} 个 BP 模型`
+                  : `BP 已有 ${blueprintRegistrationSlots.length} 个固定角色位；对话坐标不可用`
               : plan
               ? `已选择 ${selectedCount} / ${plan.targets.length} 个目标物，MapID ${plan.mapId}`
               : "检查 BP 不会修改对话或 UE 资产"}
@@ -2096,14 +2197,42 @@ export function MissionTargetModal({
               className="button"
               type="button"
               onClick={() => void loadPreview()}
-              disabled={busy || !plan || selectedCount === 0}
+              disabled={
+                busy ||
+                (plan
+                  ? selectedCount === 0
+                  : !blueprintName.trim())
+              }
+              title={
+                plan
+                  ? "按任务目标物坐标加载所选预览"
+                  : blueprintName.trim()
+                    ? !configuredDialogueId
+                      ? "按 BP 文件中的原始模型位置直接加载到 UE"
+                      : blueprintDialoguePreviewPlan?.dialogueTimeline
+                        ? "把俯视图中的最终站位加载到 UE，并自动选中变更角色"
+                        : blueprintDialoguePreviewPlan
+                          ? "把 BP 原始站位加载到 UE"
+                          : "读取 BP 和对话调度并生成最终站位俯视图"
+                    : "请先输入任务节点或 BP 文件名"
+              }
             >
               {busy ? (
                 <LoaderCircle className="spin" size={16} />
               ) : (
                 <MapPinned size={16} />
               )}
-              {busy ? "正在处理..." : "加载到 UE"}
+              {busy
+                ? "正在处理..."
+                : plan
+                  ? "加载到 UE"
+                  : !configuredDialogueId
+                    ? "加载 BP 到 UE"
+                    : blueprintDialoguePreviewPlan?.dialogueTimeline
+                      ? "加载最终站位"
+                      : blueprintDialoguePreviewPlan
+                        ? "加载 BP 原位"
+                        : "计算最终站位"}
             </button>
             <button
               className="button button--primary"
@@ -2384,7 +2513,7 @@ export function MissionTargetModal({
                   <MapPinned size={18} />
                 </span>
                 <div>
-                  <small>UE 当前关卡与任务地图不同</small>
+                  <small>UE 当前关卡与预览地图不同</small>
                   <h3 id="mission-map-choice-title">
                     {mapLoadDecision.phase === "auto"
                       ? "正在等待 UE 加载地图"
@@ -2414,7 +2543,7 @@ export function MissionTargetModal({
                     </dd>
                   </div>
                   <div>
-                    <dt>任务目标地图</dt>
+                    <dt>目标地图</dt>
                     <dd title={mapLoadDecision.plan.mapAssetPath}>
                       {mapLoadDecision.plan.mapName} ·{" "}
                       {mapLoadDecision.plan.mapAssetPath}
@@ -2423,12 +2552,12 @@ export function MissionTargetModal({
                 </dl>
                 {mapLoadDecision.phase === "manual" && (
                   <p>
-                    请在 UE 中完成地图切换，再检查并加载目标物。
+                    请在 UE 中完成地图切换，再检查并加载预览。
                   </p>
                 )}
                 {mapLoadDecision.phase === "auto" && (
                   <p>
-                    UE 正在打开目标地图。大型关卡可能需要数十秒，加载完成后会继续生成目标物预览。
+                    UE 正在打开目标地图。大型关卡可能需要数十秒，加载完成后会继续生成预览对象。
                   </p>
                 )}
                 {mapLoadDecision.error && (

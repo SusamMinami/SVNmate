@@ -93,8 +93,19 @@ CSV 解析器已经保留：
 - `Dialog.CharacterBehaviourString`
 - `Dialog.RelativeTransformsString`
 
-当前阶段仅从 `CharacterBehaviourString` 中识别唯一的 `AM_Talk` 槽位，用于
-区分同一 NPC ID 对应的多个场内实例。节点走位播放将在后续阶段实现。
+`CharacterBehaviourString` 同时用于识别唯一的 `AM_Talk` 槽位，以及恢复
+`ERotate`、`EWalk` 和 `EStateMachineWalk` 动作。分镜工作台按当前镜头结束
+节点累计动作：转身按 Montage 名称中的方向和角度更新朝向；两类走位按 UE
+起止坐标换算沙盘位移，并让角色面向移动方向。UE 回读仅补充 CSV 中不存在的
+动作，避免同一动作重复应用。
+
+任务目标物工作区在检查已有 BP 时可附带对话文件 ID。系统沿完整 `NextID`
+链读取所有节点（包括关闭 UI 和无对白节点），先应用每个节点的
+`RelativeTransformsString`，再按顺序执行该节点动作，得到每个数字模型槽在
+对话结束时的局部 Transform。最终结果通过对话根 Transform 转为关卡世界坐标，
+并以“BP 原位 → 对话最终站位”的俯视图和逐槽统计展示。首次操作只计算预览，
+用户确认后再加载到 UE；加载完成后自动选中发生变化的非玩家角色，供现有
+“注册 NPC”流程直接读取并写入目标物表。
 
 ## 身份模型
 
@@ -217,9 +228,8 @@ Electron 主进程中的 UE 传输服务默认通过 `127.0.0.1:12031` 连接项
 
 ## 后续阶段
 
-1. 将 `RelativeTransformsString` 解析为逐节点 Transform 时间线。
-2. 结合 `CharacterBehaviourString` 的 `AM_Walk` 起止点和时间播放平滑走位。
-3. 对跨越走位节点的镜头执行切镜或跟拍约束。
-4. 为分镜写回增加 SVN checkout 和 UE Transaction；当前已具备差异确认、
+1. 结合动作时长播放平滑走位；当前工作台展示节点执行完成后的准确位置。
+2. 对跨越走位节点的镜头执行切镜或跟拍约束。
+3. 为分镜写回增加 SVN checkout 和 UE Transaction；当前已具备差异确认、
    写后回读、单次保存和失败恢复。
-5. 单独实现 DialogGraph 节点走位回写；禁止直接修改导出的 CSV。
+4. 单独实现 DialogGraph 节点走位回写；禁止直接修改导出的 CSV。

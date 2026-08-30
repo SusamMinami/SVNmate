@@ -4106,7 +4106,7 @@ test("offers the detected Blueprint formation before designing shots", async ({
           "##对话ID,人物,内容,下一ID,结束,状态,动作,相对位置",
           "735000,,,735009,false,,,",
           '735009,1,不可见的镜头关键帧,735001,false,4,"0.000000,AM_Talk,0,0,0,0,0,0,0,0;",',
-          '735001,1,你来了。,735002,false,0,"0.000000,AM_Talk,0,0,0,0,0,0,0,0;",',
+          '735001,1,你来了。,735002,false,0,"0.000000,AM_Talk,0,0,0,0,0,0,0,0;0.000000,AM_TurnRight90,1,0,0,0,0,0,0,0|0.000000,AM_Walk,2,0,0,0,100,200,0,0|0.000000,None,3,100,200,0,50,300,0,0",',
           '735002,101968,巡逻队马上就会回来。,,true,0,";0.000000,AM_Talk,0,0,0,0,0,0,0,0",',
       ].join("\n"),
     },
@@ -4395,6 +4395,10 @@ test("offers the detected Blueprint formation before designing shots", async ({
     .locator(".actor-label")
     .filter({ hasText: "商会安保" })
     .first();
+  await expect(guardFacingLabel).toHaveAttribute(
+    "data-position",
+    "0.900,0.000,-1.500",
+  );
   const facingBeforeTurn = await guardFacingLabel.getAttribute(
     "data-facing-target",
   );
@@ -5399,8 +5403,8 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
   await dialog.getByRole("button", { name: "解析任务目标物" }).click();
   await expect.poll(() => refreshedTaskRequests).toBe(1);
   await expect(
-    dialog.getByRole("button", { name: "加载到 UE" }),
-  ).toBeDisabled();
+    dialog.getByRole("button", { name: "加载 BP 到 UE" }),
+  ).toBeEnabled();
   expect(loadRequests).toBe(2);
 
   await dialog.getByRole("button", { name: "返回分镜工作台" }).click();
@@ -5911,6 +5915,307 @@ test("locks and registers every existing numeric Blueprint slot", async ({
   await expect(
     workspace.getByText(/角色 3 个（含 0 号玩家）/),
   ).toBeVisible();
+});
+
+test("loads Blueprint models from dialogue coordinates without a task ID", async ({
+  page,
+}, testInfo) => {
+  let inspectionRequests = 0;
+  let loadedRequest: Record<string, any> | null = null;
+  const dialoguePreviewPlan = {
+    taskId: "735200",
+    taskName: "BP_735200 对话模型",
+    taskSource: "任务表",
+    mapId: "735200",
+    mapName: "TestMap",
+    mapAssetPath: "/Game/Test/Maps/TestMap",
+    targets: [
+      {
+        targetId: "0",
+        type: 1,
+        description: "BP 槽位 0",
+        npcId: null,
+        npcName: "player",
+        modelId: null,
+        modelClassPath:
+          "/Game/Seria/Characters/Eric/BP_Eric.BP_Eric_C",
+        itemId: null,
+        blueprintModelId: 0,
+        mapId: "735200",
+        previewKind: "asset",
+        transform: {
+          location: { x: 100, y: 200, z: 300 },
+          rotation: { pitch: 0, yaw: 90, roll: 0 },
+          scale: { x: 1, y: 1, z: 1 },
+        },
+      },
+      {
+        targetId: "1",
+        type: 1,
+        description: "BP 槽位 1",
+        npcId: null,
+        npcName: "Guard",
+        modelId: null,
+        modelClassPath: "/Game/Test/BP_Guard.BP_Guard_C",
+        itemId: null,
+        blueprintModelId: 1,
+        mapId: "735200",
+        previewKind: "asset",
+        transform: {
+          location: { x: 350, y: 450, z: 300 },
+          rotation: { pitch: 0, yaw: 150, roll: 0 },
+          scale: { x: 1, y: 1, z: 1 },
+        },
+        dialogueAdjustment: {
+          initialTransform: {
+            location: { x: 100, y: 300, z: 300 },
+            rotation: { pitch: 0, yaw: 105, roll: 0 },
+            scale: { x: 1, y: 1, z: 1 },
+          },
+          movementActionCount: 1,
+          rotationActionCount: 1,
+          positionDelta: 291.548,
+          rotationDelta: 45,
+          lastAdjustedDialogueId: "735299",
+        },
+      },
+    ],
+    warnings: [],
+    dialogueTimeline: {
+      nodeCount: 3,
+      finalDialogueId: "735299",
+      adjustedCharacterCount: 1,
+      movementActionCount: 1,
+      rotationActionCount: 1,
+    },
+  };
+  const blueprintPreviewPlan = {
+    taskId: dialoguePreviewPlan.taskId,
+    taskName: dialoguePreviewPlan.taskName,
+    taskSource: dialoguePreviewPlan.taskSource,
+    mapId: dialoguePreviewPlan.mapId,
+    mapName: dialoguePreviewPlan.mapName,
+    mapAssetPath: dialoguePreviewPlan.mapAssetPath,
+    targets: dialoguePreviewPlan.targets.map((target) => {
+      if (!target.dialogueAdjustment) {
+        return target;
+      }
+      const {
+        dialogueAdjustment,
+        ...targetWithoutAdjustment
+      } = target;
+      return {
+        ...targetWithoutAdjustment,
+        transform: dialogueAdjustment.initialTransform,
+      };
+    }),
+    warnings: dialoguePreviewPlan.warnings,
+  };
+
+  await page.route("**/api/ue/formation/read", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: { status: "not_found", message: "未找到测试 BP" },
+      }),
+    });
+  });
+  await page.route(
+    "**/api/ue/mission-targets/inspect-blueprint",
+    async (route) => {
+      inspectionRequests += 1;
+      const request = route.request().postDataJSON();
+      expect(request.blueprintName).toBe("7352");
+      if (request.dialogueId) {
+        expect(request).toMatchObject({
+          dialogueId: "735200",
+          dialogueTimeline: [
+            { id: "735200" },
+            {
+              id: "735201",
+              characterBehaviourString: expect.stringContaining("AM_Walk"),
+            },
+            {
+              id: "735299",
+              characterBehaviourString: expect.stringContaining(
+                "AM_TurnRight45",
+              ),
+            },
+          ],
+        });
+      } else {
+        expect(request.dialogueTimeline).toBeUndefined();
+      }
+      const responsePlan = request.dialogueId
+        ? dialoguePreviewPlan
+        : blueprintPreviewPlan;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          data: {
+            blueprintState: "populated",
+            blueprintAssetPath:
+              "/Game/Seria/Task/Mod/Test/BP_735200.BP_735200",
+            blueprintClassPath:
+              "/Game/Seria/Task/Mod/Test/BP_735200.BP_735200_C",
+            parentClassPath:
+              "/Game/Seria/Task/Mod/PositionMode/PositionModeBase.PositionModeBase_C",
+            dialogueId: "735200",
+            dialogueAssetPath:
+              "/Game/Seria/Task/dialoggraph/Test/735200.735200",
+            formationClassPath:
+              "/Game/Seria/Task/Mod/Test/BP_735200.BP_735200_C",
+            slots: responsePlan.targets.map((target) => ({
+              modelIndex: target.blueprintModelId,
+              targetId: null,
+              modelClassPath: target.modelClassPath,
+              existingModelName: target.npcName,
+              suggestedModelName: target.npcName,
+              candidateModelNames: [target.npcName],
+              status: "registered",
+            })),
+            dialoguePreviewPlan: responsePlan,
+            dialoguePreviewBlockedReasons: [],
+            message: "已按对话坐标解析 2 个模型",
+          },
+        }),
+      });
+    },
+  );
+  await page.route(
+    "**/api/ue/mission-targets/map-status",
+    async (route) => {
+      const request = route.request().postDataJSON();
+      expect(request.mapAssetPath).toBe("/Game/Test/Maps/TestMap");
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          data: {
+            currentMapAssetPath: request.mapAssetPath,
+            expectedMapAssetPath: request.mapAssetPath,
+            matches: true,
+          },
+        }),
+      });
+    },
+  );
+  await page.route("**/api/ue/mission-targets/load", async (route) => {
+    loadedRequest = route.request().postDataJSON();
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          status: "loaded",
+          taskId: "735200",
+          mapId: "735200",
+          mapAssetPath: "/Game/Test/Maps/TestMap",
+          autoOpenedMap: false,
+          spawnedCount: 2,
+          assetCount: 2,
+          markerCount: 0,
+          selectedActorCount: 1,
+        },
+      }),
+    });
+  });
+
+  await page.goto("/");
+  const fixtureDirectory = await writeDirectoryFixture(
+    testInfo.outputPath("dialogue-position-csvdir"),
+    [
+      {
+        name: "对话表.csv",
+        content: [
+          "##&Dialog.id,Dialog.NPCID,Dialog.Content,Dialog.NextID,Dialog.End,Dialog.CharacterBehaviourString,Dialog.RelativeTransformsString",
+          "##对话ID,人物,内容,下一ID,结束,动作,相对位置",
+          "735200,,,735201,false,,",
+          '735201,1,开始移动,735299,false,";0.000000,AM_Walk,2,100,0,100,200,100,100,0","0|1,0,0,0,0,0,0;1|1,0,0,0,0,0,0"',
+          '735299,101968,最终位置,,true,";0.000000,AM_TurnRight45,1,0,0,0,0,0,0,0","0|1,0,0,0,0,0,0;1|0,0,45,0,200,100,100"',
+        ].join("\n"),
+      },
+      {
+        name: "对话表_开始节点.csv",
+        content: [
+          "##&DialogStart.id,DialogStart.Outline",
+          "##对话ID,剧情梗概",
+          "735200,最终站位测试",
+        ].join("\n"),
+      },
+      {
+        name: "NPC表.csv",
+        content: [
+          "##&NPC.id,NPC.name,NPC.npcintroduce,NPC.resource_id",
+          "##id,名称,介绍,资源",
+          "1,玩家,玩家,",
+          "101968,守卫,守卫,200135",
+        ].join("\n"),
+      },
+      {
+        name: "m模型资源表.csv",
+        content: [
+          "##&Model.id,,Model.path",
+          "##id,配置路径,生成路径",
+          "200135,/Game/Test/BP_Guard,/Game/Test/BP_Guard.BP_Guard_C",
+        ].join("\n"),
+      },
+    ],
+  );
+  await page.locator('input[type="file"]').setInputFiles(fixtureDirectory);
+  await page.getByRole("button", { name: "任务目标物" }).click();
+  const workspace = page.getByRole("region", {
+    name: "任务目标物",
+    exact: true,
+  });
+  await workspace.getByLabel("BP 文件名").fill("7352");
+  await workspace.getByRole("button", { name: "加载 BP 到 UE" }).click();
+  await expect(
+    workspace.getByText("当前已是 TestMap，加载 2 个资产和 0 个定位标记"),
+  ).toBeVisible();
+  expect(inspectionRequests).toBe(1);
+  expect(loadedRequest).toMatchObject({
+    plan: blueprintPreviewPlan,
+    mapMode: "require-current",
+  });
+
+  loadedRequest = null;
+  await workspace.getByRole("button", {
+    name: "展开对话文件 ID",
+  }).click();
+  await workspace.getByLabel("对话文件 ID（可选）").fill("735200");
+  await workspace.getByRole("button", { name: "计算最终站位" }).click();
+  const dialoguePreview = workspace.getByRole("region", {
+    name: "对话最终站位俯视图",
+  });
+  await expect(dialoguePreview).toContainText("节点 735299 · 3 个节点");
+  await expect(dialoguePreview).toContainText(
+    "1 位变化 · 1 次走位 · 1 次旋转",
+  );
+  await expect(
+    dialoguePreview.locator('[data-target-id="1"]'),
+  ).toHaveAttribute("data-position-delta", "291.548");
+  await dialoguePreview.screenshot({
+    path: testInfo.outputPath("dialogue-final-position-preview.png"),
+  });
+  expect(loadedRequest).toBeNull();
+  await workspace.getByRole("button", { name: "加载最终站位" }).click();
+  await expect(
+    workspace.getByText("当前已是 TestMap，加载 2 个资产和 0 个定位标记"),
+  ).toBeVisible();
+  await expect(workspace.getByText(/已选中 1 个变更角色供 NPC 注册/))
+    .toBeVisible();
+  expect(inspectionRequests).toBe(2);
+  expect(loadedRequest).toMatchObject({
+    plan: dialoguePreviewPlan,
+    mapMode: "require-current",
+  });
 });
 
 test("offers bidirectional position sync for a registered Blueprint", async ({

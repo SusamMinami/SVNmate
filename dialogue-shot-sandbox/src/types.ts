@@ -205,6 +205,8 @@ export interface DialogueCharacterActionItem {
   montageName: string;
   delaySeconds: number;
   behaviourType?: string;
+  startLocation?: { x: number; y: number; z: number };
+  endLocation?: { x: number; y: number; z: number };
 }
 
 export interface DialogueCharacterActionTrack {
@@ -220,6 +222,21 @@ export interface DialogueCharacterActionSnapshot {
   tracks: DialogueCharacterActionTrack[];
 }
 
+export interface DialoguePositionTimelineRow {
+  id: string;
+  characterBehaviourString: string;
+  relativeTransformsString: string;
+}
+
+export interface DialoguePositionAdjustment {
+  initialTransform: UnrealTransform;
+  movementActionCount: number;
+  rotationActionCount: number;
+  positionDelta: number;
+  rotationDelta: number;
+  lastAdjustedDialogueId: string | null;
+}
+
 export interface MissionTargetPreviewTarget {
   targetId: string;
   type: number | null;
@@ -233,6 +250,7 @@ export interface MissionTargetPreviewTarget {
   mapId: string;
   previewKind: "asset" | "marker";
   transform: UnrealTransform;
+  dialogueAdjustment?: DialoguePositionAdjustment;
 }
 
 export interface MissionTargetPreviewPlan {
@@ -244,6 +262,13 @@ export interface MissionTargetPreviewPlan {
   mapAssetPath: string;
   targets: MissionTargetPreviewTarget[];
   warnings: string[];
+  dialogueTimeline?: {
+    nodeCount: number;
+    finalDialogueId: string;
+    adjustedCharacterCount: number;
+    movementActionCount: number;
+    rotationActionCount: number;
+  };
 }
 
 export interface MissionTargetPreviewLoadResult {
@@ -255,6 +280,7 @@ export interface MissionTargetPreviewLoadResult {
   spawnedCount: number;
   assetCount: number;
   markerCount: number;
+  selectedActorCount?: number;
 }
 
 export interface MissionTargetMapStatus {
@@ -341,6 +367,8 @@ export interface MissionTargetBlueprintInspection {
   appendSlots?: DialogueModelRegistrationSlot[];
   message: string;
   refreshedPlan?: MissionTargetPreviewPlan;
+  dialoguePreviewPlan?: MissionTargetPreviewPlan;
+  dialoguePreviewBlockedReasons?: string[];
   sync?: MissionTargetBlueprintSyncState;
 }
 
