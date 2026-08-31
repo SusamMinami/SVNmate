@@ -1,5 +1,6 @@
 import {
   Check,
+  ChevronDown,
   CircleAlert,
   Database,
   Download,
@@ -54,6 +55,76 @@ function updateLabel(snapshot: DesktopUpdateSnapshot): string {
     default:
       return "尚未检查更新";
   }
+}
+
+interface ReleaseNoteBlock {
+  kind: "heading" | "item" | "paragraph" | "meta";
+  text: string;
+}
+
+function parseReleaseNotes(markdown: string): ReleaseNoteBlock[] {
+  const blocks: ReleaseNoteBlock[] = [];
+  for (const rawLine of markdown.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line === "---" || line.startsWith("# ")) {
+      continue;
+    }
+    if (line.startsWith("## ")) {
+      blocks.push({ kind: "heading", text: line.slice(3).trim() });
+      continue;
+    }
+    if (line.startsWith("> ")) {
+      blocks.push({ kind: "meta", text: line.slice(2).trim() });
+      continue;
+    }
+    if (line.startsWith("- ")) {
+      blocks.push({ kind: "item", text: line.slice(2).trim() });
+      continue;
+    }
+    const previous = blocks.at(-1);
+    if (previous && previous.kind !== "heading") {
+      previous.text = `${previous.text} ${line}`;
+    } else {
+      blocks.push({ kind: "paragraph", text: line });
+    }
+  }
+  return blocks;
+}
+
+function ReleaseNotes({ markdown }: { markdown: string }) {
+  const blocks = parseReleaseNotes(markdown);
+  if (blocks.length === 0) {
+    return null;
+  }
+  return (
+    <details className="setup-update__notes">
+      <summary>
+        <span>查看本次更新内容</span>
+        <ChevronDown size={14} />
+      </summary>
+      <div>
+        {blocks.map((block, index) => {
+          const text = block.text.replaceAll("`", "");
+          if (block.kind === "heading") {
+            return <h4 key={`${block.kind}-${index}`}>{text}</h4>;
+          }
+          if (block.kind === "meta") {
+            return <small key={`${block.kind}-${index}`}>{text}</small>;
+          }
+          return (
+            <p
+              className={
+                block.kind === "item" ? "setup-update__note-item" : undefined
+              }
+              key={`${block.kind}-${index}`}
+            >
+              {text}
+            </p>
+          );
+        })}
+      </div>
+    </details>
+  );
 }
 
 export function DesktopSetupModal({
@@ -563,7 +634,7 @@ export function DesktopSetupModal({
           </section>
 
           <section className="setup-update">
-            <div>
+            <div className="setup-update__summary">
               <h3>在线升级</h3>
               <p>
                 {status.portable
@@ -597,6 +668,9 @@ export function DesktopSetupModal({
               )}
               {update.state === "downloaded" ? "重启并安装" : "检查更新"}
             </button>
+            {update.releaseNotes && (
+              <ReleaseNotes markdown={update.releaseNotes} />
+            )}
           </section>
 
           {(error || dataError) && (

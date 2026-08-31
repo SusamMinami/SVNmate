@@ -47,6 +47,7 @@ contextBridge.exposeInMainWorld("shotSandboxDesktop", {
       version?: string;
       percent?: number;
       message?: string;
+      releaseNotes?: string;
     }) => void,
   ) => {
     const handler = (
@@ -56,6 +57,7 @@ contextBridge.exposeInMainWorld("shotSandboxDesktop", {
         version?: string;
         percent?: number;
         message?: string;
+        releaseNotes?: string;
       },
     ) => listener(snapshot);
     ipcRenderer.on("desktop:update-state", handler);

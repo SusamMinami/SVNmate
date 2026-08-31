@@ -6,7 +6,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $packagePath = Join-Path $PSScriptRoot "..\package.json"
-$releaseNotesPath = Join-Path $PSScriptRoot "..\RELEASE_NOTES.md"
+$releaseNotesPath = Join-Path $PSScriptRoot "..\UPDATE_NOTES.md"
 $package = [System.IO.File]::ReadAllText(
   $packagePath,
   [System.Text.Encoding]::UTF8

@@ -93,6 +93,7 @@ interface UpdateSnapshot {
   version?: string;
   percent?: number;
   message?: string;
+  releaseNotes?: string;
 }
 
 interface WindowRestoreState {
@@ -363,6 +364,25 @@ function broadcastUpdate(snapshot: UpdateSnapshot): void {
   mainWindow?.webContents.send("desktop:update-state", snapshot);
 }
 
+function normalizeReleaseNotes(
+  releaseNotes:
+    | string
+    | ReadonlyArray<{ version: string; note: string | null }>
+    | null
+    | undefined,
+): string | undefined {
+  if (typeof releaseNotes === "string") {
+    return releaseNotes.trim() || undefined;
+  }
+  if (!releaseNotes) {
+    return undefined;
+  }
+  const notes = releaseNotes.flatMap(({ version, note }) =>
+    note?.trim() ? [`## ${version}\n\n${note.trim()}`] : [],
+  );
+  return notes.length > 0 ? notes.join("\n\n") : undefined;
+}
+
 function configureUpdater(): void {
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
@@ -370,16 +390,26 @@ function configureUpdater(): void {
     broadcastUpdate({ state: "checking" });
   });
   autoUpdater.on("update-available", (info) => {
-    broadcastUpdate({ state: "available", version: info.version });
+    broadcastUpdate({
+      state: "available",
+      version: info.version,
+      releaseNotes: normalizeReleaseNotes(info.releaseNotes),
+    });
   });
   autoUpdater.on("download-progress", (progress) => {
     broadcastUpdate({
+      ...updateSnapshot,
       state: "downloading",
       percent: Math.round(progress.percent),
     });
   });
   autoUpdater.on("update-downloaded", (info) => {
-    broadcastUpdate({ state: "downloaded", version: info.version });
+    broadcastUpdate({
+      state: "downloaded",
+      version: info.version,
+      releaseNotes:
+        normalizeReleaseNotes(info.releaseNotes) ?? updateSnapshot.releaseNotes,
+    });
   });
   autoUpdater.on("update-not-available", (info) => {
     broadcastUpdate({ state: "current", version: info.version });

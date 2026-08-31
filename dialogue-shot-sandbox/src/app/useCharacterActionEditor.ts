@@ -6,7 +6,11 @@ import {
   useState,
   type SetStateAction,
 } from "react";
-import { turnDegreesFromMontageName } from "../data/characterActions";
+import {
+  dialogueCharacterActionTracks,
+  mergeDialogueCharacterActionTracks,
+  turnDegreesFromMontageName,
+} from "../data/characterActions";
 import type {
   BlueprintMontageCatalog,
   DialogueCharacterActionItem,
@@ -81,7 +85,7 @@ export function useCharacterActionEditor({
   const [status, setStatus] = useState("");
   const [dialogueAssetPath, setDialogueAssetPath] = useState("");
   const [catalogs, setCatalogs] = useState<BlueprintMontageCatalog[]>([]);
-  const [existingTracks, setExistingTracks] = useState<
+  const [ueTracks, setUeTracks] = useState<
     DialogueCharacterActionTrack[]
   >([]);
   const [tracksBySignature, setTracksBySignature] = useState<
@@ -99,6 +103,14 @@ export function useCharacterActionEditor({
           : [],
       ),
     [sequence.participants],
+  );
+  const localTracks = useMemo(
+    () => dialogueCharacterActionTracks(sequence.rows),
+    [sequence.rows],
+  );
+  const existingTracks = useMemo(
+    () => mergeDialogueCharacterActionTracks(localTracks, ueTracks),
+    [localTracks, ueTracks],
   );
   const signature = useMemo(
     () =>
@@ -145,10 +157,18 @@ export function useCharacterActionEditor({
     loadedSignatureRef.current = signature;
     if (models.length === 0) {
       setCatalogs([]);
-      setExistingTracks([]);
+      setUeTracks([]);
       setDialogueAssetPath("");
       setError("");
-      setStatus("当前方案没有可读取动作的 BP 模型槽");
+      const localActionCount = localTracks.reduce(
+        (total, track) => total + track.actions.length,
+        0,
+      );
+      setStatus(
+        localActionCount > 0
+          ? `已从对话文件读取 ${localActionCount} 项动作；规则占位下现有动作只读`
+          : "当前方案没有可读取动作的 BP 模型槽",
+      );
       return;
     }
     setLoading(true);
@@ -165,7 +185,7 @@ export function useCharacterActionEditor({
       }
       setDialogueAssetPath(snapshot.dialogueAssetPath);
       setCatalogs(snapshot.catalogs);
-      setExistingTracks(snapshot.tracks);
+      setUeTracks(snapshot.tracks);
       if (discardDrafts) {
         setTracks([]);
       }
@@ -197,7 +217,14 @@ export function useCharacterActionEditor({
         setLoading(false);
       }
     }
-  }, [models, sequence.rows, sequence.startId, setTracks, signature]);
+  }, [
+    localTracks,
+    models,
+    sequence.rows,
+    sequence.startId,
+    setTracks,
+    signature,
+  ]);
 
   useEffect(() => {
     requestRunRef.current += 1;
@@ -207,7 +234,7 @@ export function useCharacterActionEditor({
     setStatus("");
     setDialogueAssetPath("");
     setCatalogs([]);
-    setExistingTracks([]);
+    setUeTracks([]);
   }, [signature]);
 
   useEffect(() => {
@@ -400,7 +427,7 @@ export function useCharacterActionEditor({
             !exportedKeys.has(trackKey(track.dialogueId, track.modelIndex)),
         ),
       );
-      setExistingTracks((current) => {
+      setUeTracks((current) => {
         const next = current.map((track) => ({
           ...track,
           actions: [...track.actions],

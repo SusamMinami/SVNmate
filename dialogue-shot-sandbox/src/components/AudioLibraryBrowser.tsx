@@ -40,6 +40,9 @@ interface AudioLibraryBrowserProps {
   activeDialogueId: string;
   appliedSoundEffects: DirectorSoundEffectRecommendation[];
   appliedMusic: MusicRecommendation[];
+  playbackActive: boolean;
+  onPlaybackStart: () => void;
+  onPlaybackStop: () => void;
   onApplySoundEffect: (
     entry: SoundEffectCatalogEntry,
     dialogueId: string,
@@ -77,6 +80,9 @@ export function AudioLibraryBrowser({
   activeDialogueId,
   appliedSoundEffects,
   appliedMusic,
+  playbackActive,
+  onPlaybackStart,
+  onPlaybackStop,
   onApplySoundEffect,
   onApplyMusic,
 }: AudioLibraryBrowserProps) {
@@ -139,13 +145,22 @@ export function AudioLibraryBrowser({
     });
   }, [activeDialogueId, dialogueScope]);
 
-  function stopPlayback() {
+  function stopPlayback(releaseOwnership = false) {
     playbackRunRef.current += 1;
     audioRef.current?.pause();
     audioRef.current = null;
     setPlayingKey(null);
     setPreparingKey(null);
+    if (releaseOwnership) {
+      onPlaybackStop();
+    }
   }
+
+  useEffect(() => {
+    if (!playbackActive) {
+      stopPlayback();
+    }
+  }, [playbackActive]);
 
   useEffect(
     () => () => {
@@ -157,14 +172,14 @@ export function AudioLibraryBrowser({
   );
 
   function selectLibrary(nextLibrary: AudioLibraryKind) {
-    stopPlayback();
+    stopPlayback(true);
     setPlaybackError("");
     setCategory(null);
     setLibrary((current) => (current === nextLibrary ? null : nextLibrary));
   }
 
   function selectCategory(nextCategory: string) {
-    stopPlayback();
+    stopPlayback(true);
     setPlaybackError("");
     setCategory(nextCategory);
   }
@@ -175,12 +190,13 @@ export function AudioLibraryBrowser({
     prepare: () => Promise<string>,
   ) {
     if (playingKey === key) {
-      stopPlayback();
+      stopPlayback(true);
       return;
     }
     stopPlayback();
     setPlaybackError("");
     setPreparingKey(key);
+    onPlaybackStart();
     const runId = ++playbackRunRef.current;
     try {
       const url = await prepare();
@@ -192,13 +208,17 @@ export function AudioLibraryBrowser({
       audioRef.current = audio;
       audio.onended = () => {
         if (audioRef.current === audio) {
+          audioRef.current = null;
           setPlayingKey(null);
+          onPlaybackStop();
         }
       };
       audio.onerror = () => {
         if (audioRef.current === audio) {
+          audioRef.current = null;
           setPlayingKey(null);
           setPlaybackError(`${label} 试听加载失败`);
+          onPlaybackStop();
         }
       };
       await audio.play();
@@ -215,9 +235,11 @@ export function AudioLibraryBrowser({
       }
     } catch (error) {
       if (playbackRunRef.current === runId) {
+        audioRef.current = null;
         setPlaybackError(
           error instanceof Error ? error.message : `${label} 无法播放`,
         );
+        onPlaybackStop();
       }
     } finally {
       if (playbackRunRef.current === runId) {
@@ -353,8 +375,14 @@ export function AudioLibraryBrowser({
                 recommendation.assetName === entry.assetName,
             );
             const auditioned = auditionedKeys.has(key);
+            const isPlaying = playingKey === key;
             return (
-              <div role="listitem" key={`${entry.category}:${entry.assetName}`}>
+              <div
+                role="listitem"
+                className={isPlaying ? "is-playing" : undefined}
+                aria-current={isPlaying ? "true" : undefined}
+                key={`${entry.category}:${entry.assetName}`}
+              >
                 <div>
                   <strong>{entry.assetName}</strong>
                   <p>{entry.description}</p>
@@ -382,9 +410,9 @@ export function AudioLibraryBrowser({
                   <button
                     className="icon-button"
                     type="button"
-                    title={playingKey === key ? "暂停音效" : "试听音效"}
+                    title={isPlaying ? "暂停音效" : "试听音效"}
                     aria-label={
-                      playingKey === key
+                      isPlaying
                         ? `暂停资料库音效 ${entry.assetName}`
                         : `试听资料库音效 ${entry.assetName}`
                     }
@@ -393,7 +421,7 @@ export function AudioLibraryBrowser({
                   >
                     {preparing ? (
                       <LoaderCircle className="spin" size={15} />
-                    ) : playingKey === key ? (
+                    ) : isPlaying ? (
                       <Pause size={15} />
                     ) : (
                       <Play size={15} />
@@ -421,8 +449,14 @@ export function AudioLibraryBrowser({
                 recommendation.recordId === entry.recordId,
             );
             const auditioned = auditionedKeys.has(key);
+            const isPlaying = playingKey === key;
             return (
-              <div role="listitem" key={entry.recordId}>
+              <div
+                role="listitem"
+                className={isPlaying ? "is-playing" : undefined}
+                aria-current={isPlaying ? "true" : undefined}
+                key={entry.recordId}
+              >
                 <div>
                   <strong>{entry.name}</strong>
                   <span>
@@ -453,13 +487,13 @@ export function AudioLibraryBrowser({
                     type="button"
                     title={
                       entry.fileToken
-                        ? playingKey === key
+                        ? isPlaying
                           ? "暂停音乐"
                           : "试听音乐"
                         : "未提供试听文件"
                     }
                     aria-label={
-                      playingKey === key
+                      isPlaying
                         ? `暂停资料库音乐 ${entry.name}`
                         : `试听资料库音乐 ${entry.name}`
                     }
@@ -468,7 +502,7 @@ export function AudioLibraryBrowser({
                   >
                     {preparing ? (
                       <LoaderCircle className="spin" size={15} />
-                    ) : playingKey === key ? (
+                    ) : isPlaying ? (
                       <Pause size={15} />
                     ) : (
                       <Play size={15} />

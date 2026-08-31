@@ -138,6 +138,7 @@ import type {
   CoverageIntent,
   LensIntent,
   MovementIntensity,
+  ParticipantSlot,
   ShotCoverage,
   ShotPlan,
   ShotSize,
@@ -312,6 +313,11 @@ interface ApplySequenceOptions {
 }
 
 type InspectorTab = "direction" | "shot" | "audio" | "ue";
+type AudioPreviewOwner =
+  | "sound-effect-recommendations"
+  | "music-recommendations"
+  | "audio-library"
+  | null;
 
 interface CachedStoryboard {
   sequence: DialogueSequence;
@@ -696,6 +702,8 @@ function ShotInspector({
   const [expandedOutlinePrefix, setExpandedOutlinePrefix] = useState<
     string | null
   >(null);
+  const [audioPreviewOwner, setAudioPreviewOwner] =
+    useState<AudioPreviewOwner>(null);
   const storyOutlineExpanded = expandedOutlinePrefix === sequence.prefix;
   const slotLabelsBySlot = new Map(
     sequence.participants.map((participant) => [
@@ -717,6 +725,14 @@ function ShotInspector({
   const visibleTabs = configurationMode
     ? tabs.filter(({ id }) => id === "audio" || id === "ue")
     : tabs;
+
+  useEffect(() => {
+    setAudioPreviewOwner(null);
+  }, [activeIndex, tab]);
+
+  function releaseAudioPreview(owner: AudioPreviewOwner) {
+    setAudioPreviewOwner((current) => (current === owner ? null : current));
+  }
 
   return (
     <>
@@ -1092,6 +1108,15 @@ function ShotInspector({
               dialogueRows={sequence.rows}
               currentDialogueIds={shot.dialogueIds}
               busy={exportBusy}
+              playbackActive={
+                audioPreviewOwner === "sound-effect-recommendations"
+              }
+              onPlaybackStart={() =>
+                setAudioPreviewOwner("sound-effect-recommendations")
+              }
+              onPlaybackStop={() =>
+                releaseAudioPreview("sound-effect-recommendations")
+              }
               onWrite={onExportSoundEffects}
               onChange={onChangeSoundEffect}
             />
@@ -1099,6 +1124,15 @@ function ShotInspector({
               recommendations={musicRecommendations}
               dialogueOrder={sequence.rows.map((row) => row.id)}
               currentDialogueIds={shot.dialogueIds}
+              playbackActive={
+                audioPreviewOwner === "music-recommendations"
+              }
+              onPlaybackStart={() =>
+                setAudioPreviewOwner("music-recommendations")
+              }
+              onPlaybackStop={() =>
+                releaseAudioPreview("music-recommendations")
+              }
             />
             <AudioLibraryBrowser
               soundEffectCatalog={soundEffectCatalog}
@@ -1108,6 +1142,13 @@ function ShotInspector({
               activeDialogueId={activeDialogueId}
               appliedSoundEffects={soundEffects}
               appliedMusic={musicRecommendations}
+              playbackActive={audioPreviewOwner === "audio-library"}
+              onPlaybackStart={() =>
+                setAudioPreviewOwner("audio-library")
+              }
+              onPlaybackStop={() =>
+                releaseAudioPreview("audio-library")
+              }
               onApplySoundEffect={onApplySoundEffect}
               onApplyMusic={onApplyMusic}
             />
@@ -1402,6 +1443,7 @@ export default function App() {
       return {
         participants: sequence.participants,
         affectedModelIndexes: new Set<number>(),
+        affectedParticipantSlots: new Set<ParticipantSlot>(),
       };
     }
     return resolveDialogueCharacterStage(
@@ -1428,10 +1470,7 @@ export default function App() {
     const facingOverrides = { ...activeShot.facingOverrides };
     for (const participant of characterActionStage.participants) {
       if (
-        participant.modelIndex === null ||
-        !characterActionStage.affectedModelIndexes.has(
-          participant.modelIndex,
-        )
+        !characterActionStage.affectedParticipantSlots.has(participant.slot)
       ) {
         continue;
       }

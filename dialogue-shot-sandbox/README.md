@@ -1,8 +1,11 @@
-# 镜头沙盘 v0.22.14
+# 镜头沙盘 v0.22.15
 
 面向 UE4 镜头对话制作的 Three.js 原型。输入四位数对话 ID 或对白文字，工具从
 配置的 `res` 与 `doc` 数据源读取真实对话链，通过规则导演、内部 TRAE 协作或
 Mira AI 生成 2-12 人分镜。
+
+面向使用者的近两周功能概览见 [`UPDATE_NOTES.md`](UPDATE_NOTES.md)；完整逐版本
+记录继续保留在 [`RELEASE_NOTES.md`](RELEASE_NOTES.md)。
 
 ## 平台范围
 
@@ -152,9 +155,10 @@ BP 注册到对话流程，不生成站位预览。六位对话节点 ID 只能�
 展开项中，工具会沿 `NextID` 链累计到指定节点，
 统计 `RelativeTransformsString`、`ERotate`、`EWalk` 和
 `EStateMachineWalk`。俯视图展示每个槽位从 BP 原位到该节点位置的位移、
-朝向和动作次数；确认后直接加载到当前已打开的 UE 关卡，不校验或切换
-`PreviewLevel`。加载完成时会自动选中位置或朝向发生变化的非玩家角色，可
-直接切换到“注册 NPC”读取选择并写入目标物表。
+朝向和动作次数；左侧站位图保持固定，仅右侧角色列表滚动。站位图生成后隐藏
+BP 注册按钮，统一通过“写入到 UE”加载到当前已打开的 UE 关卡，不校验或
+切换 `PreviewLevel`。加载完成时会自动选中位置或朝向发生变化的非玩家角色，
+可直接切换到“注册 NPC”读取选择并写入目标物表。
 
 已有 BP 的模型和 DialogModels 配置匹配时，任务目标物窗口会提供双向位置
 同步。“修改 BP 位置”会先刷新已选择 `doc\csvdir` 中的配置，再把目标物位置
@@ -184,7 +188,9 @@ NPC。`0` 号槽固定为玩家；没有发言的玩家或 NPC 仍参与群像�
 `CharacterBehaviours`；已有动作只读显示且始终保留。新增 `AM_Turn*` 动作
 自动写为 `ERotate`。对话文件中已有的 `ERotate`、`EWalk` 和
 `EStateMachineWalk` 也会按节点顺序累计到中央分镜和俯视调度，走位终点与
-移动方向会同步更新角色位置和朝向。动作节点
+移动方向会同步更新角色位置和朝向。即使当前使用规则导演占位，工具也会按
+`AM_Talk` 槽位把本地动作映射回对应 NPC，在原节点只读展示；切回 BP 占位后
+再与 UE 回读结果去重合并。动作节点
 允许全部收起，切换镜头后不会强制重新展开。新增动作默认为空，可直接输入名称
 或资源路径关键词筛选当前角色 BP 的 Montage；也可点击下拉按钮连续滚动浏览
 全部候选，列表按滚动位置动态加载约 8 项。选择后才写入草稿，未完成的空白项
@@ -282,7 +288,9 @@ powershell -ExecutionPolicy Bypass -File scripts\publish-update.ps1
 ```
 
 脚本会重新构建并上传安装包、便携版、`latest.yml`、blockmap 和校验和，
-同时使用当前版本与 `RELEASE_NOTES.md` 更新固定 Release 的标题和说明。
+同时使用当前版本与 `UPDATE_NOTES.md` 更新固定 Release 的标题和说明。
+electron-builder 也会把同一份 Markdown 写入升级元数据，桌面版检测到新版本后
+可在“设置与更新”中展开查看；`RELEASE_NOTES.md` 只保存完整逐版本历史。
 当前本地构建未配置商业代码签名证书，首次运行时 Windows SmartScreen
 可能显示未知发布者；正式外部分发前应配置 Windows 代码签名证书。
 

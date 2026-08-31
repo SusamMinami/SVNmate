@@ -992,7 +992,7 @@ test("shows local content while TRAE works and applies the completed plan direct
     await route.fulfill({
       status: 200,
       contentType: "audio/wav",
-      body: silentWavBuffer(),
+      body: silentWavBuffer(10_000),
     });
   });
   await page.unroute("**/api/ue/sound-effects/preview-info");
@@ -1368,6 +1368,9 @@ test("shows local content while TRAE works and applies the completed plan direct
     name: "日常轻松音乐",
   });
   await expect(musicLibraryList).toContainText("情绪-真诚");
+  const libraryMusicItem = musicLibraryList
+    .getByRole("listitem")
+    .filter({ hasText: "情绪-真诚" });
   await audioLibrary.screenshot({
     path: testInfo.outputPath("audio-library-browser.png"),
   });
@@ -1379,6 +1382,12 @@ test("shows local content while TRAE works and applies the completed plan direct
     .getByRole("button", { name: "试听资料库音乐 情绪-真诚" })
     .click();
   await expect.poll(() => musicPreviewRequests).toBe(1);
+  await expect(libraryMusicItem).toHaveClass(/is-playing/);
+  await expect(libraryMusicItem).toHaveAttribute("aria-current", "true");
+  await expect(libraryMusicItem).toHaveCSS(
+    "background-color",
+    "rgb(255, 253, 232)",
+  );
   await expect(applyMusic).toBeVisible();
   await applyMusic.click();
   await expect(applyMusic).toHaveAttribute("aria-pressed", "true");
@@ -1389,6 +1398,7 @@ test("shows local content while TRAE works and applies the completed plan direct
   await expect(soundPreviewButton).toBeEnabled();
   await soundPreviewButton.click();
   await expect.poll(() => soundPreviewRequests).toBe(2);
+  await expect(libraryMusicItem).not.toHaveClass(/is-playing/);
   await page
     .getByRole("spinbutton", {
       name: "音效 A_SFX_Dialog_516918 的延迟",
@@ -1402,6 +1412,26 @@ test("shows local content while TRAE works and applies the completed plan direct
   );
   await page.getByRole("button", { name: "试听配乐 情绪-真诚" }).click();
   await expect.poll(() => musicPreviewRequests).toBe(2);
+  const recommendedMusicItem = page
+    .locator(".music-recommendation-list > div")
+    .filter({ hasText: "情绪-真诚" });
+  await expect(recommendedMusicItem).toHaveClass(/is-playing/);
+  await expect(recommendedMusicItem).toHaveAttribute("aria-current", "true");
+  await expect(libraryMusicItem).not.toHaveClass(/is-playing/);
+  await libraryMusicItem
+    .getByRole("button", {
+      name: "试听资料库音乐 情绪-真诚",
+    })
+    .click();
+  await expect.poll(() => musicPreviewRequests).toBe(3);
+  await expect(recommendedMusicItem).not.toHaveClass(/is-playing/);
+  await expect(
+    page.getByRole("button", { name: "试听配乐 情绪-真诚" }),
+  ).toBeVisible();
+  await expect(libraryMusicItem).toHaveClass(/is-playing/);
+  await page.locator(".right-panel").screenshot({
+    path: testInfo.outputPath("audio-playback-highlight.png"),
+  });
   await page.locator(".shot-row").nth(1).click();
   await expect(page.locator(".music-recommendations")).toContainText("沿用中");
   await expect(page.locator(".music-recommendation-list")).toContainText(
@@ -2830,8 +2860,18 @@ test("manually syncs the sound and music catalogs from settings", async ({
         firstRun: false,
         setupCompleted: true,
       }),
-      checkForUpdates: async () => ({ state: "idle" }),
-      getUpdateSnapshot: async () => ({ state: "idle" }),
+      checkForUpdates: async () => ({
+        state: "available",
+        version: "0.22.15",
+        releaseNotes:
+          "# 镜头沙盘｜近期更新\n\n> 2026-08-30\n\n## 音效与音乐\n\n- 正在试听的资源会整行高亮，新的试听会自动暂停上一条。\n\n## 导出体验\n\n- 导出前先查看本地清单，再按选择内容连接 UE 检查差异。",
+      }),
+      getUpdateSnapshot: async () => ({
+        state: "available",
+        version: "0.22.15",
+        releaseNotes:
+          "# 镜头沙盘｜近期更新\n\n> 2026-08-30\n\n## 音效与音乐\n\n- 正在试听的资源会整行高亮，新的试听会自动暂停上一条。\n\n## 导出体验\n\n- 导出前先查看本地清单，再按选择内容连接 UE 检查差异。",
+      }),
       installUpdate: async () => undefined,
       openUpdatePage: async () => undefined,
       onUpdateState: () => () => undefined,
@@ -2843,6 +2883,13 @@ test("manually syncs the sound and music catalogs from settings", async ({
   const setup = page.getByRole("dialog", {
     name: "运行环境与数据协作",
   });
+  await expect(setup.getByText("发现 0.22.15")).toBeVisible();
+  const updateNotes = setup.locator(".setup-update__notes");
+  await updateNotes.getByText("查看本次更新内容").click();
+  await expect(updateNotes).toContainText("音效与音乐");
+  await expect(updateNotes).toContainText(
+    "正在试听的资源会整行高亮，新的试听会自动暂停上一条。",
+  );
   const soundEffectStatus = setup
     .locator(".setup-status-list > div")
     .filter({ hasText: "音效资料库" });
@@ -3547,11 +3594,11 @@ test("offers BP or rule placement after ignored missing models", async ({
       {
         name: "对话表.csv",
         content: [
-          "##&Dialog.id,Dialog.NPCID,Dialog.Content,Dialog.NextID,Dialog.End",
-          "##对话ID,人物,内容,下一ID,结束",
-          "737000,,,737001,false",
-          "737001,102101,只有声音，不需要出现在镜头中。,737002,false",
-          "737002,1,我听见了。,,true",
+          "##&Dialog.id,Dialog.NPCID,Dialog.Content,Dialog.NextID,Dialog.End,Dialog.CharacterBehaviourString",
+          "##对话ID,人物,内容,下一ID,结束,动作",
+          "737000,,,737001,false,",
+          '737001,102101,只有声音，不需要出现在镜头中。,737002,false,";0.000000,AM_Talk,0,0,0,0,0,0,0,0|0.200000,AM_TurnRight90,1,0,0,0,0,0,0,0"',
+          '737002,1,我听见了。,,true,"0.000000,AM_Talk,0,0,0,0,0,0,0,0;"',
         ].join("\n"),
       },
       {
@@ -3594,7 +3641,9 @@ test("offers BP or rule placement after ignored missing models", async ({
   await expect(missingModal).toBeVisible();
   await expect(missingModal).toContainText("伊姆");
   await expect(missingModal).toContainText("102101");
-  await expect(missingModal).toContainText("当前 BP 没有对应的角色模型槽");
+  await expect(missingModal).toContainText(
+    "AM_Talk 指向 BP 槽位 1，但该槽模型与 NPC 不一致",
+  );
   const ignoreNpc = missingModal.getByRole("checkbox", {
     name: "忽略 NPC 伊姆 的模型缺失",
   });
@@ -3650,6 +3699,24 @@ test("offers BP or rule placement after ignored missing models", async ({
   await expect(page.locator(".formation-status")).toContainText(
     "使用规则导演自动安排的角色位置",
   );
+  await page.getByRole("tab", { name: "UE" }).click();
+  await expect(
+    page.getByText(
+      "已从对话文件读取 1 项动作；规则占位下现有动作只读",
+    ),
+  ).toBeVisible();
+  const ruleActionTrack = page
+    .locator(".character-action-track")
+    .filter({ hasText: "伊姆" });
+  await expect(ruleActionTrack).toContainText("AM_TurnRight90");
+  await expect(
+    ruleActionTrack.locator(".character-action-existing-row"),
+  ).toHaveCount(1);
+  await page.screenshot({
+    path: testInfo.outputPath("rule-placement-existing-actions.png"),
+    fullPage: true,
+  });
+  await page.getByRole("tab", { name: "导演" }).click();
   await page.getByRole("button", { name: "切换占位方案" }).click();
   const switchModal = page.getByRole("dialog", {
     name: "切换占位方案",
@@ -4416,10 +4483,19 @@ test("offers the detected Blueprint formation before designing shots", async ({
     .filter({ hasText: "商会安保" });
   await expect(
     guardActions.locator(".character-action-existing-row"),
-  ).toHaveCount(1);
+  ).toHaveCount(4);
   await expect(
-    guardActions.locator(".character-action-existing-row"),
-  ).toContainText("AM_Idle1");
+    guardActions.getByText("AM_Idle1", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    guardActions.getByText("AM_TurnRight90", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    guardActions.getByText("AM_Walk", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    guardActions.getByText(/状态机走位/),
+  ).toBeVisible();
   await expect(
     guardActions.locator(".character-action-existing-row").getByRole(
       "combobox",
@@ -6017,6 +6093,47 @@ test("separates four-digit registration from six-digit node positioning", async 
           lastAdjustedDialogueId: "735201",
         },
       },
+      ...Array.from({ length: 8 }, (_, offset) => {
+        const modelIndex = offset + 2;
+        return {
+          targetId: String(modelIndex),
+          type: 1,
+          description: `BP 槽位 ${modelIndex}`,
+          npcId: null,
+          npcName: `Background ${modelIndex}`,
+          modelId: null,
+          modelClassPath: `/Game/Test/BP_Background_${modelIndex}.BP_Background_${modelIndex}_C`,
+          itemId: null,
+          blueprintModelId: modelIndex,
+          mapId: "735200",
+          previewKind: "asset",
+          transform: {
+            location: {
+              x: 100 + modelIndex * 40,
+              y: 200 + modelIndex * 30,
+              z: 300,
+            },
+            rotation: { pitch: 0, yaw: 90, roll: 0 },
+            scale: { x: 1, y: 1, z: 1 },
+          },
+          dialogueAdjustment: {
+            initialTransform: {
+              location: {
+                x: 100 + modelIndex * 40,
+                y: 200 + modelIndex * 30,
+                z: 300,
+              },
+              rotation: { pitch: 0, yaw: 90, roll: 0 },
+              scale: { x: 1, y: 1, z: 1 },
+            },
+            movementActionCount: 0,
+            rotationActionCount: 0,
+            positionDelta: 0,
+            rotationDelta: 0,
+            lastAdjustedDialogueId: null,
+          },
+        };
+      }),
     ],
     warnings: [],
     dialogueTimeline: {
@@ -6130,8 +6247,8 @@ test("separates four-digit registration from six-digit node positioning", async 
           mapId: "735200",
           mapAssetPath: "/Game/Test/Maps/OpenMap",
           autoOpenedMap: false,
-          spawnedCount: 2,
-          assetCount: 2,
+          spawnedCount: dialoguePreviewPlan.targets.length,
+          assetCount: dialoguePreviewPlan.targets.length,
           markerCount: 0,
           selectedActorCount: 1,
         },
@@ -6225,14 +6342,40 @@ test("separates four-digit registration from six-digit node positioning", async 
   await expect(
     dialoguePreview.locator('[data-target-id="1"]'),
   ).toHaveAttribute("data-position-delta", "291.548");
+  const positionMap = dialoguePreview.locator(
+    ".mission-target-dialogue-preview__map",
+  );
+  const positionList = dialoguePreview.locator(
+    ".mission-target-dialogue-preview__list",
+  );
+  await expect
+    .poll(() =>
+      positionList.evaluate(
+        (element) => element.scrollHeight > element.clientHeight,
+      ),
+    )
+    .toBe(true);
+  const mapBoundsBefore = await positionMap.boundingBox();
+  await positionList.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+  });
+  await expect
+    .poll(() => positionList.evaluate((element) => element.scrollTop))
+    .toBeGreaterThan(0);
+  const mapBoundsAfter = await positionMap.boundingBox();
+  expect(mapBoundsAfter?.y).toBe(mapBoundsBefore?.y);
+  expect(mapBoundsAfter?.height).toBe(mapBoundsBefore?.height);
   await dialoguePreview.screenshot({
     path: testInfo.outputPath("dialogue-node-position-preview.png"),
   });
+  await expect(
+    workspace.getByRole("button", { name: "按 BP 注册到对话" }),
+  ).toHaveCount(0);
   expect(loadedRequest).toBeNull();
-  await workspace.getByRole("button", { name: "加载节点站位" }).click();
+  await workspace.getByRole("button", { name: "写入到 UE" }).click();
   await expect(
     workspace.getByText(
-      "已加载到当前 UE 关卡，加载 2 个资产和 0 个定位标记",
+      `已加载到当前 UE 关卡，加载 ${dialoguePreviewPlan.targets.length} 个资产和 0 个定位标记`,
     ),
   ).toBeVisible();
   await expect(workspace.getByText(/已选中 1 个变更角色供 NPC 注册/))

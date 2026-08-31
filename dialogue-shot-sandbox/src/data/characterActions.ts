@@ -1,8 +1,10 @@
 import type {
   DialogueCharacterActionItem,
+  DialogueCharacterActionTrack,
   DialogueParticipant,
   DialoguePositionTimelineRow,
   DialogueRow,
+  ParticipantSlot,
   UnrealTransform,
   Vec3,
 } from "../types";
@@ -22,6 +24,7 @@ export interface CharacterActionTrackLike {
 export interface DialogueCharacterStage {
   participants: DialogueParticipant[];
   affectedModelIndexes: ReadonlySet<number>;
+  affectedParticipantSlots: ReadonlySet<ParticipantSlot>;
 }
 
 export interface ParsedDialogueRelativeTransform {
@@ -339,6 +342,69 @@ function unmatchedTrackActions(
   });
 }
 
+export function dialogueCharacterActionTracks(
+  rows: readonly Pick<
+    DialogueRow,
+    "id" | "characterBehaviourString"
+  >[],
+): DialogueCharacterActionTrack[] {
+  const tracks = new Map<string, DialogueCharacterActionTrack>();
+  for (const row of rows) {
+    for (const action of parseDialogueCharacterBehaviourString(
+      row.characterBehaviourString,
+    )) {
+      if (
+        action.behaviourType?.toLowerCase() === "enone" &&
+        action.montageName.toLowerCase() === "am_talk"
+      ) {
+        continue;
+      }
+      const key = `${row.id}:${action.modelIndex}`;
+      const track = tracks.get(key) ?? {
+        dialogueId: row.id,
+        modelIndex: action.modelIndex,
+        actions: [],
+        preservedComplexActionCount: 0,
+      };
+      track.actions.push(action);
+      tracks.set(key, track);
+    }
+  }
+  return Array.from(tracks.values());
+}
+
+export function mergeDialogueCharacterActionTracks(
+  primaryTracks: readonly DialogueCharacterActionTrack[],
+  fallbackTracks: readonly DialogueCharacterActionTrack[],
+): DialogueCharacterActionTrack[] {
+  const result = primaryTracks.map((track) => ({
+    ...track,
+    actions: [...track.actions],
+  }));
+  for (const fallback of fallbackTracks) {
+    const primary = result.find(
+      (track) =>
+        track.dialogueId === fallback.dialogueId &&
+        track.modelIndex === fallback.modelIndex,
+    );
+    if (!primary) {
+      result.push({
+        ...fallback,
+        actions: [...fallback.actions],
+      });
+      continue;
+    }
+    primary.actions.push(
+      ...unmatchedTrackActions(primary.actions, fallback.actions),
+    );
+    primary.preservedComplexActionCount = Math.max(
+      primary.preservedComplexActionCount,
+      fallback.preservedComplexActionCount,
+    );
+  }
+  return result;
+}
+
 function facingTargetForYaw(position: Vec3, yawDegrees: number): Vec3 {
   const radians = (yawDegrees * Math.PI) / 180;
   return [
@@ -348,6 +414,46 @@ function facingTargetForYaw(position: Vec3, yawDegrees: number): Vec3 {
   ];
 }
 
+export function dialogueParticipantsByModelIndex(
+  participants: readonly DialogueParticipant[],
+  rows: readonly DialogueRow[],
+): Map<number, DialogueParticipant> {
+  const byModelIndex = new Map(
+    participants.flatMap((participant) =>
+      participant.modelIndex === null
+        ? []
+        : [[participant.modelIndex, participant] as const],
+    ),
+  );
+  const participantByNpcId = new Map(
+    participants.map((participant) => [participant.id, participant]),
+  );
+  const player = participantByNpcId.get(1);
+  if (player && !byModelIndex.has(0)) {
+    byModelIndex.set(0, player);
+  }
+  const npcIdsByModelIndex = new Map<number, Set<number>>();
+  for (const row of rows) {
+    if (row.speakerModelIndex === null || row.npcId === null) {
+      continue;
+    }
+    const npcIds =
+      npcIdsByModelIndex.get(row.speakerModelIndex) ?? new Set<number>();
+    npcIds.add(row.npcId);
+    npcIdsByModelIndex.set(row.speakerModelIndex, npcIds);
+  }
+  for (const [modelIndex, npcIds] of npcIdsByModelIndex) {
+    if (npcIds.size !== 1) {
+      continue;
+    }
+    const participant = participantByNpcId.get(Array.from(npcIds)[0]);
+    if (participant) {
+      byModelIndex.set(modelIndex, participant);
+    }
+  }
+  return byModelIndex;
+}
+
 export function resolveDialogueCharacterStage(
   participants: readonly DialogueParticipant[],
   rows: readonly DialogueRow[],
@@ -355,16 +461,13 @@ export function resolveDialogueCharacterStage(
   existingTracks: readonly CharacterActionTrackLike[] = [],
   pendingTracks: readonly CharacterActionTrackLike[] = [],
 ): DialogueCharacterStage {
-  const participantByModelIndex = new Map(
-    participants.flatMap((participant) =>
-      participant.modelIndex === null
-        ? []
-        : [[participant.modelIndex, participant] as const],
-    ),
+  const participantByModelIndex = dialogueParticipantsByModelIndex(
+    participants,
+    rows,
   );
-  const stateByModelIndex = new Map(
-    Array.from(participantByModelIndex, ([modelIndex, participant]) => [
-      modelIndex,
+  const stateByParticipantSlot = new Map(
+    participants.map((participant) => [
+      participant.slot,
       {
         position: [...participant.position] as [number, number, number],
         yawDegrees: participantFacingYawDegrees(participant),
@@ -384,6 +487,7 @@ export function resolveDialogueCharacterStage(
     ]),
   );
   const affectedModelIndexes = new Set<number>();
+  const affectedParticipantSlots = new Set<ParticipantSlot>();
 
   for (const row of rows.slice(0, Math.max(0, dialogueEndIndex + 1))) {
     const localByModelIndex = new Map<number, DialogueCharacterActionItem[]>();
@@ -405,8 +509,11 @@ export function resolveDialogueCharacterStage(
     ]);
 
     for (const modelIndex of modelIndexes) {
-      const state = stateByModelIndex.get(modelIndex);
-      if (!state) {
+      const participant = participantByModelIndex.get(modelIndex);
+      const state = participant
+        ? stateByParticipantSlot.get(participant.slot)
+        : undefined;
+      if (!participant || !state) {
         continue;
       }
       const key = `${row.id}:${modelIndex}`;
@@ -428,6 +535,7 @@ export function resolveDialogueCharacterStage(
           if (turnDegrees !== null) {
             state.yawDegrees += turnDegrees;
             affectedModelIndexes.add(modelIndex);
+            affectedParticipantSlots.add(participant.slot);
           }
           continue;
         }
@@ -450,20 +558,19 @@ export function resolveDialogueCharacterStage(
         ];
         state.yawDegrees = (Math.atan2(deltaY, deltaX) * 180) / Math.PI;
         affectedModelIndexes.add(modelIndex);
+        affectedParticipantSlots.add(participant.slot);
       }
     }
   }
 
   return {
     affectedModelIndexes,
+    affectedParticipantSlots,
     participants: participants.map((participant) => {
-      if (
-        participant.modelIndex === null ||
-        !affectedModelIndexes.has(participant.modelIndex)
-      ) {
+      if (!affectedParticipantSlots.has(participant.slot)) {
         return participant;
       }
-      const state = stateByModelIndex.get(participant.modelIndex)!;
+      const state = stateByParticipantSlot.get(participant.slot)!;
       return {
         ...participant,
         position: state.position,

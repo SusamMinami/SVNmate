@@ -28,6 +28,7 @@ import type {
   DialogueCharacterActionTrack,
   DialogueSequence,
 } from "../types";
+import { dialogueParticipantsByModelIndex } from "../data/characterActions";
 
 interface CharacterActionEditorProps {
   controller: CharacterActionEditorController;
@@ -471,7 +472,7 @@ export function CharacterActionEditor({
   const [draggedAction, setDraggedAction] =
     useState<DraggedAction | null>(null);
   const editingDisabled = busy || controller.loading;
-  const participants = useMemo(
+  const editableParticipants = useMemo(
     () =>
       sequence.participants
         .filter(
@@ -484,15 +485,23 @@ export function CharacterActionEditor({
         ),
     [sequence.participants],
   );
-  const participantByModelIndex = useMemo(
+  const editableParticipantByModelIndex = useMemo(
     () =>
       new Map(
-        participants.map((participant) => [
+        editableParticipants.map((participant) => [
           participant.modelIndex!,
           participant,
         ]),
       ),
-    [participants],
+    [editableParticipants],
+  );
+  const participantByModelIndex = useMemo(
+    () =>
+      dialogueParticipantsByModelIndex(
+        sequence.participants,
+        sequence.rows,
+      ),
+    [sequence.participants, sequence.rows],
   );
   const catalogByModelIndex = useMemo(
     () =>
@@ -615,7 +624,7 @@ export function CharacterActionEditor({
             ]),
           ).sort((left, right) => left - right);
           const usedModelIndexes = new Set(modelIndexes);
-          const availableParticipants = participants.filter(
+          const availableParticipants = editableParticipants.filter(
             (participant) =>
               !usedModelIndexes.has(participant.modelIndex!) &&
               (catalogByModelIndex.get(participant.modelIndex!)?.actions
@@ -666,7 +675,11 @@ export function CharacterActionEditor({
                 >
                   {modelIndexes.map((modelIndex) => {
                     const participant = participantByModelIndex.get(modelIndex);
-                    const catalog = catalogByModelIndex.get(modelIndex);
+                    const catalog =
+                      editableParticipantByModelIndex.get(modelIndex) ===
+                      participant
+                        ? catalogByModelIndex.get(modelIndex)
+                        : undefined;
                     const existingTrack = existingTracks.find(
                       (track) => track.modelIndex === modelIndex,
                     );

@@ -42,6 +42,7 @@ interface DesktopUpdateSnapshot {
   version?: string;
   percent?: number;
   message?: string;
+  releaseNotes?: string;
 }
 
 interface Window {

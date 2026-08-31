@@ -18,6 +18,9 @@ interface SoundEffectRecommendationsProps {
   dialogueRows: DialogueRow[];
   currentDialogueIds: string[];
   busy: boolean;
+  playbackActive: boolean;
+  onPlaybackStart: () => void;
+  onPlaybackStop: () => void;
   onWrite: () => void;
   onChange: (
     recommendation: DirectorSoundEffectRecommendation,
@@ -60,6 +63,9 @@ export function SoundEffectRecommendations({
   dialogueRows,
   currentDialogueIds,
   busy,
+  playbackActive,
+  onPlaybackStart,
+  onPlaybackStop,
   onWrite,
   onChange,
 }: SoundEffectRecommendationsProps) {
@@ -148,19 +154,33 @@ export function SoundEffectRecommendations({
     [],
   );
 
+  useEffect(() => {
+    if (!playbackActive) {
+      prepareRequestRef.current += 1;
+      audioRef.current?.pause();
+      audioRef.current = null;
+      setPlaying(null);
+      setPreparing(null);
+    }
+  }, [playbackActive]);
+
   async function togglePreview(
     recommendation: DirectorSoundEffectRecommendation,
   ) {
     const key = soundEffectRecommendationKey(recommendation);
     if (playing === key) {
       audioRef.current?.pause();
+      audioRef.current = null;
       setPlaying(null);
+      onPlaybackStop();
       return;
     }
     audioRef.current?.pause();
+    audioRef.current = null;
     setPlaying(null);
     setPreparing(key);
     setPlaybackError("");
+    onPlaybackStart();
     const requestId = ++prepareRequestRef.current;
     try {
       const preview = await prepareSoundEffectPreview(
@@ -174,13 +194,17 @@ export function SoundEffectRecommendations({
       audioRef.current = audio;
       audio.onended = () => {
         if (audioRef.current === audio) {
+          audioRef.current = null;
           setPlaying(null);
+          onPlaybackStop();
         }
       };
       audio.onerror = () => {
         if (audioRef.current === audio) {
+          audioRef.current = null;
           setPlaying(null);
           setPlaybackError(`${recommendation.assetName} 试听加载失败`);
+          onPlaybackStop();
         }
       };
       await audio.play();
@@ -189,11 +213,13 @@ export function SoundEffectRecommendations({
       }
     } catch (error) {
       if (prepareRequestRef.current === requestId) {
+        audioRef.current = null;
         setPlaybackError(
           error instanceof Error
             ? error.message
             : `${recommendation.assetName} 无法播放`,
         );
+        onPlaybackStop();
       }
     } finally {
       if (prepareRequestRef.current === requestId) {
@@ -231,6 +257,7 @@ export function SoundEffectRecommendations({
               soundEffectRecommendationKey(recommendation);
             const preview = previewByAsset[recommendation.assetName];
             const isPreparing = preparing === recommendationKey;
+            const isPlaying = playing === recommendationKey;
             const previewDisabled =
               !preview || preview.checking || !preview.available;
             const previewTitle = isPreparing
@@ -243,7 +270,11 @@ export function SoundEffectRecommendations({
                   : "试听音效"
                 : preview?.reason ?? "UE/Wwise 试听资源不可用";
             return (
-              <div key={recommendationKey}>
+              <div
+                className={isPlaying ? "is-playing" : undefined}
+                aria-current={isPlaying ? "true" : undefined}
+                key={recommendationKey}
+              >
                 <AudioLines size={15} />
                 <div>
                   <strong>{recommendation.assetName}</strong>
@@ -314,7 +345,7 @@ export function SoundEffectRecommendations({
                   type="button"
                   title={previewTitle}
                   aria-label={
-                    playing === recommendationKey
+                    isPlaying
                       ? `暂停音效 ${recommendation.assetName}`
                       : `试听音效 ${recommendation.assetName}`
                   }
@@ -325,7 +356,7 @@ export function SoundEffectRecommendations({
                 >
                   {isPreparing ? (
                     <LoaderCircle className="spin" size={15} />
-                  ) : playing === recommendationKey ? (
+                  ) : isPlaying ? (
                     <Pause size={15} />
                   ) : (
                     <Play size={15} />

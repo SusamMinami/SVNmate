@@ -220,6 +220,8 @@ export function MissionTargetModal({
       .length ?? 0;
   const blueprintDialoguePreviewPlan =
     blueprintInspection?.dialoguePreviewPlan ?? null;
+  const hasDialoguePositionPreview =
+    !plan && Boolean(blueprintDialoguePreviewPlan?.dialogueTimeline);
   const dialogueInput = dialogueId.trim();
   const dialoguePreviewNodeId = /^\d{6}$/.test(dialogueInput)
     ? dialogueInput
@@ -2282,7 +2284,7 @@ export function MissionTargetModal({
                 title={
                   plan
                     ? "按任务目标物坐标加载所选预览"
-                    : blueprintDialoguePreviewPlan?.dialogueTimeline
+                    : hasDialoguePositionPreview
                       ? "把俯视图中的节点站位加载到当前 UE 关卡，并自动选中变更角色"
                       : "读取 BP 和对话调度并生成指定节点站位俯视图"
                 }
@@ -2296,57 +2298,59 @@ export function MissionTargetModal({
                   ? "正在处理..."
                   : plan
                     ? "加载到 UE"
-                    : blueprintDialoguePreviewPlan?.dialogueTimeline
-                      ? "加载节点站位"
+                    : hasDialoguePositionPreview
+                      ? "写入到 UE"
                       : "计算节点站位"}
               </button>
             )}
-            <button
-              className="button button--primary"
-              type="button"
-              onClick={() =>
-                void (isDialogueRegistration
-                  ? selectedAppendTargets.length > 0
-                    ? appendBlueprintTargets()
-                    : registerDialogue()
-                  : createBlueprint())
-              }
-              disabled={
-                busy ||
-                !blueprintName.trim() ||
-                blueprintInputIsDialogueNode ||
-                !dialogueNodeInputValid ||
-                !blueprintInspection ||
-                (isDialogueRegistration
-                  ? blueprintRegistrationSlots.length === 0
-                  : !plan ||
-                    blueprintInspection.blueprintState !== "empty" ||
-                    selectedAssetTargets.length === 0)
-              }
-              title={
-                isDialogueRegistration
-                  ? selectedAppendTargets.length > 0
-                    ? "保留现有 BP 槽位，按顺序追加所选目标物并注册全部 DialogModels"
-                    : "读取 BP 全部数字槽位并按原序写入 DialogModels"
-                  : "向空 PositionMode BP 写入所选资产并注册 DialogModels"
-              }
-            >
-              {busy ? (
-                <LoaderCircle className="spin" size={16} />
-              ) : selectedAppendTargets.length > 0 ||
-                !isDialogueRegistration ? (
-                <PackagePlus size={16} />
-              ) : (
-                <Link2 size={16} />
-              )}
-              {busy
-                ? "正在处理..."
-                : isDialogueRegistration
-                  ? selectedAppendTargets.length > 0
-                    ? "添加到 BP 并注册"
-                    : "按 BP 注册到对话"
-                  : "创建 BP"}
-            </button>
+            {!hasDialoguePositionPreview && (
+              <button
+                className="button button--primary"
+                type="button"
+                onClick={() =>
+                  void (isDialogueRegistration
+                    ? selectedAppendTargets.length > 0
+                      ? appendBlueprintTargets()
+                      : registerDialogue()
+                    : createBlueprint())
+                }
+                disabled={
+                  busy ||
+                  !blueprintName.trim() ||
+                  blueprintInputIsDialogueNode ||
+                  !dialogueNodeInputValid ||
+                  !blueprintInspection ||
+                  (isDialogueRegistration
+                    ? blueprintRegistrationSlots.length === 0
+                    : !plan ||
+                      blueprintInspection.blueprintState !== "empty" ||
+                      selectedAssetTargets.length === 0)
+                }
+                title={
+                  isDialogueRegistration
+                    ? selectedAppendTargets.length > 0
+                      ? "保留现有 BP 槽位，按顺序追加所选目标物并注册全部 DialogModels"
+                      : "读取 BP 全部数字槽位并按原序写入 DialogModels"
+                    : "向空 PositionMode BP 写入所选资产并注册 DialogModels"
+                }
+              >
+                {busy ? (
+                  <LoaderCircle className="spin" size={16} />
+                ) : selectedAppendTargets.length > 0 ||
+                  !isDialogueRegistration ? (
+                  <PackagePlus size={16} />
+                ) : (
+                  <Link2 size={16} />
+                )}
+                {busy
+                  ? "正在处理..."
+                  : isDialogueRegistration
+                    ? selectedAppendTargets.length > 0
+                      ? "添加到 BP 并注册"
+                      : "按 BP 注册到对话"
+                    : "创建 BP"}
+              </button>
+            )}
           </div>
         </footer>
 

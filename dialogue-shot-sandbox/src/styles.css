@@ -2850,6 +2850,10 @@ textarea:focus-visible {
   gap: 8px;
   padding-bottom: 9px;
   border-bottom: 1px solid #e5e7e8;
+  border-radius: 2px;
+  transition:
+    background-color 140ms ease,
+    box-shadow 140ms ease;
 }
 
 .sound-effect-list > div:last-child {
@@ -2933,6 +2937,10 @@ textarea:focus-visible {
   gap: 8px;
   padding-bottom: 8px;
   border-bottom: 1px solid var(--border);
+  border-radius: 2px;
+  transition:
+    background-color 140ms ease,
+    box-shadow 140ms ease;
 }
 
 .music-recommendation-list > div:last-child {
@@ -3104,10 +3112,20 @@ textarea:focus-visible {
   gap: 8px;
   padding: 8px 0;
   border-top: 1px solid #e1e2dd;
+  transition:
+    background-color 140ms ease,
+    box-shadow 140ms ease;
 }
 
 .audio-library-browser__resources > div:first-child {
   border-top: 0;
+}
+
+.sound-effect-list > div.is-playing,
+.music-recommendation-list > div.is-playing,
+.audio-library-browser__resources > div.is-playing {
+  background: #fffde8;
+  box-shadow: inset 3px 0 0 #c9c300;
 }
 
 .audio-library-browser__resources > div > div {
@@ -4911,8 +4929,11 @@ textarea:focus-visible {
 }
 
 .mission-target-dialogue-preview {
+  --dialogue-preview-pane-height: clamp(260px, 38vh, 360px);
   display: grid;
   grid-template-columns: minmax(0, 1.4fr) minmax(280px, 0.6fr);
+  grid-template-rows: auto minmax(0, var(--dialogue-preview-pane-height));
+  overflow: hidden;
   border-bottom: 1px solid var(--border);
 }
 
@@ -4947,7 +4968,8 @@ textarea:focus-visible {
 
 .mission-target-dialogue-preview__map {
   position: relative;
-  min-height: 230px;
+  height: 100%;
+  min-height: 0;
   background: #eef1f2;
   border-right: 1px solid var(--border);
 }
@@ -4956,7 +4978,6 @@ textarea:focus-visible {
   display: block;
   width: 100%;
   height: 100%;
-  min-height: 230px;
 }
 
 .mission-target-dialogue-preview__grid {
@@ -5010,6 +5031,11 @@ textarea:focus-visible {
 .mission-target-dialogue-preview__list {
   display: grid;
   align-content: start;
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   background: #ffffff;
 }
 
@@ -6461,9 +6487,9 @@ textarea:focus-visible {
 }
 
 .setup-update {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
   gap: 20px;
   padding: 16px 0;
 }
@@ -6478,6 +6504,71 @@ textarea:focus-visible {
 .setup-update small {
   color: var(--text-muted);
   font-size: 9px;
+}
+
+.setup-update__notes {
+  grid-column: 1 / -1;
+  border-top: 1px solid var(--border);
+}
+
+.setup-update__notes > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 34px;
+  color: var(--ink);
+  font-size: 10px;
+  font-weight: 750;
+  cursor: pointer;
+  list-style: none;
+}
+
+.setup-update__notes > summary::-webkit-details-marker {
+  display: none;
+}
+
+.setup-update__notes > summary svg {
+  color: var(--text-muted);
+  transition: transform 180ms ease;
+}
+
+.setup-update__notes[open] > summary svg {
+  transform: rotate(180deg);
+}
+
+.setup-update__notes > div {
+  padding: 2px 0 4px;
+}
+
+.setup-update__notes h4 {
+  margin: 13px 0 5px;
+  color: var(--ink);
+  font-size: 10px;
+}
+
+.setup-update__notes p {
+  margin: 0 0 6px;
+}
+
+.setup-update__notes > div > small {
+  display: block;
+  margin-bottom: 10px;
+  font-family: "Cascadia Code", Consolas, monospace;
+}
+
+.setup-update__note-item {
+  position: relative;
+  padding-left: 11px;
+}
+
+.setup-update__note-item::before {
+  position: absolute;
+  top: 7px;
+  left: 1px;
+  width: 4px;
+  height: 4px;
+  background: var(--ink);
+  content: "";
 }
 
 .desktop-setup-modal > footer {
@@ -6627,6 +6718,10 @@ textarea:focus-visible {
     flex-direction: column;
   }
 
+  .setup-update {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .setup-status-list {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -6738,9 +6833,11 @@ textarea:focus-visible {
 
   .mission-target-dialogue-preview {
     grid-template-columns: 1fr;
+    grid-template-rows: auto 230px minmax(0, 240px);
   }
 
   .mission-target-dialogue-preview__map {
+    height: 230px;
     border-right: 0;
     border-bottom: 1px solid var(--border);
   }

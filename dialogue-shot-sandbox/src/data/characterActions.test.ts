@@ -5,6 +5,8 @@ import type {
 } from "../types";
 import {
   behaviourTypeForMontageName,
+  dialogueCharacterActionTracks,
+  mergeDialogueCharacterActionTracks,
   parseDialogueCharacterBehaviourString,
   parseDialogueRelativeTransformsString,
   resolveDialogueCharacterStage,
@@ -87,6 +89,57 @@ describe("character actions", () => {
     ).toEqual([]);
   });
 
+  it("builds local read-only tracks without exposing AM_Talk", () => {
+    const tracks = dialogueCharacterActionTracks([
+      {
+        id: "100001",
+        characterBehaviourString:
+          ";0,AM_Talk,0,0,0,0,0,0,0,0|0.2,AM_TurnRight45,1,0,0,0,0,0,0,0",
+      },
+    ]);
+    expect(tracks).toEqual([
+      {
+        dialogueId: "100001",
+        modelIndex: 1,
+        actions: [
+          expect.objectContaining({
+            montageName: "AM_TurnRight45",
+            behaviourType: "ERotate",
+            delaySeconds: 0.2,
+          }),
+        ],
+        preservedComplexActionCount: 0,
+      },
+    ]);
+    expect(
+      mergeDialogueCharacterActionTracks(tracks, [
+        {
+          dialogueId: "100001",
+          modelIndex: 1,
+          actions: [
+            {
+              montageName: "AM_TurnRight45",
+              behaviourType: "ERotate",
+              delaySeconds: 0.2,
+            },
+            {
+              montageName: "AM_Wave",
+              behaviourType: "ENone",
+              delaySeconds: 0,
+            },
+          ],
+          preservedComplexActionCount: 1,
+        },
+      ])[0],
+    ).toMatchObject({
+      actions: [
+        { montageName: "AM_TurnRight45" },
+        { montageName: "AM_Wave" },
+      ],
+      preservedComplexActionCount: 1,
+    });
+  });
+
   it("parses explicit and Blueprint-relative node transforms", () => {
     expect(
       parseDialogueRelativeTransformsString(
@@ -160,7 +213,7 @@ describe("character actions", () => {
     );
   });
 
-  it("applies dialogue rotations and both walk modes through the active node", () => {
+  it("applies dialogue actions when rule placement has no BP model index", () => {
     const participant: DialogueParticipant = {
       id: 101,
       name: "测试角色",
@@ -172,9 +225,8 @@ describe("character actions", () => {
       color: "#fff",
       position: [1, 0, 2],
       facingTarget: [1, 0, 0],
-      modelIndex: 1,
-      modelClassPath: "/Game/Test/BP_Test.BP_Test_C",
-      positionSource: "blueprint",
+      modelIndex: null,
+      positionSource: "generated",
       firstDialogueId: "100001",
       firstDialogueIndex: 0,
       lastDialogueId: "100003",
@@ -215,11 +267,13 @@ describe("character actions", () => {
       ),
     ];
 
-    const afterRotate = resolveDialogueCharacterStage(
+    const rotateStage = resolveDialogueCharacterStage(
       [participant],
       rows,
       0,
-    ).participants[0];
+    );
+    const afterRotate = rotateStage.participants[0];
+    expect(rotateStage.affectedParticipantSlots).toEqual(new Set(["A"]));
     expect(afterRotate.position).toEqual([1, 0, 2]);
     expect(afterRotate.facingTarget[0]).toBeCloseTo(3);
     expect(afterRotate.facingTarget[2]).toBeCloseTo(2);
