@@ -53,6 +53,7 @@ def configure_styles(root: Tk, style: ttk.Style, dark: bool) -> dict[str, str]:
     style.configure("Title.TLabel", background=colors["bg"], foreground=colors["text"], font=("Segoe UI Semibold", 24))
     style.configure("Subtitle.TLabel", background=colors["bg"], foreground=colors["muted"], font=("Segoe UI", 9))
     style.configure("Section.TLabel", background=colors["card"], foreground=colors["text"], font=("Segoe UI Semibold", 12))
+    style.configure("AppSection.TLabel", background=colors["bg"], foreground=colors["text"], font=("Segoe UI Semibold", 12))
     style.configure(
         "DetailName.TLabel",
         background=colors["card"],
@@ -149,12 +150,29 @@ def configure_styles(root: Tk, style: ttk.Style, dark: bool) -> dict[str, str]:
     )
     style.map("Subtle.TButton", background=[("active", colors["accent_soft"])])
     style.configure(
+        "Icon.TButton",
+        background=colors["card"],
+        foreground=colors["text"],
+        bordercolor=colors["border"],
+        lightcolor=colors["border"],
+        darkcolor=colors["border"],
+        borderwidth=1,
+        padding=(7, 6),
+        font=("Segoe UI Symbol", 12),
+    )
+    style.map(
+        "Icon.TButton",
+        background=[("active", colors["accent_soft"])],
+        foreground=[("disabled", colors["muted"])],
+    )
+    style.configure(
         "Segment.TButton",
         background=colors["card"],
         foreground=colors["text"],
         bordercolor=colors["border"],
         lightcolor=colors["border"],
         darkcolor=colors["border"],
+        borderwidth=1,
         padding=(13, 6),
         font=("Segoe UI Semibold", 9),
     )
@@ -166,7 +184,10 @@ def configure_styles(root: Tk, style: ttk.Style, dark: bool) -> dict[str, str]:
         "SegmentActive.TButton",
         background=colors["accent"],
         foreground="#FFFFFF",
-        borderwidth=0,
+        bordercolor=colors["accent"],
+        lightcolor=colors["accent"],
+        darkcolor=colors["accent"],
+        borderwidth=1,
         padding=(13, 6),
         font=("Segoe UI Semibold", 9),
     )
@@ -177,6 +198,32 @@ def configure_styles(root: Tk, style: ttk.Style, dark: bool) -> dict[str, str]:
     )
     style.configure("TEntry", fieldbackground=colors["tree"], foreground=colors["text"], bordercolor=colors["border"])
     style.configure("TCombobox", fieldbackground=colors["tree"], foreground=colors["text"], bordercolor=colors["border"])
+    style.configure(
+        "TNotebook",
+        background=colors["bg"],
+        borderwidth=0,
+        tabmargins=(0, 0, 0, 0),
+    )
+    style.configure(
+        "TNotebook.Tab",
+        background=colors["bg"],
+        foreground=colors["muted"],
+        borderwidth=0,
+        padding=(14, 7),
+        font=("Segoe UI Semibold", 9),
+    )
+    style.map(
+        "TNotebook.Tab",
+        background=[("selected", colors["card"]), ("active", colors["accent_soft"])],
+        foreground=[("selected", colors["accent"]), ("active", colors["text"])],
+    )
+    style.configure(
+        "Workspace.TNotebook",
+        background=colors["bg"],
+        borderwidth=0,
+        tabmargins=(0, 0, 0, 0),
+    )
+    style.layout("Workspace.TNotebook.Tab", [])
 
     style.configure(
         "Result.Treeview",

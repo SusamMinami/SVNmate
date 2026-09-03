@@ -48,13 +48,18 @@ jobs:
           Copy-Item "config_id_lookup/VERSION" "release/ConfigLinker/VERSION"
           Compress-Archive -Path "release/ConfigLinker/*" -DestinationPath "ConfigLinker.zip" -Force
           $sha256 = (Get-FileHash "ConfigLinker.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
-          [ordered]@{
+          $manifest = [ordered]@{
             id = "config-linker"
             version = $version
             download_url = "https://github.com/SusamMinami/SVNmate/releases/download/config-linker-latest/ConfigLinker.zip"
             sha256 = $sha256
             entrypoint = "ConfigLinker.exe"
-          } | ConvertTo-Json | Set-Content "manifest.json" -Encoding utf8
+          } | ConvertTo-Json
+          [IO.File]::WriteAllText(
+            (Join-Path $PWD "manifest.json"),
+            $manifest + [Environment]::NewLine,
+            (New-Object Text.UTF8Encoding($false))
+          )
 
       - name: Create or update fixed module release
         shell: pwsh

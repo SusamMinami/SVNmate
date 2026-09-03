@@ -19,7 +19,8 @@ from config_linker.character_catalog import (
 from config_linker.models import NpcRecord, QueryKey, QueryKind, ResourceRecord, TargetRecord
 from config_linker.settings import AppSettings
 from config_linker.ui import CARD_COLUMNS, ConfigLinkerApp
-from tests.fixture_factory import write_fixture
+from config_linker.weapon_icon_catalog import WeaponIconAsset
+from tests.fixture_factory import write_fixture, write_weapon_fixture
 
 
 class FakeCharacterService:
@@ -90,6 +91,37 @@ class FakeCharacterContentRepository:
         return self.details
 
 
+class FakeWeaponIconService:
+    def __init__(self, image_path: Path) -> None:
+        self.image_path = image_path
+        self.cache = SimpleNamespace(count=lambda: 1)
+
+    def index_is_fresh(self) -> bool:
+        return True
+
+    def asset_for_icon(
+        self,
+        icon_id: int | None,
+    ) -> WeaponIconAsset | None:
+        if icon_id != 201572:
+            return None
+        return WeaponIconAsset(
+            icon_id=icon_id,
+            record_id="rec_weapon_icon",
+            file_token="weapon-icon-token",
+            file_name=self.image_path.name,
+        )
+
+    def asset_path(
+        self,
+        asset: WeaponIconAsset | None,
+    ) -> Path | None:
+        return self.image_path if asset is not None else None
+
+    def ensure_icon(self, icon_id: int) -> Path | None:
+        return self.image_path if icon_id == 201572 else None
+
+
 @unittest.skipUnless(os.name == "nt", "Windows Tk smoke test")
 class UiSmokeTests(unittest.TestCase):
     def test_window_builds_without_loading_real_data(self) -> None:
@@ -105,12 +137,216 @@ class UiSmokeTests(unittest.TestCase):
 
             self.assertEqual(root.title(), "配置关系检索器")
             self.assertEqual(len(app.result_trees), 3)
-            self.assertEqual(str(app.back_button.cget("state")), "disabled")
+            self.assertEqual(len(app.workspace_tabs.tabs()), 2)
             self.assertEqual(
-                str(app.choose_doc_button.cget("text")),
-                "选择 doc 目录",
+                [button.cget("text") for button in app.workspace_buttons.values()],
+                ["角色查询", "武器查询"],
             )
-            self.assertEqual(app.version_text.get(), "v1.4.0")
+            self.assertEqual(
+                str(app.workspace_tabs.cget("style")),
+                "Workspace.TNotebook",
+            )
+            self.assertEqual(str(app.back_button.cget("state")), "disabled")
+            self.assertEqual(str(app.settings_button.cget("text")), "⚙")
+            self.assertEqual(str(app.reload_button.cget("text")), "↻")
+            self.assertEqual(str(app.back_button.cget("text")), "←")
+            self.assertTrue(
+                all(
+                    str(button.cget("style")) == "Icon.TButton"
+                    for button in (
+                        app.settings_button,
+                        app.reload_button,
+                        app.back_button,
+                    )
+                )
+            )
+            self.assertEqual(
+                [tooltip.text for tooltip in app.icon_tooltips],
+                ["设置", "重新加载", "返回上一步"],
+            )
+            self.assertEqual(
+                [
+                    app.settings_menu.entrycget(index, "label")
+                    for index in range(3)
+                ],
+                ["选择 doc 目录", "复制诊断信息", "同步角色档案"],
+            )
+            self.assertEqual(app.version_text.get(), "v1.5.3")
+        finally:
+            root.destroy()
+
+    def test_weapon_tab_loads_searches_and_renders_relations(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            from PIL import Image
+
+            doc_directory = Path(temp_dir)
+            write_fixture(doc_directory / "csvdir")
+            write_weapon_fixture(doc_directory)
+            weapon_icon_path = doc_directory / "weapon_icon_201572.png"
+            Image.new("RGBA", (256, 256), "#D38A28").save(weapon_icon_path)
+            root = Tk()
+            root.withdraw()
+            try:
+                app = ConfigLinkerApp(
+                    root,
+                    config_path=doc_directory / "settings.json",
+                    auto_load=False,
+                    weapon_icon_service=FakeWeaponIconService(
+                        weapon_icon_path
+                    ),
+                )
+                app.settings = AppSettings(doc_directory)
+                app.reload_data()
+                app._select_workspace(1)
+                app.weapon_frame.query_text.set("700501")
+                app.weapon_frame.search()
+                root.update_idletasks()
+
+                result_items = app.weapon_frame.result_tree.get_children()
+                self.assertEqual(len(result_items), 1)
+                self.assertEqual(
+                    int(
+                        app.weapon_frame.result_tree.item(
+                            result_items[0],
+                            "values",
+                        )[0]
+                    ),
+                    700501,
+                )
+                self.assertEqual(
+                    app.weapon_frame.selected_name_text.get(),
+                    "真·黑光星陨剑",
+                )
+                self.assertIn(
+                    "魔剑士",
+                    app.weapon_frame.selected_meta_text.get(),
+                )
+                self.assertEqual(
+                    len(
+                        app.weapon_frame.relation_trees[
+                            "same_group"
+                        ].get_children()
+                    ),
+                    1,
+                )
+                self.assertEqual(
+                    app.weapon_frame.relation_button_texts[
+                        "same_group"
+                    ].get(),
+                    "同类武器 1",
+                )
+                self.assertEqual(
+                    app.weapon_frame.model_name_text.get(),
+                    "SK_Rapier",
+                )
+                self.assertEqual(
+                    app.weapon_frame.selected_description_text.get(),
+                    "在星陨中淬炼而成的魔剑。",
+                )
+                self.assertEqual(
+                    app.weapon_frame.description_text.get("1.0", "end-1c"),
+                    "在星陨中淬炼而成的魔剑。",
+                )
+                self.assertEqual(
+                    str(app.weapon_frame.description_text.cget("state")),
+                    "disabled",
+                )
+                self.assertEqual(
+                    app.weapon_frame.weapon_icon_view.icon_id,
+                    201572,
+                )
+                self.assertEqual(
+                    app.weapon_frame.weapon_icon_view.image_path,
+                    weapon_icon_path,
+                )
+                self.assertIsNotNone(
+                    app.weapon_frame.weapon_icon_view._photo
+                )
+                self.assertEqual(
+                    app.weapon_frame.weapon_icon_view.tooltip.text,
+                    "武器图标 ID：201572",
+                )
+                self.assertTrue(
+                    app.weapon_frame.description_text.bind("<Control-a>")
+                )
+                self.assertIn("武器 4", app.status_text.get())
+                self.assertEqual(
+                    app.weapon_frame.description_text.master.grid_info()["row"],
+                    1,
+                )
+                self.assertEqual(
+                    app.weapon_frame.relation_tabs.cget("style"),
+                    "Workspace.TNotebook",
+                )
+                self.assertEqual(
+                    {
+                        int(button.cget("width"))
+                        for button in app.weapon_frame.relation_buttons.values()
+                    },
+                    {13},
+                )
+                relation_positions = [
+                    button.winfo_x()
+                    for button in app.weapon_frame.relation_buttons.values()
+                ]
+                app.weapon_frame._select_relation(1)
+                root.update_idletasks()
+                self.assertEqual(
+                    [
+                        button.winfo_x()
+                        for button in app.weapon_frame.relation_buttons.values()
+                    ],
+                    relation_positions,
+                )
+            finally:
+                root.destroy()
+
+    def test_header_workspace_buttons_switch_content(self) -> None:
+        root = Tk()
+        root.withdraw()
+        try:
+            app = ConfigLinkerApp(
+                root,
+                config_path=Path("__missing_config_for_test__.json"),
+                auto_load=False,
+            )
+            root.update_idletasks()
+            positions_before = [
+                button.winfo_x()
+                for button in app.workspace_buttons.values()
+            ]
+
+            app._select_workspace(1)
+            root.update_idletasks()
+
+            self.assertEqual(
+                app.workspace_tabs.select(),
+                str(app.weapon_frame),
+            )
+            self.assertEqual(
+                str(app.workspace_buttons[1].cget("style")),
+                "SegmentActive.TButton",
+            )
+            self.assertEqual(
+                str(app.workspace_buttons[0].cget("style")),
+                "Segment.TButton",
+            )
+            self.assertEqual(
+                int(app.workspace_buttons[0].cget("width")),
+                int(app.workspace_buttons[1].cget("width")),
+            )
+            self.assertEqual(
+                [
+                    button.winfo_x()
+                    for button in app.workspace_buttons.values()
+                ],
+                positions_before,
+            )
+            self.assertEqual(app.role_query_controls.winfo_manager(), "")
+            self.assertEqual(
+                app.weapon_query_controls.winfo_manager(),
+                "pack",
+            )
         finally:
             root.destroy()
 

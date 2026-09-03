@@ -123,14 +123,18 @@ KindleLarkStatus 源码仓保持私有；Windows 模块通过 SVNmate 仓库的�
 完整操作说明：[ConfigLinker 使用指南](https://github.com/SusamMinami/SVNmate/blob/main/config_id_lookup/USER_GUIDE.md)。
 
 1. 打开“配置关系检索器”。
-2. 点击“选择 doc 目录”，选择包含 `csvdir` 的配置仓 `doc` 根目录。
+2. 点击右上角“设置 > 选择 doc 目录”，选择包含 `csvdir` 的配置仓 `doc` 根目录。
 3. 选择目标物 ID、NPC ID 或模型资源 ID，输入整数后搜索。
-4. 单击结果中的关系 ID 可切换查询中心，点击“返回上一步”可连续回退。
+4. 单击结果中的关系 ID 可切换查询中心，点击左箭头可连续回退。
 5. 双击 ID 会复制完整数字并显示提示。
 6. 模型资源路径可横向滚动；下方只读输入框支持框选和 `Ctrl+C`。
 7. 选中目标物后，坐标和旋转会在“选中详情”中同一行显示，双击字段可复制。
-8. 点击“同步角色档案”可从飞书 Base 同步有效命名角色及 NPC 归属。
+8. 点击“设置 > 同步角色档案”可从飞书 Base 同步有效命名角色及 NPC 归属。
 9. 选中已关联的命名 NPC 后，点击“角色详情”查看标签、摘要、性格、经历、任务、台词和剧情。
+10. 点击版本号左侧的“武器查询”，可按武器名称、装备 ID、转换组 ID 或模型 ID 查询。
+11. 武器页签只读取正式服数据，并展示职业、同类武器、同职业系列、同模型装备和模型名称。
+12. 两个功能的查询框都位于返回图标右侧；武器简介位于左下方，可直接选择复制。
+13. 有在线资源的武器会在详情中显示图标；首次查看时下载，之后直接读取本地缓存。
 
 程序自动读取：
 
@@ -140,9 +144,13 @@ doc\csvdir\NPC表.csv
 doc\csvdir\m模型资源表.csv
 ```
 
+武器查询额外读取 `doc\csvdir` 下的 `z装备表.csv`、`w武器转换表.csv`、`w武器外观表.csv` 和 `z职业配置表.csv`，不读取 `csvspecial`。
+
 如果误选 `csvdir`，程序会自动使用父级 `doc`。ConfigLinker 只读 CSV，不保存 Excel，不运行 VBA、导表器或配置检查脚本。
 
 ConfigLinker `1.3.0` 的角色档案同步依赖本机 `lark-cli` 和 Base 只读授权。任务、台词和剧情直接读取当前 `doc\csvdir` 的本地配置，不从飞书下载。通用角色、待确认角色不会展示。角色档案缓存位于 `%LOCALAPPDATA%\SVNmate\ConfigLinker`，网络失败时继续使用上一份成功缓存。
+
+ConfigLinker `1.5.3` 的武器图标也通过 `lark-cli` 从飞书 Base 只读获取。图标索引每天最多刷新一次，PNG 按需缓存在 `%LOCALAPPDATA%\SVNmate\ConfigLinker\weapon_icons`；公开安装包不包含在线图标。
 
 ## Kindle 提示板联动与更新
 

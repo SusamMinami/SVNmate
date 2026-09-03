@@ -451,8 +451,8 @@ class LarkCliBaseClient:
             [
                 "auth",
                 "login",
-                "--scope",
-                "base:record:read base:view:read",
+                "--domain",
+                "base",
                 "--no-wait",
                 "--json",
             ]
@@ -681,10 +681,42 @@ class LarkCliBaseClient:
                 f"表 {table_id} 分页超过安全上限，已停止刷新。"
             )
 
+    def list_records(
+        self,
+        table_id: str,
+        fields: Iterable[str],
+        *,
+        view_id: str | None = None,
+        filter_json: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        return self._record_list(
+            table_id,
+            fields,
+            view_id=view_id,
+            filter_json=filter_json,
+        )
+
     def download_asset(
         self,
         asset: CharacterVisualAsset,
         destination: Path,
+    ) -> Path:
+        return self.download_record_attachment(
+            VISUAL_ASSET_TABLE_ID,
+            asset.record_id,
+            asset.file_token,
+            destination,
+            resource_label=asset.resource_id,
+        )
+
+    def download_record_attachment(
+        self,
+        table_id: str,
+        record_id: str,
+        file_token: str,
+        destination: Path,
+        *,
+        resource_label: str,
     ) -> Path:
         destination = Path(destination)
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -699,11 +731,11 @@ class LarkCliBaseClient:
                 "--base-token",
                 BASE_TOKEN,
                 "--table-id",
-                VISUAL_ASSET_TABLE_ID,
+                table_id,
                 "--record-id",
-                asset.record_id,
+                record_id,
                 "--file-token",
-                asset.file_token,
+                file_token,
                 "--output",
                 f"./{temporary.name}",
                 "--overwrite",
@@ -719,7 +751,7 @@ class LarkCliBaseClient:
             self._last_record_request = time.monotonic()
         if not temporary.is_file():
             raise CharacterCatalogError(
-                f"资源 {asset.resource_id} 下载成功但未生成图片文件"
+                f"资源 {resource_label} 下载成功但未生成图片文件"
             )
         temporary.replace(destination)
         return destination

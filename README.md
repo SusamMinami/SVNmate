@@ -69,7 +69,7 @@ SVNAutoTool.exe
 
 SVNmate 的“工具模块”卡片包含：
 
-- **配置关系检索器**：目标物、NPC 与模型资源双向检索，并可联网查看命名角色档案。
+- **配置关系检索器**：目标物、NPC、模型资源双向检索，正式服武器查询与在线图标，并可联网查看命名角色档案。
 - **Kindle 提示板**：Windows 桌面客户端，可保留“启动时联动”。
 
 模块缺失时点击“安装”，已安装时点击“打开”；“检查”会读取固定发布清单，有新版后按钮变为“更新”。两个模块都可以点击“选择”接管已有的独立 EXE。Kindle 公共通道已经发布，可直接在线安装和更新。
@@ -79,6 +79,10 @@ KindleLarkStatus 源码仓保持私有，Windows ZIP 与 manifest 发布在 SVNm
 ConfigLinker 的完整操作说明见：[ConfigLinker 使用指南](config_id_lookup/USER_GUIDE.md)。
 
 ConfigLinker `1.4.0` 支持按 NPC 名称片段查找对应 ID，并在命名角色的选中详情和档案页展示头像、立绘及资源 ID；角色档案、NPC 归属和视觉资源映射使用 `lark-cli` 从飞书 Base 只读同步并缓存在本机，任务、台词和剧情直接读取当前 `doc\csvdir`。通用角色和待确认角色不会展示。
+
+ConfigLinker `1.5.2` 新增“武器查询”页签，可按武器名称、装备 ID、转换组 ID 或模型 ID 查询，并展示可复制简介、所属职业、同类武器、同职业转换系列、同模型装备和模型名称。武器索引只读取正式服 `csvdir`；“角色查询 / 武器查询”固定在版本号左侧，两类查询框统一放在返回图标右侧。
+
+ConfigLinker `1.5.3` 接入飞书 Base 在线武器图标库。图标索引每天最多自动刷新一次，武器 PNG 在首次查看时按需下载到本机缓存，后续查看和临时断网时直接复用本地图片。
 
 模块配置只记录在 `svn_auto_tool_config.json`。SVNmate 不读取 ConfigLinker 的配置仓数据，也不读取 KindleLarkStatus 的 OAuth Token、SSH 私钥或运行时配置。
 

@@ -2,7 +2,7 @@ from datetime import datetime
 from pathlib import Path
 import threading
 import webbrowser
-from tkinter import BOTH, LEFT, RIGHT, X, Y, StringVar, Tk, filedialog, messagebox, ttk
+from tkinter import BOTH, LEFT, RIGHT, X, Y, Menu, StringVar, Tk, filedialog, messagebox, ttk
 from typing import Any
 
 from .character_catalog import (
@@ -13,7 +13,7 @@ from .character_catalog import (
     LarkAuthenticationRequired,
 )
 from .character_detail import CharacterDetailWindow
-from .character_visuals import CharacterAvatar
+from .character_visuals import CharacterAvatar, HoverTooltip
 from .dpi import configure_tk_dpi, get_window_dpi, get_work_area, window_geometry
 from .interactions import ClickArbiter
 from .local_character_content import (
@@ -46,6 +46,8 @@ from .update_controller import (
     UpdateCheckResult,
 )
 from .view_state import QueryHistory, ResultPager
+from .weapon_icon_catalog import WeaponIconCatalogService
+from .weapon_ui import WeaponLookupFrame
 
 
 QUERY_LABEL_TO_KIND = {
@@ -88,12 +90,13 @@ class ConfigLinkerApp:
         *,
         config_path: Path | None = None,
         auto_load: bool = True,
-        app_version: str = "1.4.0",
+        app_version: str = "1.5.3",
         update_controller: ConfigLinkerUpdateController | None = None,
         character_service: CharacterCatalogService | None = None,
         character_content_repository: (
             LocalCharacterContentRepository | None
         ) = None,
+        weapon_icon_service: WeaponIconCatalogService | None = None,
         auto_refresh_characters: bool | None = None,
     ) -> None:
         self.root = root
@@ -126,6 +129,15 @@ class ConfigLinkerApp:
         self.character_refreshing = False
         self.character_content_repository = character_content_repository
         self.character_content_error = ""
+        self.weapon_icon_service = (
+            weapon_icon_service
+            if weapon_icon_service is not None
+            else (
+                WeaponIconCatalogService.create_default()
+                if auto_load
+                else None
+            )
+        )
         self.selected_record: Any = None
         self.selected_character_profile: CharacterProfile | None = None
         self.selected_character_visuals = CharacterVisuals()
@@ -140,6 +152,10 @@ class ConfigLinkerApp:
         self.query_type = StringVar(value="目标物 ID")
         self.query_value = StringVar(value="")
         self.status_text = StringVar(value="等待加载数据")
+        self.relationship_status_text = "等待加载数据"
+        self.relationship_status_style = "StatusWarn.TLabel"
+        self.weapon_status_text = "等待加载武器数据"
+        self.weapon_status_style = "StatusWarn.TLabel"
         self.data_directory_text = StringVar(value=str(self.settings.doc_directory))
         self.message_text = StringVar(
             value=settings_warning or "输入 ID 或 NPC 名称开始查询"
@@ -156,6 +172,7 @@ class ConfigLinkerApp:
         )
         self.toast_label: ttk.Label | None = None
         self.toast_job: str | None = None
+        self.icon_tooltips: list[HoverTooltip] = []
         self.click_arbiter = ClickArbiter(self.root.after, self.root.after_cancel)
 
         self.result_trees: dict[QueryKind, ttk.Treeview] = {}
@@ -220,12 +237,26 @@ class ConfigLinkerApp:
         ttk.Label(title_block, text="配置关系检索器", style="Title.TLabel").pack(anchor="w")
         ttk.Label(
             title_block,
-            text="目标物  ·  NPC  ·  模型资源",
+            text="目标物  ·  NPC  ·  模型资源  ·  武器",
             style="Subtitle.TLabel",
         ).pack(anchor="w")
 
         header_actions = ttk.Frame(header, style="App.TFrame")
         header_actions.pack(side=RIGHT)
+        header_navigation = ttk.Frame(header_actions, style="App.TFrame")
+        header_navigation.pack(side=LEFT, padx=(0, 12))
+        self.workspace_buttons: dict[int, ttk.Button] = {}
+        for index, label in enumerate(("角色查询", "武器查询")):
+            button = ttk.Button(
+                header_navigation,
+                text=label,
+                width=10,
+                command=lambda tab_index=index: self._select_workspace(
+                    tab_index
+                ),
+            )
+            button.pack(side=LEFT, padx=(0, 4))
+            self.workspace_buttons[index] = button
         ttk.Label(
             header_actions,
             textvariable=self.version_text,
@@ -246,46 +277,97 @@ class ConfigLinkerApp:
             header_actions,
             textvariable=self.status_text,
             style="StatusWarn.TLabel",
+            width=27,
+            anchor="e",
         )
         self.status_label.pack(side=LEFT, padx=(0, 10))
-        ttk.Button(
+        self.settings_menu = Menu(self.root, tearoff=False)
+        self.settings_menu.add_command(
+            label="选择 doc 目录",
+            command=self.choose_data_directory,
+        )
+        self.settings_menu.add_command(
+            label="复制诊断信息",
+            command=self.copy_diagnostics,
+        )
+        self.character_sync_menu_index = 2
+        self.settings_menu.add_command(
+            label="同步角色档案",
+            command=lambda: self._refresh_character_index_async(notify=True),
+        )
+        self.settings_button = ttk.Button(
             header_actions,
-            text="重新加载",
-            style="Subtle.TButton",
+            text="⚙",
+            width=3,
+            style="Icon.TButton",
+            command=self._show_settings_menu,
+        )
+        self.settings_button.pack(side=LEFT, padx=(0, 7))
+        settings_tooltip = HoverTooltip(self.settings_button, self.colors)
+        settings_tooltip.set_text("设置")
+        self.icon_tooltips.append(settings_tooltip)
+        self.reload_button = ttk.Button(
+            header_actions,
+            text="↻",
+            width=3,
+            style="Icon.TButton",
             command=self.reload_data,
-        ).pack(side=LEFT)
+        )
+        self.reload_button.pack(side=LEFT)
+        reload_tooltip = HoverTooltip(self.reload_button, self.colors)
+        reload_tooltip.set_text("重新加载")
+        self.icon_tooltips.append(reload_tooltip)
 
         toolbar = ttk.Frame(main, style="App.TFrame")
         toolbar.pack(fill=X, pady=(12, 7))
         self.back_button = ttk.Button(
             toolbar,
-            text="← 返回上一步",
-            style="Subtle.TButton",
+            text="←",
+            width=3,
+            style="Icon.TButton",
             command=self.go_back,
         )
         self.back_button.pack(side=LEFT)
-        self.choose_doc_button = ttk.Button(
+        back_tooltip = HoverTooltip(self.back_button, self.colors)
+        back_tooltip.set_text("返回上一步")
+        self.icon_tooltips.append(back_tooltip)
+        self.query_toolbar_host = ttk.Frame(
             toolbar,
-            text="选择 doc 目录",
-            style="Subtle.TButton",
-            command=self.choose_data_directory,
+            style="App.TFrame",
+            width=470,
+            height=34,
         )
-        self.choose_doc_button.pack(side=LEFT, padx=(7, 0))
+        self.query_toolbar_host.pack(side=LEFT, padx=(7, 0))
+        self.query_toolbar_host.pack_propagate(False)
+        self.role_query_controls = ttk.Frame(
+            self.query_toolbar_host,
+            style="App.TFrame",
+        )
+        self.weapon_query_controls = ttk.Frame(
+            self.query_toolbar_host,
+            style="App.TFrame",
+        )
+        self.query_combo = ttk.Combobox(
+            self.role_query_controls,
+            values=list(QUERY_LABEL_TO_KIND),
+            textvariable=self.query_type,
+            state="readonly",
+            width=11,
+        )
+        self.query_combo.pack(side=LEFT)
+        self.query_entry = ttk.Entry(
+            self.role_query_controls,
+            textvariable=self.query_value,
+            width=17,
+        )
+        self.query_entry.pack(side=LEFT, fill=X, expand=True, padx=(7, 0))
+        self.query_entry.bind("<Return>", lambda _event: self.search_from_input())
         ttk.Button(
-            toolbar,
-            text="复制诊断信息",
-            style="Subtle.TButton",
-            command=self.copy_diagnostics,
+            self.role_query_controls,
+            text="搜索",
+            style="Accent.TButton",
+            command=self.search_from_input,
         ).pack(side=LEFT, padx=(7, 0))
-        self.refresh_character_button = ttk.Button(
-            toolbar,
-            text="同步角色档案",
-            style="Subtle.TButton",
-            command=lambda: self._refresh_character_index_async(notify=True),
-        )
-        self.refresh_character_button.pack(side=LEFT, padx=(7, 0))
-        if self.character_service is None:
-            self.refresh_character_button.configure(state="disabled")
         ttk.Label(
             toolbar,
             textvariable=self.data_directory_text,
@@ -296,39 +378,36 @@ class ConfigLinkerApp:
             textvariable=self.character_status_text,
             style="AppMuted.TLabel",
         ).pack(side=RIGHT, padx=(0, 12))
+        if self.character_service is None:
+            self._set_character_sync_enabled(False)
 
-        search_card = ttk.Frame(main, style="Card.TFrame", padding=(14, 11))
-        search_card.pack(fill=X, pady=(0, 10))
-        search_controls = ttk.Frame(search_card, style="Card.TFrame")
-        search_controls.pack(anchor="center")
-        ttk.Label(
-            search_controls,
-            text="查询中心",
-            style="Section.TLabel",
-        ).pack(side=LEFT, padx=(0, 12))
-        self.query_combo = ttk.Combobox(
-            search_controls,
-            values=list(QUERY_LABEL_TO_KIND),
-            textvariable=self.query_type,
-            state="readonly",
-            width=15,
+        self.workspace_tabs = ttk.Notebook(
+            main,
+            style="Workspace.TNotebook",
         )
-        self.query_combo.pack(side=LEFT)
-        self.query_entry = ttk.Entry(
-            search_controls,
-            textvariable=self.query_value,
-            width=26,
+        self.workspace_tabs.pack(fill=BOTH, expand=True, pady=(4, 0))
+        self.relationship_page = ttk.Frame(
+            self.workspace_tabs,
+            style="App.TFrame",
+            padding=(0, 4, 0, 0),
         )
-        self.query_entry.pack(side=LEFT, padx=8)
-        self.query_entry.bind("<Return>", lambda _event: self.search_from_input())
-        ttk.Button(
-            search_controls,
-            text="搜索",
-            style="Accent.TButton",
-            command=self.search_from_input,
-        ).pack(side=LEFT)
+        self.weapon_frame = WeaponLookupFrame(
+            self.workspace_tabs,
+            copy_text=self._copy_text,
+            on_status_changed=self._weapon_status_changed,
+            colors=self.colors,
+            icon_service=self.weapon_icon_service,
+        )
+        self.weapon_frame.build_query_controls(self.weapon_query_controls)
+        self.workspace_tabs.add(self.relationship_page, text="角色查询")
+        self.workspace_tabs.add(self.weapon_frame, text="武器查询")
+        self.workspace_tabs.bind(
+            "<<NotebookTabChanged>>",
+            lambda _event: self._refresh_workspace_buttons(),
+        )
+        self._refresh_workspace_buttons()
 
-        relationship = ttk.Frame(main, style="App.TFrame")
+        relationship = ttk.Frame(self.relationship_page, style="App.TFrame")
         relationship.pack(fill=BOTH, expand=True)
         for column in (0, 2, 4):
             relationship.grid_columnconfigure(column, weight=1, uniform="cards")
@@ -348,7 +427,7 @@ class ConfigLinkerApp:
         )
         self._build_result_card(relationship, QueryKind.RESOURCE, "模型资源", 4)
 
-        message_row = ttk.Frame(main, style="App.TFrame")
+        message_row = ttk.Frame(self.relationship_page, style="App.TFrame")
         message_row.pack(fill=X, pady=(8, 5))
         self.message_label = ttk.Label(
             message_row,
@@ -357,7 +436,11 @@ class ConfigLinkerApp:
         )
         self.message_label.pack(side=LEFT)
 
-        detail_card = ttk.Frame(main, style="Card.TFrame", padding=(12, 8))
+        detail_card = ttk.Frame(
+            self.relationship_page,
+            style="Card.TFrame",
+            padding=(12, 8),
+        )
         detail_card.pack(fill=X)
         detail_header = ttk.Frame(detail_card, style="Card.TFrame")
         detail_header.pack(fill=X)
@@ -470,6 +553,84 @@ class ConfigLinkerApp:
             or "break",
         )
 
+    def _select_workspace(self, index: int) -> None:
+        self.workspace_tabs.select(index)
+        self._refresh_workspace_buttons()
+
+    def _refresh_workspace_buttons(self) -> None:
+        if not hasattr(self, "workspace_tabs"):
+            return
+        selected = self.workspace_tabs.select()
+        tabs = self.workspace_tabs.tabs()
+        for index, button in self.workspace_buttons.items():
+            button.configure(
+                style=(
+                    "SegmentActive.TButton"
+                    if index < len(tabs) and tabs[index] == selected
+                    else "Segment.TButton"
+                )
+            )
+        self._refresh_query_controls()
+        self._refresh_header_status()
+
+    def _refresh_query_controls(self) -> None:
+        if not hasattr(self, "weapon_query_controls"):
+            return
+        self.role_query_controls.pack_forget()
+        self.weapon_query_controls.pack_forget()
+        controls = (
+            self.weapon_query_controls
+            if self._active_workspace_index() == 1
+            else self.role_query_controls
+        )
+        controls.pack(fill=X, expand=True)
+
+    def _active_workspace_index(self) -> int:
+        selected = self.workspace_tabs.select()
+        tabs = self.workspace_tabs.tabs()
+        return tabs.index(selected) if selected in tabs else 0
+
+    def _refresh_header_status(self) -> None:
+        if self._active_workspace_index() == 1:
+            text = self.weapon_status_text
+            style = self.weapon_status_style
+        else:
+            text = self.relationship_status_text
+            style = self.relationship_status_style
+        self.status_text.set(text)
+        self.status_label.configure(style=style)
+
+    def _set_relationship_status(self, text: str, style: str) -> None:
+        self.relationship_status_text = text
+        self.relationship_status_style = style
+        if self._active_workspace_index() == 0:
+            self._refresh_header_status()
+
+    def _weapon_status_changed(self, text: str, style: str) -> None:
+        self.weapon_status_text = text
+        self.weapon_status_style = style
+        if (
+            hasattr(self, "workspace_tabs")
+            and self._active_workspace_index() == 1
+        ):
+            self._refresh_header_status()
+
+    def _show_settings_menu(self) -> None:
+        try:
+            self.settings_menu.tk_popup(
+                self.settings_button.winfo_rootx(),
+                self.settings_button.winfo_rooty()
+                + self.settings_button.winfo_height(),
+            )
+        finally:
+            self.settings_menu.grab_release()
+
+    def _set_character_sync_enabled(self, enabled: bool) -> None:
+        self.settings_menu.entryconfigure(
+            self.character_sync_menu_index,
+            state="normal" if enabled else "disabled",
+        )
+
     def _check_for_updates_async(self) -> None:
         if self.update_controller is None:
             return
@@ -487,7 +648,7 @@ class ConfigLinkerApp:
         if self.character_service is None or self.character_refreshing:
             return
         self.character_refreshing = True
-        self.refresh_character_button.configure(state="disabled")
+        self._set_character_sync_enabled(False)
         self.character_status_text.set("角色资料：正在同步...")
         threading.Thread(
             target=self._refresh_character_index_worker,
@@ -539,9 +700,14 @@ class ConfigLinkerApp:
         notify: bool,
     ) -> None:
         self.character_refreshing = False
-        self.refresh_character_button.configure(state="normal")
+        self._set_character_sync_enabled(True)
         self.character_status_text.set(self._character_status_summary())
         self._update_character_action(self.selected_record)
+        if (
+            self.weapon_icon_service is not None
+            and not self.weapon_icon_service.index_is_fresh()
+        ):
+            self.weapon_frame.refresh_icon_index_async()
         if notify:
             self._set_message(
                 f"命名角色资料更新完成：{len(index.profiles)} 名",
@@ -554,7 +720,7 @@ class ConfigLinkerApp:
         notify: bool,
     ) -> None:
         self.character_refreshing = False
-        self.refresh_character_button.configure(state="normal")
+        self._set_character_sync_enabled(True)
         if (
             self.character_service is not None
             and self.character_service.cache.profile_count() > 0
@@ -579,7 +745,7 @@ class ConfigLinkerApp:
         if self.character_service is None or self.character_refreshing:
             return
         self.character_refreshing = True
-        self.refresh_character_button.configure(state="disabled")
+        self._set_character_sync_enabled(False)
         self.character_status_text.set("角色资料：等待飞书授权...")
         threading.Thread(
             target=self._authorize_character_access_worker,
@@ -897,8 +1063,10 @@ class ConfigLinkerApp:
         self._run_query(key, add_history=False)
 
     def reload_data(self) -> None:
-        self.status_text.set("正在加载数据...")
-        self.status_label.configure(style="StatusWarn.TLabel")
+        self._set_relationship_status(
+            "正在加载数据...",
+            "StatusWarn.TLabel",
+        )
         self.root.update_idletasks()
         target_csv_directory = csv_directory(self.settings)
         try:
@@ -906,12 +1074,12 @@ class ConfigLinkerApp:
         except (OSError, CsvDataError, UnicodeError) as exc:
             self.last_error = str(exc)
             if self.repository is None:
-                self.status_text.set("数据加载失败")
+                status = "数据加载失败"
                 message = f"加载失败：{exc}"
             else:
-                self.status_text.set("刷新失败，仍使用旧数据")
+                status = "刷新失败，仍使用旧数据"
                 message = f"刷新失败，当前仍使用旧数据：{exc}"
-            self.status_label.configure(style="StatusError.TLabel")
+            self._set_relationship_status(status, "StatusError.TLabel")
             self._set_message(message, "error")
             return
 
@@ -942,12 +1110,14 @@ class ConfigLinkerApp:
         self.character_content_error = content_error
         self.last_error = ""
         report = new_repository.report
-        self.status_text.set(
-            f"已加载 {report.target_count} / {report.npc_count} / {report.resource_count}"
+        self._set_relationship_status(
+            f"已加载 {report.target_count} / "
+            f"{report.npc_count} / {report.resource_count}",
+            "StatusGood.TLabel",
         )
-        self.status_label.configure(style="StatusGood.TLabel")
         self.data_directory_text.set(str(self.settings.doc_directory))
         self.character_status_text.set(self._character_status_summary())
+        self.weapon_frame.load(self.settings.doc_directory)
         if content_error:
             self._set_message(
                 "基础数据加载成功；角色本地内容不可用："
@@ -1038,6 +1208,31 @@ class ConfigLinkerApp:
             lines.append(
                 f"角色本地内容错误：{self.character_content_error}"
             )
+        weapon_repository = self.weapon_frame.repository
+        if weapon_repository is not None:
+            weapon_report = weapon_repository.report
+            lines.append(
+                "武器数据："
+                f"正式服, 武器={weapon_report.weapon_count}, "
+                f"转换组={weapon_report.group_count}, "
+                f"模型={weapon_report.appearance_count}"
+            )
+        if self.weapon_frame.current_result is not None:
+            weapon_result = self.weapon_frame.current_result
+            lines.append(
+                "武器查询："
+                f"{weapon_result.query}, 命中={len(weapon_result.weapons)}, "
+                f"类型={'/'.join(weapon_result.match_kinds)}"
+            )
+        if self.weapon_frame.last_error:
+            lines.append(f"武器数据错误：{self.weapon_frame.last_error}")
+        if self.weapon_icon_service is not None:
+            lines.append(
+                "武器图标缓存："
+                f"{self.weapon_icon_service.cache.count()} 条"
+            )
+        if self.weapon_frame.icon_error:
+            lines.append(f"武器图标错误：{self.weapon_frame.icon_error}")
         if self.last_error:
             lines.append(f"最近错误：{self.last_error}")
         return "\n".join(lines)
@@ -1506,6 +1701,17 @@ class ConfigLinkerApp:
         self.colors = configure_styles(self.root, self.style, theme == "dark")
         if hasattr(self, "character_avatar"):
             self.character_avatar.set_colors(self.colors)
+        if hasattr(self, "weapon_frame"):
+            self.weapon_frame.set_colors(self.colors)
+        if hasattr(self, "settings_menu"):
+            self.settings_menu.configure(
+                background=self.colors["card"],
+                foreground=self.colors["text"],
+                activebackground=self.colors["accent_soft"],
+                activeforeground=self.colors["text"],
+            )
+        for tooltip in self.icon_tooltips:
+            tooltip.set_colors(self.colors)
         if (
             self.character_window is not None
             and self.character_window.exists()

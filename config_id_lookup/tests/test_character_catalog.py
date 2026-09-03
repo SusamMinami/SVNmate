@@ -165,8 +165,9 @@ class LarkCliBaseClientTests(unittest.TestCase):
 
         self.assertEqual(request.verification_url, "https://example.test/auth")
         self.assertEqual(request.device_code, "device-code")
-        self.assertIn("base:record:read", " ".join(calls[0]))
-        self.assertIn("base:view:read", " ".join(calls[0]))
+        self.assertIn("--domain", calls[0])
+        self.assertEqual(calls[0][calls[0].index("--domain") + 1], "base")
+        self.assertNotIn("--scope", calls[0])
 
     def test_index_keeps_only_active_named_profile_links(self) -> None:
         rows = {
