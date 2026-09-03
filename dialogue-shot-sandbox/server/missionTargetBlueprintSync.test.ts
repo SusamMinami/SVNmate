@@ -1199,6 +1199,35 @@ describe("mission target Blueprint synchronization", () => {
 });
 
 describe("background prop import", () => {
+  it("recognizes TaskActorBase in the BP inspection before reading UE selection", async () => {
+    await writeConfigFixture();
+    const connection = new TaskActorBackgroundPropConnection();
+
+    const inspection = await inspectMissionTargetBlueprint(
+      { blueprintName: connection.blueprintAssetPath },
+      () => connection,
+    );
+
+    expect(inspection).toMatchObject({
+      blueprintState: "empty",
+      blueprintAssetPath: connection.blueprintAssetPath,
+      blueprintClassPath: connection.blueprintClassPath,
+      parentClassPath: connection.parentClassPath,
+      dialogueId: null,
+      dialogueAssetPath: null,
+      formationClassPath: null,
+      slots: [],
+      message: "已识别 TaskActorBase；读取 UE 选择后可直接写入 BP",
+    });
+    expect(
+      connection.calls.some(
+        (call) =>
+          call.action === "asset.asset_search" &&
+          !String(call.args.Query).startsWith("BP_"),
+      ),
+    ).toBe(false);
+  });
+
   it("writes to a TaskActorBase BP with empty node inputs using the selected BP Actor as root", async () => {
     await writeConfigFixture();
     const connection = new TaskActorBackgroundPropConnection();

@@ -4550,7 +4550,37 @@ export async function inspectMissionTargetBlueprint(
     if (!resolved) {
       throw new Error(`BP 文件不存在：${request.blueprintName}`);
     }
-    const blueprint = await readValidatedBlueprint(connection, resolved);
+    const blueprint = await readBlueprintDetails(connection, resolved);
+    const parentKind = blueprintParentKind(blueprint.parentClassPath);
+    if (parentKind === "task_actor") {
+      if (
+        request.taskId ||
+        request.plan ||
+        request.dialogueId ||
+        request.dialogueTimeline !== undefined
+      ) {
+        throw new Error(
+          "TaskActorBase 仅支持在任务节点和对话节点都为空时直接写入 UE 选择",
+        );
+      }
+      return {
+        blueprintState: "empty",
+        blueprintAssetPath: resolved.assetPath,
+        blueprintClassPath: blueprint.blueprintClassPath,
+        parentClassPath: blueprint.parentClassPath,
+        dialogueId: null,
+        dialogueAssetPath: null,
+        formationClassPath: null,
+        slots: [],
+        dialoguePreviewBlockedReasons: [],
+        message: "已识别 TaskActorBase；读取 UE 选择后可直接写入 BP",
+      };
+    }
+    if (parentKind !== "position_mode") {
+      throw new Error(
+        `BP 父类既不是 TaskActorBase 也不是 PositionModeBase：${blueprint.parentClassPath || "无法读取"}`,
+      );
+    }
     const reservedComponents = blueprint.components.filter(
       (component) =>
         /^\d+$/.test(component.variableName) ||
