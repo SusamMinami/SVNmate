@@ -42,6 +42,8 @@ class BlueprintSyncConnection implements UnrealInvoker {
   readonly blueprintClassPath = `${this.blueprintAssetPath}_C`;
   readonly dialogueAssetPath =
     "/Game/Seria/Task/dialoggraph/Test/735200.735200";
+  readonly parentClassPath =
+    "/Game/Seria/Task/Mod/PositionMode/PositionModeBase.PositionModeBase_C";
   readonly calls: Array<{
     action: string;
     args: Record<string, unknown>;
@@ -86,8 +88,7 @@ class BlueprintSyncConnection implements UnrealInvoker {
     if (action === "bp.get_blueprint_basic_info") {
       return {
         GeneratedClass: this.blueprintClassPath,
-        ParentClass:
-          "/Game/Seria/Task/Mod/PositionMode/PositionModeBase.PositionModeBase_C",
+        ParentClass: this.parentClassPath,
       };
     }
     if (action === "asset.get_asset_by_path") {
@@ -363,6 +364,17 @@ class BackgroundPropConnection extends BlueprintSyncConnection {
     }
     return super.invoke(action, args);
   }
+}
+
+class NamedPositionModeBackgroundPropConnection extends BackgroundPropConnection {
+  override readonly blueprintAssetPath =
+    "/Game/Seria/Task/Mod/Test/BP_Shared.BP_Shared";
+  override readonly blueprintClassPath = `${this.blueprintAssetPath}_C`;
+}
+
+class TaskActorBackgroundPropConnection extends NamedPositionModeBackgroundPropConnection {
+  override readonly parentClassPath =
+    "/Game/Seria/Blueprint/Task/TaskActorBase.TaskActorBase_C";
 }
 
 class AppendBlueprintConnection extends BlueprintSyncConnection {
@@ -1187,6 +1199,112 @@ describe("mission target Blueprint synchronization", () => {
 });
 
 describe("background prop import", () => {
+  it("writes to a TaskActorBase BP with empty node inputs using the selected BP Actor as root", async () => {
+    await writeConfigFixture();
+    const connection = new TaskActorBackgroundPropConnection();
+    connection.selectedPlacementActors = [
+      {
+        actor_ref: "PersistentLevel.BP_Shared_C_0",
+        label: "BP_Shared",
+        class_path: connection.blueprintClassPath,
+        skeletal_mesh_path: "",
+        static_mesh_path: "",
+        location: [100, 200, 200],
+        rotation: [0, 0, 0],
+        scale: [1, 1, 1],
+      },
+      {
+        actor_ref: "PersistentLevel.SkeletalMeshActor_1",
+        label: "旗帜",
+        class_path: "/Script/Engine.SkeletalMeshActor",
+        skeletal_mesh_path:
+          "/Game/Test/Props/SK_Banner.SK_Banner",
+        static_mesh_path: "",
+        location: [130, 260, 340],
+        rotation: [0, 45, 0],
+        scale: [1.5, 0.75, 2],
+      },
+    ];
+    const reviewedActorRefs = connection.selectedPlacementActors.map(
+      (actor) => String(actor.actor_ref),
+    );
+
+    const preview = await inspectBackgroundPropImport(
+      {
+        blueprintName: connection.blueprintAssetPath,
+        actorRefs: reviewedActorRefs,
+      },
+      () => connection,
+    );
+
+    expect(preview.blockedReasons).toEqual([]);
+    expect(
+      preview.items.find((item) => item.actorLabel === "旗帜"),
+    ).toMatchObject({
+      action: "create",
+      relativeTransform: {
+        location: { x: 30, y: 60, z: 140 },
+        rotation: { pitch: 0, yaw: 45, roll: 0 },
+        scale: { x: 1.5, y: 0.75, z: 2 },
+      },
+    });
+    expect(
+      connection.calls.some(
+        (call) =>
+          call.action === "asset.asset_search" &&
+          !String(call.args.Query).startsWith("BP_"),
+      ),
+    ).toBe(false);
+
+    const result = await applyBackgroundPropImport(
+      {
+        blueprintName: connection.blueprintAssetPath,
+        reviewToken: preview.reviewToken,
+        selectedActorRefs: ["PersistentLevel.SkeletalMeshActor_1"],
+        reviewedActorRefs,
+      },
+      () => connection,
+    );
+
+    expect(result).toMatchObject({
+      status: "updated",
+      blueprintAssetPath: connection.blueprintAssetPath,
+      createdComponentNames: ["SK_Banner"],
+      saved: true,
+    });
+  });
+
+  it("keeps the dialogue lookup requirement for PositionModeBase with empty node inputs", async () => {
+    await writeConfigFixture();
+    const connection = new NamedPositionModeBackgroundPropConnection();
+
+    await expect(
+      inspectBackgroundPropImport(
+        { blueprintName: connection.blueprintAssetPath },
+        () => connection,
+      ),
+    ).rejects.toThrow(
+      "BP 文件名中没有可用于查找对话资产的数字 ID",
+    );
+  });
+
+  it("does not use direct TaskActorBase import when a task node is provided", async () => {
+    await writeConfigFixture();
+    const connection = new TaskActorBackgroundPropConnection();
+
+    await expect(
+      inspectBackgroundPropImport(
+        {
+          blueprintName: connection.blueprintAssetPath,
+          taskId: "900001",
+        },
+        () => connection,
+      ),
+    ).rejects.toThrow(
+      "TaskActorBase 仅支持在任务节点和对话节点都为空时直接写入 UE 选择",
+    );
+  });
+
   it("writes a selected Skeletal Mesh with its asset name and scale", async () => {
     await writeConfigFixture();
     const connection = new BackgroundPropConnection();

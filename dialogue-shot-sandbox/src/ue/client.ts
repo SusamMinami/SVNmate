@@ -259,11 +259,13 @@ export function inspectBackgroundPropImport(
   blueprintName: string,
   actorRefs?: string[],
   dialogueId?: string,
+  taskId?: string,
 ): Promise<BackgroundPropImportPreview> {
   return postUe("/api/ue/mission-targets/background-props/inspect", {
     blueprintName,
     actorRefs,
     dialogueId,
+    taskId,
   });
 }
 
@@ -273,6 +275,7 @@ export function applyBackgroundPropImport(
   selectedActorRefs: string[],
   reviewedActorRefs?: string[],
   dialogueId?: string,
+  taskId?: string,
 ): Promise<BackgroundPropImportResult> {
   return postUe(
     "/api/ue/mission-targets/background-props/apply",
@@ -282,6 +285,7 @@ export function applyBackgroundPropImport(
       selectedActorRefs,
       reviewedActorRefs,
       dialogueId,
+      taskId,
     },
     false,
   );

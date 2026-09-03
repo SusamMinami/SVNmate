@@ -279,15 +279,22 @@ BP 输入框右侧的检查按钮会读取 BP、对应数字槽位、同名 Dial
 - SkeletalMeshActor 写为 `SkeletalMeshComponent` 和实际 Skeletal Mesh。
 - StaticMeshActor 写为 `StaticMeshComponent` 和实际 Static Mesh。
 - 其他 Actor 显示为不支持，不参与写入。
+- 任务节点与对话节点都为空时，工具按 BP 父类分流。`TaskActorBase` 不要求
+  BP 文件名包含对话数字 ID，优先使用 UE 当前选择中的目标 BP Actor 作为
+  坐标原点；未选中目标 BP 时，可回退到当前关卡中的唯一同类 BP 实例。无法
+  唯一确定实例时停止写入并提示用户选择。`PositionModeBase` 仍按原流程查找
+  对话资产并校验空间配置。
 
 组件名直接使用资产名，例如 `SK_Banner` 或 `BP_BackgroundNpc`。BP 中已有同名
 同资产组件时更新 Transform；已有同名不同资产或一次选择中存在多个同名资产
 时停止该项，不自动重命名。
 
-工具使用 `PlayerInitPosition` 和 `PlayerForward` 把所选 Actor 的世界 Transform
-转换为 BP 局部 Transform，并完整写入位置、旋转和 `RelativeScale3D`。因此
-均匀、非均匀和负缩放都可保留。当前地图必须与 Preview Level 一致，BP 或
-选择变化会使预检令牌失效并要求重新检查。
+`PositionModeBase` 使用 `PlayerInitPosition` 和 `PlayerForward` 把所选 Actor
+的世界 Transform 转换为 BP 局部 Transform，并校验当前地图与
+`PreviewLevel` 一致。双节点输入为空的 `TaskActorBase` 改用 UE 中目标 BP
+Actor 的世界 Transform 完成相同换算。两种路径都会完整写入位置、旋转和
+`RelativeScale3D`，因此均匀、非均匀和负缩放都可保留。BP 或选择变化会使
+预检令牌失效并要求重新检查。
 
 如果对话缺少 `Formation`、`PreviewLevel`、虚拟场景或主角初始 Transform，
 审核层会提供“补齐对话配置”。该操作保留现有 `DialogModels`，优先使用当前

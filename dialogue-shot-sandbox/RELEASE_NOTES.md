@@ -1,3 +1,15 @@
+# 镜头沙盘 v0.22.16
+
+## 任务目标物 BP 写入
+
+- 未填写任务节点和对话节点时，读取 UE 选择会根据目标 BP 父类决定处理方式。
+- `TaskActorBase` 可直接使用 UE 中的 BP Actor Transform 写入所选场景资产，
+  不再依赖 BP 文件名中的对话数字 ID。
+- `PositionModeBase` 保持原有对话资产与空间配置校验，避免改变现有 Formation
+  和 DialogModels 工作流。
+
+---
+
 # 镜头沙盘 v0.22.15
 
 ## 规则占位动作读取

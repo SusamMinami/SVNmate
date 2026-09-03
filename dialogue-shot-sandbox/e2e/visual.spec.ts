@@ -7008,10 +7008,12 @@ test("offers bidirectional position sync for a registered Blueprint", async ({
     {
       blueprintName: "BP_735000",
       actorRefs: ["PersistentLevel.SkeletalMeshActor_1"],
+      taskId: "900001",
     },
     {
       blueprintName: "BP_735000",
       actorRefs: ["PersistentLevel.SkeletalMeshActor_1"],
+      taskId: "900001",
     },
   ]);
   await backgroundDialog.screenshot({
@@ -7030,6 +7032,7 @@ test("offers bidirectional position sync for a registered Blueprint", async ({
     reviewToken: "a".repeat(64),
     selectedActorRefs: ["PersistentLevel.SkeletalMeshActor_1"],
     reviewedActorRefs: ["PersistentLevel.SkeletalMeshActor_1"],
+    taskId: "900001",
   });
 
   await dialog.screenshot({

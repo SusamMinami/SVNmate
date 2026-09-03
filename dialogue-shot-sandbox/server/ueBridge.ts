@@ -76,8 +76,6 @@ const PREVIEW_ACTOR_PREFIX = "ShotSandboxMissionTargetPreview";
 const PREVIEW_DELETE_RETRY_DELAYS_MS = [50, 100, 200, 400, 800, 1_200];
 const LEVEL_OPEN_TIMEOUT_MS = 3 * 60_000;
 const BLUEPRINT_SEARCH_PATH = "/Game/Seria/Task/Mod";
-const POSITION_MODE_BASE_CLASS =
-  "/Game/Seria/Task/Mod/PositionMode/PositionModeBase.PositionModeBase_C";
 const PLAYER_CLASS =
   "/Game/Seria/Characters/Eric/BP_Eric.BP_Eric_C";
 const CHILD_ACTOR_COMPONENT_CLASS = "/Script/Engine.ChildActorComponent";
@@ -304,6 +302,7 @@ const MissionTargetBlueprintSyncRequestSchema = z.object({
 const BackgroundPropInspectRequestSchema = z.object({
   blueprintName: z.string().trim().min(1).max(512),
   dialogueId: DialogueAssetIdSchema.optional(),
+  taskId: z.string().regex(/^\d+$/).optional(),
   actorRefs: z.array(z.string().min(1)).min(1).max(200).optional(),
 });
 
@@ -1024,27 +1023,36 @@ async function readBlueprintComponents(
   return result;
 }
 
-async function readValidatedBlueprint(
-  connection: UnrealInvoker,
-  resolved: { assetPath: string; blueprint: string },
-): Promise<{
+interface BlueprintDetails {
   blueprintClassPath: string;
   parentClassPath: string;
   components: BlueprintComponentInfo[];
-}> {
+}
+
+type BlueprintParentKind = "position_mode" | "task_actor" | "unsupported";
+
+function blueprintParentKind(parentClassPath: string): BlueprintParentKind {
+  const parentName = assetNameFromPath(
+    unrealReferenceText(parentClassPath),
+  ).toLowerCase();
+  if (parentName === "positionmodebase") {
+    return "position_mode";
+  }
+  if (parentName === "taskactorbase") {
+    return "task_actor";
+  }
+  return "unsupported";
+}
+
+async function readBlueprintDetails(
+  connection: UnrealInvoker,
+  resolved: { assetPath: string; blueprint: string },
+): Promise<BlueprintDetails> {
   const basicInfo = (await connection.invoke(
     "bp.get_blueprint_basic_info",
     { Bp: resolved.blueprint },
   )) as { GeneratedClass?: unknown; ParentClass?: unknown };
   const parentClassPath = String(basicInfo?.ParentClass ?? "");
-  if (
-    normalizeObjectPath(parentClassPath) !==
-    normalizeObjectPath(POSITION_MODE_BASE_CLASS)
-  ) {
-    throw new Error(
-      `BP 父类不是 PositionModeBase：${parentClassPath || "无法读取"}`,
-    );
-  }
   const blueprintClassPathValue =
     String(basicInfo?.GeneratedClass ?? "") ||
     blueprintClassPath(resolved.assetPath);
@@ -1056,6 +1064,19 @@ async function readValidatedBlueprint(
       blueprintClassPathValue,
     ),
   };
+}
+
+async function readValidatedBlueprint(
+  connection: UnrealInvoker,
+  resolved: { assetPath: string; blueprint: string },
+): Promise<BlueprintDetails> {
+  const blueprint = await readBlueprintDetails(connection, resolved);
+  if (blueprintParentKind(blueprint.parentClassPath) !== "position_mode") {
+    throw new Error(
+      `BP 父类不是 PositionModeBase：${blueprint.parentClassPath || "无法读取"}`,
+    );
+  }
+  return blueprint;
 }
 
 async function addBlueprintComponent(
@@ -6405,17 +6426,19 @@ async function queryLevelActors(
 async function findBlueprintActorPlacement(
   connection: UnrealInvoker,
   blueprintClassPathValue: string,
+  selectedActorSnapshot?: SelectedLevelActor[],
 ): Promise<{
   actor: SelectedLevelActor;
   mapAssetPath: string;
   source: "selected_actor" | "level_scan";
 } | null> {
   const selectedActors = (
-    await queryLevelActors(
-      connection,
-      "unreal.EditorLevelLibrary.get_selected_level_actors()",
-      "无法读取 UE 编辑器当前选择",
-    )
+    selectedActorSnapshot ??
+    (await queryLevelActors(
+        connection,
+        "unreal.EditorLevelLibrary.get_selected_level_actors()",
+        "无法读取 UE 编辑器当前选择",
+      ))
   ).filter(
     (actor) =>
       normalizeObjectPath(actor.classPath) ===
@@ -6535,6 +6558,7 @@ async function prepareBackgroundPropImport(
   blueprintName: string,
   actorRefs?: string[],
   dialogueIdOverride?: string,
+  taskId?: string,
 ): Promise<PreparedBackgroundPropImport> {
   const resolved = await resolveExistingBlueprint(
     connection,
@@ -6543,36 +6567,22 @@ async function prepareBackgroundPropImport(
   if (!resolved) {
     throw new Error(`BP 文件不存在：${blueprintName}`);
   }
-  const blueprint = await readValidatedBlueprint(connection, resolved);
-  const dialogueId = dialogueIdForBlueprint(
-    resolved.assetPath,
-    dialogueIdOverride,
-  );
-  if (!dialogueId) {
-    throw new Error("BP 文件名中没有可用于查找对话资产的数字 ID");
-  }
-  const dialogueAssets = await findDialogueAssetPath(
-    connection,
-    dialogueId,
-  );
-  if (dialogueAssets.length !== 1) {
+  const blueprint = await readBlueprintDetails(connection, resolved);
+  const parentKind = blueprintParentKind(blueprint.parentClassPath);
+  const directTaskActorImport =
+    parentKind === "task_actor" &&
+    !taskId?.trim() &&
+    !dialogueIdOverride?.trim();
+  if (parentKind === "task_actor" && !directTaskActorImport) {
     throw new Error(
-      dialogueAssets.length === 0
-        ? `未找到与 BP 对应的对话资产 ${dialogueId}`
-        : `找到多个名为 ${dialogueId} 的对话资产，无法自动确认`,
+      "TaskActorBase 仅支持在任务节点和对话节点都为空时直接写入 UE 选择",
     );
   }
-  const startNodeData = await findDialogueStartNodeData(
-    connection,
-    dialogueAssets[0],
-  );
-  const formationValue = String(
-    await readProperty(connection, startNodeData, "Formation"),
-  );
-  const spatial = await readDialogueSpatialContext(
-    connection,
-    startNodeData,
-  );
+  if (parentKind === "unsupported") {
+    throw new Error(
+      `BP 父类既不是 TaskActorBase 也不是 PositionModeBase：${blueprint.parentClassPath || "无法读取"}`,
+    );
+  }
   const mapAssetPath = await currentMapName(connection);
   const selectedActors = await queryLevelActors(
     connection,
@@ -6598,34 +6608,85 @@ async function prepareBackgroundPropImport(
       (actorRef) => selectedActorsByRef.get(actorRef)!,
     );
   }
-  const blockedReasons: string[] = [];
-  if (
-    normalizeObjectPath(formationValue) !==
-    normalizeObjectPath(blueprint.blueprintClassPath)
-  ) {
-    blockedReasons.push("对话 Formation 尚未指向当前 BP");
-  }
-  if (!spatial.root.explicit) {
-    blockedReasons.push("对话尚未配置主角初始坐标");
-  }
-  if (!spatial.forwardExplicit) {
-    blockedReasons.push("对话尚未配置主角朝向");
-  }
-  if (!spatial.virtualEnabled || !spatial.specialVirtualEnabled) {
-    blockedReasons.push("对话尚未启用虚拟场景");
-  }
-  if (!hasUnrealObjectReference(spatial.previewLevel)) {
-    blockedReasons.push("对话尚未配置 Preview Level");
-  } else if (
-    !sameLevelPath(spatial.previewLevel, mapAssetPath)
-  ) {
-    blockedReasons.push(
-      `当前地图 ${mapAssetPath} 与 Preview Level ${spatial.previewLevel} 不一致`,
+  const dialogueId = directTaskActorImport
+    ? null
+    : dialogueIdForBlueprint(resolved.assetPath, dialogueIdOverride);
+  let spatial: DialogueSpatialContext | null = null;
+  let formationValue = "";
+  let rootTransform: MissionTargetBlueprintRoot["transform"];
+  if (!directTaskActorImport) {
+    if (!dialogueId) {
+      throw new Error("BP 文件名中没有可用于查找对话资产的数字 ID");
+    }
+    const dialogueAssets = await findDialogueAssetPath(
+      connection,
+      dialogueId,
     );
+    if (dialogueAssets.length !== 1) {
+      throw new Error(
+        dialogueAssets.length === 0
+          ? `未找到与 BP 对应的对话资产 ${dialogueId}`
+          : `找到多个名为 ${dialogueId} 的对话资产，无法自动确认`,
+      );
+    }
+    const startNodeData = await findDialogueStartNodeData(
+      connection,
+      dialogueAssets[0],
+    );
+    formationValue = String(
+      await readProperty(connection, startNodeData, "Formation"),
+    );
+    spatial = await readDialogueSpatialContext(
+      connection,
+      startNodeData,
+    );
+    rootTransform = spatial.root.transform;
+  } else {
+    const placement = await findBlueprintActorPlacement(
+      connection,
+      blueprint.blueprintClassPath,
+      selectedActors,
+    );
+    if (!placement) {
+      throw new Error(
+        "无法确定 BP 世界坐标：请在 UE 当前选择中包含当前 BP Actor，或确保当前关卡只有一个该 BP 实例",
+      );
+    }
+    rootTransform = {
+      location: placement.actor.transform.location,
+      rotation: placement.actor.transform.rotation,
+    };
+  }
+  const blockedReasons: string[] = [];
+  if (spatial) {
+    if (
+      normalizeObjectPath(formationValue) !==
+      normalizeObjectPath(blueprint.blueprintClassPath)
+    ) {
+      blockedReasons.push("对话 Formation 尚未指向当前 BP");
+    }
+    if (!spatial.root.explicit) {
+      blockedReasons.push("对话尚未配置主角初始坐标");
+    }
+    if (!spatial.forwardExplicit) {
+      blockedReasons.push("对话尚未配置主角朝向");
+    }
+    if (!spatial.virtualEnabled || !spatial.specialVirtualEnabled) {
+      blockedReasons.push("对话尚未启用虚拟场景");
+    }
+    if (!hasUnrealObjectReference(spatial.previewLevel)) {
+      blockedReasons.push("对话尚未配置 Preview Level");
+    } else if (
+      !sameLevelPath(spatial.previewLevel, mapAssetPath)
+    ) {
+      blockedReasons.push(
+        `当前地图 ${mapAssetPath} 与 Preview Level ${spatial.previewLevel} 不一致`,
+      );
+    }
   }
   if (
-    Math.abs(spatial.root.transform.rotation.pitch) > 0.000_001 ||
-    Math.abs(spatial.root.transform.rotation.roll) > 0.000_001
+    Math.abs(rootTransform.rotation.pitch) > 0.000_001 ||
+    Math.abs(rootTransform.rotation.roll) > 0.000_001
   ) {
     blockedReasons.push(
       "BP 根旋转包含 Pitch 或 Roll，暂不支持背景资产坐标换算",
@@ -6641,7 +6702,7 @@ async function prepareBackgroundPropImport(
       const componentName = backgroundPropAssetName(actor);
       const relativeTransform = blueprintTransformFromWorld(
         actor.transform,
-        spatial.root.transform,
+        rootTransform,
         actor.transform.scale,
       );
       const existingComponent =
@@ -6727,7 +6788,7 @@ async function prepareBackgroundPropImport(
   const previewWithoutToken = {
     blueprintAssetPath: resolved.assetPath,
     mapAssetPath,
-    rootTransform: spatial.root.transform,
+    rootTransform,
     items: preparedItems.map((item) => item.preview),
     blockedReasons,
   };
@@ -6756,6 +6817,7 @@ export async function inspectBackgroundPropImport(
         request.blueprintName,
         request.actorRefs,
         request.dialogueId,
+        request.taskId,
       )
     ).preview;
   } finally {
@@ -6788,6 +6850,7 @@ export async function applyBackgroundPropImport(
       request.blueprintName,
       request.reviewedActorRefs,
       request.dialogueId,
+      request.taskId,
     );
     if (prepared.preview.reviewToken !== request.reviewToken) {
       throw new Error("UE 选择、Actor Transform 或 BP 内容已变化，请重新检查");

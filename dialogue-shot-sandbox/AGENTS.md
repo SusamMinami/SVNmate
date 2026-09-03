@@ -99,6 +99,10 @@
   未匹配 Actor 才进入非数字 BP 组件审核；该路径不修改目标物表或
   DialogModels，且 Blueprint、Skeletal Mesh 和 Static Mesh 必须保留原名与
   完整 Transform，同名冲突不得自动改名。
+- 任务节点与对话节点都为空时，非数字 BP 组件审核必须按 BP 父类分流：
+  `TaskActorBase` 使用 UE 当前选择中的目标 BP Actor，或当前关卡中的唯一同类
+  实例，确定世界 Transform 后直接写入；`PositionModeBase` 继续查找对应对话
+  资产并执行原有空间配置校验。
 - 首次“读取 UE 选择”匹配到任务目标物后，进入“修改位置”必须复用该次 Actor
   Transform 和匹配关系直接形成待修改草稿；不得要求用户在编辑页重复读取 UE。
 - 已包含数字站位槽的 BP 按自身槽位注册到对话，不依赖目标物表；0 号玩家必须

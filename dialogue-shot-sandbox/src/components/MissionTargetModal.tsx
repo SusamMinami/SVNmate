@@ -551,6 +551,7 @@ export function MissionTargetModal({
         blueprintName.trim(),
         reviewedActorRefs.length > 0 ? reviewedActorRefs : undefined,
         configuredDialogueId,
+        taskId.trim() || undefined,
       );
       setBackgroundPropPreview(preview);
       setSelectedBackgroundActorRefs((current) =>
@@ -826,6 +827,7 @@ export function MissionTargetModal({
         blueprintName.trim(),
         reviewedActorRefs,
         configuredDialogueId,
+        taskId.trim() || undefined,
       );
       setBackgroundPropPreview(preview);
       setBackgroundMatchedTargetIds(matchedTargetIds);
@@ -898,6 +900,7 @@ export function MissionTargetModal({
         Array.from(selectedBackgroundActorRefs),
         backgroundPropPreview.items.map((item) => item.actorRef),
         configuredDialogueId,
+        taskId.trim() || undefined,
       );
       setBackgroundPropPreview(null);
       setSelectedBackgroundActorRefs(new Set());
