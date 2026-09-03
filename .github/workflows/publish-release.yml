@@ -28,11 +28,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -e
-          if gh release view v1.4.2 >/dev/null 2>&1; then
-            gh release upload v1.4.2 "SVNmate.zip" --clobber
+          if gh release view v1.4.3 >/dev/null 2>&1; then
+            gh release upload v1.4.3 "SVNmate.zip" --clobber
           else
-            gh release create v1.4.2 "SVNmate.zip" \
-              --title "一键更新SVN v1.4.2" \
+            gh release create v1.4.3 "SVNmate.zip" \
+              --title "一键更新SVN v1.4.3" \
               --notes-file RELEASE_NOTES.md
           fi
-          gh release edit v1.4.2 --latest
+          gh release edit v1.4.3 --latest

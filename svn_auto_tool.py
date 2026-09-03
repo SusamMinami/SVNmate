@@ -87,7 +87,7 @@ CONFIG_PATH = APP_DIR / "svn_auto_tool_config.json"
 LOG_DIR = APP_DIR / "logs"
 LOG_RETENTION_DAYS = 7
 MUSIC_EXTENSIONS = (".mp3", ".wav")
-APP_VERSION = "v1.4.2"
+APP_VERSION = "v1.4.3"
 LATEST_RELEASE_URL = "https://github.com/SusamMinami/SVNmate/releases/latest"
 RELEASE_DOWNLOAD_URL = "https://github.com/SusamMinami/SVNmate/releases/download/{tag}/{asset}"
 RELEASE_ASSET_NAME = "SVNmate.zip"
@@ -101,6 +101,12 @@ ACTIVATE_INSTANCE_MESSAGE_NAME = "SVNmate.ActivateExistingInstance.v1"
 MAX_PENDING_LOG_ITEMS = 500
 MAX_LIVE_LOG_ROWS = 300
 MAX_LIVE_LOG_CHARS = 12000
+TRAY_ACTION_POLL_MS = 250
+LOG_ACTIVE_POLL_MS = 200
+LOG_IDLE_POLL_MS = 1000
+SCHEDULE_POLL_MS = 5000
+DPI_VISIBLE_POLL_MS = 1000
+DPI_HIDDEN_POLL_MS = 10000
 
 
 if os.name == "nt":
@@ -226,6 +232,7 @@ class SingleInstanceGuard:
 
 class WindowsTrayIcon:
     NIM_ADD = 0
+    NIM_MODIFY = 1
     NIM_DELETE = 2
     NIF_MESSAGE = 0x1
     NIF_ICON = 0x2
@@ -272,12 +279,16 @@ class WindowsTrayIcon:
         self._class_name = TRAY_WINDOW_CLASS_NAME
         self._instance = 0
         self._activate_message = 0
+        self._taskbar_created_message = 0
         if os.name == "nt":
             user32 = ctypes.windll.user32
             user32.RegisterWindowMessageW.argtypes = [wintypes.LPCWSTR]
             user32.RegisterWindowMessageW.restype = wintypes.UINT
             self._activate_message = user32.RegisterWindowMessageW(
                 ACTIVATE_INSTANCE_MESSAGE_NAME
+            )
+            self._taskbar_created_message = user32.RegisterWindowMessageW(
+                "TaskbarCreated"
             )
 
     def start(self) -> bool:
@@ -317,6 +328,23 @@ class WindowsTrayIcon:
                     self.module_actions[action][1]()
         except queue.Empty:
             pass
+
+    def ensure_visible(self) -> bool:
+        if os.name != "nt" or not self.hwnd:
+            return False
+        shell32 = ctypes.windll.shell32
+        shell32.Shell_NotifyIconW.argtypes = [
+            wintypes.DWORD,
+            ctypes.POINTER(_NotifyIconData),
+        ]
+        if self._notify_data is not None and shell32.Shell_NotifyIconW(
+            self.NIM_MODIFY,
+            ctypes.byref(self._notify_data),
+        ):
+            self.available = True
+            return True
+        self.available = self._add_icon()
+        return self.available
 
     def _message_loop(self) -> None:
         user32 = ctypes.windll.user32
@@ -405,43 +433,49 @@ class WindowsTrayIcon:
             self._ready_event.set()
 
     def _add_icon(self) -> bool:
-        user32 = ctypes.windll.user32
         shell32 = ctypes.windll.shell32
-        user32.LoadImageW.argtypes = [
-            wintypes.HINSTANCE,
-            wintypes.LPCWSTR,
-            wintypes.UINT,
-            ctypes.c_int,
-            ctypes.c_int,
-            wintypes.UINT,
-        ]
         shell32.Shell_NotifyIconW.argtypes = [wintypes.DWORD, ctypes.POINTER(_NotifyIconData)]
-        width = user32.GetSystemMetrics(49) or 16
-        height = user32.GetSystemMetrics(50) or 16
-        user32.LoadImageW.restype = wintypes.HICON
-        self.icon_handle = user32.LoadImageW(
-            None,
-            str(self.icon_path),
-            self.IMAGE_ICON,
-            width,
-            height,
-            self.LR_LOADFROMFILE,
+        if self._notify_data is None:
+            user32 = ctypes.windll.user32
+            user32.LoadImageW.argtypes = [
+                wintypes.HINSTANCE,
+                wintypes.LPCWSTR,
+                wintypes.UINT,
+                ctypes.c_int,
+                ctypes.c_int,
+                wintypes.UINT,
+            ]
+            width = user32.GetSystemMetrics(49) or 16
+            height = user32.GetSystemMetrics(50) or 16
+            user32.LoadImageW.restype = wintypes.HICON
+            self.icon_handle = user32.LoadImageW(
+                None,
+                str(self.icon_path),
+                self.IMAGE_ICON,
+                width,
+                height,
+                self.LR_LOADFROMFILE,
+            )
+            if self.icon_handle:
+                self.owns_icon = True
+            else:
+                user32.LoadIconW.restype = wintypes.HICON
+                self.icon_handle = user32.LoadIconW(None, ctypes.c_void_p(32512))
+            data = _NotifyIconData()
+            data.cbSize = ctypes.sizeof(_NotifyIconData)
+            data.hWnd = self.hwnd
+            data.uID = 1
+            data.uFlags = self.NIF_MESSAGE | self.NIF_ICON | self.NIF_TIP
+            data.uCallbackMessage = self.WM_TRAYICON
+            data.hIcon = self.icon_handle
+            data.szTip = "SVNmate - 一键更新 SVN"
+            self._notify_data = data
+        return bool(
+            shell32.Shell_NotifyIconW(
+                self.NIM_ADD,
+                ctypes.byref(self._notify_data),
+            )
         )
-        if self.icon_handle:
-            self.owns_icon = True
-        else:
-            user32.LoadIconW.restype = wintypes.HICON
-            self.icon_handle = user32.LoadIconW(None, ctypes.c_void_p(32512))
-        data = _NotifyIconData()
-        data.cbSize = ctypes.sizeof(_NotifyIconData)
-        data.hWnd = self.hwnd
-        data.uID = 1
-        data.uFlags = self.NIF_MESSAGE | self.NIF_ICON | self.NIF_TIP
-        data.uCallbackMessage = self.WM_TRAYICON
-        data.hIcon = self.icon_handle
-        data.szTip = "SVNmate - 一键更新 SVN"
-        self._notify_data = data
-        return bool(shell32.Shell_NotifyIconW(self.NIM_ADD, ctypes.byref(data)))
 
     def _remove_icon(self) -> None:
         if self._notify_data is not None:
@@ -455,6 +489,14 @@ class WindowsTrayIcon:
     def _window_proc(self, hwnd: int, message: int, wparam: int, lparam: int) -> int:
         if self._activate_message and message == self._activate_message:
             self._actions.put("show")
+            return 0
+        taskbar_created_message = getattr(
+            self,
+            "_taskbar_created_message",
+            0,
+        )
+        if taskbar_created_message and message == taskbar_created_message:
+            self.available = self._add_icon()
             return 0
         if message == self.WM_TRAYICON:
             event = int(lparam) & 0xFFFF
@@ -630,7 +672,7 @@ class SvnAutoTool:
         self._poll_log_queue()
         self._poll_tray_actions()
         self._schedule_tick()
-        self.root.after(1000, self._dpi_tick)
+        self.root.after(DPI_VISIBLE_POLL_MS, self._dpi_tick)
         self.root.after(200, self._start_tray_icon)
         self.root.after(800, self._launch_kindle_status_at_startup)
         self.root.after(2000, self._check_for_updates_async)
@@ -1585,13 +1627,15 @@ class SvnAutoTool:
         self.root.after(60000, self._theme_tick)
 
     def _dpi_tick(self) -> None:
-        if os.name == "nt":
+        visible = self.root.state() != "withdrawn"
+        if os.name == "nt" and visible:
             dpi = _get_window_dpi(self.root)
             if dpi > 0 and dpi != self.current_dpi:
                 self.current_dpi = dpi
                 self.root.tk.call("tk", "scaling", dpi / 72.0)
                 self._apply_visual_theme(self.current_theme)
-        self.root.after(1000, self._dpi_tick)
+        delay = DPI_VISIBLE_POLL_MS if visible else DPI_HIDDEN_POLL_MS
+        self.root.after(delay, self._dpi_tick)
 
     @staticmethod
     def _is_night_time() -> bool:
@@ -2060,7 +2104,7 @@ class SvnAutoTool:
                 if now.hour == hour and now.minute == minute and self.last_scheduled_key != schedule_key:
                     self.last_scheduled_key = schedule_key
                     self._start_worker(trigger="定时执行")
-        self.root.after(1000, self._schedule_tick)
+        self.root.after(SCHEDULE_POLL_MS, self._schedule_tick)
 
     def _run_now(self) -> None:
         self._start_worker(trigger="手动执行")
@@ -2900,7 +2944,12 @@ class SvnAutoTool:
             self._log("全部任务已完成")
             self.live_log.configure(style="Completed.LiveLog.Treeview")
             self._fade_out_music_after_tasks()
-        self.root.after(200, self._poll_log_queue)
+        delay = (
+            LOG_ACTIVE_POLL_MS
+            if self.running or not self.log_queue.empty()
+            else LOG_IDLE_POLL_MS
+        )
+        self.root.after(delay, self._poll_log_queue)
 
     def _open_log_folder(self) -> None:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -2915,11 +2964,15 @@ class SvnAutoTool:
 
     def _poll_tray_actions(self) -> None:
         self.tray_icon.process_pending_actions()
-        self.root.after(100, self._poll_tray_actions)
+        self.root.after(TRAY_ACTION_POLL_MS, self._poll_tray_actions)
 
     def _hide_to_tray(self) -> None:
-        if not self.tray_icon.available:
-            self._exit_application()
+        if not self.tray_icon.ensure_visible():
+            self._log("系统托盘图标不可用，已取消隐藏主窗口。")
+            messagebox.showwarning(
+                "无法隐藏到托盘",
+                "系统托盘图标暂时不可用，主窗口将保持打开。",
+            )
             return
         self.root.withdraw()
 

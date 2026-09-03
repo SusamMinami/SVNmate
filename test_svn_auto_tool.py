@@ -36,7 +36,7 @@ class ReleaseConfigTests(unittest.TestCase):
     def test_release_asset_name_is_stable_and_url_safe(self) -> None:
         self.assertEqual(RELEASE_ASSET_NAME, "SVNmate.zip")
         asset_url = RELEASE_DOWNLOAD_URL.format(tag=APP_VERSION, asset=RELEASE_ASSET_NAME)
-        self.assertTrue(asset_url.endswith("/v1.4.2/SVNmate.zip"))
+        self.assertTrue(asset_url.endswith("/v1.4.3/SVNmate.zip"))
 
 
 class ToolModuleIntegrationTests(unittest.TestCase):
@@ -197,6 +197,46 @@ class TrayInteractionTests(unittest.TestCase):
 
         self.assertEqual(result, 0)
         self.assertEqual(tray._actions.get_nowait(), "show")
+
+    def test_taskbar_recreation_registers_the_icon_again(self) -> None:
+        tray = WindowsTrayIcon.__new__(WindowsTrayIcon)
+        tray._activate_message = 43210
+        tray._taskbar_created_message = 54321
+        tray.available = False
+
+        with patch.object(tray, "_add_icon", return_value=True) as add_icon:
+            result = tray._window_proc(0, 54321, 0, 0)
+
+        self.assertEqual(result, 0)
+        self.assertTrue(tray.available)
+        add_icon.assert_called_once_with()
+
+    def test_hide_to_tray_checks_icon_before_hiding_window(self) -> None:
+        tool = SvnAutoTool.__new__(SvnAutoTool)
+        tool.root = Mock()
+        tool.tray_icon = Mock()
+        tool.tray_icon.ensure_visible.return_value = True
+
+        tool._hide_to_tray()
+
+        tool.tray_icon.ensure_visible.assert_called_once_with()
+        tool.root.withdraw.assert_called_once_with()
+
+    def test_hide_to_tray_keeps_window_open_when_icon_is_unavailable(self) -> None:
+        tool = SvnAutoTool.__new__(SvnAutoTool)
+        tool.root = Mock()
+        tool.tray_icon = Mock()
+        tool.tray_icon.ensure_visible.return_value = False
+
+        with (
+            patch.object(tool, "_log") as log,
+            patch("svn_auto_tool.messagebox.showwarning") as showwarning,
+        ):
+            tool._hide_to_tray()
+
+        tool.root.withdraw.assert_not_called()
+        log.assert_called_once()
+        showwarning.assert_called_once()
 
     def test_double_click_hides_window_when_it_is_visible(self) -> None:
         tool = SvnAutoTool.__new__(SvnAutoTool)
