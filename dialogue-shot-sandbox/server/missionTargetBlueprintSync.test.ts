@@ -309,7 +309,12 @@ class BackgroundPropConnection extends BlueprintSyncConnection {
       this.calls.push({ action, args });
       const name = object.slice("Template_BG_".length);
       const component = this.backgroundComponents.get(name)!;
-      if (property === "SkeletalMesh" || property === "StaticMesh") {
+      if (
+        property === "SkeletalMesh" ||
+        property === "StaticMesh" ||
+        property === "Template" ||
+        property === "Asset"
+      ) {
         return component.assetPath;
       }
       if (property === "ChildActorClass") {
@@ -347,7 +352,9 @@ class BackgroundPropConnection extends BlueprintSyncConnection {
       if (
         property === "SkeletalMesh" ||
         property === "StaticMesh" ||
-        property === "ChildActorClass"
+        property === "ChildActorClass" ||
+        property === "Template" ||
+        property === "Asset"
       ) {
         component.assetPath = String(args.Value);
       }
@@ -1300,6 +1307,110 @@ describe("background prop import", () => {
       blueprintAssetPath: connection.blueprintAssetPath,
       createdComponentNames: ["SK_Banner"],
       saved: true,
+    });
+  });
+
+  it("writes selected Cascade and Niagara effects as BP components", async () => {
+    await writeConfigFixture();
+    const connection = new TaskActorBackgroundPropConnection();
+    connection.selectedPlacementActors = [
+      {
+        actor_ref: "PersistentLevel.BP_Shared_C_0",
+        label: "BP_Shared",
+        class_path: connection.blueprintClassPath,
+        skeletal_mesh_path: "",
+        static_mesh_path: "",
+        location: [100, 200, 200],
+        rotation: [0, 0, 0],
+        scale: [1, 1, 1],
+      },
+      {
+        actor_ref: "PersistentLevel.Emitter_1",
+        label: "PS_Scene_96_01_AncientRuins_Smoke_04",
+        class_path: "/Script/Engine.Emitter",
+        skeletal_mesh_path: "",
+        static_mesh_path: "",
+        particle_system_path:
+          "/Game/Test/FX/PS_Scene_96_01_AncientRuins_Smoke_04.PS_Scene_96_01_AncientRuins_Smoke_04",
+        location: [130, 260, 340],
+        rotation: [0, 45, 0],
+        scale: [1.5, 0.75, 2],
+      },
+      {
+        actor_ref: "PersistentLevel.NiagaraActor_1",
+        label: "NS_Dust",
+        class_path: "/Script/Niagara.NiagaraActor",
+        skeletal_mesh_path: "",
+        static_mesh_path: "",
+        niagara_system_path: "/Game/Test/FX/NS_Dust.NS_Dust",
+        location: [90, 180, 300],
+        rotation: [0, -20, 0],
+        scale: [0.9, 0.9, 0.9],
+      },
+    ];
+    const reviewedActorRefs = connection.selectedPlacementActors.map(
+      (actor) => String(actor.actor_ref),
+    );
+
+    const preview = await inspectBackgroundPropImport(
+      {
+        blueprintName: connection.blueprintAssetPath,
+        actorRefs: reviewedActorRefs,
+      },
+      () => connection,
+    );
+
+    expect(preview.blockedReasons).toEqual([]);
+    expect(preview.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          actorLabel: "PS_Scene_96_01_AncientRuins_Smoke_04",
+          assetKind: "particle_system",
+          componentName: "PS_Scene_96_01_AncientRuins_Smoke_04",
+          componentClass: "/Script/Engine.ParticleSystemComponent",
+          assetPropertyName: "Template",
+          action: "create",
+        }),
+        expect.objectContaining({
+          actorLabel: "NS_Dust",
+          assetKind: "niagara_system",
+          componentName: "NS_Dust",
+          componentClass: "/Script/Niagara.NiagaraComponent",
+          assetPropertyName: "Asset",
+          action: "create",
+        }),
+      ]),
+    );
+
+    const result = await applyBackgroundPropImport(
+      {
+        blueprintName: connection.blueprintAssetPath,
+        reviewToken: preview.reviewToken,
+        selectedActorRefs: [
+          "PersistentLevel.Emitter_1",
+          "PersistentLevel.NiagaraActor_1",
+        ],
+        reviewedActorRefs,
+      },
+      () => connection,
+    );
+
+    expect(result.createdComponentNames).toEqual([
+      "PS_Scene_96_01_AncientRuins_Smoke_04",
+      "NS_Dust",
+    ]);
+    expect(
+      connection.backgroundComponents.get(
+        "PS_Scene_96_01_AncientRuins_Smoke_04",
+      ),
+    ).toMatchObject({
+      componentClass: "/Script/Engine.ParticleSystemComponent",
+      assetPath:
+        "/Game/Test/FX/PS_Scene_96_01_AncientRuins_Smoke_04.PS_Scene_96_01_AncientRuins_Smoke_04",
+    });
+    expect(connection.backgroundComponents.get("NS_Dust")).toMatchObject({
+      componentClass: "/Script/Niagara.NiagaraComponent",
+      assetPath: "/Game/Test/FX/NS_Dust.NS_Dust",
     });
   });
 

@@ -278,6 +278,8 @@ BP 输入框右侧的检查按钮会读取 BP、对应数字槽位、同名 Dial
 - Blueprint Actor 写为 `ChildActorComponent` 和对应 Generated Class。
 - SkeletalMeshActor 写为 `SkeletalMeshComponent` 和实际 Skeletal Mesh。
 - StaticMeshActor 写为 `StaticMeshComponent` 和实际 Static Mesh。
+- Cascade Emitter 写为 `ParticleSystemComponent` 和实际 Particle System。
+- Niagara Actor 写为 `NiagaraComponent` 和实际 Niagara System。
 - 其他 Actor 显示为不支持，不参与写入。
 - 任务节点与对话节点都为空时，工具按 BP 父类分流。`TaskActorBase` 不要求
   BP 文件名包含对话数字 ID，优先使用 UE 当前选择中的目标 BP Actor 作为

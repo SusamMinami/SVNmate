@@ -160,6 +160,12 @@ function backgroundPropKindLabel(
   if (kind === "static_mesh") {
     return "Static Mesh";
   }
+  if (kind === "particle_system") {
+    return "Cascade 特效";
+  }
+  if (kind === "niagara_system") {
+    return "Niagara 特效";
+  }
   return "不支持";
 }
 

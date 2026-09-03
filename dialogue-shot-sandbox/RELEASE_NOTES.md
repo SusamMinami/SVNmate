@@ -1,3 +1,14 @@
+# 镜头沙盘 v0.22.18
+
+## 任务目标物特效写入
+
+- UE 选择中的 Cascade Particle System 与 Niagara System 现可作为支持类型
+  写入 BP。
+- 特效组件沿用原资产名，并完整保留位置、旋转和缩放；写入后继续执行组件类型、
+  资产路径与 Transform 回读校验。
+
+---
+
 # 镜头沙盘 v0.22.17
 
 ## TaskActorBase 检查修复

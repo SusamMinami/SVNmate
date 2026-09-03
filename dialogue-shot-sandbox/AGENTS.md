@@ -97,8 +97,9 @@
 - 任务目标物工作区的“读取 UE 选择”先匹配当前任务目标物并用匹配结果替换
   可追加项勾选；精确预览名称优先，随后按模型类路径和世界坐标消歧。只有
   未匹配 Actor 才进入非数字 BP 组件审核；该路径不修改目标物表或
-  DialogModels，且 Blueprint、Skeletal Mesh 和 Static Mesh 必须保留原名与
-  完整 Transform，同名冲突不得自动改名。
+  DialogModels，且 Blueprint、Skeletal Mesh、Static Mesh、Cascade Particle
+  System 和 Niagara System 必须保留原名与完整 Transform，同名冲突不得自动
+  改名。
 - 任务节点与对话节点都为空时，非数字 BP 组件审核必须按 BP 父类分流：
   `TaskActorBase` 使用 UE 当前选择中的目标 BP Actor，或当前关卡中的唯一同类
   实例，确定世界 Transform 后直接写入；`PositionModeBase` 继续查找对应对话

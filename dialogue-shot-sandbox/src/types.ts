@@ -599,6 +599,8 @@ export interface SelectedLevelActor {
     | "blueprint_actor"
     | "skeletal_mesh"
     | "static_mesh"
+    | "particle_system"
+    | "niagara_system"
     | "unsupported";
   assetPath?: string;
   transform: UnrealTransform;
@@ -616,6 +618,8 @@ export interface BackgroundPropPreviewItem {
     | "blueprint_actor"
     | "skeletal_mesh"
     | "static_mesh"
+    | "particle_system"
+    | "niagara_system"
     | "unsupported";
   assetPath: string;
   componentName: string;

@@ -83,6 +83,9 @@ const CAMERA_COMPONENT_CLASS = "/Script/Engine.CameraComponent";
 const SKELETAL_MESH_COMPONENT_CLASS =
   "/Script/Engine.SkeletalMeshComponent";
 const STATIC_MESH_COMPONENT_CLASS = "/Script/Engine.StaticMeshComponent";
+const PARTICLE_SYSTEM_COMPONENT_CLASS =
+  "/Script/Engine.ParticleSystemComponent";
+const NIAGARA_COMPONENT_CLASS = "/Script/Niagara.NiagaraComponent";
 const DIALOGUE_SEARCH_PATH = "/Game/Seria/Task/dialoggraph";
 const SOUND_EFFECT_SEARCH_PATH = "/Game/Seria/WwiseSoundData/Events";
 const DIALOG_NPC_TABLE_PATH =
@@ -973,6 +976,28 @@ async function readBlueprintComponents(
           connection,
           String(componentTemplate),
           "StaticMesh",
+        )) ?? "",
+      );
+    } else if (
+      componentClass.endsWith("ParticleSystemComponent") &&
+      hasUnrealObjectReference(componentTemplate)
+    ) {
+      sourceAssetPath = String(
+        (await readProperty(
+          connection,
+          String(componentTemplate),
+          "Template",
+        )) ?? "",
+      );
+    } else if (
+      componentClass.endsWith("NiagaraComponent") &&
+      hasUnrealObjectReference(componentTemplate)
+    ) {
+      sourceAssetPath = String(
+        (await readProperty(
+          connection,
+          String(componentTemplate),
+          "Asset",
         )) ?? "",
       );
     }
@@ -6375,6 +6400,8 @@ function parseLevelActors(
       class_path?: unknown;
       skeletal_mesh_path?: unknown;
       static_mesh_path?: unknown;
+      particle_system_path?: unknown;
+      niagara_system_path?: unknown;
       location?: unknown[];
       rotation?: unknown[];
       scale?: unknown[];
@@ -6394,6 +6421,8 @@ function parseLevelActors(
     const classPath = String(actor.class_path);
     const skeletalMeshPath = String(actor.skeletal_mesh_path ?? "");
     const staticMeshPath = String(actor.static_mesh_path ?? "");
+    const particleSystemPath = String(actor.particle_system_path ?? "");
+    const niagaraSystemPath = String(actor.niagara_system_path ?? "");
     const blueprintActor =
       classPath.startsWith("/Game/") && classPath.endsWith("_C");
     const assetKind = blueprintActor
@@ -6402,7 +6431,11 @@ function parseLevelActors(
         ? "skeletal_mesh" as const
         : staticMeshPath
           ? "static_mesh" as const
-          : "unsupported" as const;
+          : particleSystemPath
+            ? "particle_system" as const
+            : niagaraSystemPath
+              ? "niagara_system" as const
+              : "unsupported" as const;
     return {
       actorRef: String(actor.actor_ref),
       label: String(actor.label || `Actor ${index + 1}`),
@@ -6410,7 +6443,10 @@ function parseLevelActors(
       assetKind,
       assetPath: blueprintActor
         ? blueprintAssetPath(classPath)
-        : skeletalMeshPath || staticMeshPath,
+        : skeletalMeshPath ||
+          staticMeshPath ||
+          particleSystemPath ||
+          niagaraSystemPath,
       transform: {
         location: {
           x: values[0],
@@ -6436,6 +6472,8 @@ const LEVEL_ACTOR_JSON_FIELDS =
   "{'actor_ref': a.get_path_name(), 'label': a.get_actor_label(), 'class_path': a.get_class().get_path_name(), " +
   "'skeletal_mesh_path': (a.get_component_by_class(unreal.SkeletalMeshComponent).get_editor_property('skeletal_mesh').get_path_name() if a.get_component_by_class(unreal.SkeletalMeshComponent) and a.get_component_by_class(unreal.SkeletalMeshComponent).get_editor_property('skeletal_mesh') else ''), " +
   "'static_mesh_path': (a.get_component_by_class(unreal.StaticMeshComponent).get_editor_property('static_mesh').get_path_name() if a.get_component_by_class(unreal.StaticMeshComponent) and a.get_component_by_class(unreal.StaticMeshComponent).get_editor_property('static_mesh') else ''), " +
+  "'particle_system_path': (a.get_component_by_class(unreal.ParticleSystemComponent).get_editor_property('template').get_path_name() if a.get_component_by_class(unreal.ParticleSystemComponent) and a.get_component_by_class(unreal.ParticleSystemComponent).get_editor_property('template') else ''), " +
+  "'niagara_system_path': ((a.get_component_by_class(unreal.NiagaraComponent).get_editor_property('asset').get_path_name() if a.get_component_by_class(unreal.NiagaraComponent) and a.get_component_by_class(unreal.NiagaraComponent).get_editor_property('asset') else '') if getattr(unreal, 'NiagaraComponent', None) else ''), " +
   "'location': [a.get_actor_location().x, a.get_actor_location().y, a.get_actor_location().z], " +
   "'rotation': [a.get_actor_rotation().pitch, a.get_actor_rotation().yaw, a.get_actor_rotation().roll], " +
   "'scale': [a.get_actor_scale3d().x, a.get_actor_scale3d().y, a.get_actor_scale3d().z]}";
@@ -6569,6 +6607,20 @@ function backgroundPropComponentSpec(actor: SelectedLevelActor): {
     return {
       componentClass: STATIC_MESH_COMPONENT_CLASS,
       assetPropertyName: "StaticMesh",
+      assetValue: actor.assetPath,
+    };
+  }
+  if (actor.assetKind === "particle_system" && actor.assetPath) {
+    return {
+      componentClass: PARTICLE_SYSTEM_COMPONENT_CLASS,
+      assetPropertyName: "Template",
+      assetValue: actor.assetPath,
+    };
+  }
+  if (actor.assetKind === "niagara_system" && actor.assetPath) {
+    return {
+      componentClass: NIAGARA_COMPONENT_CLASS,
+      assetPropertyName: "Asset",
       assetValue: actor.assetPath,
     };
   }
@@ -6751,7 +6803,8 @@ async function prepareBackgroundPropImport(
         message = "目标 BP Actor 本身不会作为背景资产导入";
       } else if (!spec || !componentName) {
         action = "blocked";
-        message = "仅支持 Blueprint Actor、Skeletal Mesh 和 Static Mesh";
+        message =
+          "仅支持 Blueprint Actor、Skeletal Mesh、Static Mesh 和粒子特效";
       } else if (!/^[A-Za-z0-9_]+$/.test(componentName)) {
         action = "blocked";
         message = `资产名 ${componentName} 不能直接作为 BP 组件名`;
