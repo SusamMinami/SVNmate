@@ -1,4 +1,6 @@
-# 开发中
+# 一键更新SVN v1.4.4
+
+本版本正式发布 SVNmate 外部更新接口与迁移核验助手模块，并补齐独立在线更新通道。
 
 - 抽取无界面的 `svnmate_core`，统一负责 Update、Cleanup 和单次重试。
 - SVNmate 常驻时开放 Windows Named Pipe，允许迁移核验助手请求更新指定目录。
@@ -23,6 +25,10 @@
 - 海外 OB 流程在国内到海外 trunk 复核通过后，自动继续海外 trunk 到 OSOB，
   第一阶段未完成时不会误启动第二阶段。
 - 新增 `migration-guard-latest` 独立发布通道，SVNmate 可单独安装和更新该模块。
+- MigrationGuard v1.0.1 在更新前先从提交记录发现本批次文件，只检查并更新落后的
+  文件目录；无需再更新整个 trunk 工作副本。
+- MigrationGuard 增加固定阶段进度条；复核完成的文件持续标绿，整批完成后进度条
+  转为绿色，存在待处理项或失败时分别显示橙色或红色。
 
 # 一键更新SVN v1.4.3
 

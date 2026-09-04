@@ -30,6 +30,7 @@ IPC 和无进程回退都使用同一套 core，因此不会复制 Update/Cleanu
 - `migration_guard/app.py`：Windows 桌面界面、筛选、详情和 JSON 导出。
 - `migration_guard/ticket_mapping.py`：飞书合并表读取、SERIA/OSCOA 双向映射、路线
   分段和离线缓存。
+- `migration_guard/selective_update.py`：按源清单和远端状态生成最小更新目录集合。
 - `migration_guard/ue_client.py`：OmniMcpCore 长度前缀协议和 UE 工程校验。
 - `migration_guard/batch_workflow.py`：资源去重与用户选择、海外 Jira 提交分组和
   窗口等待。
@@ -318,6 +319,11 @@ svn cleanup <working-copy>
 
 Update 失败后只 Cleanup 和重试一次。默认不使用 `--break-locks`；只有用户明确选择
 强制恢复时才调用 TortoiseSVN 的对应能力。
+
+迁移核验助手不会默认更新整个模块根目录。它先读取提交日志形成源清单，再对清单文件
+执行 `svn status --show-updates`，只更新落后文件所在的最近存在目录。目标侧只处理
+核验状态为“需更新”的路径。候选目录会去重并消除被父目录覆盖的子目录；无法定位
+路径或候选数超过 IPC 上限时，才保守回退到模块根目录。
 
 ### 源单扫描
 

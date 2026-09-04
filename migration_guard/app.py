@@ -50,6 +50,7 @@ from .models import (
     VerificationState,
     WorkspaceModule,
 )
+from .selective_update import SelectiveUpdatePlanner
 from .svn_client import SvnClient
 from .svn_update_client import MigrationUpdateClient
 from .ticket_mapping import (
@@ -151,6 +152,8 @@ class MigrationGuardApp:
         }
         self.filter_state = StringVar(value="全部")
         self.status_text = StringVar(value="就绪")
+        self.workflow_stage_text = StringVar(value="未开始")
+        self.workflow_progress = IntVar(value=0)
         self.summary_text = {
             "all": StringVar(value="0"),
             VerificationState.NOT_MIGRATED.value: StringVar(value="0"),
@@ -265,6 +268,26 @@ class MigrationGuardApp:
             foreground="#344054",
             font=("Segoe UI Semibold", 10),
             padding=(6, 6),
+        )
+        style.configure(
+            "Workflow.Horizontal.TProgressbar",
+            troughcolor="#E5E7EB",
+            background="#2563EB",
+        )
+        style.configure(
+            "WorkflowSuccess.Horizontal.TProgressbar",
+            troughcolor="#DCFCE7",
+            background="#15803D",
+        )
+        style.configure(
+            "WorkflowWarning.Horizontal.TProgressbar",
+            troughcolor="#FEF3C7",
+            background="#B45309",
+        )
+        style.configure(
+            "WorkflowError.Horizontal.TProgressbar",
+            troughcolor="#FEE2E2",
+            background="#B42318",
         )
 
     def _build_ui(self) -> None:
@@ -650,7 +673,7 @@ class MigrationGuardApp:
         self.detail.configure(state="disabled")
 
         footer = ttk.Frame(container, style="App.TFrame")
-        footer.pack(fill=X, pady=(6, 0))
+        footer.pack(fill=X, pady=(6, 0), before=body)
         self.export_button = ttk.Button(
             footer,
             text="导出结果",
@@ -659,6 +682,20 @@ class MigrationGuardApp:
             state="disabled",
         )
         self.export_button.pack(side=RIGHT)
+        self.workflow_progress_bar = ttk.Progressbar(
+            footer,
+            variable=self.workflow_progress,
+            maximum=100,
+            mode="determinate",
+            length=190,
+            style="Workflow.Horizontal.TProgressbar",
+        )
+        self.workflow_progress_bar.pack(side=RIGHT, padx=(8, 12))
+        ttk.Label(
+            footer,
+            textvariable=self.workflow_stage_text,
+            style="Muted.TLabel",
+        ).pack(side=RIGHT)
         ttk.Label(
             footer,
             textvariable=self.status_text,
@@ -1473,6 +1510,7 @@ class MigrationGuardApp:
         self.current_result = None
         self._set_action_buttons("disabled")
         label = "批量更新并核验" if update_first else "批量核验"
+        self._reset_workflow_progress(label)
         self.status_text.set(f"{label}中...")
         self._set_detail(
             f"{label}：{len(mappings)} 条任务，请稍候。"
@@ -1502,25 +1540,6 @@ class MigrationGuardApp:
         update_first: bool,
     ) -> None:
         try:
-            if update_first:
-                folders = [
-                    path
-                    for module in modules
-                    for path in (module.source_path, module.target_path)
-                ]
-                update_result = MigrationUpdateClient(
-                    log=self._queue_log,
-                ).update_folders(folders)
-                self.events.put(("update-result", update_result))
-                if not update_result.get("ok"):
-                    raise RuntimeError(
-                        str(
-                            update_result.get(
-                                "message",
-                                "工作区更新未全部成功",
-                            )
-                        )
-                    )
             service = MigrationAuditService(
                 svn=SvnClient(log=self._queue_log),
                 progress=lambda stage, message: self.events.put(
@@ -1528,18 +1547,77 @@ class MigrationGuardApp:
                 ),
                 include_externals=include_externals,
             )
-            result = service.audit_batch(
-                modules,
-                tuple(
-                    MigrationCase(
-                        item.source_issue,
-                        item.target_issue,
-                        item.target_text or item.source_text,
-                    )
-                    for item in mappings
-                ),
-                lookback_days=lookback_days,
+            cases = tuple(
+                MigrationCase(
+                    item.source_issue,
+                    item.target_issue,
+                    item.target_text or item.source_text,
+                )
+                for item in mappings
             )
+            if update_first:
+                self.events.put(
+                    (
+                        "progress",
+                        (
+                            "selective-discovery",
+                            "先扫描本批次文件，规划精细更新范围",
+                        ),
+                    )
+                )
+                initial_result = service.audit_batch(
+                    modules,
+                    cases,
+                    lookback_days=lookback_days,
+                )
+                planner = SelectiveUpdatePlanner(service.svn)
+                self.events.put(
+                    (
+                        "progress",
+                        (
+                            "selective-status",
+                            "检查源文件是否落后于仓库",
+                        ),
+                    )
+                )
+                update_plan = planner.build(initial_result, modules)
+                self.events.put(("update-plan", update_plan))
+                if not update_plan.empty:
+                    update_result = MigrationUpdateClient(
+                        log=self._queue_log,
+                    ).update_folders(update_plan.targets)
+                    self.events.put(("update-result", update_result))
+                    if not update_result.get("ok"):
+                        raise RuntimeError(
+                            str(
+                                update_result.get(
+                                    "message",
+                                    "精细更新未全部成功",
+                                )
+                            )
+                        )
+                    self.events.put(
+                        (
+                            "progress",
+                            (
+                                "selective-verify",
+                                "精细更新完成，重新核验全部文件",
+                            ),
+                        )
+                    )
+                    result = service.audit_batch(
+                        modules,
+                        cases,
+                        lookback_days=lookback_days,
+                    )
+                else:
+                    result = initial_result
+            else:
+                result = service.audit_batch(
+                    modules,
+                    cases,
+                    lookback_days=lookback_days,
+                )
             self.events.put(("audit-result", result))
         except Exception as exc:
             self.events.put(("error", str(exc)))
@@ -1628,6 +1706,7 @@ class MigrationGuardApp:
         self.task_failed = False
         self.active_task = "migration"
         self._set_action_buttons("disabled")
+        self._reset_workflow_progress("批量迁移")
         self.status_text.set("批量迁移：重新确认源清单")
         self._set_detail(
             f"批量流水线已启动：{len(stage_mappings)} 条任务。"
@@ -2204,6 +2283,7 @@ class MigrationGuardApp:
         self.active_task = "audit"
         self.current_result = None
         self._set_action_buttons("disabled")
+        self._reset_workflow_progress(label)
         self.status_text.set(f"{label}中...")
         self._set_detail(f"{label}中，请稍候。")
         self._show_progress_row(f"{label}：准备中")
@@ -2383,6 +2463,58 @@ class MigrationGuardApp:
             values=values,
         )
 
+    def _reset_workflow_progress(self, label: str) -> None:
+        self.workflow_progress.set(0)
+        self.workflow_stage_text.set(label)
+        self.workflow_progress_bar.configure(
+            style="Workflow.Horizontal.TProgressbar"
+        )
+
+    def _update_workflow_progress(
+        self,
+        stage: str,
+        message: str,
+    ) -> None:
+        progress_by_stage = {
+            "selective-discovery": 5,
+            "workspace": 10,
+            "source-log": 20,
+            "target-log": 32,
+            "target-status": 40,
+            "selective-status": 48,
+            "selective-update": 58,
+            "selective-verify": 64,
+            "preflight": 12,
+            "migrate": 44,
+            "checkout-scan": 60,
+            "checkout": 76,
+            "verify": 90,
+            "osob-preflight": 8,
+        }
+        value = progress_by_stage.get(stage)
+        if value is not None:
+            self.workflow_progress.set(value)
+        self.workflow_stage_text.set(message[:42])
+
+    def _finish_workflow_progress(
+        self,
+        *,
+        complete: bool,
+        failed: bool = False,
+    ) -> None:
+        self.workflow_progress.set(100)
+        if failed:
+            style = "WorkflowError.Horizontal.TProgressbar"
+            label = "执行失败"
+        elif complete:
+            style = "WorkflowSuccess.Horizontal.TProgressbar"
+            label = "全部完成"
+        else:
+            style = "WorkflowWarning.Horizontal.TProgressbar"
+            label = "仍有待处理项"
+        self.workflow_progress_bar.configure(style=style)
+        self.workflow_stage_text.set(label)
+
     def _poll_events(self) -> None:
         try:
             while True:
@@ -2390,6 +2522,10 @@ class MigrationGuardApp:
                 if event == "progress":
                     stage, message = payload
                     self.status_text.set(str(message))
+                    self._update_workflow_progress(
+                        str(stage),
+                        str(message),
+                    )
                     if self.active_task in {"audit", "migration"}:
                         self._show_progress_row(
                             str(message),
@@ -2407,7 +2543,28 @@ class MigrationGuardApp:
                         else "内置核心"
                     )
                     self.status_text.set(f"{owner}更新完成")
+                    self._update_workflow_progress(
+                        "selective-update",
+                        f"{owner}精细更新完成",
+                    )
                     self._show_progress_row(f"{owner}更新完成")
+                elif event == "update-plan":
+                    plan = payload
+                    message = (
+                        f"精细更新 {len(plan.targets)} 个目录"
+                        f"（源落后 {plan.stale_source_count}，"
+                        f"目标落后 {plan.stale_target_count}）"
+                    )
+                    if plan.empty:
+                        message = (
+                            f"已检查 {plan.source_path_count} 个源文件，"
+                            "均为最新"
+                        )
+                    self.status_text.set(message)
+                    self._update_workflow_progress(
+                        "selective-status",
+                        message,
+                    )
                 elif event == "audit-result":
                     self.current_result = payload
                     self._render_result(payload)
@@ -2459,6 +2616,7 @@ class MigrationGuardApp:
                 elif event == "pipeline-cancelled":
                     self.task_failed = True
                     self.status_text.set("第二阶段已取消")
+                    self._finish_workflow_progress(complete=False)
                 elif event == "error":
                     self.task_failed = True
                     self.status_text.set("执行失败")
@@ -2468,6 +2626,10 @@ class MigrationGuardApp:
                             state="失败",
                         )
                     self._set_detail(str(payload))
+                    self._finish_workflow_progress(
+                        complete=False,
+                        failed=True,
+                    )
                     messagebox.showerror("执行失败", str(payload))
                 elif event == "done":
                     self.busy = False
@@ -2485,6 +2647,9 @@ class MigrationGuardApp:
                             if self.current_result.complete
                             else "核验完成，存在待处理项"
                         )
+                        self._finish_workflow_progress(
+                            complete=self.current_result.complete
+                        )
                     elif (
                         finished_task == "migration"
                         and payload == "migration"
@@ -2495,6 +2660,9 @@ class MigrationGuardApp:
                             "批量迁移与复核完成"
                             if self.current_result.complete
                             else "批量迁移完成，仍有待处理项"
+                        )
+                        self._finish_workflow_progress(
+                            complete=self.current_result.complete
                         )
         except queue.Empty:
             pass

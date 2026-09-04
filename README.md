@@ -60,6 +60,13 @@ result = update_working_copies(
 外部请求只执行指定目录的 SVN 更新和失败恢复，不会运行 SVNmate 中配置的
 `Update.bat`、`Build.bat` 或每日任务。
 
+## v1.4.4 更新摘要
+
+- 正式提供 Named Pipe 外部更新接口和共享 `svnmate_core`。
+- 新增并发布迁移核验助手，支持通过独立通道安装和更新。
+- 迁移核验助手按单据提交记录发现文件，仅更新落后的相关目录。
+- 增加迁移阶段进度条、逐文件绿色完成状态和 checkout 后完整复核。
+
 ## v1.4.3 更新摘要
 
 - Explorer 重启后自动重新注册 SVNmate 托盘图标。

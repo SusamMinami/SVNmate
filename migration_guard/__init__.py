@@ -11,6 +11,7 @@ from .models import (
     VerificationState,
     WorkspaceModule,
 )
+from .selective_update import SelectiveUpdatePlan, SelectiveUpdatePlanner
 from .svn_update_client import MigrationUpdateClient, update_working_copies
 from .ticket_mapping import (
     LarkTicketSheetClient,
@@ -33,6 +34,8 @@ __all__ = [
     "MigrationAuditService",
     "MigrationCase",
     "MigrationUpdateClient",
+    "SelectiveUpdatePlan",
+    "SelectiveUpdatePlanner",
     "TicketMapping",
     "TicketRoute",
     "TicketSheetSnapshot",

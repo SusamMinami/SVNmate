@@ -2,7 +2,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from migration_guard.config import (
     WORKSPACE_DOMESTIC,
@@ -283,6 +283,130 @@ class MigrationGuardUiSmokeTests(unittest.TestCase):
             )
             self.assertEqual(app.source_root.get(), r"D:\Oversea\OStrunk")
             self.assertEqual(app.target_root.get(), r"D:\Oversea\OSOB")
+        finally:
+            _destroy_root(root)
+
+    def test_batch_update_uses_selective_plan_then_reaudits(self) -> None:
+        from tkinter import Tk
+
+        from migration_guard.app import MigrationGuardApp
+        from migration_guard.models import (
+            BatchMigrationAuditResult,
+            WorkspaceModule,
+        )
+        from migration_guard.selective_update import SelectiveUpdatePlan
+        from migration_guard.ticket_mapping import (
+            TicketMapping,
+            TicketRoute,
+        )
+
+        root = Tk()
+        root.withdraw()
+        try:
+            with patch(
+                "migration_guard.app.load_config",
+                return_value=MigrationGuardConfig(),
+            ):
+                app = MigrationGuardApp(root)
+            module = WorkspaceModule(
+                "res",
+                Path(r"C:\source\res"),
+                Path(r"D:\target\res"),
+            )
+            mapping = TicketMapping(
+                "SERIA-10",
+                "OSCOA-20",
+                TicketRoute.DOMESTIC_TO_OVERSEAS,
+                1,
+                "source",
+                "target",
+                "raw",
+            )
+            result = BatchMigrationAuditResult(
+                started_at="start",
+                finished_at="finish",
+                cases=(),
+            )
+            audit_service = Mock()
+            audit_service.svn = Mock()
+            audit_service.audit_batch.side_effect = (result, result)
+            plan = SelectiveUpdatePlan(
+                targets=(Path(r"C:\source\res\Content\Game"),),
+                source_path_count=1,
+                stale_source_count=1,
+                stale_target_count=0,
+                fallback_count=0,
+            )
+            planner = Mock()
+            planner.build.return_value = plan
+            update_client = Mock()
+            update_client.update_folders.return_value = {
+                "ok": True,
+                "executed_by": "svnmate",
+                "status": "completed",
+            }
+
+            with (
+                patch(
+                    "migration_guard.app.MigrationAuditService",
+                    return_value=audit_service,
+                ),
+                patch(
+                    "migration_guard.app.SelectiveUpdatePlanner",
+                    return_value=planner,
+                ),
+                patch(
+                    "migration_guard.app.MigrationUpdateClient",
+                    return_value=update_client,
+                ),
+            ):
+                app._run_batch_background(
+                    (module,),
+                    (mapping,),
+                    90,
+                    False,
+                    True,
+                )
+
+            self.assertEqual(audit_service.audit_batch.call_count, 2)
+            planner.build.assert_called_once_with(result, (module,))
+            update_client.update_folders.assert_called_once_with(
+                plan.targets
+            )
+            events = []
+            while not app.events.empty():
+                events.append(app.events.get_nowait()[0])
+            self.assertIn("update-plan", events)
+            self.assertIn("update-result", events)
+            self.assertIn("audit-result", events)
+        finally:
+            _destroy_root(root)
+
+    def test_progress_bar_uses_completion_color(self) -> None:
+        from tkinter import Tk
+
+        from migration_guard.app import MigrationGuardApp
+
+        root = Tk()
+        root.withdraw()
+        try:
+            with patch(
+                "migration_guard.app.load_config",
+                return_value=MigrationGuardConfig(),
+            ):
+                app = MigrationGuardApp(root)
+
+            app._reset_workflow_progress("核验")
+            app._update_workflow_progress("verify", "最终复核")
+            self.assertEqual(app.workflow_progress.get(), 90)
+            app._finish_workflow_progress(complete=True)
+
+            self.assertEqual(app.workflow_progress.get(), 100)
+            self.assertEqual(app.workflow_stage_text.get(), "全部完成")
+            self.assertEqual(
+                app.workflow_progress_bar.cget("style"),
+                "WorkflowSuccess.Horizontal.TProgressbar",
+            )
         finally:
             _destroy_root(root)
 
