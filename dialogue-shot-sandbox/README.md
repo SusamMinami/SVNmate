@@ -1,4 +1,4 @@
-# 镜头沙盘 v0.23.0
+# 镜头沙盘 v0.24.0
 
 面向 UE4 镜头对话制作的 Three.js 原型。输入四位数对话 ID 或对白文字，工具从
 配置的 `res` 与 `doc` 数据源读取真实对话链，通过规则导演、内部 TRAE 协作或
@@ -38,6 +38,9 @@ Mira AI 生成 2-12 人分镜。
 “NPC 迁移”工作区把美术 UE 中的 Skeletal Mesh、依赖资源和动作文件迁入
 策划 UE，并生成可直接检查的 NPC BP、动画蓝图和动作资产。
 
+进入工作区后先选择“全新 NPC”“动作补充与修改”或“面部补充”。后两种模式
+直接处理策划 UE 中的已有 NPC，不重复执行模型依赖迁移和 BP/ABP 创建。
+
 1. 启动美术 UE 与 `OmniMcpCore`，在内容浏览器中只选择一个 `SK_` 资产。
 2. 点击“读取源资产”，确认自动提取的 NPC 名称；BP 与 ABP 名称随之派生。
 3. 选择策划工程的 `Content` 目录，以及当前 NPC 的动作 FBX 目录。
@@ -56,8 +59,14 @@ Mira AI 生成 2-12 人分镜。
 - 创建 `BS_<NPC>_Look`，复制模板轴和采样位置，替换 LookD/F/U、
   IdleStand、Impact 和 Interact。
 
+面部补充模式从已有 NPC BP 或 Body Skeletal Mesh 自动确定 Body/Face
+Skeleton，将 `_Face.fbx` 与同名 Body 动作配对。审核清单可分别控制 Morph
+Target 曲线复制和 Montage 生成；执行时直接调用
+`SeriaAssetHelperBlueprintFunctionLibrary` 的 Python 接口，不再依赖
+`BP_FaceConfigHelper` 关卡实例。
+
 写入完成后仍需在 UE 中检查角色正面、胶囊体贴合、状态机播放效果、
-Look 三个采样点、Face Helper 输出和后处理动画蓝图。完整规则、命名和阻断条件见
+Look 三个采样点、面部曲线/Montage 输出和后处理动画蓝图。完整规则、命名和阻断条件见
 [`docs/npc-migration.md`](docs/npc-migration.md)。
 
 ## 运行

@@ -881,6 +881,80 @@ export interface NpcMigrationTargetResult {
   manualChecks: string[];
 }
 
+export type NpcSupplementKind = "actions" | "face";
+
+export interface NpcSupplementTarget {
+  targetProjectFile: string;
+  targetContentDirectory: string;
+  selectedAssetPath: string;
+  selectedAssetName: string;
+  selectedAssetType: "Blueprint" | "SkeletalMesh";
+  npcName: string;
+  skeletalMeshAssetPath: string;
+  skeletonAssetPath: string;
+  faceSkeletalMeshAssetPath: string;
+  faceSkeletonAssetPath: string;
+  targetPackagePath: string;
+  animationPackagePath: string;
+  existingAssetPaths: string[];
+  dirtyPackageNames: string[];
+  warnings: string[];
+}
+
+export type NpcSupplementItemState = "new" | "update" | "blocked";
+
+export interface NpcSupplementPlanItem {
+  sourceFile: string;
+  sourceAssetName: string;
+  actionName: string;
+  targetAssetPath: string;
+  bodyAssetPath: string;
+  montageName: string;
+  montageAssetPath: string;
+  montageState: "none" | "create" | "reuse";
+  copyFaceCurves: boolean;
+  makeMontage: boolean;
+  state: NpcSupplementItemState;
+  included: boolean;
+  blockedReason: string;
+}
+
+export interface NpcSupplementPlan {
+  reviewToken: string;
+  kind: NpcSupplementKind;
+  target: NpcSupplementTarget;
+  sourceDirectory: string;
+  npcPrefix: string;
+  items: NpcSupplementPlanItem[];
+  canApply: boolean;
+  blockedReasons: string[];
+  warnings: string[];
+}
+
+export interface NpcSupplementPlanRequest {
+  kind: NpcSupplementKind;
+  target: NpcSupplementTarget;
+  sourceDirectory: string;
+  includedSourceFiles?: string[];
+  faceOptions?: Array<{
+    sourceFile: string;
+    copyFaceCurves: boolean;
+    makeMontage: boolean;
+  }>;
+}
+
+export interface NpcSupplementApplyResult {
+  status: "configured";
+  kind: NpcSupplementKind;
+  importedAssetPaths: string[];
+  createdMontageAssetPaths: string[];
+  reusedMontageAssetPaths: string[];
+  lockedRootAssetPaths: string[];
+  curveCopiedBodyAssetPaths: string[];
+  processedBodyAssetPaths: string[];
+  manualChecks: string[];
+}
+
 export type MissionTargetTransform = Pick<
   UnrealTransform,
   "location" | "rotation"

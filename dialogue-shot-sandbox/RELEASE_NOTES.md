@@ -1,3 +1,27 @@
+# 镜头沙盘 v0.24.0
+
+## NPC 增补工作流
+
+- NPC 迁移工作区新增“全新 NPC”“动作补充与修改”“面部补充”三个任务入口，
+  已有 NPC 的动作或面部更新不再重复执行完整迁移。
+- 动作增补可审核新增与覆盖项，并为新识别的 Idle/Turn 动作创建 Montage。
+- 面部补充自动匹配 Body/Face Skeleton 与同名动作，支持逐项决定是否复制
+  Morph Target 曲线及生成 Montage。
+- 新增 UE Python 自动化脚本，直接调用
+  `SeriaAssetHelperBlueprintFunctionLibrary`，完成 Face FBX 导入、根骨骼锁定、
+  曲线复制、Montage 生成、保存和回读，不再依赖 `BP_FaceConfigHelper`。
+- NPC 目录扫描改用 Asset Registry 先按类型筛选，避免递归加载大量动画并触发
+  DDC 构建或 MCP 断连。
+- 增补流程沿用 SHA-256 审核令牌；勾选或处理选项变化后必须重新审核。
+
+## 工程质量
+
+- 新增面部增补计划、原生 Python 调用与桌面布局测试。
+- Python 脚本作为桌面应用资源随安装版和便携版分发。
+- 真实策划 UE 已完成函数反射、Body/Face 配对、目标扫描和脚本 dry-run 验证。
+
+---
+
 # 镜头沙盘 v0.23.0
 
 ## NPC 迁移与蓝图配置

@@ -29,6 +29,10 @@ import type {
   NpcMigrationTargetInspection,
   NpcMigrationTargetRequest,
   NpcMigrationTargetResult,
+  NpcSupplementApplyResult,
+  NpcSupplementPlan,
+  NpcSupplementPlanRequest,
+  NpcSupplementTarget,
   NpcRegistrationScanResult,
   NpcRegistrationWriteItem,
   NpcRegistrationWriteResult,
@@ -432,6 +436,34 @@ export function configureNpcMigrationTarget(
   return postUe(
     "/api/ue/npc-migration/target-configure",
     request,
+    false,
+  );
+}
+
+export function scanNpcSupplementTarget(): Promise<NpcSupplementTarget> {
+  return postUe(
+    "/api/ue/npc-migration/supplement-target",
+    undefined,
+    false,
+  );
+}
+
+export function inspectNpcSupplementPlan(
+  request: NpcSupplementPlanRequest,
+): Promise<NpcSupplementPlan> {
+  return postUe(
+    "/api/ue/npc-migration/supplement-plan",
+    request,
+    false,
+  );
+}
+
+export function applyNpcSupplement(
+  plan: NpcSupplementPlan,
+): Promise<NpcSupplementApplyResult> {
+  return postUe(
+    "/api/ue/npc-migration/supplement-apply",
+    { plan, reviewToken: plan.reviewToken },
     false,
   );
 }

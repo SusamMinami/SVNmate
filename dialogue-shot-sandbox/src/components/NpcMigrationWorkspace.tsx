@@ -6,14 +6,18 @@ import {
   ClipboardCheck,
   FileBox,
   FolderOpen,
+  LayoutGrid,
   LoaderCircle,
   PackageCheck,
+  PersonStanding,
   Play,
   RefreshCw,
+  ScanFace,
   ScanSearch,
   Settings2,
   ShieldAlert,
   Sparkles,
+  UserRoundPlus,
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import type {
@@ -31,6 +35,7 @@ import {
   scanNpcMigrationSource,
 } from "../ue/client";
 import { inferStandardAbpTemplate } from "../data/npcMigration";
+import { NpcSupplementWorkspace } from "./NpcSupplementWorkspace";
 
 interface NpcMigrationWorkspaceProps {
   onClose: () => void;
@@ -61,6 +66,7 @@ function compactPath(value: string): string {
 export function NpcMigrationWorkspace({
   onClose,
 }: NpcMigrationWorkspaceProps) {
+  const [mode, setMode] = useState<"new" | "actions" | "face" | null>(null);
   const [source, setSource] = useState<NpcMigrationSourceScan | null>(null);
   const [targetContentDirectory, setTargetContentDirectory] = useState("");
   const [animationSourceDirectory, setAnimationSourceDirectory] = useState("");
@@ -293,8 +299,94 @@ export function NpcMigrationWorkspace({
     }
   }
 
+  if (!mode) {
+    return (
+      <div className="npc-migration-workspace npc-migration-mode-workspace">
+        <div className="workspace-subview-title">
+          <strong>NPC 迁移</strong>
+          <small>WORK TYPE</small>
+        </div>
+        <div className="workspace-floating-actions">
+          <button
+            className="icon-button workspace-floating-back"
+            type="button"
+            onClick={onClose}
+            title="返回分镜工作台"
+            aria-label="返回分镜工作台"
+          >
+            <ArrowLeft size={17} />
+          </button>
+        </div>
+        <div className="npc-migration-mode-shell">
+          <header>
+            <strong>选择处理类型</strong>
+            <small>NPC WORKFLOW</small>
+          </header>
+          <div className="npc-migration-mode-grid">
+            <button
+              type="button"
+              className="npc-migration-mode-option is-primary"
+              onClick={() => setMode("new")}
+            >
+              <span className="npc-migration-mode-option__icon">
+                <UserRoundPlus size={42} strokeWidth={1.5} />
+              </span>
+              <span>
+                <strong>全新 NPC</strong>
+                <small>完整迁移</small>
+              </span>
+              <em>01</em>
+            </button>
+            <button
+              type="button"
+              className="npc-migration-mode-option"
+              onClick={() => setMode("actions")}
+            >
+              <span className="npc-migration-mode-option__icon">
+                <PersonStanding size={42} strokeWidth={1.5} />
+              </span>
+              <span>
+                <strong>动作补充与修改</strong>
+                <small>BODY ACTIONS</small>
+              </span>
+              <em>02</em>
+            </button>
+            <button
+              type="button"
+              className="npc-migration-mode-option"
+              onClick={() => setMode("face")}
+            >
+              <span className="npc-migration-mode-option__icon">
+                <ScanFace size={42} strokeWidth={1.5} />
+              </span>
+              <span>
+                <strong>面部补充</strong>
+                <small>FACE PIPELINE</small>
+              </span>
+              <em>03</em>
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (mode === "actions" || mode === "face") {
+    return (
+      <NpcSupplementWorkspace
+        kind={mode}
+        onBack={() => setMode(null)}
+        onClose={onClose}
+      />
+    );
+  }
+
   return (
     <div className="npc-migration-workspace">
+      <div className="workspace-subview-title">
+        <strong>全新 NPC</strong>
+        <small>FULL MIGRATION</small>
+      </div>
       <div className="workspace-floating-actions">
         <button
           className="button workspace-floating-command"
@@ -309,6 +401,16 @@ export function NpcMigrationWorkspace({
             <RefreshCw size={16} />
           )}
           读取源资产
+        </button>
+        <button
+          className="icon-button"
+          type="button"
+          disabled={busy !== null}
+          onClick={() => setMode(null)}
+          title="重新选择处理类型"
+          aria-label="重新选择处理类型"
+        >
+          <LayoutGrid size={17} />
         </button>
         <button
           className="icon-button workspace-floating-back"

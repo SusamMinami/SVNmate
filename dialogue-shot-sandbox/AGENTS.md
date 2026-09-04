@@ -116,6 +116,12 @@
   `ABP_N18_Villager_Female_A`，LookD/F/U、IdleStand、Impact、Interact
   缺失时不得继续写入。胶囊体、转头曲线、Montage、Look BlendSpace 和模板
   节点替换均需写后回读。
+- NPC 迁移工作区先分流为全新 NPC、动作补充与修改、面部补充。后两者只连接
+  策划 UE，并按勾选后的审核清单新增或重导入动作。面部补充必须使用 Face
+  Skeleton、锁定根骨骼并匹配同名 Body 动作；清单需分别审核曲线复制和
+  Montage 生成。执行时直接调用
+  `SeriaAssetHelperBlueprintFunctionLibrary` 的逐资产 Python 接口并回读，
+  不加载或生成 `BP_FaceConfigHelper` 关卡实例。
 - 已包含数字站位槽的 BP 按自身槽位注册到对话，不依赖目标物表；0 号玩家必须
   显示、计入角色总数并固定写为 `player`。
 - 已有 BP 与任务目标物同时加载时，现有数字槽位置顶、锁定并保留；用户勾选的

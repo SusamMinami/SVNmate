@@ -93,6 +93,13 @@ export async function routeUeRequest(
       });
       return true;
     }
+    if (url.pathname === "/api/ue/npc-migration/supplement-target") {
+      sendJson(response, 200, {
+        ok: true,
+        data: await services.scanNpcSupplementTarget(),
+      });
+      return true;
+    }
     const body = (await readJson(request)) as Record<string, unknown>;
     if (url.pathname === "/api/ue/npc-migration/plan") {
       sendJson(response, 200, {
@@ -119,6 +126,20 @@ export async function routeUeRequest(
       sendJson(response, 200, {
         ok: true,
         data: await services.configureNpcMigrationTarget(body),
+      });
+      return true;
+    }
+    if (url.pathname === "/api/ue/npc-migration/supplement-plan") {
+      sendJson(response, 200, {
+        ok: true,
+        data: await services.inspectNpcSupplementPlan(body),
+      });
+      return true;
+    }
+    if (url.pathname === "/api/ue/npc-migration/supplement-apply") {
+      sendJson(response, 200, {
+        ok: true,
+        data: await services.applyNpcSupplement(body),
       });
       return true;
     }

@@ -20,6 +20,46 @@ NPC 迁移可以自动化，但不能安全地压缩成一次无审核的写入�
 5. 人工复核：胶囊体与 Mesh 的视觉贴合、角色正面、ABP 状态机运行效果、
    Look 三个采样点、Face Helper 输出和后处理动画蓝图。
 
+## 工作区分流
+
+进入 NPC 迁移工作区后先选择本次任务：
+
+1. **全新 NPC**：保留原有的美术 UE 扫描、文件迁移和策划 UE 完整配置流程。
+2. **动作补充与修改**：读取策划 UE 中已有的 NPC BP 或 Body Skeletal Mesh，
+   只导入本次勾选的 Body FBX。同名资产按“更新”审核，新资产按“新增”审核；
+   新的 Idle / Turn 动作按既有规则创建 Montage。
+3. **面部补充**：读取已有 NPC、Body Skeleton、Face Skeletal Mesh 与
+   Face Skeleton，只处理以 `_Face` 结尾且能找到同名 Body 动作的 FBX。
+
+动作和面部增补不再执行美术 UE 依赖扫描、跨工程文件复制、NPC BP/ABP 创建、
+胶囊体和状态机配置。清单勾选变化后必须重新生成审核令牌，才允许写入 UE。
+
+## 单独面部补充
+
+根据《NPC表情配置自动化工具》文档，独立面部补充采用以下流程：
+
+1. 在策划 UE 内容浏览器中选择已有 NPC BP 或 Body Skeletal Mesh。
+2. 工具从 Body Mesh 推导 NPC 名称与 `Animation` 目录，并在 NPC 资产目录中
+   唯一匹配 `SK_<NPC>_Face` 及其 Face Skeleton。
+3. 扫描用户选择的 FBX 目录，只保留
+   `A_<NPC>_<Action>_Face.fbx`；去掉 `_Face` 后必须存在同名 Body AnimSequence。
+4. 用户可临时取消不需要处理的动作。重新审核后，工具使用 Face Skeleton
+   导入所选 FBX，对新增和更新分别处理，强制写入 `force_root_lock=True`，
+   保存并回读。
+5. 清单分别提供“复制曲线”和“生成 Montage”选项。默认值与原 Helper 的
+   DataTable 规则一致：LookD/F/U 不复制曲线；Look、Turn、Walk、lean 和
+   Idlestand 系列默认不生成 Montage。
+6. 工具逐项调用 Seria 原生 Python 接口：
+   `copy_face_anim_sequence_morph_targets_curve` 复制 Morph Target 曲线；
+   `make_npc_montage_by_anim_sequence` 生成需要的 Montage。
+7. 写入后重新使用 `get_face_anim_sequence` 校验 Body / Face 配对，并回读、
+   保存 Body AnimSequence、Face AnimSequence 和新建 Montage。
+
+`BP_FaceConfigHelper` 本身不再参与独立面部补充。运行时反射确认
+`SeriaAssetHelperBlueprintFunctionLibrary` 及以上三个逐资产函数均可由
+OmniMcpCore 的 UE Python 直接调用，因此不需要修改 Helper、UE 编辑器或 Seria
+C++ 代码。原来的 MakeTable 由镜头沙盒审核清单替代，Out 由逐项原生调用替代。
+
 ## 文档步骤映射
 
 | 原步骤 | 工具模块 | 自动化程度 |
@@ -32,7 +72,7 @@ NPC 迁移可以自动化，但不能安全地压缩成一次无审核的写入�
 | 配置转头曲线 | 行为配置 | 自动定位 `NpcBehaviourComponent` 的唯一曲线属性并写入 |
 | 添加 Face 组件 | Face 配置 | 人工确认 Mesh 和 Socket |
 | 锁定 Face 动作根骨骼 | Face 动作导入 | 自动 |
-| 执行 `BP_FaceConfigHelper` | Face Helper | 辅助，保留清单确认 |
+| 执行 `BP_FaceConfigHelper` | 原生 Seria 面部处理 | 面部补充自动，逐项审核后写入并回读 |
 | 创建 `ABP_XXX` | 动画蓝图配置 | 自动继承男性或女性标准模板并绑定 Skeleton |
 | 创建 Idle/Turn Montage 与插槽 | Montage 配置 | 自动按命名规则创建并写入 `IdleSlot` / `TurnSlot` |
 | 配置状态机 | 标准 ABP 模板 | 自动继承模板图表并覆盖目标动作 |
@@ -111,6 +151,10 @@ LookD、LookF、LookU 会自动设置为 Mesh Space Additive，以 LookF 第 15 
 
 - `src/data/npcMigration.ts`：命名、动作分类、流程计划和阻断规则。
 - `server/npcMigration.ts`：UE 源扫描、文件预检/复制、目标 UE 校验与配置。
+- `src/data/npcSupplement.ts`：动作增补清单、Face 默认处理规则和阻断条件。
+- `server/npcSupplement.ts`：增补审核令牌、UE 调用与结果回读。
+- `server/ue/scripts/npc_face_supplement.py`：Face 导入、锁根、曲线复制和
+  Montage 生成的 UE Python 自动化。
 - `server/ue/services.ts`：业务服务门面。
 - `server/ue/routes.ts`：本地 HTTP API。
 - `src/ue/client.ts`：前端 API 客户端。

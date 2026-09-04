@@ -8069,6 +8069,138 @@ textarea:focus-visible {
   background: #f2f2f0;
 }
 
+.npc-migration-mode-workspace {
+  overflow: hidden;
+}
+
+.npc-migration-mode-workspace .workspace-subview-title {
+  left: 158px;
+}
+
+.npc-migration-mode-shell {
+  display: grid;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 46px clamp(28px, 5vw, 76px) 58px
+    clamp(150px, 12vw, 180px);
+  align-content: center;
+}
+
+.npc-migration-mode-shell > header {
+  display: grid;
+  gap: 5px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid #c9cac4;
+}
+
+.npc-migration-mode-shell > header strong {
+  font-size: 18px;
+  font-weight: 680;
+}
+
+.npc-migration-mode-shell > header small {
+  color: #777a74;
+  font: 9px/1 "Cascadia Code", Consolas, monospace;
+}
+
+.npc-migration-mode-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.npc-migration-mode-option {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  min-height: 224px;
+  padding: 24px 22px 20px;
+  color: #272a26;
+  background: #ffffff;
+  border: 1px solid #c7c9c2;
+  border-radius: 4px;
+  cursor: pointer;
+  text-align: left;
+  transition:
+    color 200ms ease,
+    background-color 200ms ease,
+    border-color 200ms ease;
+}
+
+.npc-migration-mode-option::before {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 4px;
+  content: "";
+  background: #aeb0aa;
+}
+
+.npc-migration-mode-option.is-primary::before {
+  background: var(--signal);
+}
+
+.npc-migration-mode-option:hover,
+.npc-migration-mode-option:focus-visible {
+  color: #ffffff;
+  background: #242724;
+  border-color: #242724;
+  outline: none;
+}
+
+.npc-migration-mode-option:focus-visible {
+  box-shadow: 0 0 0 3px rgba(255, 250, 0, 0.58);
+}
+
+.npc-migration-mode-option__icon {
+  display: grid;
+  width: 72px;
+  height: 72px;
+  color: #424540;
+  background: #f0f0ed;
+  border: 1px solid #d3d4ce;
+  border-radius: 3px;
+  place-items: center;
+}
+
+.npc-migration-mode-option:hover .npc-migration-mode-option__icon,
+.npc-migration-mode-option:focus-visible .npc-migration-mode-option__icon {
+  color: #ffffff;
+  background: #343733;
+  border-color: #5f625c;
+}
+
+.npc-migration-mode-option > span:nth-child(2) {
+  display: grid;
+  align-self: end;
+  gap: 6px;
+}
+
+.npc-migration-mode-option strong {
+  font-size: 16px;
+}
+
+.npc-migration-mode-option small {
+  color: #747770;
+  font: 9px/1 "Cascadia Code", Consolas, monospace;
+}
+
+.npc-migration-mode-option:hover small,
+.npc-migration-mode-option:focus-visible small {
+  color: #c5c7c1;
+}
+
+.npc-migration-mode-option em {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  color: #8b8e87;
+  font: 700 10px/1 "Cascadia Code", Consolas, monospace;
+  font-style: normal;
+}
+
 .npc-migration-message {
   display: flex;
   flex: 0 0 auto;
@@ -8609,6 +8741,318 @@ textarea:focus-visible {
 .npc-migration-result p > span {
   color: #656862;
   font-family: "Cascadia Code", Consolas, monospace;
+}
+
+.npc-supplement-layout {
+  display: grid;
+  flex: 1 1 auto;
+  grid-template-columns: 250px minmax(390px, 1fr) 310px;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-top: 1px solid #cfd0ca;
+}
+
+.npc-supplement-setup,
+.npc-supplement-list,
+.npc-supplement-review {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+.npc-supplement-setup {
+  background: #e9e9e5;
+  border-right: 1px solid #c7c9c2;
+}
+
+.npc-supplement-setup > section {
+  border-bottom: 1px solid #cccec7;
+}
+
+.npc-supplement-setup section > header,
+.npc-supplement-list > header,
+.npc-supplement-review > header {
+  display: flex;
+  min-height: 50px;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 14px;
+  background: #f7f7f5;
+  border-bottom: 1px solid #d9dad5;
+}
+
+.npc-supplement-setup section > header > div,
+.npc-supplement-list > header > div:first-child,
+.npc-supplement-review > header > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.npc-supplement-setup header strong,
+.npc-supplement-list header strong,
+.npc-supplement-review header strong {
+  font-size: 11px;
+}
+
+.npc-supplement-setup header small,
+.npc-supplement-list header small,
+.npc-supplement-review header small {
+  overflow: hidden;
+  color: #858881;
+  font: 8px/1 "Cascadia Code", Consolas, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.npc-supplement-target {
+  margin: 0;
+}
+
+.npc-supplement-target > div {
+  min-width: 0;
+  padding: 10px 14px;
+  background: #ffffff;
+  border-bottom: 1px solid #e0e1dc;
+}
+
+.npc-supplement-target dt,
+.npc-supplement-target dd {
+  margin: 0;
+}
+
+.npc-supplement-target dt {
+  color: #777a74;
+  font-size: 8px;
+}
+
+.npc-supplement-target dd {
+  overflow: hidden;
+  margin-top: 4px;
+  font: 9px/14px "Cascadia Code", Consolas, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.npc-supplement-directory {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 32px;
+  gap: 6px;
+  padding: 12px 12px 8px;
+}
+
+.npc-supplement-directory input {
+  width: 100%;
+  height: 32px;
+  min-width: 0;
+  padding: 0 8px;
+  color: #30332f;
+  background: #ffffff;
+  border: 1px solid #bfc1ba;
+  border-radius: 2px;
+  font: 9px/1 "Cascadia Code", Consolas, monospace;
+}
+
+.npc-supplement-directory input:focus {
+  border-color: #747871;
+  outline: 2px solid rgba(255, 250, 0, 0.48);
+}
+
+.npc-supplement-setup section > .button {
+  width: calc(100% - 24px);
+  margin: 0 12px 12px;
+}
+
+.npc-supplement-list {
+  background: #ffffff;
+}
+
+.npc-supplement-list > header {
+  position: sticky;
+  z-index: 2;
+  top: 0;
+  justify-content: space-between;
+}
+
+.npc-supplement-list-actions {
+  display: flex;
+  gap: 5px;
+}
+
+.npc-supplement-table {
+  min-width: 0;
+}
+
+.npc-supplement-table__head,
+.npc-supplement-row {
+  display: grid;
+  grid-template-columns: 28px minmax(140px, 1fr) 58px minmax(110px, 0.8fr);
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  border-bottom: 1px solid #dedfda;
+}
+
+.npc-supplement-table__head.is-face,
+.npc-supplement-row.is-face {
+  grid-template-columns:
+    28px minmax(120px, 1fr) 54px minmax(90px, 0.8fr)
+    54px 64px;
+}
+
+.npc-supplement-table__head {
+  position: sticky;
+  z-index: 1;
+  top: 50px;
+  min-height: 31px;
+  padding: 0 12px;
+  color: #777a74;
+  background: #eeeeeb;
+  font-size: 8px;
+  font-weight: 700;
+}
+
+.npc-supplement-row {
+  min-height: 52px;
+  padding: 7px 12px;
+  cursor: pointer;
+}
+
+.npc-supplement-row:hover {
+  background: #f7f7f3;
+}
+
+.npc-supplement-row.is-blocked {
+  color: #8d401f;
+  background: #fff7f2;
+  cursor: default;
+}
+
+.npc-supplement-row input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--ink);
+}
+
+.npc-supplement-row > span {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.npc-supplement-row strong,
+.npc-supplement-row small,
+.npc-supplement-row code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.npc-supplement-row strong {
+  font-size: 10px;
+}
+
+.npc-supplement-row small {
+  color: #777a74;
+  font: 8px/1 "Cascadia Code", Consolas, monospace;
+}
+
+.npc-supplement-row em {
+  justify-self: start;
+  padding: 2px 4px;
+  color: #256548;
+  background: #edf8f2;
+  border: 1px solid #b9ddcb;
+  border-radius: 2px;
+  font-size: 8px;
+  font-style: normal;
+}
+
+.npc-supplement-row em[data-state="update"] {
+  color: #315d70;
+  background: #edf6f9;
+  border-color: #bfd6df;
+}
+
+.npc-supplement-row em[data-state="blocked"] {
+  color: #8d401f;
+  background: #fff1e9;
+  border-color: #efc7b2;
+}
+
+.npc-supplement-row code {
+  color: #686b65;
+  font-size: 8px;
+}
+
+.npc-supplement-operation {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+  color: #555852;
+  font-size: 8px;
+  cursor: pointer;
+}
+
+.npc-supplement-operation input {
+  flex: 0 0 auto;
+}
+
+.npc-supplement-operation:has(input:disabled) {
+  color: #a2a49e;
+  cursor: default;
+}
+
+.npc-supplement-review {
+  display: flex;
+  flex-direction: column;
+  background: #eeeeeb;
+  border-left: 1px solid #c7c9c2;
+}
+
+.npc-supplement-review > header {
+  flex: 0 0 auto;
+}
+
+.npc-supplement-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0;
+  background: #ffffff;
+  border-bottom: 1px solid #d6d7d1;
+}
+
+.npc-supplement-metrics > div {
+  padding: 10px 7px;
+  text-align: center;
+  border-right: 1px solid #e0e1dc;
+}
+
+.npc-supplement-metrics dt,
+.npc-supplement-metrics dd {
+  margin: 0;
+}
+
+.npc-supplement-metrics dt {
+  color: #777a74;
+  font-size: 8px;
+}
+
+.npc-supplement-metrics dd {
+  margin-top: 4px;
+  font: 700 11px/14px "Cascadia Code", Consolas, monospace;
+}
+
+.npc-supplement-review > .button {
+  width: calc(100% - 28px);
+  margin: 14px;
+}
+
+.npc-supplement-result {
+  border-top: 1px solid #d1d2cc;
 }
 
 .tool-workspace__embedded .mission-target-query {

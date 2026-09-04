@@ -19,6 +19,11 @@ import {
   scanNpcMigrationSource,
 } from "../npcMigration";
 import {
+  applyNpcSupplement,
+  inspectNpcSupplementPlan,
+  scanNpcSupplementTarget,
+} from "../npcSupplement";
+import {
   appendMissionTargetBlueprint,
   applyBackgroundPropImport,
   clearMissionTargetPreview,
@@ -45,6 +50,7 @@ import {
 export const ueServices = {
   appendMissionTargetBlueprint,
   applyNpcAssetMigration,
+  applyNpcSupplement,
   applyBackgroundPropImport,
   clearMissionTargetPreview,
   configureNpcMigrationTarget,
@@ -56,6 +62,7 @@ export const ueServices = {
   inspectMissionTargetMap,
   inspectNpcMigrationPlan,
   inspectNpcMigrationTarget,
+  inspectNpcSupplementPlan,
   inspectSoundEffectPreview,
   loadMissionTargetPreview,
   openConfigTable,
@@ -68,6 +75,7 @@ export const ueServices = {
   readSelectedLevelActors,
   registerBlueprintDialogueModels,
   scanNpcMigrationSource,
+  scanNpcSupplementTarget,
   scanSelectedNpcRegistration,
   syncBlueprintPositionsToMissionTargets,
   updateDialogueContent,
