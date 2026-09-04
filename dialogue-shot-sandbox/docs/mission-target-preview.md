@@ -276,6 +276,9 @@ BP 输入框右侧的检查按钮会读取 BP、对应数字槽位、同名 Dial
 `DialogModels`：
 
 - Blueprint Actor 写为 `ChildActorComponent` 和对应 Generated Class。
+- 关卡图生成的 `SceneObject` NPC 从 `child_preview_class` 解析实际 NPC
+  Generated Class，使用包装 Actor 的世界 Transform，并继续参与任务目标物
+  模型匹配；匹配成功后沿用 BP 数字槽和 `DialogModels` 注册流程。
 - SkeletalMeshActor 写为 `SkeletalMeshComponent` 和实际 Skeletal Mesh。
 - StaticMeshActor 写为 `StaticMeshComponent` 和实际 Static Mesh。
 - Cascade Emitter 写为 `ParticleSystemComponent` 和实际 Particle System。

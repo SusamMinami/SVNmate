@@ -12,6 +12,7 @@ import {
   applyBackgroundPropImport,
   inspectBackgroundPropImport,
   inspectMissionTargetBlueprint,
+  readSelectedLevelActors,
   registerBlueprintDialogueModels,
   syncBlueprintPositionsToMissionTargets,
   updateMissionTargetBlueprintPositions,
@@ -1206,6 +1207,55 @@ describe("mission target Blueprint synchronization", () => {
 });
 
 describe("background prop import", () => {
+  it("unwraps SceneObject NPC previews while keeping the wrapper Transform", async () => {
+    const connection = new BackgroundPropConnection();
+    connection.selectedPlacementActors = [
+      {
+        actor_ref: "PersistentLevel.SceneObject31",
+        label: "SceneObject31",
+        class_path:
+          "/Game/Seria/Editor/SeriaLevelGraphActor/BP_Npc_Preview.BP_Npc_Preview_C",
+        parent_class_path: "/Script/SeriaGraphEditor.NpcDefaultActor",
+        child_preview_class_path:
+          "/Game/Seria/NPC/N116_Finance_Male/BP_N116_Finance_Male.BP_N116_Finance_Male_C",
+        child_preview_label: "BP_N116_Finance_Male",
+        skeletal_mesh_path: "",
+        static_mesh_path: "",
+        location: [-55801.25, -9820.79, 58398.22],
+        rotation: [0, 55.28, 0],
+        scale: [1, 1, 1],
+      },
+    ];
+
+    const selection = await readSelectedLevelActors(() => connection);
+
+    expect(selection.actors).toEqual([
+      expect.objectContaining({
+        actorRef: "PersistentLevel.SceneObject31",
+        label: "BP_N116_Finance_Male",
+        classPath:
+          "/Game/Seria/NPC/N116_Finance_Male/BP_N116_Finance_Male.BP_N116_Finance_Male_C",
+        parentClassPath: "/Script/SeriaGraphEditor.NpcDefaultActor",
+        assetKind: "blueprint_actor",
+        assetPath:
+          "/Game/Seria/NPC/N116_Finance_Male/BP_N116_Finance_Male.BP_N116_Finance_Male",
+        transform: {
+          location: { x: -55801.25, y: -9820.79, z: 58398.22 },
+          rotation: { pitch: 0, yaw: 55.28, roll: 0 },
+          scale: { x: 1, y: 1, z: 1 },
+        },
+      }),
+    ]);
+    const expression = String(
+      connection.calls.find(
+        (call) => call.action === "script.eval_python_expression",
+      )?.args.Expression,
+    );
+    expect(expression).toContain("child_preview_class");
+    expect(expression).toContain("type(a).static_class()");
+    expect(expression).not.toContain("get_super_class");
+  });
+
   it("recognizes TaskActorBase in the BP inspection before reading UE selection", async () => {
     await writeConfigFixture();
     const connection = new TaskActorBackgroundPropConnection();

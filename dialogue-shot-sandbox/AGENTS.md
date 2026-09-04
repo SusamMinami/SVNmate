@@ -100,6 +100,9 @@
   DialogModels，且 Blueprint、Skeletal Mesh、Static Mesh、Cascade Particle
   System 和 Niagara System 必须保留原名与完整 Transform，同名冲突不得自动
   改名。
+- 关卡图生成的 `SceneObject` NPC 必须从 `child_preview_class` 读取实际 NPC
+  Generated Class，并使用包装 Actor 的世界 Transform。后续目标物匹配、BP
+  数字槽和 `DialogModels` 注册必须复用普通 NPC 链路，不得按不支持类型阻断。
 - 任务节点与对话节点都为空时，非数字 BP 组件审核必须按 BP 父类分流：
   `TaskActorBase` 使用 UE 当前选择中的目标 BP Actor，或当前关卡中的唯一同类
   实例，确定世界 Transform 后直接写入；`PositionModeBase` 继续查找对应对话

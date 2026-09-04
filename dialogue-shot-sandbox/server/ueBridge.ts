@@ -6398,6 +6398,8 @@ function parseLevelActors(
       label?: unknown;
       class_path?: unknown;
       parent_class_path?: unknown;
+      child_preview_class_path?: unknown;
+      child_preview_label?: unknown;
       skeletal_mesh_path?: unknown;
       static_mesh_path?: unknown;
       particle_system_path?: unknown;
@@ -6418,7 +6420,19 @@ function parseLevelActors(
     ) {
       throw new Error(`${errorMessage}：第 ${index + 1} 项无效`);
     }
-    const classPath = String(actor.class_path);
+    const actorClassPath = String(actor.class_path);
+    const childPreviewClassPath = String(
+      actor.child_preview_class_path ?? "",
+    );
+    const classPath =
+      childPreviewClassPath.startsWith("/Game/") &&
+      childPreviewClassPath.endsWith("_C")
+        ? childPreviewClassPath
+        : actorClassPath;
+    const label =
+      classPath === childPreviewClassPath && actor.child_preview_label
+        ? String(actor.child_preview_label)
+        : String(actor.label || `Actor ${index + 1}`);
     const skeletalMeshPath = String(actor.skeletal_mesh_path ?? "");
     const staticMeshPath = String(actor.static_mesh_path ?? "");
     const particleSystemPath = String(actor.particle_system_path ?? "");
@@ -6438,7 +6452,7 @@ function parseLevelActors(
               : "unsupported" as const;
     return {
       actorRef: String(actor.actor_ref),
-      label: String(actor.label || `Actor ${index + 1}`),
+      label,
       classPath,
       ...(actor.parent_class_path
         ? { parentClassPath: String(actor.parent_class_path) }
@@ -6472,7 +6486,9 @@ function parseLevelActors(
 }
 
 const LEVEL_ACTOR_JSON_FIELDS =
-  "{'actor_ref': a.get_path_name(), 'label': a.get_actor_label(), 'class_path': a.get_class().get_path_name(), 'parent_class_path': (a.get_class().get_super_class().get_path_name() if a.get_class().get_super_class() else ''), " +
+  "{'actor_ref': a.get_path_name(), 'label': a.get_actor_label(), 'class_path': a.get_class().get_path_name(), 'parent_class_path': (type(a).static_class().get_path_name() if hasattr(type(a), 'static_class') else ''), " +
+  "'child_preview_class_path': (getattr(a, 'child_preview_class', None).get_path_name() if getattr(a, 'child_preview_class', None) else ''), " +
+  "'child_preview_label': (a.get_child_preview_actor().get_actor_label() if hasattr(a, 'get_child_preview_actor') and a.get_child_preview_actor() else ''), " +
   "'skeletal_mesh_path': (a.get_component_by_class(unreal.SkeletalMeshComponent).get_editor_property('skeletal_mesh').get_path_name() if a.get_component_by_class(unreal.SkeletalMeshComponent) and a.get_component_by_class(unreal.SkeletalMeshComponent).get_editor_property('skeletal_mesh') else ''), " +
   "'static_mesh_path': (a.get_component_by_class(unreal.StaticMeshComponent).get_editor_property('static_mesh').get_path_name() if a.get_component_by_class(unreal.StaticMeshComponent) and a.get_component_by_class(unreal.StaticMeshComponent).get_editor_property('static_mesh') else ''), " +
   "'particle_system_path': (a.get_component_by_class(unreal.ParticleSystemComponent).get_editor_property('template').get_path_name() if a.get_component_by_class(unreal.ParticleSystemComponent) and a.get_component_by_class(unreal.ParticleSystemComponent).get_editor_property('template') else ''), " +

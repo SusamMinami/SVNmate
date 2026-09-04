@@ -1,4 +1,12 @@
-# 镜头沙盘 v0.24.0
+# 镜头沙盘 v0.23.1
+
+## UE SceneObject NPC
+
+- 任务目标物读取 UE 选择时，可从关卡图生成的 `SceneObject` 中识别实际 NPC
+  Blueprint，并复用目标物匹配、BP 数字槽和 `DialogModels` 注册流程。
+- 保留 `SceneObject` 的世界位置、旋转和缩放；界面显示实际预览 NPC 名称。
+- 修复 UE4 `BlueprintGeneratedClass` 不支持 `get_super_class()` 导致的选择
+  扫描失败。
 
 ## NPC 增补工作流
 
