@@ -251,7 +251,9 @@ BP 占位时，可点击左侧的 BP 文件名重新读取 UE 中的位置和朝
 并取消其他可追加项；混合选择中只有未匹配 Actor 才进入背景资源审核。预览
 Actor 按任务与目标物 ID 精确识别，普通 Actor 按模型类路径和世界坐标消歧。
 关卡图生成的 `SceneObject` NPC 会读取其 `child_preview_class`，按实际 NPC
-Blueprint 参与相同匹配，同时保留包装对象的位置、旋转和缩放。
+Blueprint 参与相同匹配，同时保留包装对象的位置、旋转和缩放。未匹配目标物的
+`SceneObject` NPC 仍按 UE 选择顺序从当前最大数字槽后追加，并同步对应对话的
+`DialogModels`；不会作为资产名背景组件写入。
 只输入任务节点也可直接读取 UE 当前选择，不要求先填写 BP；匹配结果会逐项显示
 `UE Actor -> 目标物 ID -> NPC`，并在目标物列表中标记“UE 已选”。
 背景审核可将 Blueprint Actor、Skeletal Mesh 或 Static Mesh 直接写入 BP，

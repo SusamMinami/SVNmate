@@ -6429,8 +6429,9 @@ function parseLevelActors(
       childPreviewClassPath.endsWith("_C")
         ? childPreviewClassPath
         : actorClassPath;
+    const sceneObjectNpc = classPath === childPreviewClassPath;
     const label =
-      classPath === childPreviewClassPath && actor.child_preview_label
+      sceneObjectNpc && actor.child_preview_label
         ? String(actor.child_preview_label)
         : String(actor.label || `Actor ${index + 1}`);
     const skeletalMeshPath = String(actor.skeletal_mesh_path ?? "");
@@ -6457,6 +6458,7 @@ function parseLevelActors(
       ...(actor.parent_class_path
         ? { parentClassPath: String(actor.parent_class_path) }
         : {}),
+      ...(sceneObjectNpc ? { sceneObjectNpc: true } : {}),
       assetKind,
       assetPath: blueprintActor
         ? blueprintAssetPath(classPath)
@@ -6593,6 +6595,7 @@ interface PreparedBackgroundPropImport {
   resolved: { assetPath: string; blueprint: string };
   blueprint: Awaited<ReturnType<typeof readValidatedBlueprint>>;
   items: PreparedBackgroundPropItem[];
+  dialogueContext: DialogueRegistrationContext | null;
 }
 
 function backgroundPropAssetName(actor: SelectedLevelActor): string {
@@ -6797,23 +6800,97 @@ async function prepareBackgroundPropImport(
     blockedReasons.push("UE 当前没有选中的 Actor");
   }
 
-  const preparedItems: PreparedBackgroundPropItem[] = actors.map(
-    (actor) => {
-      const spec = backgroundPropComponentSpec(actor);
-      const componentName = backgroundPropAssetName(actor);
+  const numericComponents = blueprint.components
+    .filter((component) => /^\d+$/.test(component.variableName))
+    .sort(
+      (left, right) =>
+        Number(left.variableName) - Number(right.variableName),
+    );
+  const claimedNumericComponentNames = new Set<string>();
+  let nextModelIndex =
+    Math.max(
+      0,
+      ...numericComponents.map((component) =>
+        Number(component.variableName),
+      ),
+    ) + 1;
+  const sceneObjectNpcAssignments = new Map<
+    string,
+    { modelIndex: number; existingComponent: BlueprintComponentInfo | null }
+  >();
+  if (parentKind === "position_mode") {
+    for (const actor of actors.filter((candidate) => candidate.sceneObjectNpc)) {
       const relativeTransform = blueprintTransformFromWorld(
         actor.transform,
         rootTransform,
         actor.transform.scale,
       );
       const existingComponent =
-        blueprint.components.find(
+        numericComponents.find(
           (component) =>
-            component.variableName.toLowerCase() ===
-            componentName.toLowerCase(),
+            component.variableName !== "0" &&
+            !claimedNumericComponentNames.has(component.variableName) &&
+            normalizeObjectPath(component.childActorClass) ===
+              normalizeObjectPath(actor.classPath) &&
+            !blueprintTransformsDiffer(
+              component.transform,
+              relativeTransform,
+            ),
         ) ?? null;
+      if (existingComponent) {
+        claimedNumericComponentNames.add(existingComponent.variableName);
+      }
+      sceneObjectNpcAssignments.set(actor.actorRef, {
+        modelIndex: existingComponent
+          ? Number(existingComponent.variableName)
+          : nextModelIndex++,
+        existingComponent,
+      });
+    }
+  }
+
+  const preparedItems: PreparedBackgroundPropItem[] = actors.map(
+    (actor) => {
+      const spec = backgroundPropComponentSpec(actor);
+      const sceneObjectNpcAssignment = sceneObjectNpcAssignments.get(
+        actor.actorRef,
+      );
+      const importMode = sceneObjectNpcAssignment
+        ? "dialogue_npc" as const
+        : "background" as const;
+      const componentName = sceneObjectNpcAssignment
+        ? String(sceneObjectNpcAssignment.modelIndex)
+        : backgroundPropAssetName(actor);
+      const relativeTransform = blueprintTransformFromWorld(
+        actor.transform,
+        rootTransform,
+        actor.transform.scale,
+      );
+      const existingComponent =
+        sceneObjectNpcAssignment?.existingComponent ??
+        blueprint.components.find(
+            (component) =>
+              component.variableName.toLowerCase() ===
+              componentName.toLowerCase(),
+          ) ??
+        null;
+      const legacyComponent = sceneObjectNpcAssignment
+        ? blueprint.components.find(
+            (component) =>
+              !/^\d+$/.test(component.variableName) &&
+              normalizeObjectPath(component.childActorClass) ===
+                normalizeObjectPath(actor.classPath) &&
+              !blueprintTransformsDiffer(
+                component.transform,
+                relativeTransform,
+              ),
+          ) ?? null
+        : null;
       let action: BackgroundPropPreviewItem["action"] = "create";
-      let message = "新增背景组件";
+      let message =
+        importMode === "dialogue_npc"
+          ? `新增对话角色槽 ${componentName}`
+          : "新增背景组件";
       if (
         normalizeObjectPath(actor.classPath) ===
         normalizeObjectPath(blueprint.blueprintClassPath)
@@ -6824,6 +6901,10 @@ async function prepareBackgroundPropImport(
         action = "blocked";
         message =
           "仅支持 Blueprint Actor、Skeletal Mesh、Static Mesh 和粒子特效";
+      } else if (legacyComponent) {
+        action = "blocked";
+        message =
+          `BP 中已有旧版非数字组件 ${legacyComponent.variableName}；请将其重命名为 ${componentName}（或删除）后重新读取，避免重复角色`;
       } else if (!/^[A-Za-z0-9_]+$/.test(componentName)) {
         action = "blocked";
         message = `资产名 ${componentName} 不能直接作为 BP 组件名`;
@@ -6846,7 +6927,10 @@ async function prepareBackgroundPropImport(
           message = "更新已有背景组件 Transform";
         } else {
           action = "unchanged";
-          message = "BP 中已存在且 Transform 一致";
+          message =
+            importMode === "dialogue_npc"
+              ? `对话角色槽 ${componentName} 已存在且 Transform 一致`
+              : "BP 中已存在且 Transform 一致";
         }
       }
       return {
@@ -6856,9 +6940,13 @@ async function prepareBackgroundPropImport(
         preview: {
           actorRef: actor.actorRef,
           actorLabel: actor.label,
+          importMode,
           assetKind: actor.assetKind ?? "unsupported",
           assetPath: actor.assetPath ?? "",
           componentName,
+          ...(sceneObjectNpcAssignment
+            ? { modelIndex: sceneObjectNpcAssignment.modelIndex }
+            : {}),
           componentClass: spec?.componentClass ?? "",
           assetPropertyName: spec?.assetPropertyName ?? "",
           worldTransform: actor.transform,
@@ -6869,9 +6957,79 @@ async function prepareBackgroundPropImport(
       };
     },
   );
+  const existingSourceSlots: DialogueModelSourceSlot[] =
+    numericComponents.map((component) => ({
+      modelIndex: Number(component.variableName),
+      targetId: null,
+      modelClassPath: component.childActorClass,
+    }));
+  let dialogueContext: DialogueRegistrationContext | null = null;
+  const dialogueNpcItems = preparedItems.filter(
+    (item) => item.preview.importMode === "dialogue_npc",
+  );
+  if (dialogueNpcItems.length > 0) {
+    const playerSlot = numericComponents.find(
+      (component) => component.variableName === "0",
+    );
+    if (
+      !playerSlot ||
+      normalizeObjectPath(playerSlot.childActorClass) !==
+        normalizeObjectPath(PLAYER_CLASS)
+    ) {
+      blockedReasons.push(
+        "SceneObject NPC 写入要求 BP 的 0 号位为玩家 BP_Eric",
+      );
+    }
+    const baseDialogueContext = await readDialogueRegistrationContext(
+      connection,
+      resolved.assetPath,
+      existingSourceSlots,
+      dialogueIdOverride,
+    );
+    const sourceSlots = [
+      ...existingSourceSlots,
+      ...dialogueNpcItems
+        .filter(
+          (item) =>
+            !item.existingComponent &&
+            item.preview.modelIndex !== undefined,
+        )
+        .map((item) => ({
+          modelIndex: item.preview.modelIndex!,
+          targetId: null,
+          modelClassPath: item.actor.classPath,
+        })),
+    ];
+    dialogueContext = {
+      ...baseDialogueContext,
+      slots: buildDialogueModelRegistrationSlots(
+        sourceSlots,
+        baseDialogueContext.existingModels,
+        baseDialogueContext.registry,
+      ),
+    };
+    const registrationByIndex = new Map(
+      dialogueContext.slots.map((slot) => [slot.modelIndex, slot]),
+    );
+    for (const item of dialogueNpcItems) {
+      const registration = registrationByIndex.get(
+        item.preview.modelIndex ?? -1,
+      );
+      item.preview.dialogueModelName =
+        registration?.suggestedModelName ?? null;
+      if (item.preview.action !== "blocked") {
+        item.preview.message += registration?.suggestedModelName
+          ? `；DialogModels=${registration.suggestedModelName}`
+          : "；DialogNPCTable 未登记，将写入 None";
+      }
+    }
+  }
   const names = new Map<string, PreparedBackgroundPropItem[]>();
   for (const item of preparedItems) {
-    if (!item.preview.componentName) {
+    if (
+      item.preview.importMode === "dialogue_npc" ||
+      !item.preview.componentName
+    ) {
       continue;
     }
     const key = item.preview.componentName.toLowerCase();
@@ -6902,6 +7060,7 @@ async function prepareBackgroundPropImport(
     resolved,
     blueprint,
     items: preparedItems,
+    dialogueContext,
   };
 }
 
@@ -6946,6 +7105,7 @@ export async function applyBackgroundPropImport(
   let prepared: PreparedBackgroundPropImport | null = null;
   const changedItems: PreparedBackgroundPropItem[] = [];
   let mutationStarted = false;
+  let blueprintSaved = false;
   try {
     prepared = await prepareBackgroundPropImport(
       connection,
@@ -6987,6 +7147,21 @@ export async function applyBackgroundPropImport(
         `Formation BP ${blueprintPackagePath} 存在未保存修改，请先在 UE 中保存或撤销`,
       );
     }
+    const selectedDialogueNpcItems = selectedItems.filter(
+      (item) => item.preview.importMode === "dialogue_npc",
+    );
+    if (selectedDialogueNpcItems.length > 0) {
+      if (!prepared.dialogueContext) {
+        throw new Error("无法读取 SceneObject NPC 对应的对话注册信息");
+      }
+      const dialoguePackagePath =
+        prepared.dialogueContext.dialogueAssetPath.split(".")[0];
+      if (dirtyPackages.has(dialoguePackagePath.toLowerCase())) {
+        throw new Error(
+          `对话资产 ${dialoguePackagePath} 存在未保存修改，请先在 UE 中保存或撤销`,
+        );
+      }
+    }
     changedItems.push(
       ...selectedItems.filter(
         (item) =>
@@ -6994,7 +7169,10 @@ export async function applyBackgroundPropImport(
           item.preview.action === "update",
       ),
     );
-    if (changedItems.length === 0) {
+    if (
+      changedItems.length === 0 &&
+      selectedDialogueNpcItems.length === 0
+    ) {
       return {
         status: "unchanged",
         blueprintAssetPath: prepared.resolved.assetPath,
@@ -7003,65 +7181,122 @@ export async function applyBackgroundPropImport(
         saved: false,
       };
     }
-    mutationStarted = true;
-    for (const item of changedItems) {
-      if (item.preview.action === "create") {
-        await connection.invoke("bp.add_component", {
+    let actualComponents = prepared.blueprint.components;
+    if (changedItems.length > 0) {
+      mutationStarted = true;
+      for (const item of changedItems) {
+        if (
+          item.preview.action === "create" &&
+          item.preview.importMode === "dialogue_npc"
+        ) {
+          await addBlueprintComponent(
+            connection,
+            prepared.resolved.blueprint,
+            {
+              componentName: item.preview.componentName,
+              componentClass: CHILD_ACTOR_COMPONENT_CLASS,
+              childActorClass: item.actor.classPath,
+              targetId: null,
+              transform: item.preview.relativeTransform,
+            },
+          );
+          continue;
+        }
+        if (item.preview.action === "create") {
+          await connection.invoke("bp.add_component", {
+            Bp: prepared.resolved.blueprint,
+            ComponentClass: item.preview.componentClass,
+            ComponentName: item.preview.componentName,
+          });
+        }
+        await connection.invoke("bp.set_component_property", {
           Bp: prepared.resolved.blueprint,
-          ComponentClass: item.preview.componentClass,
           ComponentName: item.preview.componentName,
+          PropertyName: item.preview.assetPropertyName,
+          Value: item.assetValue,
         });
-      }
-      await connection.invoke("bp.set_component_property", {
-        Bp: prepared.resolved.blueprint,
-        ComponentName: item.preview.componentName,
-        PropertyName: item.preview.assetPropertyName,
-        Value: item.assetValue,
-      });
-      await setBlueprintComponentTransform(
-        connection,
-        prepared.resolved.blueprint,
-        item.preview.componentName,
-        item.preview.relativeTransform,
-        true,
-      );
-    }
-    const compileResult = await connection.invoke("bp.compile_blueprint", {
-      Bp: prepared.resolved.blueprint,
-    });
-    const compileError = compileFailure(compileResult);
-    if (compileError) {
-      throw new Error(compileError);
-    }
-    const actualComponents = await readBlueprintComponents(
-      connection,
-      prepared.blueprint.blueprintClassPath,
-    );
-    for (const item of changedItems) {
-      const actual = actualComponents.find(
-        (component) =>
-          component.variableName.toLowerCase() ===
-          item.preview.componentName.toLowerCase(),
-      );
-      if (
-        !actual ||
-        normalizeObjectPath(actual.componentClass) !==
-          normalizeObjectPath(item.preview.componentClass) ||
-        normalizeObjectPath(actual.sourceAssetPath) !==
-          normalizeObjectPath(item.assetValue) ||
-        blueprintTransformsDiffer(
-          actual.transform,
+        await setBlueprintComponentTransform(
+          connection,
+          prepared.resolved.blueprint,
+          item.preview.componentName,
           item.preview.relativeTransform,
-        )
-      ) {
-        throw new Error(
-          `背景组件 ${item.preview.componentName} 写入后的回读结果不一致`,
+          true,
         );
       }
+      const compileResult = await connection.invoke("bp.compile_blueprint", {
+        Bp: prepared.resolved.blueprint,
+      });
+      const compileError = compileFailure(compileResult);
+      if (compileError) {
+        throw new Error(compileError);
+      }
+      actualComponents = await readBlueprintComponents(
+        connection,
+        prepared.blueprint.blueprintClassPath,
+      );
+      for (const item of changedItems) {
+        const actual = actualComponents.find(
+          (component) =>
+            component.variableName.toLowerCase() ===
+            item.preview.componentName.toLowerCase(),
+        );
+        if (
+          !actual ||
+          normalizeObjectPath(actual.componentClass) !==
+            normalizeObjectPath(item.preview.componentClass) ||
+          normalizeObjectPath(actual.sourceAssetPath) !==
+            normalizeObjectPath(item.assetValue) ||
+          blueprintTransformsDiffer(
+            actual.transform,
+            item.preview.relativeTransform,
+          )
+        ) {
+          throw new Error(
+            `${item.preview.importMode === "dialogue_npc" ? "对话角色槽" : "背景组件"} ${item.preview.componentName} 写入后的回读结果不一致`,
+          );
+        }
+      }
+      await compileAndSaveBlueprint(connection, prepared.resolved);
+      blueprintSaved = true;
     }
-    await compileAndSaveBlueprint(connection, prepared.resolved);
+    let dialogueRegistration: DialogueModelRegistrationResult | undefined;
+    if (selectedDialogueNpcItems.length > 0) {
+      const sourceSlots = actualComponents
+        .filter((component) => /^\d+$/.test(component.variableName))
+        .map((component) => ({
+          modelIndex: Number(component.variableName),
+          targetId: null,
+          modelClassPath: component.childActorClass,
+        }));
+      const registrationContext = {
+        ...prepared.dialogueContext!,
+        slots: buildDialogueModelRegistrationSlots(
+          sourceSlots,
+          prepared.dialogueContext!.existingModels,
+          prepared.dialogueContext!.registry,
+        ),
+      };
+      dialogueRegistration = await writeDialogueRegistration(
+        connection,
+        prepared.resolved.assetPath,
+        registrationContext,
+        new Set(
+          sourceSlots
+            .map((slot) => slot.modelIndex)
+            .filter((modelIndex) => modelIndex > 0),
+        ),
+        {
+          mapAssetPath: prepared.preview.mapAssetPath,
+          rootTransform: prepared.preview.rootTransform,
+          fillMissingOnly: true,
+        },
+      );
+    }
+    const changed =
+      changedItems.length > 0 ||
+      dialogueRegistration?.status === "registered";
     return {
-      status: "updated",
+      status: changed ? "updated" : "unchanged",
       blueprintAssetPath: prepared.resolved.assetPath,
       createdComponentNames: changedItems
         .filter((item) => item.preview.action === "create")
@@ -7069,7 +7304,8 @@ export async function applyBackgroundPropImport(
       updatedComponentNames: changedItems
         .filter((item) => item.preview.action === "update")
         .map((item) => item.preview.componentName),
-      saved: true,
+      ...(dialogueRegistration ? { dialogueRegistration } : {}),
+      saved: changed,
     };
   } catch (error) {
     if (prepared && mutationStarted) {
@@ -7095,10 +7331,14 @@ export async function applyBackgroundPropImport(
       }
     }
     throw new Error(
-      `${error instanceof Error ? error.message : "背景资产写入失败"}${
-        mutationStarted
-          ? "；新增组件可能留在 UE 的未保存 BP 中，请检查后撤销"
-          : ""
+      `${
+        error instanceof Error ? error.message : "UE 选择写入失败"
+      }${
+        blueprintSaved
+          ? "；BP 已保存，但对话模型注册未完成"
+          : mutationStarted
+            ? "；新增组件可能留在 UE 的未保存 BP 中，请检查后撤销"
+            : ""
       }`,
     );
   } finally {

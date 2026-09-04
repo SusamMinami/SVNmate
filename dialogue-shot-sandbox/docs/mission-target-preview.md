@@ -272,27 +272,31 @@ BP 输入框右侧的检查按钮会读取 BP、对应数字槽位、同名 Dial
   直接以该 Transform 填充待修改草稿，无需在编辑页重复执行“读取 UE 选择”；
   编辑页仍保留重新读取入口用于 UE 选择已经变化的情况。
 
-背景资源流程只向 BP 添加非数字命名的展示组件，不新增目标物，不修改
-`DialogModels`：
+UE 选择审核会区分 SceneObject NPC 与普通背景资源，不新增目标物：
 
 - Blueprint Actor 写为 `ChildActorComponent` 和对应 Generated Class。
 - 关卡图生成的 `SceneObject` NPC 从 `child_preview_class` 解析实际 NPC
-  Generated Class，使用包装 Actor 的世界 Transform，并继续参与任务目标物
-  模型匹配；匹配成功后沿用 BP 数字槽和 `DialogModels` 注册流程。
+  Generated Class，使用包装 Actor 的世界 Transform。匹配任务目标物时沿用
+  原流程；未匹配时从 BP 当前最大数字槽后按 UE 选择顺序追加，并通过
+  `DialogNPCTable` 同步 `DialogModels`。
 - SkeletalMeshActor 写为 `SkeletalMeshComponent` 和实际 Skeletal Mesh。
 - StaticMeshActor 写为 `StaticMeshComponent` 和实际 Static Mesh。
 - Cascade Emitter 写为 `ParticleSystemComponent` 和实际 Particle System。
 - Niagara Actor 写为 `NiagaraComponent` 和实际 Niagara System。
-- 其他 Actor 显示为不支持，不参与写入。
+- 除 SceneObject NPC 外，普通背景资源仍以资产名创建非数字展示组件，不修改
+  `DialogModels`；其他 Actor 显示为不支持，不参与写入。
 - 任务节点与对话节点都为空时，工具按 BP 父类分流。`TaskActorBase` 不要求
   BP 文件名包含对话数字 ID，优先使用 UE 当前选择中的目标 BP Actor 作为
   坐标原点；未选中目标 BP 时，可回退到当前关卡中的唯一同类 BP 实例。无法
   唯一确定实例时停止写入并提示用户选择。`PositionModeBase` 仍按原流程查找
   对话资产并校验空间配置。
 
-组件名直接使用资产名，例如 `SK_Banner` 或 `BP_BackgroundNpc`。BP 中已有同名
-同资产组件时更新 Transform；已有同名不同资产或一次选择中存在多个同名资产
-时停止该项，不自动重命名。
+普通背景组件名直接使用资产名，例如 `SK_Banner` 或 `BP_BackgroundNpc`。BP 中
+已有同名同资产组件时更新 Transform；已有同名不同资产或一次选择中存在多个
+同名资产时停止该项，不自动重命名。SceneObject NPC 使用数字槽名，因此允许
+同一 NPC Blueprint 在不同位置出现多次。若检测到旧版已用资产名写入同一 NPC
+和 Transform，会显示目标数字槽，要求先将旧组件手动重命名到该槽（或删除）
+后重新读取，避免生成重复角色。
 
 `PositionModeBase` 使用 `PlayerInitPosition` 和 `PlayerForward` 把所选 Actor
 的世界 Transform 转换为 BP 局部 Transform，并校验当前地图与

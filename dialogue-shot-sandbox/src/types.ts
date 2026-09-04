@@ -596,6 +596,7 @@ export interface SelectedLevelActor {
   label: string;
   classPath: string;
   parentClassPath?: string;
+  sceneObjectNpc?: boolean;
   assetKind?:
     | "blueprint_actor"
     | "skeletal_mesh"
@@ -615,6 +616,7 @@ export interface SelectedLevelActorsResult {
 export interface BackgroundPropPreviewItem {
   actorRef: string;
   actorLabel: string;
+  importMode: "background" | "dialogue_npc";
   assetKind:
     | "blueprint_actor"
     | "skeletal_mesh"
@@ -624,6 +626,8 @@ export interface BackgroundPropPreviewItem {
     | "unsupported";
   assetPath: string;
   componentName: string;
+  modelIndex?: number;
+  dialogueModelName?: string | null;
   componentClass: string;
   assetPropertyName: string;
   worldTransform: UnrealTransform;
@@ -646,6 +650,7 @@ export interface BackgroundPropImportResult {
   blueprintAssetPath: string;
   createdComponentNames: string[];
   updatedComponentNames: string[];
+  dialogueRegistration?: DialogueModelRegistrationResult;
   saved: boolean;
 }
 

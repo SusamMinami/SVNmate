@@ -346,6 +346,11 @@ export function MissionTargetModal({
   const selectedBackgroundCount = selectableBackgroundItems.filter(
     (item) => selectedBackgroundActorRefs.has(item.actorRef),
   ).length;
+  const selectedDialogueNpcCount = selectableBackgroundItems.filter(
+    (item) =>
+      item.importMode === "dialogue_npc" &&
+      selectedBackgroundActorRefs.has(item.actorRef),
+  ).length;
   const allBackgroundItemsSelected =
     selectableBackgroundItems.length > 0 &&
     selectedBackgroundCount === selectableBackgroundItems.length;
@@ -887,10 +892,23 @@ export function MissionTargetModal({
     ) {
       return;
     }
+    const selectedItems = backgroundPropPreview.items.filter((item) =>
+      selectedBackgroundActorRefs.has(item.actorRef),
+    );
+    const dialogueNpcCount = selectedItems.filter(
+      (item) => item.importMode === "dialogue_npc",
+    ).length;
+    const backgroundAssetCount = selectedItems.length - dialogueNpcCount;
     if (
       !window.confirm(
         `将向 ${backgroundPropPreview.blueprintAssetPath} 写入 ${selectedBackgroundCount} 个 UE Actor。` +
-          "\n组件使用资产原名，并保留位置、旋转和缩放。" +
+          (dialogueNpcCount > 0
+            ? `\n${dialogueNpcCount} 个 SceneObject NPC 将按数字槽位顺序写入，并同步对应对话的 DialogModels。`
+            : "") +
+          (backgroundAssetCount > 0
+            ? `\n${backgroundAssetCount} 个背景资产使用资产原名写入。`
+            : "") +
+          "\n全部对象均保留位置、旋转和缩放。" +
           "\n不会写入 NPC 表或目标物表。" +
           "\n\nBP 将编译并保存，是否继续？",
       )
@@ -918,8 +936,12 @@ export function MissionTargetModal({
       setStatus(
         selectionPrefix +
           (result.status === "unchanged"
-          ? "所选 UE Actor 已经与 BP 一致"
-          : `已直接写入 BP：新增 ${result.createdComponentNames.length} 个，更新 ${result.updatedComponentNames.length} 个`),
+          ? "所选 UE Actor 与 BP、对话模型均已一致"
+          : `已写入 BP：新增 ${result.createdComponentNames.length} 个，更新 ${result.updatedComponentNames.length} 个${
+              result.dialogueRegistration
+                ? `；DialogModels 已注册 ${result.dialogueRegistration.registeredCount} 个角色`
+                : ""
+            }`),
       );
     } catch (importError) {
       setBackgroundPropError(
@@ -2406,7 +2428,7 @@ export function MissionTargetModal({
                   <span className="background-prop-choice__routing">
                     已识别任务目标物{" "}
                     <code>{backgroundMatchedTargetIds.join("、")}</code>
-                    ，下列未匹配 Actor 按背景资源审核
+                    ，下列未匹配 Actor 按实际类型审核
                   </span>
                 )}
               </div>
@@ -2479,10 +2501,18 @@ export function MissionTargetModal({
                             </small>
                           </td>
                           <td>
-                            {backgroundPropKindLabel(item.assetKind)}
+                            {item.importMode === "dialogue_npc"
+                              ? "SceneObject NPC"
+                              : backgroundPropKindLabel(item.assetKind)}
                           </td>
                           <td>
                             <code>{item.componentName || "-"}</code>
+                            {item.importMode === "dialogue_npc" && (
+                              <small>
+                                DialogModels：
+                                {item.dialogueModelName ?? "None"}
+                              </small>
+                            )}
                           </td>
                           <td>
                             <code>
@@ -2518,6 +2548,7 @@ export function MissionTargetModal({
                             >
                               {backgroundPropActionLabel(item.action)}
                             </span>
+                            {blocked && <small>{item.message}</small>}
                           </td>
                         </tr>
                       );
@@ -2571,7 +2602,11 @@ export function MissionTargetModal({
                     ) : (
                       <PackagePlus size={15} />
                     )}
-                    {busy ? "正在写入..." : "写入 BP"}
+                    {busy
+                      ? "正在写入..."
+                      : selectedDialogueNpcCount > 0
+                        ? "写入 BP 与对话"
+                        : "写入 BP"}
                   </button>
                 </div>
               </footer>

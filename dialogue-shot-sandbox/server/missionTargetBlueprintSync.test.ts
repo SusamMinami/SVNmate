@@ -70,6 +70,8 @@ class BlueprintSyncConnection implements UnrealInvoker {
   previewLevel = "";
   selectedPlacementActors: Array<Record<string, unknown>> = [];
   levelPlacementActors: Array<Record<string, unknown>> = [];
+  dialogNpcNames = ["Guard"];
+  dialogNpcPaths = ["/Game/Test/BP_Guard.BP_Guard_C"];
 
   async connect(): Promise<void> {}
 
@@ -103,8 +105,8 @@ class BlueprintSyncConnection implements UnrealInvoker {
         return {
           bSuccess: true,
           Result: `'${JSON.stringify({
-            names: ["Guard"],
-            paths: ["/Game/Test/BP_Guard.BP_Guard_C"],
+            names: this.dialogNpcNames,
+            paths: this.dialogNpcPaths,
           })}'`,
         };
       }
@@ -1254,6 +1256,247 @@ describe("background prop import", () => {
     expect(expression).toContain("child_preview_class");
     expect(expression).toContain("type(a).static_class()");
     expect(expression).not.toContain("get_super_class");
+  });
+
+  it("appends SceneObject NPCs as ordered numeric slots and registers DialogModels", async () => {
+    await writeConfigFixture();
+    const connection = new BackgroundPropConnection();
+    connection.commonProperties[0].CurrentBool = true;
+    connection.specialProperties[0].CurrentBool = true;
+    connection.previewLevel = "/Game/Test/Maps/PlacedMap.PlacedMap";
+    connection.dialogNpcNames = ["Guard", "Added", "BackgroundNpc"];
+    connection.dialogNpcPaths = [
+      "/Game/Test/BP_Guard.BP_Guard_C",
+      "/Game/Test/BP_Added.BP_Added_C",
+      "/Game/Test/NPC/BP_BackgroundNpc.BP_BackgroundNpc_C",
+    ];
+    connection.selectedPlacementActors = [
+      {
+        actor_ref: "PersistentLevel.SceneObject20",
+        label: "SceneObject20",
+        class_path:
+          "/Game/Seria/Editor/SeriaLevelGraphActor/BP_Npc_Preview.BP_Npc_Preview_C",
+        parent_class_path: "/Script/SeriaGraphEditor.NpcDefaultActor",
+        child_preview_class_path: "/Game/Test/BP_Added.BP_Added_C",
+        child_preview_label: "BP_Added",
+        location: [140, 250, 300],
+        rotation: [0, 30, 0],
+        scale: [1, 1, 1],
+      },
+      {
+        actor_ref: "PersistentLevel.SceneObject21",
+        label: "SceneObject21",
+        class_path:
+          "/Game/Seria/Editor/SeriaLevelGraphActor/BP_Npc_Preview.BP_Npc_Preview_C",
+        parent_class_path: "/Script/SeriaGraphEditor.NpcDefaultActor",
+        child_preview_class_path:
+          "/Game/Test/NPC/BP_BackgroundNpc.BP_BackgroundNpc_C",
+        child_preview_label: "BP_BackgroundNpc",
+        location: [160, 280, 310],
+        rotation: [0, -25, 0],
+        scale: [1, 1, 1],
+      },
+    ];
+    const actorRefs = connection.selectedPlacementActors.map((actor) =>
+      String(actor.actor_ref),
+    );
+
+    const preview = await inspectBackgroundPropImport(
+      { blueprintName: "BP_735200", actorRefs },
+      () => connection,
+    );
+
+    expect(preview.blockedReasons).toEqual([]);
+    expect(preview.items).toEqual([
+      expect.objectContaining({
+        actorLabel: "BP_Added",
+        importMode: "dialogue_npc",
+        componentName: "2",
+        modelIndex: 2,
+        dialogueModelName: "Added",
+        action: "create",
+      }),
+      expect.objectContaining({
+        actorLabel: "BP_BackgroundNpc",
+        importMode: "dialogue_npc",
+        componentName: "3",
+        modelIndex: 3,
+        dialogueModelName: "BackgroundNpc",
+        action: "create",
+      }),
+    ]);
+
+    const result = await applyBackgroundPropImport(
+      {
+        blueprintName: "BP_735200",
+        reviewToken: preview.reviewToken,
+        selectedActorRefs: actorRefs,
+        reviewedActorRefs: actorRefs,
+      },
+      () => connection,
+    );
+
+    expect(result).toMatchObject({
+      status: "updated",
+      createdComponentNames: ["2", "3"],
+      dialogueRegistration: {
+        dialogueModels: ["player", "Guard", "Added", "BackgroundNpc"],
+        registeredCount: 3,
+        unresolvedIndexes: [],
+      },
+      saved: true,
+    });
+    expect(connection.dialogueModels).toEqual([
+      "player",
+      "Guard",
+      "Added",
+      "BackgroundNpc",
+    ]);
+
+    const repeatedPreview = await inspectBackgroundPropImport(
+      { blueprintName: "BP_735200", actorRefs },
+      () => connection,
+    );
+    expect(
+      repeatedPreview.items.map((item) => [
+        item.componentName,
+        item.action,
+      ]),
+    ).toEqual([
+      ["2", "unchanged"],
+      ["3", "unchanged"],
+    ]);
+  });
+
+  it("allows the same SceneObject NPC model in multiple numeric slots", async () => {
+    await writeConfigFixture();
+    const connection = new BackgroundPropConnection();
+    connection.commonProperties[0].CurrentBool = true;
+    connection.specialProperties[0].CurrentBool = true;
+    connection.previewLevel = "/Game/Test/Maps/PlacedMap.PlacedMap";
+    connection.dialogNpcNames = ["Guard", "Added"];
+    connection.dialogNpcPaths = [
+      "/Game/Test/BP_Guard.BP_Guard_C",
+      "/Game/Test/BP_Added.BP_Added_C",
+    ];
+    connection.selectedPlacementActors = [
+      {
+        actor_ref: "PersistentLevel.SceneObject20",
+        label: "SceneObject20",
+        class_path:
+          "/Game/Seria/Editor/SeriaLevelGraphActor/BP_Npc_Preview.BP_Npc_Preview_C",
+        parent_class_path: "/Script/SeriaGraphEditor.NpcDefaultActor",
+        child_preview_class_path: "/Game/Test/BP_Added.BP_Added_C",
+        child_preview_label: "BP_Added",
+        location: [140, 250, 300],
+        rotation: [0, 30, 0],
+        scale: [1, 1, 1],
+      },
+      {
+        actor_ref: "PersistentLevel.SceneObject21",
+        label: "SceneObject21",
+        class_path:
+          "/Game/Seria/Editor/SeriaLevelGraphActor/BP_Npc_Preview.BP_Npc_Preview_C",
+        parent_class_path: "/Script/SeriaGraphEditor.NpcDefaultActor",
+        child_preview_class_path: "/Game/Test/BP_Added.BP_Added_C",
+        child_preview_label: "BP_Added",
+        location: [180, 290, 310],
+        rotation: [0, -30, 0],
+        scale: [1, 1, 1],
+      },
+    ];
+    const actorRefs = connection.selectedPlacementActors.map((actor) =>
+      String(actor.actor_ref),
+    );
+
+    const preview = await inspectBackgroundPropImport(
+      { blueprintName: "BP_735200", actorRefs },
+      () => connection,
+    );
+
+    expect(
+      preview.items.map((item) => ({
+        componentName: item.componentName,
+        dialogueModelName: item.dialogueModelName,
+        action: item.action,
+      })),
+    ).toEqual([
+      {
+        componentName: "2",
+        dialogueModelName: "Added",
+        action: "create",
+      },
+      {
+        componentName: "3",
+        dialogueModelName: "Added",
+        action: "create",
+      },
+    ]);
+
+    const result = await applyBackgroundPropImport(
+      {
+        blueprintName: "BP_735200",
+        reviewToken: preview.reviewToken,
+        selectedActorRefs: actorRefs,
+        reviewedActorRefs: actorRefs,
+      },
+      () => connection,
+    );
+
+    expect(result.dialogueRegistration?.dialogueModels).toEqual([
+      "player",
+      "Guard",
+      "Added",
+      "Added",
+    ]);
+  });
+
+  it("blocks SceneObject NPCs that were previously written as named background components", async () => {
+    await writeConfigFixture();
+    const connection = new BackgroundPropConnection();
+    connection.commonProperties[0].CurrentBool = true;
+    connection.specialProperties[0].CurrentBool = true;
+    connection.previewLevel = "/Game/Test/Maps/PlacedMap.PlacedMap";
+    connection.dialogNpcNames = ["Guard", "Added"];
+    connection.dialogNpcPaths = [
+      "/Game/Test/BP_Guard.BP_Guard_C",
+      "/Game/Test/BP_Added.BP_Added_C",
+    ];
+    connection.backgroundComponents.set("BP_Added", {
+      componentClass: "/Script/Engine.ChildActorComponent",
+      assetPath: "/Game/Test/BP_Added.BP_Added_C",
+      location: { X: 40, Y: 50, Z: 100 },
+      rotation: { Pitch: 0, Yaw: 30, Roll: 0 },
+      scale: { X: 1, Y: 1, Z: 1 },
+    });
+    connection.selectedPlacementActors = [
+      {
+        actor_ref: "PersistentLevel.SceneObject20",
+        label: "SceneObject20",
+        class_path:
+          "/Game/Seria/Editor/SeriaLevelGraphActor/BP_Npc_Preview.BP_Npc_Preview_C",
+        parent_class_path: "/Script/SeriaGraphEditor.NpcDefaultActor",
+        child_preview_class_path: "/Game/Test/BP_Added.BP_Added_C",
+        child_preview_label: "BP_Added",
+        location: [140, 250, 300],
+        rotation: [0, 30, 0],
+        scale: [1, 1, 1],
+      },
+    ];
+
+    const preview = await inspectBackgroundPropImport(
+      { blueprintName: "BP_735200" },
+      () => connection,
+    );
+
+    expect(preview.items[0]).toMatchObject({
+      importMode: "dialogue_npc",
+      componentName: "2",
+      action: "blocked",
+      message: expect.stringContaining(
+        "已有旧版非数字组件 BP_Added",
+      ),
+    });
   });
 
   it("recognizes TaskActorBase in the BP inspection before reading UE selection", async () => {

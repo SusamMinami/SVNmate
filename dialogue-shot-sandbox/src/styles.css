@@ -5752,6 +5752,13 @@ textarea:focus-visible {
   white-space: nowrap;
 }
 
+.background-prop-table td:last-child small {
+  display: block;
+  max-width: 240px;
+  margin-top: 4px;
+  white-space: normal;
+}
+
 .background-prop-choice > footer {
   align-items: center;
   justify-content: space-between;

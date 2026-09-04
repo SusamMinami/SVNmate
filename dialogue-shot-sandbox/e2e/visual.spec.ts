@@ -6869,6 +6869,7 @@ test("offers bidirectional position sync for a registered Blueprint", async ({
               {
                 actorRef: "PersistentLevel.SkeletalMeshActor_1",
                 actorLabel: "场景旗帜",
+                importMode: "background",
                 assetKind: "skeletal_mesh",
                 assetPath:
                   "/Game/Test/Props/SK_Banner.SK_Banner",
@@ -7146,7 +7147,7 @@ test("offers bidirectional position sync for a registered Blueprint", async ({
   await backgroundDialog
     .getByRole("button", { name: "写入 BP", exact: true })
     .click();
-  await expect(dialog.getByText(/已直接写入 BP：新增 1 个/)).toBeVisible();
+  await expect(dialog.getByText(/已写入 BP：新增 1 个/)).toBeVisible();
   expect(backgroundApplyRequest).toEqual({
     blueprintName: "BP_735000",
     reviewToken: "a".repeat(64),
