@@ -21,9 +21,14 @@ contextBridge.exposeInMainWorld("shotSandboxDesktop", {
       enabled,
       contentSize,
     ),
+  writeClipboardText: (text: string) =>
+    ipcRenderer.invoke("desktop:write-clipboard-text", text),
   getPathForFile: (file: File) => webUtils.getPathForFile(file),
   chooseDataDirectory: (kind: "live" | "config") =>
     ipcRenderer.invoke("desktop:choose-data-directory", kind),
+  chooseNpcMigrationDirectory: (
+    kind: "target-content" | "animations",
+  ) => ipcRenderer.invoke("desktop:choose-npc-migration-directory", kind),
   setLiveResDirectory: (directoryPath: string) =>
     ipcRenderer.invoke("desktop:set-live-data-directory", directoryPath),
   setConfigDocDirectory: (directoryPath: string) =>

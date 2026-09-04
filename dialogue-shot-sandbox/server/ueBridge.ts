@@ -1,7 +1,6 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { access, readFile, unlink } from "node:fs/promises";
-import { join } from "node:path";
 import { z } from "zod";
 import type {
   BackgroundPropImportPreview,
@@ -6398,6 +6397,7 @@ function parseLevelActors(
       actor_ref?: unknown;
       label?: unknown;
       class_path?: unknown;
+      parent_class_path?: unknown;
       skeletal_mesh_path?: unknown;
       static_mesh_path?: unknown;
       particle_system_path?: unknown;
@@ -6440,6 +6440,9 @@ function parseLevelActors(
       actorRef: String(actor.actor_ref),
       label: String(actor.label || `Actor ${index + 1}`),
       classPath,
+      ...(actor.parent_class_path
+        ? { parentClassPath: String(actor.parent_class_path) }
+        : {}),
       assetKind,
       assetPath: blueprintActor
         ? blueprintAssetPath(classPath)
@@ -6469,7 +6472,7 @@ function parseLevelActors(
 }
 
 const LEVEL_ACTOR_JSON_FIELDS =
-  "{'actor_ref': a.get_path_name(), 'label': a.get_actor_label(), 'class_path': a.get_class().get_path_name(), " +
+  "{'actor_ref': a.get_path_name(), 'label': a.get_actor_label(), 'class_path': a.get_class().get_path_name(), 'parent_class_path': (a.get_class().get_super_class().get_path_name() if a.get_class().get_super_class() else ''), " +
   "'skeletal_mesh_path': (a.get_component_by_class(unreal.SkeletalMeshComponent).get_editor_property('skeletal_mesh').get_path_name() if a.get_component_by_class(unreal.SkeletalMeshComponent) and a.get_component_by_class(unreal.SkeletalMeshComponent).get_editor_property('skeletal_mesh') else ''), " +
   "'static_mesh_path': (a.get_component_by_class(unreal.StaticMeshComponent).get_editor_property('static_mesh').get_path_name() if a.get_component_by_class(unreal.StaticMeshComponent) and a.get_component_by_class(unreal.StaticMeshComponent).get_editor_property('static_mesh') else ''), " +
   "'particle_system_path': (a.get_component_by_class(unreal.ParticleSystemComponent).get_editor_property('template').get_path_name() if a.get_component_by_class(unreal.ParticleSystemComponent) and a.get_component_by_class(unreal.ParticleSystemComponent).get_editor_property('template') else ''), " +

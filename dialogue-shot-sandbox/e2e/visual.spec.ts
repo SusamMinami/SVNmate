@@ -5850,6 +5850,126 @@ test("applies one MapID to selected actors and writes reusable NPCs as targets o
   });
 });
 
+test("registers TaskActorBase with model and target tables only", async ({
+  page,
+}, testInfo) => {
+  let writeRequest: {
+    scope: string;
+    items: Array<Record<string, unknown>>;
+  } | null = null;
+  const actor = {
+    actorRef: "PersistentLevel.BP_TaskProp_C_0",
+    label: "任务装置",
+    classPath:
+      "/Game/Seria/Task/BPtriger/TaskActor/BP_TaskProp.BP_TaskProp_C",
+    parentClassPath:
+      "/Game/Seria/Task/BPtriger/TaskActor/TaskActorBase.TaskActorBase_C",
+    transform: {
+      location: { x: 100, y: 200, z: 300 },
+      rotation: { pitch: 0, yaw: 45, roll: 0 },
+      scale: { x: 1, y: 1, z: 1 },
+    },
+  };
+  await page.route("**/api/ue/selection/registration", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          selection: {
+            mapAssetPath: "/Game/Test/Maps/TestMap",
+            actors: [actor],
+          },
+          candidates: [
+            {
+              actor,
+              registrationKind: "task_actor",
+              modelOptions: [],
+              npcOptions: [],
+              positionMatches: [],
+              targetMatches: [],
+              mapOptions: [
+                {
+                  id: "1204",
+                  name: "测试地图",
+                  resourceId: "100128",
+                  assetPath: "/Game/Test/Maps/TestMap",
+                  rowNumber: 3,
+                },
+              ],
+              mapId: "1204",
+              mapName: "测试地图",
+            },
+          ],
+        },
+      }),
+    });
+  });
+  await page.route("**/api/ue/config-registration/write", async (route) => {
+    writeRequest = route.request().postDataJSON();
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          createdModels: [{ actorRef: actor.actorRef, id: 500712 }],
+          createdNpcs: [],
+          createdTargets: [{ actorRef: actor.actorRef, id: 100999 }],
+          reusedTargets: [],
+          openedWorkbooks: [
+            "C:\\trunk\\doc\\xlsdir\\m模型资源表.xlsm",
+            "C:\\trunk\\doc\\xlsdir\\r任务剧情\\m目标物表.xlsm",
+          ],
+        },
+      }),
+    });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "注册 NPC" }).click();
+  const registration = page.getByRole("region", {
+    name: "注册 NPC",
+    exact: true,
+  });
+  await registration.getByRole("button", { name: "读取 UE 选择" }).click();
+
+  await expect(registration.getByText("任务装置")).toBeVisible();
+  await expect(registration.getByText("无需 NPC")).toBeVisible();
+  await expect(
+    registration.getByLabel("任务装置 NPC 复用方式"),
+  ).toHaveCount(0);
+  await expect(
+    registration.getByText(/1 个 TaskActor · 1 个模型待注册 · 0 个 NPC 待新建/),
+  ).toBeVisible();
+  await registration.screenshot({
+    path: testInfo.outputPath("task-actor-registration.png"),
+  });
+
+  page.once("dialog", async (confirmation) => {
+    expect(confirmation.message()).toContain("新增 1 个模型、0 个 NPC");
+    await confirmation.accept();
+  });
+  await registration.getByRole("button", { name: "写入新增项" }).click();
+  await expect(
+    registration.getByText(/模型 1、NPC 0、目标物 1/),
+  ).toBeVisible();
+  expect(writeRequest).toMatchObject({
+    scope: "all",
+    items: [
+      {
+        actorRef: actor.actorRef,
+        registrationKind: "task_actor",
+        existingModelId: null,
+        existingNpcId: null,
+        mapId: "1204",
+        newNpc: null,
+      },
+    ],
+  });
+});
+
 test("locks and registers every existing numeric Blueprint slot", async ({
   page,
 }, testInfo) => {

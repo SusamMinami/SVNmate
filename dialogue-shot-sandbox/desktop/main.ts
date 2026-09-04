@@ -10,6 +10,7 @@ import { extname, join, normalize, resolve } from "node:path";
 import {
   app,
   BrowserWindow,
+  clipboard,
   dialog,
   ipcMain,
   screen,
@@ -694,6 +695,22 @@ function registerDesktopIpc(): void {
     },
   );
   ipcMain.handle(
+    "desktop:choose-npc-migration-directory",
+    async (_event, kind: unknown) => {
+      if (kind !== "target-content" && kind !== "animations") {
+        throw new Error("未知的 NPC 迁移目录类型");
+      }
+      const result = await dialog.showOpenDialog(mainWindow!, {
+        title:
+          kind === "target-content"
+            ? "选择策划 UE 项目的 Content 目录"
+            : "选择 NPC 动作 FBX 目录",
+        properties: ["openDirectory"],
+      });
+      return result.canceled ? null : result.filePaths[0] ?? null;
+    },
+  );
+  ipcMain.handle(
     "desktop:set-live-data-directory",
     (_event, directoryPath: unknown) =>
       setLiveResDirectory(directoryPath),
@@ -749,6 +766,12 @@ function registerDesktopIpc(): void {
     "desktop:get-configuration-window-mode",
     () => configurationWindowRestoreState !== null,
   );
+  ipcMain.handle("desktop:write-clipboard-text", (_event, text: unknown) => {
+    if (typeof text !== "string") {
+      throw new Error("剪贴板内容必须是文本");
+    }
+    clipboard.writeText(text);
+  });
   ipcMain.handle("desktop:check-update", () => checkForUpdates());
   ipcMain.handle("desktop:update-snapshot", () => updateSnapshot);
   ipcMain.handle("desktop:install-update", () => {

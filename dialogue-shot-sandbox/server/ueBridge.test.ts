@@ -1694,6 +1694,8 @@ describe("UE editor selection", () => {
         label: "守卫 A",
         class_path:
           "/Game/Seria/NPC/Guard/BP_Guard.BP_Guard_C",
+        parent_class_path:
+          "/Game/Seria/NPC/Base/NpcBase.NpcBase_C",
         location: [10, 20, 30],
         rotation: [1, 90, 2],
         scale: [1, 1, 1],
@@ -1717,6 +1719,8 @@ describe("UE editor selection", () => {
           label: "守卫 A",
           classPath:
             "/Game/Seria/NPC/Guard/BP_Guard.BP_Guard_C",
+          parentClassPath:
+            "/Game/Seria/NPC/Base/NpcBase.NpcBase_C",
           assetKind: "blueprint_actor",
           assetPath:
             "/Game/Seria/NPC/Guard/BP_Guard.BP_Guard",

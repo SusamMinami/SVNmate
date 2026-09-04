@@ -22,6 +22,13 @@ import type {
   MissionTargetUpdateResult,
   MissionTargetPreviewLoadResult,
   MissionTargetPreviewPlan,
+  NpcMigrationCopyResult,
+  NpcMigrationPlan,
+  NpcMigrationPlanRequest,
+  NpcMigrationSourceScan,
+  NpcMigrationTargetInspection,
+  NpcMigrationTargetRequest,
+  NpcMigrationTargetResult,
   NpcRegistrationScanResult,
   NpcRegistrationWriteItem,
   NpcRegistrationWriteResult,
@@ -391,6 +398,42 @@ export function readSelectedLevelActors(): Promise<SelectedLevelActorsResult> {
 
 export function scanSelectedNpcRegistration(): Promise<NpcRegistrationScanResult> {
   return postUe("/api/ue/selection/registration");
+}
+
+export function scanNpcMigrationSource(): Promise<NpcMigrationSourceScan> {
+  return postUe("/api/ue/npc-migration/source-scan", undefined, false);
+}
+
+export function inspectNpcMigrationPlan(
+  request: NpcMigrationPlanRequest,
+): Promise<NpcMigrationPlan> {
+  return postUe("/api/ue/npc-migration/plan", request, false);
+}
+
+export function applyNpcAssetMigration(
+  plan: NpcMigrationPlan,
+): Promise<NpcMigrationCopyResult> {
+  return postUe(
+    "/api/ue/npc-migration/migrate",
+    { plan, reviewToken: plan.reviewToken },
+    false,
+  );
+}
+
+export function inspectNpcMigrationTarget(
+  request: NpcMigrationTargetRequest,
+): Promise<NpcMigrationTargetInspection> {
+  return postUe("/api/ue/npc-migration/target-inspect", request, false);
+}
+
+export function configureNpcMigrationTarget(
+  request: NpcMigrationTargetRequest,
+): Promise<NpcMigrationTargetResult> {
+  return postUe(
+    "/api/ue/npc-migration/target-configure",
+    request,
+    false,
+  );
 }
 
 export function openConfigTable(

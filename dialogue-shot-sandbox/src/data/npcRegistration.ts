@@ -107,11 +107,25 @@ export function registrationWriteScope(
   return items.every(
     (item) =>
       item.existingModelId !== null &&
-      item.existingNpcId !== null &&
-      item.newNpc === null,
+      item.newNpc === null &&
+      (item.registrationKind === "task_actor"
+        ? item.existingNpcId === null
+        : item.existingNpcId !== null),
   )
     ? "target_only"
     : "all";
+}
+
+function registrationKind(
+  actor: SelectedLevelActor,
+): NpcRegistrationCandidate["registrationKind"] {
+  const parentName =
+    actor.parentClassPath
+      ?.split(".")
+      .at(-1)
+      ?.replace(/_C$/i, "")
+      .toLowerCase() ?? "";
+  return parentName === "taskactorbase" ? "task_actor" : "npc";
 }
 
 function angleDistance(left: number, right: number): number {
@@ -157,6 +171,7 @@ export function buildNpcRegistrationCandidates(
   const npcs = Array.from(database.npcs.values());
 
   return selection.actors.map((actor) => {
+    const actorRegistrationKind = registrationKind(actor);
     const actorClassPath = normalizedAssetPath(actor.classPath);
     const modelOptions = models.filter(
       (model) =>
@@ -175,8 +190,13 @@ export function buildNpcRegistrationCandidates(
         mapIds.has(target.mapId) &&
         matchesActorPosition(target, actor),
     );
-    const targetMatches = positionMatches.filter((target) =>
-      matchesActorRotation(target, actor),
+    const targetMatches = positionMatches.filter(
+      (target) =>
+        matchesActorRotation(target, actor) &&
+        (actorRegistrationKind !== "task_actor" ||
+          (target.type === 4 &&
+            target.blueprintModelId !== null &&
+            modelIds.has(target.blueprintModelId))),
     );
     const inferredMapId =
       targetMatches[0]?.mapId ??
@@ -187,6 +207,7 @@ export function buildNpcRegistrationCandidates(
     );
     return {
       actor,
+      registrationKind: actorRegistrationKind,
       modelOptions,
       npcOptions,
       positionMatches,

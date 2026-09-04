@@ -62,10 +62,14 @@ interface Window {
       enabled: boolean,
       contentSize?: { width: number; height: number },
     ) => Promise<boolean>;
+    writeClipboardText?: (text: string) => Promise<void>;
     getPathForFile: (file: File) => string;
     chooseDataDirectory?: (
       kind: "live" | "config",
     ) => Promise<DesktopSetupStatus | null>;
+    chooseNpcMigrationDirectory?: (
+      kind: "target-content" | "animations",
+    ) => Promise<string | null>;
     setLiveResDirectory?: (
       directoryPath: string,
     ) => Promise<DesktopSetupStatus>;

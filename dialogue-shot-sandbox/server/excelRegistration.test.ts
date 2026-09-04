@@ -157,7 +157,10 @@ describe("Excel PowerShell errors", () => {
       "[void]$requiredPaths.Add($paths.model)",
     );
     expect(EXCEL_REGISTRATION_SCRIPT).toContain(
-      "if ($null -eq $item.existingNpcId)",
+      '[string]$item.registrationKind -ne "task_actor" -and',
+    );
+    expect(EXCEL_REGISTRATION_SCRIPT).toContain(
+      "$null -eq $item.existingNpcId",
     );
     expect(EXCEL_REGISTRATION_SCRIPT).toContain(
       "[void]$requiredPaths.Add($paths.npc)",
@@ -214,6 +217,93 @@ describe("Excel PowerShell errors", () => {
     expect(request.paths.npc).toBe(
       "D:\\Project\\doc\\xlsdir\\NPC表.xlsm",
     );
+  });
+
+  it("accepts TaskActor writes without an NPC and uses the 500000 model segment", () => {
+    const request = parseNpcRegistrationWriteRequest({
+      scope: "all",
+      paths: TEST_REGISTRATION_PATHS,
+      items: [
+        {
+          actorRef: "BP_TaskProp_C_1",
+          label: "任务物件",
+          targetDescription: "任务物件",
+          classPath:
+            "/Game/Seria/Task/BPtriger/TaskActor/BP_TaskProp.BP_TaskProp_C",
+          registrationKind: "task_actor",
+          transform: {
+            location: { x: 1, y: 2, z: 3 },
+            rotation: { pitch: 0, yaw: 90, roll: 0 },
+            scale: { x: 1, y: 1, z: 1 },
+          },
+          mapId: "1204",
+          existingModelId: null,
+          existingNpcId: null,
+          existingTargetId: null,
+          canTurn: false,
+          newNpc: null,
+        },
+      ],
+    });
+
+    expect(request.items[0]).toMatchObject({
+      registrationKind: "task_actor",
+      existingNpcId: null,
+      newNpc: null,
+    });
+    expect(EXCEL_REGISTRATION_SCRIPT).toContain(
+      "Get-NextId $modelValues $modelRowCount 0 500000 599999",
+    );
+    expect(EXCEL_REGISTRATION_SCRIPT).toContain(
+      "Set-NewCell $targetSheet $row 5 4",
+    );
+    expect(EXCEL_REGISTRATION_SCRIPT).toContain(
+      "Set-NewCell $targetSheet $row 6 0",
+    );
+    expect(EXCEL_REGISTRATION_SCRIPT).toContain(
+      "Set-NewCell $targetSheet $row 7 0",
+    );
+    expect(EXCEL_REGISTRATION_SCRIPT).toContain(
+      "Set-NewCell $targetSheet $row 8 $modelByActor[$item.actorRef]",
+    );
+    expect(EXCEL_REGISTRATION_SCRIPT).toContain(
+      '[string]$_.type -eq "4"',
+    );
+    expect(EXCEL_REGISTRATION_SCRIPT).toContain(
+      "[string]$_.blueprintModelId -eq [string]$expectedModelId",
+    );
+  });
+
+  it("accepts TaskActor target-only writes with an existing model and no NPC", () => {
+    const request = parseNpcRegistrationWriteRequest({
+      scope: "target_only",
+      paths: TEST_REGISTRATION_PATHS,
+      items: [
+        {
+          actorRef: "BP_TaskProp_C_1",
+          label: "任务物件",
+          targetDescription: "任务物件",
+          classPath:
+            "/Game/Seria/Task/BPtriger/TaskActor/BP_TaskProp.BP_TaskProp_C",
+          registrationKind: "task_actor",
+          transform: {
+            location: { x: 1, y: 2, z: 3 },
+            rotation: { pitch: 0, yaw: 90, roll: 0 },
+            scale: { x: 1, y: 1, z: 1 },
+          },
+          mapId: "1204",
+          existingModelId: 500711,
+          existingNpcId: null,
+          existingTargetId: null,
+          canTurn: false,
+          newNpc: null,
+        },
+      ],
+    });
+
+    expect(request.scope).toBe("target_only");
+    expect(request.items[0].existingModelId).toBe(500711);
+    expect(request.items[0].existingNpcId).toBeNull();
   });
 
   it("rejects a successful response that did not confirm every target", () => {

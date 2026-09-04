@@ -1,3 +1,50 @@
+# 镜头沙盘 v0.23.0
+
+## NPC 迁移与蓝图配置
+
+- 新增常驻“NPC 迁移”工作区，按美术 UE 扫描、文件迁移、策划 UE 校验和目标
+  配置四个阶段执行，切换工作区不会丢失计划和审核状态。
+- 从内容浏览器读取单个 `SK_` Skeletal Mesh，递归收集 `/Game` 依赖与物理
+  文件；迁移保持原包路径，源资产未保存、目标冲突或目录不合法时阻断。
+- NPC 名称从 SK 自动派生并允许确认；`BP_<NPC>`、`ABP_<NPC>` 与
+  `BS_<NPC>_Look` 保持确定性命名。
+- 使用 FBX Import Task 批量导入 Body/Face 动作，禁止导入 Mesh，明确绑定
+  当前 Skeleton；Face 动作自动开启根骨骼锁定。
+- 按 Skeletal Mesh 导入包围盒估算 Capsule Radius/Half Height 和 Mesh Z
+  偏移，并在写入后回读校验。
+- 动态定位 `NpcBehaviourComponent` 的唯一转头曲线属性；资产缺失、属性歧义
+  或回读不一致时停止保存。
+- 按 Idle、TurnL/TurnR、TurnLeft/Right90/180 命名创建 Montage，并写入
+  `IdleSlot` / `TurnSlot`；同名映射会在计划阶段阻断。
+- 支持男性 `ABP_N16_Villager_Male_A` 与女性
+  `ABP_N18_Villager_Female_A` 标准模板。工具复制模板 ABP，替换目标 Skeleton，
+  并遍历复制品中的 Sequence/BlendSpace Player 节点，替换 Look、
+  IdleStand、Impact、Interact 资产。
+- 自动创建 Look BlendSpace，复制模板轴名称、范围、网格和采样位置；LookD/F/U
+  配置为 Mesh Space Additive，以 LookF 第 15 帧为基准，并使用当前
+  IdleStand 作为预览基础姿势。
+- 迁移计划使用审核令牌防止参数变化后继续写入；动作导入数量、蓝图、胶囊体、
+  曲线、Montage 和模板替换均执行写后回读。
+
+## TaskActor 注册
+
+- UE Actor 扫描新增直接父类路径，注册流程可区分普通 NPC 和
+  `TaskActorBase`。
+- TaskActor 不创建或复用 NPC；模型 ID 使用 `500000-599999`，目标物写
+  `type=4`、`NPCID=0`、`ItemID=0` 和对应 `BluePrint` 模型 ID。
+- Excel 写入、目标物查重、单表范围和混合批次均按注册类型校验；只有普通 NPC
+  会打开 NPC 表。
+- 注册界面显示 TaskActor 数量和“无需 NPC”状态，并使用 Electron 原生剪贴板
+  写入目标物 ID。
+
+## 工程质量
+
+- 新增 NPC 迁移计划、文件复制、目标配置和模板替换单元测试及桌面布局 E2E。
+- 移除 Niagara/Cascade 排查期间的临时 HTTP 调试上报和 `.dbg` 运行时文件。
+- README、用户更新说明、NPC 注册与 NPC 迁移文档同步到 `0.23.0`。
+
+---
+
 # 镜头沙盘 v0.22.18
 
 ## 任务目标物特效写入

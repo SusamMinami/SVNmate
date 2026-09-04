@@ -256,8 +256,12 @@ export function NpcRegistrationModal({
       candidate.targetMatches.length === 0 &&
       candidate.modelOptions.length === 0,
   ).length;
+  const taskActorCount = selectedCandidates.filter(
+    (candidate) => candidate.registrationKind === "task_actor",
+  ).length;
   const newNpcCount = selectedCandidates.filter(
     (candidate) =>
+      candidate.registrationKind !== "task_actor" &&
       (npcChoices[candidate.actor.actorRef] ?? "new") === "new" &&
       registeredNpcIds[candidate.actor.actorRef] === undefined,
   ).length;
@@ -374,6 +378,17 @@ export function NpcRegistrationModal({
       const nextDrafts: Record<string, NewNpcDraft> = {};
       const nextMapChoices: Record<string, string> = {};
       for (const candidate of result.candidates) {
+        if (candidate.registrationKind === "task_actor") {
+          nextChoices[candidate.actor.actorRef] = "none";
+          nextDrafts[candidate.actor.actorRef] = {
+            name: "",
+            title: "",
+            canTurn: false,
+          };
+          nextMapChoices[candidate.actor.actorRef] =
+            candidate.mapId ?? "";
+          continue;
+        }
         const targetNpcId = candidate.targetMatches
           .map((target) => target.npcId)
           .find(
@@ -667,10 +682,13 @@ export function NpcRegistrationModal({
     mapId: string,
   ): NpcRegistrationWriteItem {
     const actorRef = candidate.actor.actorRef;
-    const choice = npcChoices[actorRef] ?? "new";
+    const registrationKind =
+      candidate.registrationKind === "task_actor" ? "task_actor" : "npc";
+    const taskActor = registrationKind === "task_actor";
+    const choice = taskActor ? "none" : (npcChoices[actorRef] ?? "new");
     const registeredNpcId = registeredNpcIds[actorRef];
     const existingNpc =
-      choice === "new"
+      taskActor || choice === "new"
         ? undefined
         : candidate.npcOptions.find(
             (npc) => npc.id === Number(choice),
@@ -681,7 +699,9 @@ export function NpcRegistrationModal({
       canTurn: true,
     };
     const createNewNpc =
-      choice === "new" && registeredNpcId === undefined;
+      !taskActor &&
+      choice === "new" &&
+      registeredNpcId === undefined;
     return {
       actorRef,
       label: candidate.actor.label,
@@ -692,13 +712,18 @@ export function NpcRegistrationModal({
         draft.name.trim() ||
         candidate.actor.label,
       classPath: candidate.actor.classPath,
+      registrationKind,
       transform: candidate.actor.transform,
       mapId,
       existingModelId:
         existingNpc?.resourceId ?? candidate.modelOptions[0]?.id ?? null,
-      existingNpcId: registeredNpcId ?? existingNpc?.id ?? null,
+      existingNpcId: taskActor
+        ? null
+        : registeredNpcId ?? existingNpc?.id ?? null,
       existingTargetId: null,
-      canTurn: existingNpc?.canTurn ?? draft.canTurn,
+      canTurn: taskActor
+        ? false
+        : existingNpc?.canTurn ?? draft.canTurn,
       newNpc: createNewNpc
         ? {
             name: draft.name.trim(),
@@ -732,6 +757,7 @@ export function NpcRegistrationModal({
   async function writeNpcOnly() {
     const pendingCandidates = selectedCandidates.filter(
       (candidate) =>
+        candidate.registrationKind !== "task_actor" &&
         (npcChoices[candidate.actor.actorRef] ?? "new") === "new" &&
         registeredNpcIds[candidate.actor.actorRef] === undefined,
     );
@@ -805,6 +831,7 @@ export function NpcRegistrationModal({
     }
     const missingChoice = pendingCandidates.find(
       (candidate) =>
+        candidate.registrationKind !== "task_actor" &&
         (npcChoices[candidate.actor.actorRef] ?? "new") === "choose",
     );
     if (missingChoice) {
@@ -819,7 +846,8 @@ export function NpcRegistrationModal({
     );
     const missingIdentity = items.find(
       (item) =>
-        item.existingModelId === null || item.existingNpcId === null,
+        item.existingModelId === null ||
+        (item.registrationKind === "npc" && item.existingNpcId === null),
     );
     if (missingIdentity) {
       setError(
@@ -906,6 +934,7 @@ export function NpcRegistrationModal({
     }
     const missingNpcChoice = pendingCandidates.find(
       (candidate) =>
+        candidate.registrationKind !== "task_actor" &&
         (npcChoices[candidate.actor.actorRef] ?? "new") === "choose",
     );
     if (missingNpcChoice) {
@@ -928,7 +957,9 @@ export function NpcRegistrationModal({
       (item) => item.existingModelId === null,
     ).length;
     const pendingNpcCount = requestItems.filter(
-      (item) => item.existingNpcId === null,
+      (item) =>
+        item.registrationKind === "npc" &&
+        item.existingNpcId === null,
     ).length;
     if (
       !window.confirm(
@@ -995,7 +1026,13 @@ export function NpcRegistrationModal({
     }
     setError("");
     try {
-      await navigator.clipboard.writeText(writtenTargetIdText);
+      const desktopClipboard =
+        window.shotSandboxDesktop?.writeClipboardText;
+      if (desktopClipboard) {
+        await desktopClipboard(writtenTargetIdText);
+      } else {
+        await navigator.clipboard.writeText(writtenTargetIdText);
+      }
       setTargetIdsCopied(true);
       setStatus(
         `已复制 ${writtenTargetIdList.length} 个目标物 ID，可直接粘贴到任务节点`,
@@ -1395,7 +1432,11 @@ export function NpcRegistrationModal({
                         )}
                       </td>
                       <td>
-                        {modelOptions.length > 0 && (
+                        {candidate.registrationKind === "task_actor" ? (
+                          <span className="registration-state is-existing">
+                            无需 NPC
+                          </span>
+                        ) : modelOptions.length > 0 ? (
                           <div className="npc-registration-bulk-choice">
                             <select
                               value={choice}
@@ -1447,8 +1488,9 @@ export function NpcRegistrationModal({
                               应用到已选
                             </button>
                           </div>
-                        )}
-                        {choice === "new" && (
+                        ) : null}
+                        {candidate.registrationKind !== "task_actor" &&
+                          choice === "new" && (
                           <div className="npc-registration-new-fields">
                             <input
                               value={draft.name}
@@ -1498,7 +1540,7 @@ export function NpcRegistrationModal({
                               可转身
                             </label>
                           </div>
-                        )}
+                          )}
                       </td>
                       <td>
                         {candidate.mapOptions.length > 0 ? (
@@ -1625,7 +1667,7 @@ export function NpcRegistrationModal({
                   invalidEditCount ? ` · ${invalidEditCount} 项格式错误` : ""
                 }`
               : selection
-                ? `已选择 ${selectedCandidateCount} / ${candidates.length} 个 Actor · ${missingModelCount} 个模型待注册 · ${newNpcCount} 个 NPC 待新建 · ${newTargetCount} 个目标物待新增`
+                ? `已选择 ${selectedCandidateCount} / ${candidates.length} 个 Actor · ${taskActorCount} 个 TaskActor · ${missingModelCount} 个模型待注册 · ${newNpcCount} 个 NPC 待新建 · ${newTargetCount} 个目标物待新增`
                 : "只读取关卡选择，不修改地图或配置表"}
           </span>
           <div>

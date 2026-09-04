@@ -1,4 +1,4 @@
-# 镜头沙盘 v0.22.15
+# 镜头沙盘 v0.23.0
 
 面向 UE4 镜头对话制作的 Three.js 原型。输入四位数对话 ID 或对白文字，工具从
 配置的 `res` 与 `doc` 数据源读取真实对话链，通过规则导演、内部 TRAE 协作或
@@ -14,8 +14,8 @@ Mira AI 生成 2-12 人分镜。
 后续界面设计、实现和测试均以常规 Windows 桌面窗口为准。面向 AI 开发助手
 的完整约束见 [`AGENTS.md`](AGENTS.md)。
 
-界面采用常驻左侧工具轨道，在“分镜工作台”“注册 NPC”和“任务目标物”三个
-工作区之间切换并保留当前输入、勾选和查询结果。首次窗口会话显示启动页；
+界面采用常驻左侧工具轨道，在“分镜工作台”“注册 NPC”“任务目标物”和
+“NPC 迁移”四个工作区之间切换并保留当前输入、勾选和查询结果。首次窗口会话显示启动页；
 详细视觉、动效和可访问性规范见 [`DESIGN.md`](DESIGN.md)。
 
 ## 性能与架构
@@ -32,6 +32,33 @@ Mira AI 生成 2-12 人分镜。
   `server/ue/transport.ts`、`server/ue/services.ts`、`server/ue/routes.ts`
   分离传输、业务门面和 HTTP 适配，配置目录由
   `server/configRepository.ts` 统一管理。
+
+## NPC 一键迁移
+
+“NPC 迁移”工作区把美术 UE 中的 Skeletal Mesh、依赖资源和动作文件迁入
+策划 UE，并生成可直接检查的 NPC BP、动画蓝图和动作资产。
+
+1. 启动美术 UE 与 `OmniMcpCore`，在内容浏览器中只选择一个 `SK_` 资产。
+2. 点击“读取源资产”，确认自动提取的 NPC 名称；BP 与 ABP 名称随之派生。
+3. 选择策划工程的 `Content` 目录，以及当前 NPC 的动作 FBX 目录。
+4. 选择男性或女性标准 ABP 模板，检查依赖、动作语义、冲突和待生成资产。
+5. 执行基础资产迁移后，关闭美术 UE 并启动策划 UE。
+6. 点击“校验策划 UE”；全部检查通过后执行目标配置。
+
+工具会自动：
+
+- 保持 `/Game` 包路径迁移 Mesh、Skeleton、材质、贴图和物理资产，不覆盖同名文件。
+- 以目标 Skeleton 导入 Body/Face 动作，并为 Face 动作锁定根骨骼。
+- 创建 NPC BP/ABP，按 Mesh 包围盒估算胶囊体并绑定转头曲线。
+- 创建 Idle/Turn Montage，写入 `IdleSlot` / `TurnSlot`。
+- 使用 `ABP_N16_Villager_Male_A` 或 `ABP_N18_Villager_Female_A`
+  标准模板配置状态机。
+- 创建 `BS_<NPC>_Look`，复制模板轴和采样位置，替换 LookD/F/U、
+  IdleStand、Impact 和 Interact。
+
+写入完成后仍需在 UE 中检查角色正面、胶囊体贴合、状态机播放效果、
+Look 三个采样点、Face Helper 输出和后处理动画蓝图。完整规则、命名和阻断条件见
+[`docs/npc-migration.md`](docs/npc-migration.md)。
 
 ## 运行
 

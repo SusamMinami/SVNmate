@@ -106,6 +106,16 @@
   资产并执行原有空间配置校验。
 - 首次“读取 UE 选择”匹配到任务目标物后，进入“修改位置”必须复用该次 Actor
   Transform 和匹配关系直接形成待修改草稿；不得要求用户在编辑页重复读取 UE。
+- “注册 NPC”读取到父类为 `TaskActorBase` 的 BP 时，按任务物件注册，不得
+  新增或复用 NPC。新模型 ID 在 `500000-599999` 段顺增；目标物写
+  `MissionPosition.type=4`、`NPCID=0`、`ItemID=0`，并将模型 ID 写入
+  `MissionPosition.BluePrint`。混合批次只为普通 NPC Actor 打开 NPC 表。
+- NPC 迁移保持美术 UE 扫描、文件复制、策划 UE 配置两个编辑器阶段。迁移必须
+  保留 `/Game` 包路径且不得覆盖目标同名文件；BP/ABP 名称从确认后的 NPC 名称
+  派生。标准 ABP 只使用 `ABP_N16_Villager_Male_A` 或
+  `ABP_N18_Villager_Female_A`，LookD/F/U、IdleStand、Impact、Interact
+  缺失时不得继续写入。胶囊体、转头曲线、Montage、Look BlendSpace 和模板
+  节点替换均需写后回读。
 - 已包含数字站位槽的 BP 按自身槽位注册到对话，不依赖目标物表；0 号玩家必须
   显示、计入角色总数并固定写为 `player`。
 - 已有 BP 与任务目标物同时加载时，现有数字槽位置顶、锁定并保留；用户勾选的

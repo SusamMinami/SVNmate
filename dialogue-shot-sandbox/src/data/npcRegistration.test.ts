@@ -54,6 +54,16 @@ function database(): DialogueDatabase {
           rowNumber: 3,
         },
       ],
+      [
+        500711,
+        {
+          id: 500711,
+          configuredPath: "/Game/Seria/Task/BPtriger/TaskActor/BP_TaskProp",
+          generatedClassPath:
+            "/Game/Seria/Task/BPtriger/TaskActor/BP_TaskProp.BP_TaskProp_C",
+          rowNumber: 4,
+        },
+      ],
     ]),
     missionRows: [],
     missionPositions: [
@@ -69,6 +79,19 @@ function database(): DialogueDatabase {
         rotationText:
           "(Pitch=0.000000,Yaw=90.000000,Roll=0.000000)",
         rowNumber: 3,
+      },
+      {
+        id: "103070",
+        type: 4,
+        description: "任务物件",
+        npcId: 0,
+        itemId: 0,
+        blueprintModelId: 500711,
+        mapId: "1209",
+        positionText: "(X=70.000000,Y=80.000000,Z=90.000000)",
+        rotationText:
+          "(Pitch=0.000000,Yaw=45.000000,Roll=0.000000)",
+        rowNumber: 4,
       },
     ],
     mapConfigs: [
@@ -120,6 +143,19 @@ function selection(): SelectedLevelActorsResult {
           scale: { x: 1, y: 1, z: 1 },
         },
       },
+      {
+        actorRef: "BP_TaskProp_C_0",
+        label: "任务物件",
+        classPath:
+          "/Game/Seria/Task/BPtriger/TaskActor/BP_TaskProp.BP_TaskProp_C",
+        parentClassPath:
+          "/Game/Seria/Task/BPtriger/TaskActor/TaskActorBase.TaskActorBase_C",
+        transform: {
+          location: { x: 70, y: 80, z: 90 },
+          rotation: { pitch: 0, yaw: 45, roll: 0 },
+          scale: { x: 1, y: 1, z: 1 },
+        },
+      },
     ],
   };
 }
@@ -132,6 +168,7 @@ describe("buildNpcRegistrationCandidates", () => {
     );
 
     expect(candidates[0]).toMatchObject({
+      registrationKind: "npc",
       mapId: "1209",
       mapName: "上城区",
       mapOptions: [{ id: "1204" }, { id: "1209" }],
@@ -144,12 +181,22 @@ describe("buildNpcRegistrationCandidates", () => {
       targetMatches: [{ id: "103069", npcId: 101968 }],
     });
     expect(candidates[1]).toMatchObject({
+      registrationKind: "npc",
       mapId: null,
       modelOptions: [],
       npcOptions: [],
       positionMatches: [],
       targetMatches: [],
       mapOptions: [{ id: "1204" }, { id: "1209" }],
+    });
+    expect(candidates[2]).toMatchObject({
+      registrationKind: "task_actor",
+      mapId: "1209",
+      modelOptions: [{ id: 500711 }],
+      npcOptions: [],
+      targetMatches: [
+        { id: "103070", type: 4, blueprintModelId: 500711 },
+      ],
     });
   });
 });
@@ -212,6 +259,7 @@ describe("registrationWriteScope", () => {
     label: "守卫",
     targetDescription: "守卫长",
     classPath: "/Game/Test/BP_Guard.BP_Guard_C",
+    registrationKind: "npc",
     transform: {
       location: { x: 1, y: 2, z: 3 },
       rotation: { pitch: 0, yaw: 90, roll: 0 },
@@ -238,6 +286,36 @@ describe("registrationWriteScope", () => {
           actorRef: "BP_New_C_1",
           existingNpcId: null,
           newNpc: { name: "新角色", title: "", canTurn: true },
+        },
+      ]),
+    ).toBe("all");
+  });
+
+  it("uses target-only registration for TaskActor with an existing model", () => {
+    expect(
+      registrationWriteScope([
+        {
+          ...reusableItem,
+          actorRef: "BP_TaskProp_C_1",
+          registrationKind: "task_actor",
+          existingModelId: 500711,
+          existingNpcId: null,
+          newNpc: null,
+        },
+      ]),
+    ).toBe("target_only");
+  });
+
+  it("keeps full registration when TaskActor needs a model ID", () => {
+    expect(
+      registrationWriteScope([
+        {
+          ...reusableItem,
+          actorRef: "BP_TaskProp_C_1",
+          registrationKind: "task_actor",
+          existingModelId: null,
+          existingNpcId: null,
+          newNpc: null,
         },
       ]),
     ).toBe("all");

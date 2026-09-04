@@ -14,6 +14,7 @@ import {
   LocateFixed,
   MapPinned,
   Maximize2,
+  PackageOpen,
   PanelRightClose,
   Pencil,
   RefreshCw,
@@ -57,6 +58,7 @@ import { DirectorControl } from "./components/DirectorControl";
 import { LaunchScreen } from "./components/LaunchScreen";
 import { MissingNpcModelModal } from "./components/MissingNpcModelModal";
 import { MissionTargetModal } from "./components/MissionTargetModal";
+import { NpcMigrationWorkspace } from "./components/NpcMigrationWorkspace";
 import { NpcRegistrationModal } from "./components/NpcRegistrationModal";
 import { MusicRecommendations } from "./components/MusicRecommendations";
 import { SoundEffectRecommendations } from "./components/SoundEffectRecommendations";
@@ -180,6 +182,7 @@ const LazyTraeCollaborationModal = lazy(() =>
   })),
 );
 const MemoizedMissionTargetModal = memo(MissionTargetModal);
+const MemoizedNpcMigrationWorkspace = memo(NpcMigrationWorkspace);
 const MemoizedNpcRegistrationModal = memo(NpcRegistrationModal);
 
 function buildSequence(
@@ -3617,6 +3620,20 @@ export default function App() {
             <MapPinned size={19} />
             <span>任务目标物</span>
           </button>
+          <button
+            className={`app-rail__button ${
+              activeWorkspace === "migration" ? "is-active" : ""
+            }`}
+            type="button"
+            aria-current={
+              activeWorkspace === "migration" ? "page" : undefined
+            }
+            title="NPC 迁移"
+            onClick={() => switchWorkspace("migration")}
+          >
+            <PackageOpen size={19} />
+            <span>NPC 迁移</span>
+          </button>
         </div>
         <div className="app-rail__tools app-rail__tools--bottom">
           <button
@@ -3659,6 +3676,8 @@ export default function App() {
               <Camera size={18} />
             ) : activeWorkspace === "npc" ? (
               <UserRoundPlus size={18} />
+            ) : activeWorkspace === "migration" ? (
+              <PackageOpen size={18} />
             ) : (
               <MapPinned size={18} />
             )}
@@ -3669,14 +3688,18 @@ export default function App() {
                 ? "分镜工作台"
                 : activeWorkspace === "npc"
                   ? "注册 NPC"
-                  : "任务目标物"}
+                  : activeWorkspace === "migration"
+                    ? "NPC 迁移"
+                    : "任务目标物"}
             </h1>
             <p>
               {activeWorkspace === "storyboard"
                 ? "DIALOGUE CAMERA SYSTEM"
                 : activeWorkspace === "npc"
                   ? "UE SELECTION REGISTRATION"
-                  : "MISSION TARGET & BLUEPRINT"}
+                  : activeWorkspace === "migration"
+                    ? "ASSET MIGRATION & BLUEPRINT"
+                    : "MISSION TARGET & BLUEPRINT"}
             </p>
           </div>
         </div>
@@ -4511,6 +4534,28 @@ export default function App() {
           embedded
           onClose={closeToolWorkspace}
         />
+      </section>
+
+      <section
+        className="tool-workspace"
+        data-workspace-state={
+          activeWorkspace === "migration"
+            ? outgoingWorkspace
+              ? "entering"
+              : "active"
+            : outgoingWorkspace === "migration"
+              ? "exiting"
+              : "inactive"
+        }
+        hidden={
+          activeWorkspace !== "migration" &&
+          outgoingWorkspace !== "migration"
+        }
+        aria-hidden={activeWorkspace !== "migration" || undefined}
+        inert={activeWorkspace !== "migration" || undefined}
+        aria-label="NPC 迁移工作区"
+      >
+        <MemoizedNpcMigrationWorkspace onClose={closeToolWorkspace} />
       </section>
 
       <section

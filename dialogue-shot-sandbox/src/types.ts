@@ -595,6 +595,7 @@ export interface SelectedLevelActor {
   actorRef: string;
   label: string;
   classPath: string;
+  parentClassPath?: string;
   assetKind?:
     | "blueprint_actor"
     | "skeletal_mesh"
@@ -650,6 +651,7 @@ export interface BackgroundPropImportResult {
 
 export interface NpcRegistrationCandidate {
   actor: SelectedLevelActor;
+  registrationKind: "npc" | "task_actor";
   modelOptions: ModelResource[];
   npcOptions: NpcProfile[];
   positionMatches: MissionPositionRow[];
@@ -669,6 +671,7 @@ export interface NpcRegistrationWriteItem {
   label: string;
   targetDescription: string;
   classPath: string;
+  registrationKind: "npc" | "task_actor";
   transform: UnrealTransform;
   mapId: string;
   existingModelId: number | null;
@@ -693,6 +696,189 @@ export interface NpcRegistrationWriteResult {
   createdTargets: Array<{ actorRef: string; id: number }>;
   reusedTargets: Array<{ actorRef: string; id: string }>;
   openedWorkbooks: string[];
+}
+
+export interface NpcMigrationSourceFile {
+  packageName: string;
+  sourcePath: string;
+  relativePath: string;
+  size: number;
+}
+
+export interface NpcMigrationSourceScan {
+  sourceProjectFile: string;
+  sourceContentDirectory: string;
+  skeletalMeshName: string;
+  skeletalMeshAssetPath: string;
+  skeletalMeshPackageName: string;
+  skeletonAssetPath: string;
+  physicsAssetPath: string;
+  materialAssetPaths: string[];
+  dependencyPackageNames: string[];
+  sourceFiles: NpcMigrationSourceFile[];
+  dirtyPackageNames: string[];
+  suggestedNpcName: string;
+  suggestedTargetPackagePath: string;
+  warnings: string[];
+}
+
+export interface NpcMigrationFileOperation {
+  packageName: string;
+  sourcePath: string;
+  destinationPath: string;
+  relativePath: string;
+  size: number;
+  state: "ready" | "conflict";
+}
+
+export type NpcMigrationStepId =
+  | "source"
+  | "migration"
+  | "animations"
+  | "blueprint"
+  | "animation_blueprint"
+  | "look_blend_space"
+  | "montages"
+  | "face"
+  | "visual_review"
+  | "finalize";
+
+export interface NpcMigrationStep {
+  id: NpcMigrationStepId;
+  label: string;
+  mode: "automatic" | "assisted" | "manual";
+  state: "ready" | "blocked";
+  detail: string;
+}
+
+export type NpcMigrationMontageKind =
+  | "idle"
+  | "turn_left_90"
+  | "turn_right_90"
+  | "turn_left_180"
+  | "turn_right_180";
+
+export interface NpcMigrationMontagePlan {
+  kind: NpcMigrationMontageKind;
+  sourceFile: string;
+  sourceAssetName: string;
+  montageName: string;
+  slotName: "IdleSlot" | "TurnSlot";
+}
+
+export type NpcMigrationStandardAbpTemplate = "male" | "female";
+
+export interface NpcMigrationAnimationRoleAssets {
+  lookDown: string;
+  lookForward: string;
+  lookUp: string;
+  idleStand: string;
+  impact: string;
+  interact: string;
+}
+
+export interface NpcMigrationPlan {
+  reviewToken: string;
+  source: NpcMigrationSourceScan;
+  npcName: string;
+  targetContentDirectory: string;
+  targetPackagePath: string;
+  animationSourceDirectory: string;
+  animationPackagePath: string;
+  blueprintName: string;
+  animationBlueprintName: string;
+  bodyAnimationFiles: string[];
+  faceAnimationFiles: string[];
+  montages: NpcMigrationMontagePlan[];
+  configureStandardAbp: boolean;
+  standardAbpTemplate: NpcMigrationStandardAbpTemplate;
+  lookBlendSpaceName: string;
+  animationRoleAssets: NpcMigrationAnimationRoleAssets;
+  fileOperations: NpcMigrationFileOperation[];
+  steps: NpcMigrationStep[];
+  canMigrate: boolean;
+  canConfigure: boolean;
+  blockedReasons: string[];
+  warnings: string[];
+}
+
+export interface NpcMigrationPlanRequest {
+  source: NpcMigrationSourceScan;
+  targetContentDirectory: string;
+  animationSourceDirectory: string;
+  targetPackagePath?: string;
+  npcName?: string;
+  configureStandardAbp?: boolean;
+  standardAbpTemplate?: NpcMigrationStandardAbpTemplate;
+}
+
+export interface NpcMigrationCopyResult {
+  copiedFiles: string[];
+  copiedBytes: number;
+  targetContentDirectory: string;
+}
+
+export interface NpcMigrationTargetRequest {
+  plan: NpcMigrationPlan;
+  reviewToken: string;
+  npcBaseClassPath: string;
+  animationBlueprintParentClassPath: string;
+  turnCurveAssetPath?: string;
+  autoFitCapsule?: boolean;
+  bindTurnCurve?: boolean;
+  createMontages?: boolean;
+  createFaceComponent?: boolean;
+}
+
+export interface NpcMigrationCapsuleEstimate {
+  radius: number;
+  halfHeight: number;
+  meshOffsetZ: number;
+  boundsOrigin: { x: number; y: number; z: number };
+  boundsExtent: { x: number; y: number; z: number };
+}
+
+export interface NpcMigrationTargetInspection {
+  targetProjectFile: string;
+  targetContentDirectory: string;
+  skeletalMeshFound: boolean;
+  skeletonFound: boolean;
+  npcBaseClassFound: boolean;
+  animationBlueprintParentClassFound: boolean;
+  capsuleEstimate: NpcMigrationCapsuleEstimate | null;
+  turnCurveFound: boolean;
+  turnCurvePropertyPath: string;
+  turnCurvePropertyCandidates: string[];
+  montageAutomationAvailable: boolean;
+  templateAnimationBlueprintAssetPath: string;
+  templateAnimationAssets: {
+    lookBlendSpace: string;
+    idleStand: string;
+    impact: string;
+    interact: string;
+  };
+  standardAbpAutomationAvailable: boolean;
+  lookBlendSpaceAutomationAvailable: boolean;
+  existingAssetPaths: string[];
+  blockedReasons: string[];
+  warnings: string[];
+}
+
+export interface NpcMigrationTargetResult {
+  status: "configured";
+  skeletalMeshAssetPath: string;
+  importedAnimationAssetPaths: string[];
+  blueprintAssetPath: string;
+  animationBlueprintAssetPath: string;
+  faceAnimationCount: number;
+  capsuleEstimate: NpcMigrationCapsuleEstimate | null;
+  turnCurvePropertyPath: string;
+  createdMontageAssetPaths: string[];
+  templateAnimationBlueprintAssetPath: string;
+  lookBlendSpaceAssetPath: string;
+  animationBlueprintOverrideAssetPaths: string[];
+  savedAssetPaths: string[];
+  manualChecks: string[];
 }
 
 export type MissionTargetTransform = Pick<

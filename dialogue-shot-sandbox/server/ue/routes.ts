@@ -86,7 +86,42 @@ export async function routeUeRequest(
       });
       return true;
     }
+    if (url.pathname === "/api/ue/npc-migration/source-scan") {
+      sendJson(response, 200, {
+        ok: true,
+        data: await services.scanNpcMigrationSource(),
+      });
+      return true;
+    }
     const body = (await readJson(request)) as Record<string, unknown>;
+    if (url.pathname === "/api/ue/npc-migration/plan") {
+      sendJson(response, 200, {
+        ok: true,
+        data: await services.inspectNpcMigrationPlan(body),
+      });
+      return true;
+    }
+    if (url.pathname === "/api/ue/npc-migration/migrate") {
+      sendJson(response, 200, {
+        ok: true,
+        data: await services.applyNpcAssetMigration(body),
+      });
+      return true;
+    }
+    if (url.pathname === "/api/ue/npc-migration/target-inspect") {
+      sendJson(response, 200, {
+        ok: true,
+        data: await services.inspectNpcMigrationTarget(body),
+      });
+      return true;
+    }
+    if (url.pathname === "/api/ue/npc-migration/target-configure") {
+      sendJson(response, 200, {
+        ok: true,
+        data: await services.configureNpcMigrationTarget(body),
+      });
+      return true;
+    }
     if (url.pathname === "/api/ue/sound-effects/preview-info") {
       sendJson(response, 200, {
         ok: true,

@@ -42,6 +42,9 @@ const RegistrationWriteSchema = z
           label: z.string().min(1),
           targetDescription: z.string().trim().default(""),
           classPath: z.string().startsWith("/Game/"),
+          registrationKind: z
+            .enum(["npc", "task_actor"])
+            .default("npc"),
           transform: z.object({
             location: VectorSchema,
             rotation: z.object({
@@ -88,19 +91,25 @@ const RegistrationWriteSchema = z
         request.scope === "target_only" &&
         (!/^\d+$/.test(item.mapId) ||
           item.existingModelId === null ||
-          item.existingNpcId === null ||
+          (item.registrationKind === "npc"
+            ? item.existingNpcId === null
+            : item.existingNpcId !== null) ||
           item.existingTargetId !== null ||
           item.newNpc !== null)
       ) {
         context.addIssue({
           code: "custom",
           path: ["items", index],
-          message: "仅注册目标物时必须复用现有模型和 NPC，并提供 MapID",
+          message:
+            item.registrationKind === "task_actor"
+              ? "TaskActor 仅注册目标物时必须复用现有模型、不使用 NPC，并提供 MapID"
+              : "仅注册目标物时必须复用现有模型和 NPC，并提供 MapID",
         });
       }
       if (
         request.scope === "npc_only" &&
-        (item.existingModelId === null ||
+        (item.registrationKind !== "npc" ||
+          item.existingModelId === null ||
           item.existingNpcId !== null ||
           item.existingTargetId !== null ||
           item.newNpc === null)
@@ -109,6 +118,16 @@ const RegistrationWriteSchema = z
           code: "custom",
           path: ["items", index],
           message: "仅注册 NPC 时必须复用现有模型并创建新 NPC",
+        });
+      }
+      if (
+        item.registrationKind === "task_actor" &&
+        (item.existingNpcId !== null || item.newNpc !== null)
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["items", index],
+          message: "TaskActor 不得注册或复用 NPC",
         });
       }
     });
@@ -267,7 +286,10 @@ foreach ($item in $request.items) {
       if ($null -eq $item.existingModelId) {
         [void]$requiredPaths.Add($paths.model)
       }
-      if ($null -eq $item.existingNpcId) {
+      if (
+        [string]$item.registrationKind -ne "task_actor" -and
+        $null -eq $item.existingNpcId
+      ) {
         [void]$requiredPaths.Add($paths.npc)
       }
     }
@@ -610,9 +632,17 @@ try {
       $position = [string](Get-RangeValue $targetValues $rowOffset 10)
       $rotation = [string](Get-RangeValue $targetValues $rowOffset 11)
       if (-not [string]::IsNullOrWhiteSpace($rowId)) {
+        $targetEntry = [PSCustomObject]@{
+          id = $rowId
+          type = [string](Get-RangeValue $targetValues $rowOffset 3)
+          npcId = [string](Get-RangeValue $targetValues $rowOffset 4)
+          itemId = [string](Get-RangeValue $targetValues $rowOffset 5)
+          blueprintModelId =
+            [string](Get-RangeValue $targetValues $rowOffset 6)
+        }
         Add-IndexEntry $targetIdsByTransform (
           Get-TargetTransformKey $mapId $position $rotation
-        ) $rowId
+        ) $targetEntry
       }
     }
   }
@@ -652,7 +682,11 @@ try {
           }
         }
       }
-      if ($null -ne $item.existingNpcId) {
+      if ([string]$item.registrationKind -eq "task_actor") {
+        if ($null -ne $item.existingNpcId -or $null -ne $item.newNpc) {
+          throw "TaskActor $($item.label) 不得注册或复用 NPC"
+        }
+      } elseif ($null -ne $item.existingNpcId) {
         if ($null -eq $item.existingModelId) {
           throw "NPC ID $($item.existingNpcId) 缺少可验证的模型 ID"
         }
@@ -688,29 +722,71 @@ try {
         } else {
           @()
         }
+      if ([string]$item.registrationKind -eq "task_actor") {
+        $configuredPath = Get-ConfiguredPath $item.classPath
+        $pathKey = $configuredPath.ToLowerInvariant()
+        $expectedModelId =
+          if ($null -ne $item.existingModelId) {
+            [int]$item.existingModelId
+          } elseif ($modelByPath.ContainsKey($pathKey)) {
+            [int]$modelByPath[$pathKey]
+          } else {
+            $null
+          }
+        $existingTargets =
+          if ($null -eq $expectedModelId) {
+            @()
+          } else {
+            @(
+              $existingTargets | Where-Object {
+                [string]$_.type -eq "4" -and
+                [string]$_.npcId -eq "0" -and
+                [string]$_.itemId -eq "0" -and
+                [string]$_.blueprintModelId -eq [string]$expectedModelId
+              }
+            )
+          }
+      }
       if ($existingTargets.Count -gt 1) {
         throw "Actor $($item.label) 在 MapID $($item.mapId) 中匹配到多个目标物"
       }
       if ($existingTargets.Count -eq 1) {
-        $existingTargetByActor[$item.actorRef] = [string]$existingTargets[0]
+        $existingTargetByActor[$item.actorRef] =
+          [string]$existingTargets[0].id
       }
     }
   }
 
-  $needsNewModel = @(
-    $pendingItems | Where-Object { $null -eq $_.existingModelId }
+  $needsNewNpcModel = @(
+    $pendingItems | Where-Object {
+      $null -eq $_.existingModelId -and
+      [string]$_.registrationKind -ne "task_actor"
+    }
+  ).Count -gt 0 -and $scope -eq "all"
+  $needsNewTaskActorModel = @(
+    $pendingItems | Where-Object {
+      $null -eq $_.existingModelId -and
+      [string]$_.registrationKind -eq "task_actor"
+    }
   ).Count -gt 0 -and $scope -eq "all"
   $needsNewNpc = @(
-    $pendingItems | Where-Object { $null -eq $_.existingNpcId }
+    $pendingItems | Where-Object {
+      [string]$_.registrationKind -ne "task_actor" -and
+      $null -eq $_.existingNpcId
+    }
   ).Count -gt 0 -and $scope -ne "target_only"
   $needsNewTarget = @(
     $pendingItems | Where-Object {
       -not $existingTargetByActor.ContainsKey($_.actorRef)
     }
   ).Count -gt 0 -and $scope -ne "npc_only"
-  $nextModelId =
-    if ($needsNewModel) {
+  $nextNpcModelId =
+    if ($needsNewNpcModel) {
       Get-NextId $modelValues $modelRowCount 0 200000 299999
+    } else { $null }
+  $nextTaskActorModelId =
+    if ($needsNewTaskActorModel) {
+      Get-NextId $modelValues $modelRowCount 0 500000 599999
     } else { $null }
   $nextNpcId =
     if ($needsNewNpc) {
@@ -720,11 +796,23 @@ try {
     if ($needsNewTarget) {
       Get-NextId $targetValues $targetRowCount 0 1 2147483647
     } else { $null }
-  $newModelUpperBound = @(
-    $pendingItems | Where-Object { $null -eq $_.existingModelId }
+  $newNpcModelUpperBound = @(
+    $pendingItems | Where-Object {
+      $null -eq $_.existingModelId -and
+      [string]$_.registrationKind -ne "task_actor"
+    }
+  ).Count
+  $newTaskActorModelUpperBound = @(
+    $pendingItems | Where-Object {
+      $null -eq $_.existingModelId -and
+      [string]$_.registrationKind -eq "task_actor"
+    }
   ).Count
   $newNpcCount = @(
-    $pendingItems | Where-Object { $null -eq $_.existingNpcId }
+    $pendingItems | Where-Object {
+      [string]$_.registrationKind -ne "task_actor" -and
+      $null -eq $_.existingNpcId
+    }
   ).Count
   $newTargetCount = @(
     $pendingItems | Where-Object {
@@ -732,10 +820,16 @@ try {
     }
   ).Count
   if (
-    $null -ne $nextModelId -and
-    $nextModelId + $newModelUpperBound - 1 -gt 299999
+    $null -ne $nextNpcModelId -and
+    $nextNpcModelId + $newNpcModelUpperBound - 1 -gt 299999
   ) {
     throw "模型 ID 段 200000-299999 剩余空间不足"
+  }
+  if (
+    $null -ne $nextTaskActorModelId -and
+    $nextTaskActorModelId + $newTaskActorModelUpperBound - 1 -gt 599999
+  ) {
+    throw "TaskActor 模型 ID 段 500000-599999 剩余空间不足"
   }
   if (
     $null -ne $nextNpcId -and
@@ -758,6 +852,8 @@ try {
       $modelByActor[$item.actorRef] = [int]$item.existingModelId
       continue
     }
+    $taskActorModel =
+      [string]$item.registrationKind -eq "task_actor"
     $configuredPath = Get-ConfiguredPath $item.classPath
     if ($null -ne $item.existingModelId) {
       if ($null -ne $modelSheet) {
@@ -786,6 +882,12 @@ try {
     if ($null -eq $modelWorkbook) {
       throw "模型资源表未打开"
     }
+    $nextModelId =
+      if ($taskActorModel) {
+        $nextTaskActorModelId
+      } else {
+        $nextNpcModelId
+      }
     $insertRow = $modelLastRow + 1
     foreach ($modelRow in $modelRows) {
       $rowId = 0
@@ -818,7 +920,11 @@ try {
     [void]$createdModels.Add(
       [PSCustomObject]@{ actorRef = $item.actorRef; id = $existingId }
     )
-    $nextModelId++
+    if ($taskActorModel) {
+      $nextTaskActorModelId++
+    } else {
+      $nextNpcModelId++
+    }
     $lastSheet = $modelSheet
     $lastRow = $insertRow
     $modelByPath[$pathKey] = $existingId
@@ -827,6 +933,9 @@ try {
 
   foreach ($item in $request.items) {
     if ($null -ne $item.existingTargetId) {
+      continue
+    }
+    if ([string]$item.registrationKind -eq "task_actor") {
       continue
     }
     if ($null -ne $item.existingNpcId) {
@@ -902,9 +1011,16 @@ try {
       Set-NewCell $targetSheet $row 1 0
       Set-NewCell $targetSheet $row 2 $nextTargetId
       Set-NewCell $targetSheet $row 4 $item.targetDescription
-      Set-NewCell $targetSheet $row 5 1
-      Set-NewCell $targetSheet $row 6 $npcByActor[$item.actorRef]
-      Set-NewCell $targetSheet $row 7 0
+      if ([string]$item.registrationKind -eq "task_actor") {
+        Set-NewCell $targetSheet $row 5 4
+        Set-NewCell $targetSheet $row 6 0
+        Set-NewCell $targetSheet $row 7 0
+        Set-NewCell $targetSheet $row 8 $modelByActor[$item.actorRef]
+      } else {
+        Set-NewCell $targetSheet $row 5 1
+        Set-NewCell $targetSheet $row 6 $npcByActor[$item.actorRef]
+        Set-NewCell $targetSheet $row 7 0
+      }
       Set-NewCell $targetSheet $row 11 ([int]$item.mapId)
       Set-NewCell $targetSheet $row 12 $position
       Set-NewCell $targetSheet $row 13 $rotation

@@ -34,6 +34,7 @@ Content Browser 中只选中 Blueprint 资产不会被识别，因为目标物�
 
 - Actor 引用与编辑器标签。
 - Generated Class 路径。
+- Blueprint 的直接父类路径，用于区分普通 NPC 与 `TaskActorBase`。
 - Blueprint 资产路径，或原生 SkeletalMeshActor / StaticMeshActor 使用的实际
   Mesh 资产路径。
 - 世界坐标。
@@ -120,7 +121,8 @@ Excel COM 的 `Value2` 按布尔、数值和字符串使用独立赋值分支，
 
 新增规则：
 
-1. 模型 ID 只在 `200000-299999` 中顺增，并插入该 ID 段的正确位置。
+1. 普通 NPC 模型 ID 在 `200000-299999` 中顺增；`TaskActorBase` 模型 ID 在
+   `500000-599999` 中顺增，并插入对应 ID 段的正确位置。
 2. 模型表只写版本、模型 ID 和配置路径；自动生成路径留给原 Excel 保存流程。
 3. NPC ID 按当前工作簿最大值顺增；名称和头衔可留空，是否可转身由界面确认。
 4. 新 NPC 使用非地图显示、非功能 NPC、交互按钮 1、交互距离 400、
@@ -129,6 +131,20 @@ Excel COM 的 `Value2` 按布尔、数值和字符串使用独立赋值分支，
    Transform，默认非绝对创建、速度 0、瞬间消失。
 6. 写入后 Excel 保持可见且未保存，最终检查和保存由用户完成。
 7. 新增模型、NPC 和目标物实际写入的单元格均使用红色字体，便于保存前复核。
+
+## TaskActorBase 注册
+
+父类为 `TaskActorBase` 的 BP 不是 NPC。注册草稿会显示“无需 NPC”，并按以下
+规则只处理模型资源表和目标物表：
+
+1. 已有模型路径时复用其模型 ID；没有时从模型资源表 `500000-599999` 段顺增。
+2. 不打开 NPC 表，不创建或复用 NPC ID。
+3. 目标物表写 `MissionPosition.type=4`。
+4. `MissionPosition.NPCID` 与 `MissionPosition.ItemID`（Excel F/G 列）写 `0`。
+5. `MissionPosition.BluePrint`（Excel H 列）直接写本行复用或新建的模型 ID。
+
+同一批选择可以同时包含普通 NPC 与 TaskActor。此时模型与目标物共用一次写入，
+NPC 表仅为普通 NPC 行按需打开。
 
 ## 仅注册 NPC
 
