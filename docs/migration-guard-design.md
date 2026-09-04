@@ -32,6 +32,8 @@ IPC 和无进程回退都使用同一套 core，因此不会复制 Update/Cleanu
   分段和离线缓存。
 - `migration_guard/jira_client.py`：批量读取 Jira 状态、创建时间和版本登记，并
   聚合无工程模式下的国内 trunk、海外 trunk、OSOB 任务进度。
+- `migration_guard/remote_asset_progress.py`：无需工作副本，按 Jira 单号查询三套
+  远端 SVN URL，将提交路径对齐为三阶段资产进度。
 - `migration_guard/selective_update.py`：按源清单和远端状态生成最小更新目录集合。
 - `migration_guard/ue_client.py`：OmniMcpCore 长度前缀协议和 UE 工程校验。
 - `migration_guard/batch_workflow.py`：资源去重与用户选择、海外 Jira 提交分组和
@@ -53,9 +55,13 @@ IPC 和无进程回退都使用同一套 core，因此不会复制 Update/Cleanu
 任一 Jira 读取失败                         -> 状态未知
 ```
 
-结果按 5 分钟内存缓存，并逐单降级；单个接口失败不会清空其他任务。该模式只表达
-Jira 流程和版本登记，不宣称文件集合已经一致。有本地工作区时，用户从同一任务行
-进入现有 SVN 路径级核验，以 SVN 结果作为更高可信度证据。
+结果按 5 分钟内存缓存，并逐单降级；单个接口失败不会清空其他任务。随后对固定的
+`res/doc/bin` 远端仓库 URL 执行 `svn log --xml -v --search`，按模块相对路径
+合并国内 trunk、海外 trunk、OSOB 的提交证据。
+
+资产树叶子显示每个阶段的最终动作和 revision，目录显示该阶段的“已提交数/总数”。
+远端查询不要求本地工作副本，但仍要求 `svn.exe` 和仓库只读权限。它不能发现本地
+未提交改动；有本地工作区时，用户从同一视图进入现有精确核验。
 
 ## 2. 现有实现分析
 

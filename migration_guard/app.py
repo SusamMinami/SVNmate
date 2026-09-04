@@ -31,6 +31,7 @@ from tkinter import ttk
 from .asset_tree import (
     CHECKED,
     PARTIAL,
+    AssetProgressTree,
     AssetTreeSelection,
 )
 from .audit import MigrationAuditService, default_workspace_modules
@@ -54,6 +55,12 @@ from .models import (
     MigrationAuditResult,
     VerificationState,
     WorkspaceModule,
+)
+from .remote_asset_progress import (
+    BranchEvidence,
+    RemoteAssetProgress,
+    RemoteAssetProgressResult,
+    RemoteAssetProgressService,
 )
 from .selective_update import SelectiveUpdatePlanner
 from .svn_client import SvnClient
@@ -181,6 +188,8 @@ class MigrationGuardApp:
         self.visible_files: list[FileVerification] = []
         self.visible_ticket_mappings: list[TicketMapping] = []
         self.visible_ticket_progress: list[TicketJiraProgress] = []
+        self.remote_asset_result: RemoteAssetProgressResult | None = None
+        self.remote_asset_tree: AssetProgressTree | None = None
         self.ticket_snapshot: TicketSheetSnapshot | None = None
         self.ticket_snapshots: dict[str, TicketSheetSnapshot] = {}
         self.jira_client = JiraIssueClient()
@@ -626,6 +635,16 @@ class MigrationGuardApp:
         self.table.tag_configure("jira-domestic", foreground="#B45309")
         self.table.tag_configure("jira-unknown", foreground="#667085")
         self.table.tag_configure("jira-warning", foreground="#B42318")
+        self.table.tag_configure(
+            "remote-folder",
+            foreground="#344054",
+            font=("Segoe UI Semibold", 10),
+        )
+        self.table.tag_configure("remote-osob", foreground="#15803D")
+        self.table.tag_configure("remote-trunk", foreground="#047857")
+        self.table.tag_configure("remote-domestic", foreground="#B45309")
+        self.table.tag_configure("remote-partial", foreground="#6D5BD0")
+        self.table.tag_configure("remote-warning", foreground="#B42318")
         self.table.bind("<<TreeviewSelect>>", self._show_selected_detail)
         self.table.bind("<Double-1>", self._on_table_double_click)
 
@@ -942,6 +961,7 @@ class MigrationGuardApp:
         snapshot: TicketSheetSnapshot,
     ) -> None:
         self.table_mode = "tickets"
+        self.table.configure(show="headings", displaycolumns="#all")
         self.ticket_snapshot = snapshot
         self.current_result = None
         self.migrate_button.configure(state="disabled")
@@ -1334,12 +1354,26 @@ class MigrationGuardApp:
     ) -> None:
         self._jira_request_id += 1
         request_id = self._jira_request_id
+        enabled_modules = tuple(
+            name
+            for name, variable in self.module_enabled.items()
+            if variable.get()
+        )
+        try:
+            lookback_days = int(self.lookback_days.get())
+        except (TypeError, ValueError):
+            lookback_days = 90
         self.status_text.set(
             f"已解析 {len(mappings)} 条，正在读取 Jira 进度..."
         )
         threading.Thread(
             target=self._jira_progress_worker,
-            args=(request_id, mappings),
+            args=(
+                request_id,
+                mappings,
+                enabled_modules,
+                lookback_days,
+            ),
             name="migration-jira-progress",
             daemon=True,
         ).start()
@@ -1348,6 +1382,8 @@ class MigrationGuardApp:
         self,
         request_id: int,
         mappings: tuple[TicketMapping, ...],
+        enabled_modules: tuple[str, ...],
+        lookback_days: int,
     ) -> None:
         try:
             issue_keys = tuple(
@@ -1369,12 +1405,35 @@ class MigrationGuardApp:
             self.events.put(
                 ("jira-progress-error", (request_id, str(exc)))
             )
+        try:
+            service = RemoteAssetProgressService(
+                svn=SvnClient(log=self._queue_log),
+                progress=lambda stage, message: self.events.put(
+                    (
+                        "remote-assets-progress",
+                        (request_id, stage, message),
+                    )
+                ),
+            )
+            result = service.scan(
+                mappings,
+                enabled_modules=enabled_modules,
+                lookback_days=lookback_days,
+            )
+            self.events.put(
+                ("remote-assets", (request_id, result))
+            )
+        except Exception as exc:
+            self.events.put(
+                ("remote-assets-error", (request_id, str(exc)))
+            )
 
     def _render_jira_progress(
         self,
         progress: tuple[TicketJiraProgress, ...],
     ) -> None:
         self.table_mode = "jira"
+        self.table.configure(show="headings", displaycolumns="#all")
         self.current_result = None
         self.visible_files = []
         self.visible_ticket_mappings = []
@@ -1471,6 +1530,131 @@ class MigrationGuardApp:
         self.use_ticket_button.configure(
             text=f"核验选中（{len(children)}）",
             state="normal" if children else "disabled",
+        )
+        self._show_selected_detail()
+
+    def _render_remote_assets(
+        self,
+        result: RemoteAssetProgressResult,
+    ) -> None:
+        if not result.assets:
+            warning = (
+                "\n".join(result.warnings)
+                if result.warnings
+                else "查询范围内没有找到相关资产提交。"
+            )
+            self.status_text.set("未找到远端资产提交")
+            self._set_detail(warning)
+            return
+        self.table_mode = "remote-assets"
+        self.current_result = None
+        self.remote_asset_result = result
+        self.visible_files = []
+        self.visible_ticket_mappings = []
+        self.table.configure(
+            show="tree headings",
+            displaycolumns=("state", "module", "path", "source"),
+        )
+        self.table.heading("#0", text="资产位置")
+        self.table.column(
+            "#0",
+            width=360,
+            minwidth=240,
+            stretch=True,
+            anchor="w",
+        )
+        for name, title, width in (
+            ("state", "国内 trunk", 102),
+            ("module", "海外 trunk", 102),
+            ("path", "海外 OB", 102),
+            ("source", "当前阶段", 92),
+        ):
+            self.table.heading(name, text=title)
+            self.table.column(
+                name,
+                width=width,
+                minwidth=width,
+                stretch=False,
+                anchor="center",
+            )
+        counts = {state: 0 for state in VerificationState}
+        for asset in result.assets:
+            counts[_remote_asset_summary_state(asset)] += 1
+        self.summary_text["all"].set(str(len(result.assets)))
+        for state in VerificationState:
+            self.summary_text[state.value].set(str(counts[state]))
+        self.filter_state.set("全部")
+        self.open_path_button.configure(state="disabled")
+        self.export_button.configure(state="disabled")
+        self._refresh_remote_asset_tree()
+        count_text = result.counts
+        self.status_text.set(
+            f"资产 {len(result.assets)}：国内 "
+            f"{count_text['domestic']}，海外 trunk "
+            f"{count_text['overseas_trunk']}，OB "
+            f"{count_text['osob']}"
+        )
+
+    def _refresh_remote_asset_tree(self) -> None:
+        result = self.remote_asset_result
+        if result is None:
+            return
+        selected_filter = self.filter_state.get()
+        assets = tuple(
+            asset
+            for asset in result.assets
+            if (
+                selected_filter == "全部"
+                or _remote_asset_summary_state(asset).label
+                == selected_filter
+            )
+        )
+        tree = AssetProgressTree(assets)
+        self.remote_asset_tree = tree
+        self.table.delete(*self.table.get_children())
+
+        def insert_node(
+            parent_id: str,
+            node_id: str,
+            depth: int,
+        ) -> None:
+            node = tree.nodes[node_id]
+            label = node.name
+            if not node.is_asset:
+                label += f" ({len(tree.descendant_assets(node_id))})"
+            stage = tree.stage(node_id)
+            tags = (
+                ("remote-folder", _remote_tree_tag(stage))
+                if not node.is_asset
+                else (_remote_tree_tag(stage),)
+            )
+            self.table.insert(
+                parent_id,
+                END,
+                iid=node_id,
+                text=label,
+                values=(
+                    tree.stage_label(node_id, "domestic"),
+                    tree.stage_label(node_id, "overseas_trunk"),
+                    tree.stage_label(node_id, "osob"),
+                    _remote_stage_label(stage),
+                ),
+                open=depth < 2,
+                tags=tags,
+            )
+            for child_id in node.children:
+                insert_node(node_id, child_id, depth + 1)
+
+        for root_id in tree.root_ids:
+            insert_node("", root_id, 0)
+        roots = self.table.get_children()
+        if roots:
+            self.table.selection_set(roots[0])
+            self.table.focus(roots[0])
+            self.table.see(roots[0])
+        self.use_ticket_button.configure(
+            text="SVN 精确核验",
+            state="normal" if self.current_ticket_mappings else "disabled",
         )
         self._show_selected_detail()
 
@@ -2573,6 +2757,7 @@ class MigrationGuardApp:
         )
 
     def _configure_audit_table(self) -> None:
+        self.table.configure(show="headings", displaycolumns="#all")
         headings = {
             "state": "状态",
             "module": "模块",
@@ -2778,6 +2963,23 @@ class MigrationGuardApp:
                         self.status_text.set(
                             f"Jira 进度读取失败：{message}"
                         )
+                elif event == "remote-assets-progress":
+                    request_id, _stage, message = payload
+                    if request_id == self._jira_request_id:
+                        self.status_text.set(str(message))
+                elif event == "remote-assets":
+                    request_id, result = payload
+                    if (
+                        request_id == self._jira_request_id
+                        and self.active_task not in {"audit", "migration"}
+                    ):
+                        self._render_remote_assets(result)
+                elif event == "remote-assets-error":
+                    request_id, message = payload
+                    if request_id == self._jira_request_id:
+                        self.status_text.set(
+                            f"远端资产记录读取失败：{message}"
+                        )
                 elif event == "workspace-stage":
                     self._set_workspace_route(str(payload))
                 elif event == "asset-selection-request":
@@ -2871,6 +3073,9 @@ class MigrationGuardApp:
         if self.table_mode == "jira":
             self._refresh_jira_table()
             return
+        if self.table_mode == "remote-assets":
+            self._refresh_remote_asset_tree()
+            return
         self.table.delete(*self.table.get_children())
         self.visible_files = []
         if self.current_result is None:
@@ -2923,6 +3128,8 @@ class MigrationGuardApp:
             return None
 
     def _selected_tickets(self) -> tuple[TicketMapping, ...]:
+        if self.table_mode == "remote-assets":
+            return self.current_ticket_mappings
         if self.table_mode not in {"tickets", "jira"}:
             return ()
         selection = self.table.selection()
@@ -2990,6 +3197,62 @@ class MigrationGuardApp:
         self._copy_selected_path(event)
 
     def _show_selected_detail(self, _event: object = None) -> None:
+        if self.table_mode == "remote-assets":
+            tree = self.remote_asset_tree
+            selection = self.table.selection()
+            if tree is None or not selection:
+                return
+            node = tree.nodes.get(selection[0])
+            if node is None:
+                return
+            asset = tree.asset_for_node(node.node_id)
+            if asset is None:
+                descendants = tree.descendant_assets(node.node_id)
+                self._set_detail(
+                    "\n".join(
+                        (
+                            f"目录：{node.path}",
+                            f"资产数：{len(descendants)}",
+                            "国内 trunk："
+                            f"{tree.stage_label(node.node_id, 'domestic')}",
+                            "海外 trunk："
+                            f"{tree.stage_label(node.node_id, 'overseas_trunk')}",
+                            "海外 OB："
+                            f"{tree.stage_label(node.node_id, 'osob')}",
+                            "",
+                            "展开目录可查看每个资产的提交版本。",
+                        )
+                    )
+                )
+                return
+            self._set_detail(
+                "\n".join(
+                    (
+                        f"当前阶段：{asset.stage_label}",
+                        "动作一致："
+                        f"{'否' if asset.has_action_mismatch else '是'}",
+                        f"模块：{asset.module}",
+                        f"资产：{asset.display_path}",
+                        f"相对路径：{asset.relative_path}",
+                        "",
+                        "国内单号："
+                        f"{'、'.join(asset.source_issues) or '-'}",
+                        "海外单号："
+                        f"{'、'.join(asset.target_issues) or '-'}",
+                        "",
+                        "国内 trunk："
+                        f"{_remote_evidence_detail(asset.domestic)}",
+                        "海外 trunk："
+                        f"{_remote_evidence_detail(asset.overseas_trunk)}",
+                        "海外 OB："
+                        f"{_remote_evidence_detail(asset.osob)}",
+                        "",
+                        "数据来源：按 Jira 单号查询远端 SVN 提交记录；"
+                        "不依赖本地工作副本。",
+                    )
+                )
+            )
+            return
         if self.table_mode == "jira":
             selection = self.table.selection()
             if not selection:
@@ -3088,6 +3351,18 @@ class MigrationGuardApp:
         self._set_detail(content)
 
     def _copy_selected_path(self, _event: object = None) -> None:
+        if self.table_mode == "remote-assets":
+            tree = self.remote_asset_tree
+            selection = self.table.selection()
+            if tree is None or not selection:
+                return
+            asset = tree.asset_for_node(selection[0])
+            if asset is None:
+                return
+            self.root.clipboard_clear()
+            self.root.clipboard_append(asset.display_path)
+            self.status_text.set("资产路径已复制")
+            return
         item = self._selected_item()
         if item is None or not item.expected.target_local_path:
             return
@@ -3203,6 +3478,52 @@ def _jira_summary_state(
     if item.source.has_trunk:
         return VerificationState.PENDING_COMMIT
     return VerificationState.NOT_MIGRATED
+
+
+def _remote_tree_tag(stage: str) -> str:
+    return {
+        "osob": "remote-osob",
+        "overseas_trunk": "remote-trunk",
+        "domestic": "remote-domestic",
+        "partial": "remote-partial",
+        "warning": "remote-warning",
+    }.get(stage, "remote-partial")
+
+
+def _remote_stage_label(stage: str) -> str:
+    return {
+        "osob": "海外 OB",
+        "overseas_trunk": "海外 trunk",
+        "domestic": "国内 trunk",
+        "partial": "部分完成",
+        "warning": "动作不一致",
+        "empty": "-",
+    }.get(stage, stage)
+
+
+def _remote_asset_summary_state(
+    asset: RemoteAssetProgress,
+) -> VerificationState:
+    if asset.has_action_mismatch:
+        return VerificationState.BLOCKED
+    if asset.osob.present:
+        return VerificationState.COMPLETE
+    if asset.overseas_trunk.present:
+        return VerificationState.SUBMITTED
+    if asset.domestic.present:
+        return VerificationState.PENDING_COMMIT
+    return VerificationState.NOT_MIGRATED
+
+
+def _remote_evidence_detail(evidence: BranchEvidence) -> str:
+    if not evidence.present:
+        return "无提交"
+    revisions = ", ".join(f"r{value}" for value in evidence.revisions)
+    authors = "、".join(evidence.authors) or "-"
+    return (
+        f"{evidence.action or '?'} | {revisions} | "
+        f"{authors}"
+    )
 
 
 def main() -> None:

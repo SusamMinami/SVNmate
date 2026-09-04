@@ -37,6 +37,7 @@ jobs:
           python -B -m unittest
           test_migration_audit
           test_jira_client
+          test_remote_asset_progress
           test_ticket_mapping
           test_batch_workflow
           test_asset_tree

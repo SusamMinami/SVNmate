@@ -293,6 +293,93 @@ class MigrationGuardUiSmokeTests(unittest.TestCase):
         finally:
             _destroy_root(root)
 
+    def test_remote_assets_render_as_three_stage_tree(self) -> None:
+        from tkinter import Tk
+
+        from migration_guard.app import MigrationGuardApp
+        from migration_guard.remote_asset_progress import (
+            BranchEvidence,
+            RemoteAssetProgress,
+            RemoteAssetProgressResult,
+        )
+        from migration_guard.ticket_mapping import TicketMapping, TicketRoute
+
+        root = Tk()
+        root.withdraw()
+        try:
+            with patch(
+                "migration_guard.app.load_config",
+                return_value=MigrationGuardConfig(),
+            ):
+                app = MigrationGuardApp(root)
+            mapping = TicketMapping(
+                source_issue="SERIA-10",
+                target_issue="OSCOA-20",
+                route=TicketRoute.DOMESTIC_TO_OVERSEAS,
+                row=1,
+                source_text="source",
+                target_text="target",
+                raw_text="",
+            )
+            app.current_ticket_mappings = (mapping,)
+            result = RemoteAssetProgressResult(
+                assets=(
+                    RemoteAssetProgress(
+                        module="res",
+                        relative_path="Content/Foo/A.uasset",
+                        display_path="/res/Game/Foo/A",
+                        source_issues=("SERIA-10",),
+                        target_issues=("OSCOA-20",),
+                        domestic=BranchEvidence((10,), ("a",), "A"),
+                        overseas_trunk=BranchEvidence(
+                            (20,),
+                            ("b",),
+                            "A",
+                        ),
+                        osob=BranchEvidence((30,), ("c",), "A"),
+                    ),
+                    RemoteAssetProgress(
+                        module="res",
+                        relative_path="Content/Foo/B.uasset",
+                        display_path="/res/Game/Foo/B",
+                        source_issues=("SERIA-10",),
+                        target_issues=("OSCOA-20",),
+                        domestic=BranchEvidence((11,), ("a",), "M"),
+                    ),
+                )
+            )
+
+            app._render_remote_assets(result)
+            root.update_idletasks()
+
+            self.assertEqual(app.table_mode, "remote-assets")
+            self.assertEqual(
+                tuple(map(str, app.table.cget("show"))),
+                ("tree", "headings"),
+            )
+            self.assertEqual(app.table.heading("#0", "text"), "资产位置")
+            root_id = app.table.get_children()[0]
+            self.assertEqual(
+                app.table.item(root_id, "values")[:3],
+                ("2/2", "1/2", "1/2"),
+            )
+            self.assertEqual(app.summary_text["complete"].get(), "1")
+            self.assertEqual(app.summary_text["pending_commit"].get(), "1")
+            self.assertEqual(app._selected_tickets(), (mapping,))
+            self.assertIn(
+                "展开目录可查看每个资产",
+                app.detail.get("1.0", "end-1c"),
+            )
+            app.filter_state.set("已完成")
+            app._refresh_table()
+            filtered_root = app.table.get_children()[0]
+            self.assertEqual(
+                app.table.item(filtered_root, "values")[:3],
+                ("1/1", "1/1", "1/1"),
+            )
+        finally:
+            _destroy_root(root)
+
     def test_ticket_table_selects_all_domestic_rows_and_starts_batch(self) -> None:
         from tkinter import Tk
 

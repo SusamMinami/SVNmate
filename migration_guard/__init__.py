@@ -17,6 +17,12 @@ from .models import (
     VerificationState,
     WorkspaceModule,
 )
+from .remote_asset_progress import (
+    BranchEvidence,
+    RemoteAssetProgress,
+    RemoteAssetProgressResult,
+    RemoteAssetProgressService,
+)
 from .selective_update import SelectiveUpdatePlan, SelectiveUpdatePlanner
 from .svn_update_client import MigrationUpdateClient, update_working_copies
 from .ticket_mapping import (
@@ -35,6 +41,7 @@ __all__ = [
     "AssetMigrationPlan",
     "BatchMigrationAuditResult",
     "BatchMigrationExecutor",
+    "BranchEvidence",
     "CheckoutPlan",
     "JiraIssueClient",
     "JiraIssueSnapshot",
@@ -42,6 +49,9 @@ __all__ = [
     "MigrationAuditService",
     "MigrationCase",
     "MigrationUpdateClient",
+    "RemoteAssetProgress",
+    "RemoteAssetProgressResult",
+    "RemoteAssetProgressService",
     "SelectiveUpdatePlan",
     "SelectiveUpdatePlanner",
     "TicketMapping",
