@@ -4,6 +4,12 @@ from .batch_workflow import (
     BatchMigrationExecutor,
     CheckoutPlan,
 )
+from .jira_client import (
+    JiraIssueClient,
+    JiraIssueSnapshot,
+    TicketJiraProgress,
+    build_ticket_progress,
+)
 from .models import (
     BatchMigrationAuditResult,
     MigrationAuditResult,
@@ -30,6 +36,8 @@ __all__ = [
     "BatchMigrationAuditResult",
     "BatchMigrationExecutor",
     "CheckoutPlan",
+    "JiraIssueClient",
+    "JiraIssueSnapshot",
     "MigrationAuditResult",
     "MigrationAuditService",
     "MigrationCase",
@@ -37,12 +45,14 @@ __all__ = [
     "SelectiveUpdatePlan",
     "SelectiveUpdatePlanner",
     "TicketMapping",
+    "TicketJiraProgress",
     "TicketRoute",
     "TicketSheetSnapshot",
     "TicketTextResolution",
     "VerificationState",
     "WorkspaceModule",
     "as_overseas_to_osob",
+    "build_ticket_progress",
     "default_workspace_modules",
     "resolve_ticket_text",
     "update_working_copies",

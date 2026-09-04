@@ -42,6 +42,11 @@ from .config import (
     load_config,
     save_config,
 )
+from .jira_client import (
+    JiraIssueClient,
+    TicketJiraProgress,
+    build_ticket_progress,
+)
 from .models import (
     BatchMigrationAuditResult,
     FileVerification,
@@ -175,8 +180,11 @@ class MigrationGuardApp:
         self.current_ticket_mappings: tuple[TicketMapping, ...] = ()
         self.visible_files: list[FileVerification] = []
         self.visible_ticket_mappings: list[TicketMapping] = []
+        self.visible_ticket_progress: list[TicketJiraProgress] = []
         self.ticket_snapshot: TicketSheetSnapshot | None = None
         self.ticket_snapshots: dict[str, TicketSheetSnapshot] = {}
+        self.jira_client = JiraIssueClient()
+        self._jira_request_id = 0
         self.active_table_kind = TABLE_TRUNK
         self.table_mode = "audit"
         self.settings_window: Toplevel | None = None
@@ -613,6 +621,11 @@ class MigrationGuardApp:
             TicketRoute.SKIP.value,
             foreground="#B42318",
         )
+        self.table.tag_configure("jira-osob", foreground="#15803D")
+        self.table.tag_configure("jira-trunk", foreground="#047857")
+        self.table.tag_configure("jira-domestic", foreground="#B45309")
+        self.table.tag_configure("jira-unknown", foreground="#667085")
+        self.table.tag_configure("jira-warning", foreground="#B42318")
         self.table.bind("<<TreeviewSelect>>", self._show_selected_detail)
         self.table.bind("<Double-1>", self._on_table_double_click)
 
@@ -933,6 +946,7 @@ class MigrationGuardApp:
         self.current_result = None
         self.migrate_button.configure(state="disabled")
         self.visible_files = []
+        self.visible_ticket_progress = []
         self.visible_ticket_mappings = [
             mapping
             for mapping in snapshot.mappings
@@ -1291,6 +1305,7 @@ class MigrationGuardApp:
             self._set_detail("\n".join(details))
             return
         self.ticket_snapshots[self.active_table_kind] = snapshot
+        self.ticket_snapshot = snapshot
         self._use_ticket_mappings(
             snapshot,
             mappings,
@@ -1311,6 +1326,153 @@ class MigrationGuardApp:
                 ("", "映射不唯一：" + ", ".join(resolution.ambiguous_keys))
             )
         self._set_detail("\n".join(details))
+        self._start_jira_progress(mappings)
+
+    def _start_jira_progress(
+        self,
+        mappings: tuple[TicketMapping, ...],
+    ) -> None:
+        self._jira_request_id += 1
+        request_id = self._jira_request_id
+        self.status_text.set(
+            f"已解析 {len(mappings)} 条，正在读取 Jira 进度..."
+        )
+        threading.Thread(
+            target=self._jira_progress_worker,
+            args=(request_id, mappings),
+            name="migration-jira-progress",
+            daemon=True,
+        ).start()
+
+    def _jira_progress_worker(
+        self,
+        request_id: int,
+        mappings: tuple[TicketMapping, ...],
+    ) -> None:
+        try:
+            issue_keys = tuple(
+                dict.fromkeys(
+                    issue
+                    for mapping in mappings
+                    for issue in (
+                        mapping.source_issue,
+                        mapping.target_issue or mapping.source_issue,
+                    )
+                )
+            )
+            issues = self.jira_client.fetch_many(issue_keys)
+            progress = build_ticket_progress(mappings, issues)
+            self.events.put(
+                ("jira-progress", (request_id, progress))
+            )
+        except Exception as exc:
+            self.events.put(
+                ("jira-progress-error", (request_id, str(exc)))
+            )
+
+    def _render_jira_progress(
+        self,
+        progress: tuple[TicketJiraProgress, ...],
+    ) -> None:
+        self.table_mode = "jira"
+        self.current_result = None
+        self.visible_files = []
+        self.visible_ticket_mappings = []
+        self.visible_ticket_progress = list(progress)
+        self.table.delete(*self.table.get_children())
+        headings = {
+            "state": "当前阶段",
+            "module": "一致性",
+            "path": "任务",
+            "source": "国内 Jira",
+            "local": "海外 Jira",
+            "target": "版本登记",
+        }
+        widths = {
+            "state": 80,
+            "module": 64,
+            "path": 210,
+            "source": 130,
+            "local": 130,
+            "target": 150,
+        }
+        for name in self.table["columns"]:
+            self.table.heading(name, text=headings[name])
+            self.table.column(
+                name,
+                width=widths[name],
+                minwidth=widths[name],
+                stretch=name == "path",
+                anchor="w" if name == "path" else "center",
+            )
+        self.open_path_button.configure(state="disabled")
+        self.export_button.configure(state="disabled")
+        self.summary_text["all"].set(str(len(progress)))
+        counts = {state: 0 for state in VerificationState}
+        for item in progress:
+            counts[_jira_summary_state(item)] += 1
+        for state in VerificationState:
+            self.summary_text[state.value].set(str(counts[state]))
+        self.filter_state.set("全部")
+        self._refresh_jira_table()
+        failed = sum(
+            1
+            for item in progress
+            if not item.source.available or not item.target.available
+        )
+        self.status_text.set(
+            f"Jira 进度已更新：{len(progress)} 条"
+            + (f"，{failed} 条读取失败" if failed else "")
+        )
+
+    def _refresh_jira_table(self) -> None:
+        self.table.delete(*self.table.get_children())
+        selected_filter = self.filter_state.get()
+        for index, item in enumerate(self.visible_ticket_progress):
+            summary_state = _jira_summary_state(item)
+            if (
+                selected_filter != "全部"
+                and summary_state.label != selected_filter
+            ):
+                continue
+            title = (
+                item.mapping.target_text
+                or item.mapping.source_text
+                or (
+                    f"{item.mapping.source_issue} → "
+                    f"{item.mapping.target_issue}"
+                )
+            )
+            self.table.insert(
+                "",
+                END,
+                iid=str(index),
+                values=(
+                    item.stage_label,
+                    item.consistency_label,
+                    title,
+                    (
+                        f"{item.mapping.source_issue} "
+                        f"{item.source.status or '-'}"
+                    ),
+                    (
+                        f"{item.mapping.target_issue or item.mapping.source_issue} "
+                        f"{item.target.status or '-'}"
+                    ),
+                    item.branch_label,
+                ),
+                tags=(_jira_progress_tag(item),),
+            )
+        children = self.table.get_children()
+        if children:
+            self.table.selection_set(children)
+            self.table.focus(children[0])
+            self.table.see(children[0])
+        self.use_ticket_button.configure(
+            text=f"核验选中（{len(children)}）",
+            state="normal" if children else "disabled",
+        )
+        self._show_selected_detail()
 
     def _mapping_allowed_for_active_table(
         self,
@@ -2603,6 +2765,19 @@ class MigrationGuardApp:
                 elif event == "ticket-table":
                     table_kind, snapshot = payload
                     self._show_ticket_table(snapshot, table_kind)
+                elif event == "jira-progress":
+                    request_id, progress = payload
+                    if (
+                        request_id == self._jira_request_id
+                        and self.active_task not in {"audit", "migration"}
+                    ):
+                        self._render_jira_progress(progress)
+                elif event == "jira-progress-error":
+                    request_id, message = payload
+                    if request_id == self._jira_request_id:
+                        self.status_text.set(
+                            f"Jira 进度读取失败：{message}"
+                        )
                 elif event == "workspace-stage":
                     self._set_workspace_route(str(payload))
                 elif event == "asset-selection-request":
@@ -2675,6 +2850,7 @@ class MigrationGuardApp:
         self._configure_audit_table()
         self.ticket_snapshot = None
         self.visible_ticket_mappings = []
+        self.visible_ticket_progress = []
         counts = result.counts
         self.summary_text["all"].set(str(len(result.files)))
         for state in VerificationState:
@@ -2691,6 +2867,9 @@ class MigrationGuardApp:
 
     def _refresh_table(self) -> None:
         if self.table_mode == "tickets":
+            return
+        if self.table_mode == "jira":
+            self._refresh_jira_table()
             return
         self.table.delete(*self.table.get_children())
         self.visible_files = []
@@ -2744,7 +2923,7 @@ class MigrationGuardApp:
             return None
 
     def _selected_tickets(self) -> tuple[TicketMapping, ...]:
-        if self.table_mode != "tickets":
+        if self.table_mode not in {"tickets", "jira"}:
             return ()
         selection = self.table.selection()
         if not selection:
@@ -2757,7 +2936,13 @@ class MigrationGuardApp:
         result = []
         for item_id in selection:
             try:
-                result.append(self.visible_ticket_mappings[int(item_id)])
+                index = int(item_id)
+                if self.table_mode == "jira":
+                    result.append(
+                        self.visible_ticket_progress[index].mapping
+                    )
+                else:
+                    result.append(self.visible_ticket_mappings[index])
             except (ValueError, IndexError):
                 continue
         return tuple(result)
@@ -2799,12 +2984,56 @@ class MigrationGuardApp:
         )
 
     def _on_table_double_click(self, event: object = None) -> None:
-        if self.table_mode == "tickets":
+        if self.table_mode in {"tickets", "jira"}:
             self._use_selected_ticket()
             return
         self._copy_selected_path(event)
 
     def _show_selected_detail(self, _event: object = None) -> None:
+        if self.table_mode == "jira":
+            selection = self.table.selection()
+            if not selection:
+                return
+            try:
+                items = tuple(
+                    self.visible_ticket_progress[int(item_id)]
+                    for item_id in selection
+                )
+            except (ValueError, IndexError):
+                return
+            item = items[0]
+            self.use_ticket_button.configure(
+                text=f"核验选中（{len(items)}）"
+            )
+            source_error = item.source.error or "-"
+            target_error = item.target.error or "-"
+            self._set_detail(
+                "\n".join(
+                    (
+                        f"当前阶段：{item.stage_label}",
+                        f"版本一致性：{item.consistency_label}",
+                        "数据来源：Jira 状态与版本登记",
+                        "",
+                        f"国内单号：{item.mapping.source_issue}",
+                        f"国内状态：{item.source.status or '未知'}",
+                        f"国内版本：{item.source.version_label}",
+                        f"国内创建：{item.source.create_date or '-'}",
+                        "",
+                        "海外单号："
+                        f"{item.mapping.target_issue or item.mapping.source_issue}",
+                        f"海外状态：{item.target.status or '未知'}",
+                        f"海外版本：{item.target.version_label}",
+                        f"海外创建：{item.target.create_date or '-'}",
+                        "",
+                        f"国内读取错误：{source_error}",
+                        f"海外读取错误：{target_error}",
+                        "",
+                        "Jira 进度适用于无工程查看；"
+                        "文件级完成状态仍以 SVN 核验为准。",
+                    )
+                )
+            )
+            return
         if self.table_mode == "tickets":
             mappings = self._selected_tickets()
             if not mappings:
@@ -2942,6 +3171,38 @@ def _ticket_commit_message(mapping: TicketMapping) -> str:
     if title:
         return f"【{mapping.target_issue}】{title}"
     return f"【{mapping.target_issue}】"
+
+
+def _jira_progress_tag(item: TicketJiraProgress) -> str:
+    if not item.source.available or not item.target.available:
+        return "jira-unknown"
+    if item.consistency_label == "版本异常":
+        return "jira-warning"
+    if item.target.has_osob:
+        return "jira-osob"
+    if item.target.has_trunk:
+        return "jira-trunk"
+    if item.source.has_trunk:
+        return "jira-domestic"
+    return "jira-unknown"
+
+
+def _jira_summary_state(
+    item: TicketJiraProgress,
+) -> VerificationState:
+    if (
+        not item.source.available
+        or not item.target.available
+        or item.consistency_label == "版本异常"
+    ):
+        return VerificationState.BLOCKED
+    if item.target.has_osob:
+        return VerificationState.COMPLETE
+    if item.target.has_trunk:
+        return VerificationState.SUBMITTED
+    if item.source.has_trunk:
+        return VerificationState.PENDING_COMMIT
+    return VerificationState.NOT_MIGRATED
 
 
 def main() -> None:

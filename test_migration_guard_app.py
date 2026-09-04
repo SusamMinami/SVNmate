@@ -159,14 +159,17 @@ class MigrationGuardUiSmokeTests(unittest.TestCase):
                 mappings=(mapping,),
             )
 
-            app._apply_ticket_resolution(
-                snapshot,
-                (mapping,),
-                "SERIA-10",
-            )
+            with patch.object(app, "_start_jira_progress") as start_jira:
+                app._apply_ticket_resolution(
+                    snapshot,
+                    (mapping,),
+                    "SERIA-10",
+                )
+            start_jira.assert_called_once_with((mapping,))
 
             self.assertEqual(app.source_issue.get(), "SERIA-10")
             self.assertEqual(app.target_issue.get(), "OSCOA-20")
+            self.assertIs(app.ticket_snapshot, snapshot)
             self.assertIn("第 15 行", app.status_text.get())
 
             app._show_ticket_table(snapshot)
@@ -198,6 +201,95 @@ class MigrationGuardUiSmokeTests(unittest.TestCase):
                 app.table.item("__progress__", "values")[:3],
                 ("进行中", "source-log", "扫描源提交"),
             )
+        finally:
+            _destroy_root(root)
+
+    def test_jira_progress_renders_without_local_workspace(self) -> None:
+        from tkinter import Tk
+
+        from migration_guard.app import MigrationGuardApp
+        from migration_guard.jira_client import (
+            JiraIssueSnapshot,
+            build_ticket_progress,
+        )
+        from migration_guard.ticket_mapping import (
+            TicketMapping,
+            TicketRoute,
+            TicketSheetSnapshot,
+        )
+
+        root = Tk()
+        root.withdraw()
+        try:
+            with patch(
+                "migration_guard.app.load_config",
+                return_value=MigrationGuardConfig(),
+            ):
+                app = MigrationGuardApp(root)
+            mapping = TicketMapping(
+                source_issue="SERIA-10",
+                target_issue="OSCOA-20",
+                route=TicketRoute.DOMESTIC_TO_OVERSEAS,
+                row=15,
+                source_text="国内任务",
+                target_text="海外任务",
+                raw_text="mapping",
+            )
+            app.ticket_snapshot = TicketSheetSnapshot(
+                url="https://example.invalid",
+                sheet_id="sheet-1",
+                sheet_name="current",
+                revision=12,
+                fetched_at="2026-09-04T00:00:00+00:00",
+                mappings=(mapping,),
+            )
+            progress = build_ticket_progress(
+                (mapping,),
+                {
+                    "SERIA-10": JiraIssueSnapshot(
+                        issue_key="SERIA-10",
+                        status="主干测试",
+                        versions=("trunk",),
+                    ),
+                    "OSCOA-20": JiraIssueSnapshot(
+                        issue_key="OSCOA-20",
+                        status="分支测试",
+                        versions=("trunk", "OSOB2.0"),
+                    ),
+                },
+            )
+
+            app._render_jira_progress(progress)
+            root.update_idletasks()
+
+            self.assertEqual(app.table_mode, "jira")
+            self.assertEqual(
+                app.table.heading("state", "text"),
+                "当前阶段",
+            )
+            self.assertEqual(
+                app.table.item("0", "values")[0],
+                "海外 OB",
+            )
+            self.assertEqual(
+                app.table.item("0", "tags"),
+                ("jira-osob",),
+            )
+            self.assertEqual(
+                app.summary_text["complete"].get(),
+                "1",
+            )
+            self.assertEqual(app._selected_tickets(), (mapping,))
+            self.assertIn(
+                "数据来源：Jira 状态与版本登记",
+                app.detail.get("1.0", "end-1c"),
+            )
+            app.filter_state.set("待提交")
+            app._refresh_table()
+            self.assertEqual(app.table.get_children(), ())
+            app.filter_state.set("已完成")
+            app._refresh_table()
+            self.assertEqual(app.table.get_children(), ("0",))
         finally:
             _destroy_root(root)
 

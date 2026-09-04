@@ -30,6 +30,8 @@ IPC 和无进程回退都使用同一套 core，因此不会复制 Update/Cleanu
 - `migration_guard/app.py`：Windows 桌面界面、筛选、详情和 JSON 导出。
 - `migration_guard/ticket_mapping.py`：飞书合并表读取、SERIA/OSCOA 双向映射、路线
   分段和离线缓存。
+- `migration_guard/jira_client.py`：批量读取 Jira 状态、创建时间和版本登记，并
+  聚合无工程模式下的国内 trunk、海外 trunk、OSOB 任务进度。
 - `migration_guard/selective_update.py`：按源清单和远端状态生成最小更新目录集合。
 - `migration_guard/ue_client.py`：OmniMcpCore 长度前缀协议和 UE 工程校验。
 - `migration_guard/batch_workflow.py`：资源去重与用户选择、海外 Jira 提交分组和
@@ -37,6 +39,23 @@ IPC 和无进程回退都使用同一套 core，因此不会复制 Update/Cleanu
 
 当前尚未实现源文件后续提交漂移提示、表格语义差异和 UE 依赖资源的精确 Jira
 归属。
+
+### 1.2 无工程 Jira 模式
+
+项目管理员不需要配置或下载三套 SVN 工作区。粘贴单号并完成飞书映射后，客户端
+并发请求内部 `P6JiraStatusGet` 接口，读取 `jiraStatus`、`jiraVersions` 和
+`createDate`：
+
+```text
+国内 Jira 含 trunk，海外 Jira 不含 trunk -> 国内 trunk
+海外 Jira 含 trunk，不含 OSOB             -> 海外 trunk
+海外 Jira 含 OSOB                          -> 海外 OB
+任一 Jira 读取失败                         -> 状态未知
+```
+
+结果按 5 分钟内存缓存，并逐单降级；单个接口失败不会清空其他任务。该模式只表达
+Jira 流程和版本登记，不宣称文件集合已经一致。有本地工作区时，用户从同一任务行
+进入现有 SVN 路径级核验，以 SVN 结果作为更高可信度证据。
 
 ## 2. 现有实现分析
 
