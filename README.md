@@ -12,12 +12,14 @@
 - 支持 cleanup 后自动运行 `res\Build.bat`
 - 支持手动选择 `Update.bat` 和 `Build.bat` 的位置
 - 支持按需安装、打开和独立更新 ConfigLinker
+- 支持从工具模块区域打开迁移核验助手
 - 支持选择已有 KindleLarkStatus EXE、打开和启动时联动
 - 支持启动时联动打开 KindleLarkStatus，并避免重复启动
 - 支持每天定时执行
 - Metro 风格紧凑界面，执行设置与工具模块分栏显示
 - 支持 Per-Monitor DPI，125%/150% 缩放下保持字体清晰
 - 支持 Windows 单实例运行，重复启动时提示并唤醒已有窗口
+- 常驻实例通过本机 Named Pipe 接收其他 SVNmate 模块的指定目录更新请求
 - 支持 Windows 系统托盘，双击图标切换窗口显示/隐藏
 - 托盘右键菜单可直接打开 ConfigLinker 或 KindleLarkStatus
 - 实时输出执行日志，任务完成后变为绿色提示
@@ -36,6 +38,27 @@ SVNAutoTool.exe
 首次启动会自动生成本机配置文件。配置、日志不会上传到仓库。
 
 点击窗口关闭按钮或“隐藏到托盘”后，程序会继续在系统托盘运行，以保证定时任务有效。双击托盘图标可切换主窗口显示/隐藏；右键托盘图标可打开窗口、立即执行、直接打开任一工具模块或彻底退出。软件已经运行时再次双击 EXE，会先提示当前状态，再恢复并激活已有窗口。
+
+## 模块调用 SVN 更新
+
+迁移核验助手等本机模块通过 `migration_guard.update_working_copies`
+请求更新指定工作副本：
+
+```python
+from migration_guard import update_working_copies
+
+result = update_working_copies(
+    [r"C:\trunk\res", r"D:\Oversea\OStrunk\res"]
+)
+```
+
+- SVNmate 正在运行：请求通过 `\\.\pipe\SVNmate.Command.v1` 交给常驻实例。
+- SVNmate 未运行：调用方直接使用 `svnmate_core`。
+- SVNmate 正在运行但 IPC 不可用：返回 `ipc-unavailable`，不会并发启动 core。
+- 两条执行路径都返回每个目录的 Update、Cleanup 和重试结果。
+
+外部请求只执行指定目录的 SVN 更新和失败恢复，不会运行 SVNmate 中配置的
+`Update.bat`、`Build.bat` 或每日任务。
 
 ## v1.4.3 更新摘要
 
@@ -70,9 +93,10 @@ SVNAutoTool.exe
 SVNmate 的“工具模块”卡片包含：
 
 - **配置关系检索器**：目标物、NPC、模型资源双向检索，正式服武器查询与在线图标，并可联网查看命名角色档案。
+- **迁移核验助手**：按源/海外 Jira 单号检查涉及文件、目标本地修改和海外提交证据。
 - **Kindle 提示板**：Windows 桌面客户端，可保留“启动时联动”。
 
-模块缺失时点击“安装”，已安装时点击“打开”；“检查”会读取固定发布清单，有新版后按钮变为“更新”。两个模块都可以点击“选择”接管已有的独立 EXE。Kindle 公共通道已经发布，可直接在线安装和更新。
+支持在线发布的模块缺失时点击“安装”，已安装时点击“打开”；“检查”会读取固定发布清单，有新版后按钮变为“更新”。迁移核验助手使用独立的 `migration-guard-latest` 更新通道，也可点击“选择”接管已有 EXE。
 
 KindleLarkStatus 源码仓保持私有，Windows ZIP 与 manifest 发布在 SVNmate 仓库的独立 `kindle-windows-latest` 通道。发布与验收记录见 [Kindle 公共更新通道交接](KINDLE_PUBLIC_CHANNEL_HANDOFF.md)。
 

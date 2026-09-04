@@ -12,6 +12,7 @@
 ## v1.4.2 更新摘要
 
 - 软件只保留一个运行实例；重复启动时先提示，再恢复并激活已有窗口。
+- 常驻实例通过本机 Named Pipe 接收其他 SVNmate 模块的指定目录更新请求。
 - 双击托盘图标可在“显示并激活”和“隐藏到托盘”之间切换。
 - 托盘右键菜单可直接打开配置关系检索器或 Kindle 提示板，不需要先打开主窗口。
 - 实时日志队列、单条内容和界面行数均有上限，完整内容继续写入磁盘日志。
@@ -57,6 +58,11 @@ python svn_auto_tool.py
 
 运行 exe 不需要额外安装 Python。工具会优先使用 TortoiseSVN 的 `TortoiseProc.exe` 执行 update/cleanup，这和右键菜单行为更接近；如果找不到 TortoiseSVN，才会回退到命令行 `svn.exe`。
 
+其他本机工具可调用 `migration_guard.update_working_copies` 请求更新指定目录。SVNmate
+常驻时由 SVNmate 执行；未运行时调用方使用共享的 `svnmate_core`。如果检测到旧版
+SVNmate 正在运行但 IPC 不可用，调用方会停止并提示重启，避免两个进程同时操作同一
+工作副本。
+
 执行 TortoiseSVN update 时，工具会在确认窗口已经完成后自动点击 `OK/确定/确认/关闭`；执行 cleanup 时会使用 TortoiseSVN 的 `/noui` 静默清理，避免弹出确认窗口。
 
 右上角有音乐播放开关。默认开启，工具会优先播放 exe 所在目录下的 `.mp3` 音乐文件，也兼容 `.wav`。
@@ -75,10 +81,11 @@ https://bytedance.larkoffice.com/docx/BdDod9tjIo4rPbx2oWHchVRUnwh
 
 ## 工具模块
 
-“工具模块”卡片提供两个独立程序：
+“工具模块”卡片提供三个独立程序：
 
 ```text
 配置关系检索器（ConfigLinker）
+迁移核验助手（MigrationGuard）
 Kindle 提示板（KindleLarkStatus）
 ```
 
@@ -93,20 +100,23 @@ modules\ConfigLinker\ConfigLinker.exe
 modules\KindleLarkStatus\KindleLarkStatus.exe
 ```
 
-模块不随 `SVNmate.zip` 预装。安装失败不会删除当前可用版本，也不会覆盖模块配置。
+迁移核验助手使用独立的 `migration-guard-latest` 在线更新通道；同时仍会从同目录
+或 `dist\MigrationGuard.exe` 自动识别，也可手动选择。
+其他模块不随 `SVNmate.zip` 预装。安装失败不会删除当前可用版本，也不会覆盖模块配置。
 
 ### 选择已有程序
 
 已有独立 EXE 时点击对应行的“选择”：
 
 - ConfigLinker 必须选择 `ConfigLinker.exe`。
+- 迁移核验助手必须选择 `MigrationGuard.exe`。
 - Kindle 提示板必须选择 `KindleLarkStatus.exe`。
 - 新的 `tool_module_paths` 会保存到 `svn_auto_tool_config.json`。
 - 旧版 `kindle_status_path` 会自动迁移，不需要重新选择。
 
 ### 检查与更新
 
-SVNmate 启动后会后台检查两个模块。网络失败只把模块状态改为“检查失败”，不影响 SVN 更新和已安装模块启动。
+SVNmate 启动后会后台检查支持在线发布的模块。网络失败只把模块状态改为“检查失败”，不影响 SVN 更新、本地迁移核验或已安装模块启动。
 
 - 无更新时保持当前版本。
 - 有更新时“检查”变为“更新”。
@@ -167,7 +177,7 @@ SVNmate 启动后会在 Windows 通知区域显示 Metro 蓝色图标。
 
 - 点击窗口关闭按钮或“隐藏到托盘”只会隐藏窗口，定时任务仍会继续。
 - 双击托盘图标：主窗口可见时隐藏，否则恢复并激活。
-- 右键托盘图标可选择“打开 SVNmate”“立即执行”、直接打开两个工具模块或“退出”。
+- 右键托盘图标可选择“打开 SVNmate”“立即执行”、直接打开各工具模块或“退出”。
 - 软件已在运行时再次双击 EXE，会提示当前状态并唤醒已有窗口，不会产生第二个托盘进程。
 - 只有选择托盘菜单中的“退出”才会彻底关闭 SVNmate。
 

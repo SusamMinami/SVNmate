@@ -8,6 +8,7 @@ from module_updates import ModuleManifest
 from tool_modules import (
     CONFIG_LINKER,
     KINDLE_STATUS,
+    MIGRATION_GUARD,
     ToolModuleManager,
     module_paths_from_config,
 )
@@ -20,6 +21,16 @@ class ToolModuleManagerTests(unittest.TestCase):
             (
                 "https://github.com/SusamMinami/SVNmate/releases/download/"
                 "kindle-windows-latest/manifest.json"
+            ),
+        )
+
+    def test_migration_guard_uses_its_own_release_channel(self) -> None:
+        self.assertTrue(MIGRATION_GUARD.supports_updates)
+        self.assertEqual(
+            MIGRATION_GUARD.manifest_url,
+            (
+                "https://github.com/SusamMinami/SVNmate/releases/download/"
+                "migration-guard-latest/manifest.json"
             ),
         )
 
@@ -41,16 +52,22 @@ class ToolModuleManagerTests(unittest.TestCase):
                 "tool_module_paths": {
                     "config-linker": r"D:\Tools\ConfigLinker.exe",
                     "kindle-lark-status": r"D:\Tools\KindleLarkStatus.exe",
+                    "migration-guard": r"D:\Tools\MigrationGuard.exe",
                 }
             },
             detected_config_linker=r"C:\Default\ConfigLinker.exe",
             detected_kindle_status=r"C:\Default\KindleLarkStatus.exe",
+            detected_migration_guard=r"C:\Default\MigrationGuard.exe",
         )
 
         self.assertEqual(paths["config-linker"], r"D:\Tools\ConfigLinker.exe")
         self.assertEqual(
             paths["kindle-lark-status"],
             r"D:\Tools\KindleLarkStatus.exe",
+        )
+        self.assertEqual(
+            paths["migration-guard"],
+            r"D:\Tools\MigrationGuard.exe",
         )
 
     def test_default_and_configured_paths_are_resolved(self) -> None:
@@ -61,6 +78,10 @@ class ToolModuleManagerTests(unittest.TestCase):
             self.assertEqual(
                 manager.executable_path(CONFIG_LINKER),
                 app_dir / "modules" / "ConfigLinker" / "ConfigLinker.exe",
+            )
+            self.assertEqual(
+                manager.executable_path(MIGRATION_GUARD),
+                app_dir / "modules" / "MigrationGuard" / "MigrationGuard.exe",
             )
             configured = app_dir / "external" / "KindleLarkStatus.exe"
             self.assertEqual(

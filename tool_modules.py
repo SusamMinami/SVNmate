@@ -23,6 +23,7 @@ class ToolModuleSpec:
     manifest_url: str
     executable_name: str
     install_folder: str
+    supports_updates: bool = True
 
 
 CONFIG_LINKER = ToolModuleSpec(
@@ -47,7 +48,18 @@ KINDLE_STATUS = ToolModuleSpec(
     install_folder="KindleLarkStatus",
 )
 
-TOOL_MODULES = (CONFIG_LINKER, KINDLE_STATUS)
+MIGRATION_GUARD = ToolModuleSpec(
+    module_id="migration-guard",
+    display_name="迁移核验助手",
+    manifest_url=(
+        "https://github.com/SusamMinami/SVNmate/releases/download/"
+        "migration-guard-latest/manifest.json"
+    ),
+    executable_name="MigrationGuard.exe",
+    install_folder="MigrationGuard",
+)
+
+TOOL_MODULES = (CONFIG_LINKER, MIGRATION_GUARD, KINDLE_STATUS)
 
 
 def module_paths_from_config(
@@ -55,9 +67,11 @@ def module_paths_from_config(
     *,
     detected_config_linker: str,
     detected_kindle_status: str,
+    detected_migration_guard: str = "",
 ) -> dict[str, str]:
     paths = {
         CONFIG_LINKER.module_id: detected_config_linker,
+        MIGRATION_GUARD.module_id: detected_migration_guard,
         KINDLE_STATUS.module_id: detected_kindle_status,
     }
     if not isinstance(data, dict):
@@ -156,6 +170,8 @@ class ToolModuleManager:
         return not self.is_running(spec)
 
     def check_update(self, spec: ToolModuleSpec) -> ModuleManifest:
+        if not spec.supports_updates or not spec.manifest_url:
+            raise ModuleUpdateError(f"{spec.display_name}暂未配置更新通道")
         return self._manifest_fetcher(spec.manifest_url, spec.module_id)
 
     def update_available(

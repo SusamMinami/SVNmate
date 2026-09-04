@@ -8,9 +8,12 @@ dist/
 release/
 *.spec
 !config_id_lookup/ConfigLinker.spec
+!MigrationGuard.spec
 
 # Local runtime state
 logs/
+.dbg/
+debug-ticket-paste-freeze.md
 svn_auto_tool_config.json
 *.log
 print_debug.log

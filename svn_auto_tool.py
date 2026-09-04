@@ -11,14 +11,23 @@ import urllib.parse
 import urllib.request
 import webbrowser
 from collections import deque
+from collections.abc import Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta
 from pathlib import Path
 
 from module_updates import ModuleManifest, ModuleUpdateError, download_archive
+from svnmate_core import (
+    CommandExecution,
+    UpdateEvent,
+    WorkspaceUpdateService,
+    needs_svn_cleanup,
+)
+from svnmate_ipc import IPC_PROTOCOL_VERSION, SvnMateIpcServer
 from tool_modules import (
     CONFIG_LINKER,
     KINDLE_STATUS,
+    MIGRATION_GUARD,
     TOOL_MODULES,
     ToolModuleManager,
     ToolModuleSpec,
@@ -107,6 +116,7 @@ LOG_IDLE_POLL_MS = 1000
 SCHEDULE_POLL_MS = 5000
 DPI_VISIBLE_POLL_MS = 1000
 DPI_HIDDEN_POLL_MS = 10000
+IPC_REQUEST_TIMEOUT_SECONDS = 6 * 60 * 60
 
 
 if os.name == "nt":
@@ -598,6 +608,9 @@ class SvnAutoTool:
         self.custom_update_bat_path = StringVar(value="")
         self.custom_build_bat_path = StringVar(value="")
         detected_config_linker = self._find_default_config_linker_executable()
+        detected_migration_guard = (
+            self._find_default_migration_guard_executable()
+        )
         detected_kindle_status = self._find_default_kindle_status_executable()
         self.tool_module_manager = ToolModuleManager(
             APP_DIR,
@@ -606,6 +619,9 @@ class SvnAutoTool:
         self.tool_module_paths = {
             CONFIG_LINKER.module_id: StringVar(
                 value=str(detected_config_linker or "")
+            ),
+            MIGRATION_GUARD.module_id: StringVar(
+                value=str(detected_migration_guard or "")
             ),
             KINDLE_STATUS.module_id: StringVar(
                 value=str(detected_kindle_status or "")
@@ -659,6 +675,10 @@ class SvnAutoTool:
             },
             APP_ICON_PATH,
         )
+        self.ipc_server = SvnMateIpcServer(
+            self._handle_ipc_request,
+            log=self._log,
+        )
 
         self._cleanup_old_logs()
         self._build_ui()
@@ -674,6 +694,7 @@ class SvnAutoTool:
         self._schedule_tick()
         self.root.after(DPI_VISIBLE_POLL_MS, self._dpi_tick)
         self.root.after(200, self._start_tray_icon)
+        self.root.after(300, self._start_ipc_server)
         self.root.after(800, self._launch_kindle_status_at_startup)
         self.root.after(2000, self._check_for_updates_async)
         self.root.after(2600, self._check_tool_modules_async)
@@ -997,6 +1018,9 @@ class SvnAutoTool:
             data,
             detected_config_linker=detected_config_linker,
             detected_kindle_status=detected_kindle_status,
+            detected_migration_guard=(
+                self.tool_module_paths[MIGRATION_GUARD.module_id].get()
+            ),
         )
         for module_id, path in module_paths.items():
             self.tool_module_paths[module_id].set(path)
@@ -1090,6 +1114,21 @@ class SvnAutoTool:
         return None
 
     @staticmethod
+    def _find_default_migration_guard_executable() -> Path | None:
+        candidates = [
+            APP_DIR / MIGRATION_GUARD.executable_name,
+            APP_DIR / "dist" / MIGRATION_GUARD.executable_name,
+            APP_DIR
+            / "migration_guard"
+            / "dist"
+            / MIGRATION_GUARD.executable_name,
+        ]
+        for candidate in candidates:
+            if candidate.is_file():
+                return candidate
+        return None
+
+    @staticmethod
     def _find_default_kindle_status_executable() -> Path | None:
         downloads = Path.home() / "Downloads"
         candidates = [
@@ -1144,7 +1183,9 @@ class SvnAutoTool:
             state = self.tool_module_states.get(spec.module_id, "idle")
             manifest = self.tool_module_manifests.get(spec.module_id)
 
-            if state == "checking":
+            if not spec.supports_updates:
+                status = "已安装 · 本地版本" if installed else "未选择"
+            elif state == "checking":
                 status = "检查中..."
             elif state == "downloading":
                 status = "下载并安装中..."
@@ -1173,13 +1214,29 @@ class SvnAutoTool:
             busy = state in {"checking", "downloading"}
             if action_button:
                 action_button.configure(
-                    text="打开" if installed else "安装",
+                    text=(
+                        "打开"
+                        if installed
+                        else "选择"
+                        if not spec.supports_updates
+                        else "安装"
+                    ),
                     state="disabled" if busy else "normal",
                 )
             if update_button:
                 update_button.configure(
-                    text="更新" if state == "ready" and installed else "检查",
-                    state="disabled" if busy else "normal",
+                    text=(
+                        "本地"
+                        if not spec.supports_updates
+                        else "更新"
+                        if state == "ready" and installed
+                        else "检查"
+                    ),
+                    state=(
+                        "disabled"
+                        if busy or not spec.supports_updates
+                        else "normal"
+                    ),
                 )
 
     def _refresh_kindle_status_path_text(self) -> None:
@@ -1274,6 +1331,9 @@ class SvnAutoTool:
         ):
             self._launch_tool_module(spec, manual=True)
             return
+        if not spec.supports_updates:
+            self._choose_tool_module_path(spec)
+            return
         self._start_tool_module_install(spec)
 
     def _on_tool_module_update(self, spec: ToolModuleSpec) -> None:
@@ -1284,7 +1344,8 @@ class SvnAutoTool:
 
     def _check_tool_modules_async(self) -> None:
         for spec in TOOL_MODULES:
-            self._check_tool_module_async(spec)
+            if spec.supports_updates:
+                self._check_tool_module_async(spec)
 
     def _check_tool_module_async(
         self,
@@ -1293,6 +1354,10 @@ class SvnAutoTool:
         manual: bool = False,
         install_when_ready: bool = False,
     ) -> None:
+        if not spec.supports_updates:
+            self.tool_module_states[spec.module_id] = "idle"
+            self._refresh_tool_module_rows()
+            return
         if install_when_ready:
             self.tool_module_install_after_check.add(spec.module_id)
         if self.tool_module_states.get(spec.module_id) in {
@@ -2109,6 +2174,154 @@ class SvnAutoTool:
     def _run_now(self) -> None:
         self._start_worker(trigger="手动执行")
 
+    def _start_ipc_server(self) -> None:
+        if self.ipc_server.start():
+            self._log("SVNmate 外部调用服务已就绪")
+        else:
+            self._log("SVNmate 外部调用服务未启动")
+
+    def _handle_ipc_request(
+        self,
+        request: dict[str, object],
+    ) -> dict[str, object]:
+        command = request.get("command")
+        if command == "ping":
+            return {
+                "protocol_version": IPC_PROTOCOL_VERSION,
+                "request_id": request.get("request_id", ""),
+                "command": "ping",
+                "executed_by": "svnmate",
+                "ok": True,
+                "status": "busy" if self.running else "ready",
+                "version": APP_VERSION,
+            }
+        if command != "update":
+            return {
+                "protocol_version": IPC_PROTOCOL_VERSION,
+                "request_id": request.get("request_id", ""),
+                "command": str(command or ""),
+                "executed_by": "svnmate",
+                "ok": False,
+                "status": "unsupported-command",
+                "message": "SVNmate 不支持该外部命令",
+            }
+
+        completed = threading.Event()
+        response: dict[str, object] = {}
+        try:
+            self.root.after(
+                0,
+                lambda: self._start_ipc_update_on_ui_thread(
+                    request,
+                    response,
+                    completed,
+                ),
+            )
+        except Exception as exc:
+            return {
+                "protocol_version": IPC_PROTOCOL_VERSION,
+                "request_id": request.get("request_id", ""),
+                "command": "update",
+                "executed_by": "svnmate",
+                "ok": False,
+                "status": "shutting-down",
+                "message": str(exc),
+            }
+        if not completed.wait(IPC_REQUEST_TIMEOUT_SECONDS):
+            return {
+                "protocol_version": IPC_PROTOCOL_VERSION,
+                "request_id": request.get("request_id", ""),
+                "command": "update",
+                "executed_by": "svnmate",
+                "ok": False,
+                "status": "timeout",
+                "message": "等待 SVNmate 更新任务完成超时",
+            }
+        return response
+
+    def _start_ipc_update_on_ui_thread(
+        self,
+        request: dict[str, object],
+        response: dict[str, object],
+        completed: threading.Event,
+    ) -> None:
+        if self.running:
+            response.update(
+                {
+                    "protocol_version": IPC_PROTOCOL_VERSION,
+                    "request_id": request.get("request_id", ""),
+                    "command": "update",
+                    "executed_by": "svnmate",
+                    "ok": False,
+                    "status": "busy",
+                    "message": "SVNmate 当前有任务正在执行",
+                }
+            )
+            completed.set()
+            return
+
+        folders = [
+            str(folder)
+            for folder in request.get("folders", [])
+            if isinstance(folder, str)
+        ]
+        source = " ".join(
+            str(request.get("source", "external")).split()
+        )[:80]
+        trigger = f"外部更新（{source}）"
+        self.running = True
+        self.run_button.configure(state="disabled")
+        self.live_log.configure(style="LiveLog.Treeview")
+        self.status_text.set("外部更新中...")
+        self._log(
+            f"========== {trigger}开始："
+            f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} =========="
+        )
+        self.worker_thread = threading.Thread(
+            target=self._run_ipc_update,
+            args=(
+                trigger,
+                folders,
+                str(request.get("request_id", "")),
+                response,
+                completed,
+            ),
+            name="svnmate-ipc-update",
+            daemon=True,
+        )
+        self.worker_thread.start()
+
+    def _run_ipc_update(
+        self,
+        trigger: str,
+        folders: list[str],
+        request_id: str,
+        response: dict[str, object],
+        completed: threading.Event,
+    ) -> None:
+        try:
+            result = self._workspace_update_service().update_folders(
+                folders,
+                request_id=request_id,
+            )
+            response.update(result.to_dict(executed_by="svnmate"))
+        except Exception as exc:
+            self._log(f"外部更新任务异常：{exc}")
+            response.update(
+                {
+                    "protocol_version": IPC_PROTOCOL_VERSION,
+                    "request_id": request_id,
+                    "command": "update",
+                    "executed_by": "svnmate",
+                    "ok": False,
+                    "status": "error",
+                    "message": str(exc),
+                }
+            )
+        finally:
+            completed.set()
+            self.log_queue.put(("done", trigger))
+
     def _start_worker(self, trigger: str) -> None:
         if self.running:
             messagebox.showinfo("正在执行", "当前任务还没有结束，请稍后再试。")
@@ -2328,6 +2541,36 @@ class SvnAutoTool:
     def _is_tortoise_command(self, command: list[str]) -> bool:
         return bool(self.tortoise_proc and command and str(Path(command[0])).lower() == str(Path(self.tortoise_proc)).lower())
 
+    def _workspace_update_service(self) -> WorkspaceUpdateService:
+        return WorkspaceUpdateService(
+            executor=self._execute_workspace_update_command,
+            update_command=self._svn_update_command,
+            cleanup_command=self._svn_cleanup_command,
+            event_sink=self._handle_workspace_update_event,
+        )
+
+    def _handle_workspace_update_event(self, event: UpdateEvent) -> None:
+        if event.status == "开始":
+            return
+        self._record(
+            event.folder,
+            event.action,
+            event.status,
+            event.message,
+        )
+
+    def _execute_workspace_update_command(
+        self,
+        cwd: Path,
+        command: Sequence[str],
+        action: str,
+    ) -> CommandExecution:
+        return self._execute_command_once(
+            cwd,
+            list(command),
+            action,
+        )
+
     def _run_command(
         self,
         cwd: Path,
@@ -2336,6 +2579,53 @@ class SvnAutoTool:
         auto_cleanup: bool = False,
         visible_console: bool = False,
     ) -> bool:
+        if auto_cleanup and action == "svn update":
+            result = self._workspace_update_service().update_folder(
+                cwd,
+                explicit_update_command=command,
+                validate_folder=False,
+            )
+            return result.success
+
+        execution = self._execute_command_once(
+            cwd,
+            command,
+            action,
+            visible_console=visible_console,
+        )
+        if execution.success:
+            self._record(
+                str(cwd),
+                action,
+                "成功",
+                f"耗时 {execution.elapsed_seconds:.1f}s",
+            )
+            return True
+
+        if (
+            action == "Build.bat"
+            and visible_console
+            and execution.return_code != -1
+        ):
+            self._record(
+                str(cwd),
+                action,
+                "完成",
+                f"CMD 窗口已结束，返回码 {execution.return_code}",
+            )
+            return True
+
+        self._record(str(cwd), action, "失败", execution.message[:300])
+        return False
+
+    def _execute_command_once(
+        self,
+        cwd: Path,
+        command: list[str],
+        action: str,
+        *,
+        visible_console: bool = False,
+    ) -> CommandExecution:
         self._log(f"[开始] {action} | {cwd}")
         started = datetime.now()
         output_already_logged = False
@@ -2351,46 +2641,29 @@ class SvnAutoTool:
                 )
                 output_already_logged = True
         except FileNotFoundError as exc:
-            self._record(str(cwd), action, "失败", f"命令不存在：{exc.filename}")
-            return False
+            return CommandExecution(
+                return_code=-1,
+                error=f"命令不存在：{exc.filename}",
+                elapsed_seconds=(datetime.now() - started).total_seconds(),
+            )
         except OSError as exc:
-            self._record(str(cwd), action, "失败", str(exc))
-            return False
+            return CommandExecution(
+                return_code=-1,
+                error=str(exc),
+                elapsed_seconds=(datetime.now() - started).total_seconds(),
+            )
 
         elapsed = (datetime.now() - started).total_seconds()
         if output and not output_already_logged:
             self._log(output)
         if error and not output_already_logged:
             self._log(error)
-
-        if return_code == 0:
-            self._record(str(cwd), action, "成功", f"耗时 {elapsed:.1f}s")
-            return True
-
-        if action == "Build.bat" and visible_console:
-            self._record(str(cwd), action, "完成", f"CMD 窗口已结束，返回码 {return_code}")
-            return True
-
-        message = error or output or f"退出码 {return_code}"
-        if auto_cleanup and action == "svn update":
-            if self._needs_svn_cleanup(message):
-                recovery_message = "SVN 提示工作副本需要清理，正在执行 cleanup"
-            else:
-                recovery_message = f"SVN Update 失败（{message[:160]}），先执行 cleanup 后重试一次"
-            self._record(str(cwd), action, "自动恢复", recovery_message)
-            cleanup_ok = self._run_command(
-                cwd,
-                self._svn_cleanup_command(cwd),
-                "svn cleanup(自动恢复)",
-            )
-            if cleanup_ok:
-                self._record(str(cwd), action, "重试", "cleanup 完成，重新执行 svn update")
-                return self._run_command(cwd, command, action, auto_cleanup=False)
-            self._record(str(cwd), action, "失败", "自动 cleanup 失败，已停止重试")
-            return False
-
-        self._record(str(cwd), action, "失败", message[:300])
-        return False
+        return CommandExecution(
+            return_code=return_code,
+            output=output,
+            error=error,
+            elapsed_seconds=elapsed,
+        )
 
     def _run_streamed_command(
         self,
@@ -2838,21 +3111,7 @@ class SvnAutoTool:
 
     @staticmethod
     def _needs_svn_cleanup(message: str) -> bool:
-        normalized = message.lower()
-        keywords = [
-            "run 'svn cleanup'",
-            "run svn cleanup",
-            "run 'cleanup'",
-            "working copy locked",
-            "previous operation has not finished",
-            "please execute the 'cleanup' command",
-            "e155004",
-            "e155037",
-            "需要先执行",
-            "执行清理",
-            "工作副本被锁定",
-        ]
-        return any(keyword in normalized for keyword in keywords)
+        return needs_svn_cleanup(message)
 
     @staticmethod
     def _creation_flags() -> int:
@@ -3029,6 +3288,7 @@ class SvnAutoTool:
                 return
         self._save_config()
         self._stop_music()
+        self.ipc_server.stop()
         self.tray_icon.stop()
         self.root.destroy()
 
@@ -3103,6 +3363,7 @@ class SvnAutoTool:
             return
         self._launch_update_installer(zip_path)
         self._stop_music()
+        self.ipc_server.stop()
         self.tray_icon.stop()
         self.root.destroy()
 
@@ -3266,8 +3527,11 @@ def main() -> None:
             ttk.Style().theme_use("clam")
         except Exception:
             pass
-        SvnAutoTool(root)
-        root.mainloop()
+        tool = SvnAutoTool(root)
+        try:
+            root.mainloop()
+        finally:
+            tool.ipc_server.stop()
     finally:
         instance_guard.close()
 
