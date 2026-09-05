@@ -23,9 +23,10 @@ class MigrationGuardConfig:
     overseas_trunk_root: str = DEFAULT_OVERSEAS_TRUNK_ROOT
     overseas_ob_root: str = DEFAULT_OVERSEAS_OB_ROOT
     source_workspace: str = WORKSPACE_DOMESTIC
-    enabled_modules: tuple[str, ...] = ("res", "doc", "bin")
+    enabled_modules: tuple[str, ...] = ()
     lookback_days: int = 90
-    include_externals: bool = True
+    remote_refresh_minutes: int = 2
+    include_externals: bool = False
     trunk_sheet_url: str = DEFAULT_TICKET_SHEET_URL
     osob_sheet_url: str = DEFAULT_TICKET_SHEET_URL
 
@@ -33,9 +34,9 @@ class MigrationGuardConfig:
     def from_dict(cls, data: object) -> "MigrationGuardConfig":
         if not isinstance(data, dict):
             return cls()
-        modules = data.get("enabled_modules", cls.enabled_modules)
+        modules = data.get("enabled_modules", ())
         if not isinstance(modules, (list, tuple)):
-            modules = cls.enabled_modules
+            modules = ()
         valid_modules = tuple(
             module
             for module in ("res", "doc", "bin")
@@ -45,6 +46,14 @@ class MigrationGuardConfig:
             lookback_days = int(data.get("lookback_days", 90))
         except (TypeError, ValueError):
             lookback_days = 90
+        try:
+            remote_refresh_minutes = int(
+                data.get("remote_refresh_minutes", 2)
+            )
+        except (TypeError, ValueError):
+            remote_refresh_minutes = 2
+        if remote_refresh_minutes not in {2, 5}:
+            remote_refresh_minutes = 2
         legacy_source = str(data.get("source_root", "")).strip()
         legacy_target = str(data.get("target_root", "")).strip()
         legacy_sheet = str(data.get("ticket_sheet_url", "")).strip()
@@ -91,9 +100,10 @@ class MigrationGuardConfig:
             overseas_trunk_root=overseas_trunk_root,
             overseas_ob_root=overseas_ob_root,
             source_workspace=source_workspace,
-            enabled_modules=valid_modules or cls.enabled_modules,
+            enabled_modules=valid_modules,
             lookback_days=max(1, min(lookback_days, 3650)),
-            include_externals=bool(data.get("include_externals", True)),
+            remote_refresh_minutes=remote_refresh_minutes,
+            include_externals=bool(data.get("include_externals", False)),
             trunk_sheet_url=str(
                 data.get(
                     "trunk_sheet_url",

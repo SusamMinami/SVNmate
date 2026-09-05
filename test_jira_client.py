@@ -65,6 +65,25 @@ class JiraIssueClientTests(unittest.TestCase):
         self.assertIs(first, second)
         self.assertEqual(calls, 1)
 
+    def test_force_refresh_bypasses_cache(self) -> None:
+        calls = 0
+
+        def opener(_request, *, timeout):
+            nonlocal calls
+            calls += 1
+            return _Response(
+                {"error": 0, "jiraStatus": f"状态 {calls}"}
+            )
+
+        client = JiraIssueClient(opener=opener)
+
+        first = client.fetch("OSCOA-20")
+        second = client.fetch("OSCOA-20", force_refresh=True)
+
+        self.assertEqual(first.status, "状态 1")
+        self.assertEqual(second.status, "状态 2")
+        self.assertEqual(calls, 2)
+
     def test_fetch_returns_error_snapshot_without_raising(self) -> None:
         def opener(_request, *, timeout):
             raise OSError("offline")

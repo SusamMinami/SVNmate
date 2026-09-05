@@ -78,6 +78,19 @@ class TicketRowParsingTests(unittest.TestCase):
                 for item in mappings
             )
         )
+        by_source = {item.source_issue: item for item in mappings}
+        self.assertEqual(
+            by_source["SERIA-10"].source_text,
+            "【SERIA-10】国内A",
+        )
+        self.assertEqual(
+            by_source["SERIA-11"].source_text,
+            "【SERIA-11】国内B",
+        )
+        self.assertEqual(
+            by_source["SERIA-10"].target_text,
+            "【OSCOA-20】海外",
+        )
 
     def test_pasted_web_rows_resolve_multiple_tickets_and_deduplicate(
         self,

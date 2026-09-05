@@ -402,8 +402,14 @@ def parse_ticket_rows(
                             else TicketRoute.UNKNOWN
                         ),
                         row=row,
-                        source_text=right.strip(),
-                        target_text=left.strip(),
+                        source_text=_text_for_issue(
+                            right,
+                            source_issue,
+                        ),
+                        target_text=_text_for_issue(
+                            left,
+                            target_issue,
+                        ),
                         raw_text=value,
                     )
                 )
@@ -565,6 +571,25 @@ def _related_issue_pairs(
     if len(left_oscoa) == len(right_seria):
         return tuple(zip(right_seria, left_oscoa)), True
     return ((right_seria[0], left_oscoa[0]),), False
+
+
+def _text_for_issue(value: str, issue_key: str) -> str:
+    matches = tuple(ISSUE_FINDER.finditer(value))
+    for index, match in enumerate(matches):
+        if match.group(1).upper() != issue_key:
+            continue
+        start = match.start()
+        if start and value[start - 1] in "【[（(":
+            start -= 1
+        end = (
+            matches[index + 1].start()
+            if index + 1 < len(matches)
+            else len(value)
+        )
+        if end and value[end - 1] in "【[（(":
+            end -= 1
+        return value[start:end].strip()
+    return value.strip()
 
 
 def _route_marker(value: str) -> TicketRoute | None:

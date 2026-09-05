@@ -469,6 +469,7 @@ class MigrationAuditService:
                     files=verified,
                     modules=module_audits,
                     warnings=warnings,
+                    label=case.label,
                 )
             )
         return BatchMigrationAuditResult(

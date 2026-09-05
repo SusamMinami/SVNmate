@@ -9,7 +9,7 @@ a = Analysis(
     pathex=[str(project_dir)],
     binaries=[],
     datas=[
-        (str(project_dir / "svnmate.ico"), "."),
+        (str(project_dir / "migration_guard.ico"), "."),
         (str(project_dir / "migration_guard" / "VERSION"), "."),
     ],
     hiddenimports=[],
@@ -41,5 +41,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=[str(project_dir / "svnmate.ico")],
+    icon=[str(project_dir / "migration_guard.ico")],
 )

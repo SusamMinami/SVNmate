@@ -20,8 +20,11 @@ from .models import (
 from .remote_asset_progress import (
     BranchEvidence,
     RemoteAssetProgress,
+    RemoteAssetProgressCache,
     RemoteAssetProgressResult,
+    RemoteAssetScanCancelled,
     RemoteAssetProgressService,
+    create_cancellable_svn_runner,
 )
 from .selective_update import SelectiveUpdatePlan, SelectiveUpdatePlanner
 from .svn_update_client import MigrationUpdateClient, update_working_copies
@@ -50,7 +53,9 @@ __all__ = [
     "MigrationCase",
     "MigrationUpdateClient",
     "RemoteAssetProgress",
+    "RemoteAssetProgressCache",
     "RemoteAssetProgressResult",
+    "RemoteAssetScanCancelled",
     "RemoteAssetProgressService",
     "SelectiveUpdatePlan",
     "SelectiveUpdatePlanner",
@@ -63,6 +68,7 @@ __all__ = [
     "WorkspaceModule",
     "as_overseas_to_osob",
     "build_ticket_progress",
+    "create_cancellable_svn_runner",
     "default_workspace_modules",
     "resolve_ticket_text",
     "update_working_copies",

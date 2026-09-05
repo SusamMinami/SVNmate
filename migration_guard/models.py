@@ -153,6 +153,7 @@ class MigrationAuditResult:
     files: tuple[FileVerification, ...]
     modules: tuple[ModuleAudit, ...]
     warnings: tuple[str, ...] = field(default_factory=tuple)
+    label: str = ""
 
     @property
     def counts(self) -> dict[str, int]:
@@ -183,6 +184,7 @@ class MigrationAuditResult:
             "files": [item.to_dict() for item in self.files],
             "modules": [asdict(item) for item in self.modules],
             "warnings": list(self.warnings),
+            "label": self.label,
         }
 
 

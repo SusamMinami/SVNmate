@@ -109,10 +109,19 @@ class JiraIssueClient:
         self.cache_seconds = cache_seconds
         self._cache: dict[str, tuple[float, JiraIssueSnapshot]] = {}
 
-    def fetch(self, issue_key: str) -> JiraIssueSnapshot:
+    def fetch(
+        self,
+        issue_key: str,
+        *,
+        force_refresh: bool = False,
+    ) -> JiraIssueSnapshot:
         key = normalize_issue_key(issue_key)
         cached = self._cache.get(key)
-        if cached and time.monotonic() - cached[0] < self.cache_seconds:
+        if (
+            not force_refresh
+            and cached
+            and time.monotonic() - cached[0] < self.cache_seconds
+        ):
             return cached[1]
         try:
             payload = self._request(key)
@@ -129,6 +138,8 @@ class JiraIssueClient:
     def fetch_many(
         self,
         issue_keys: tuple[str, ...],
+        *,
+        force_refresh: bool = False,
     ) -> dict[str, JiraIssueSnapshot]:
         keys = tuple(
             dict.fromkeys(normalize_issue_key(key) for key in issue_keys)
@@ -141,7 +152,11 @@ class JiraIssueClient:
             thread_name_prefix="migration-jira",
         ) as executor:
             futures = {
-                executor.submit(self.fetch, key): key
+                executor.submit(
+                    self.fetch,
+                    key,
+                    force_refresh=force_refresh,
+                ): key
                 for key in keys
             }
             for future in as_completed(futures):

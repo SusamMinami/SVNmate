@@ -319,8 +319,16 @@ class MigrationAuditDecisionTests(unittest.TestCase):
             ).audit_batch(
                 [WorkspaceModule("res", source, target)],
                 (
-                    MigrationCase("SERIA-10", "OSCOA-20"),
-                    MigrationCase("SERIA-11", "OSCOA-21"),
+                    MigrationCase(
+                        "SERIA-10",
+                        "OSCOA-20",
+                        "first description",
+                    ),
+                    MigrationCase(
+                        "SERIA-11",
+                        "OSCOA-21",
+                        "second description",
+                    ),
                 ),
                 lookback_days=30,
             )
@@ -330,6 +338,10 @@ class MigrationAuditDecisionTests(unittest.TestCase):
         self.assertEqual(svn.last_message_pattern, "*OSCOA-*")
         self.assertEqual(len(result.cases), 2)
         self.assertEqual(len(result.files), 2)
+        self.assertEqual(
+            tuple(case.label for case in result.cases),
+            ("first description", "second description"),
+        )
         self.assertTrue(result.complete)
 
     def test_batch_accepts_same_path_committed_by_another_ticket(self) -> None:

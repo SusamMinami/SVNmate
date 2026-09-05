@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import ctypes
-import json
 import os
 import queue
+import re
 import subprocess
 import sys
 import threading
 from collections.abc import Callable
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from tkinter import (
     BOTH,
@@ -19,6 +20,7 @@ from tkinter import (
     X,
     BooleanVar,
     IntVar,
+    Menu,
     StringVar,
     Text,
     Tk,
@@ -26,6 +28,7 @@ from tkinter import (
     filedialog,
     messagebox,
 )
+from tkinter import font as tkfont
 from tkinter import ttk
 
 from .asset_tree import (
@@ -59,8 +62,11 @@ from .models import (
 from .remote_asset_progress import (
     BranchEvidence,
     RemoteAssetProgress,
+    RemoteAssetProgressCache,
     RemoteAssetProgressResult,
+    RemoteAssetScanCancelled,
     RemoteAssetProgressService,
+    create_cancellable_svn_runner,
 )
 from .selective_update import SelectiveUpdatePlanner
 from .svn_client import SvnClient
@@ -82,7 +88,7 @@ if getattr(sys, "frozen", False):
 else:
     APP_DIR = Path(__file__).resolve().parents[1]
 RESOURCE_DIR = Path(getattr(sys, "_MEIPASS", APP_DIR))
-APP_ICON_PATH = RESOURCE_DIR / "svnmate.ico"
+APP_ICON_PATH = RESOURCE_DIR / "migration_guard.ico"
 APP_TITLE = "迁移核验助手"
 UI_POLL_MS = 100
 TABLE_TRUNK = "trunk"
@@ -93,6 +99,38 @@ WORKSPACE_LABELS = {
     WORKSPACE_OVERSEAS_TRUNK: "海外 trunk",
     WORKSPACE_OSOB: "海外 OB",
 }
+UI_FONT_CANDIDATES = (
+    "Microsoft YaHei UI",
+    "Microsoft YaHei",
+    "Segoe UI",
+)
+STATE_COLORS = {
+    VerificationState.COMPLETE: "#15803D",
+    VerificationState.SUBMITTED: "#047857",
+    VerificationState.PENDING_COMMIT: "#B45309",
+    VerificationState.NOT_MIGRATED: "#B42318",
+    VerificationState.NEEDS_UPDATE: "#2563EB",
+    VerificationState.NEEDS_REVIEW: "#6D5BD0",
+    VerificationState.BLOCKED: "#B42318",
+}
+ISSUE_KEY_PATTERN = re.compile(
+    r"\b(?:SER|OSC|SERIA|OSCOA)-\d+\b",
+    re.IGNORECASE,
+)
+
+
+def _preferred_ui_font_family(root: Tk) -> str:
+    available = {
+        family.casefold(): family
+        for family in tkfont.families(root)
+    }
+    for candidate in UI_FONT_CANDIDATES:
+        family = available.get(candidate.casefold())
+        if family is not None:
+            return family
+    return str(
+        tkfont.nametofont("TkDefaultFont", root=root).actual("family")
+    )
 
 
 def _enable_windows_dpi_awareness() -> None:
@@ -130,7 +168,7 @@ class MigrationGuardApp:
         self.root = root
         self.root.title(APP_TITLE)
         self.root.minsize(920, 640)
-        initial_width = min(1180, max(920, root.winfo_screenwidth() - 40))
+        initial_width = min(1360, max(920, root.winfo_screenwidth() - 40))
         initial_height = min(
             760,
             max(640, root.winfo_screenheight() - 80),
@@ -141,6 +179,7 @@ class MigrationGuardApp:
                 self.root.iconbitmap(default=str(APP_ICON_PATH))
             except Exception:
                 pass
+        self._build_typography()
 
         config = load_config()
         self.domestic_root = StringVar(value=config.domestic_root)
@@ -150,11 +189,15 @@ class MigrationGuardApp:
         self.overseas_ob_root = StringVar(value=config.overseas_ob_root)
         self.source_workspace = StringVar()
         self.target_workspace = StringVar()
+        self.route_summary = StringVar()
         self.source_root = StringVar()
         self.target_root = StringVar()
         self.source_issue = StringVar()
         self.target_issue = StringVar()
         self.lookback_days = IntVar(value=config.lookback_days)
+        self.remote_refresh_minutes = IntVar(
+            value=config.remote_refresh_minutes
+        )
         self.include_externals = BooleanVar(value=config.include_externals)
         self.trunk_sheet_url = StringVar(value=config.trunk_sheet_url)
         self.osob_sheet_url = StringVar(value=config.osob_sheet_url)
@@ -163,11 +206,15 @@ class MigrationGuardApp:
             for name in ("res", "doc", "bin")
         }
         self.filter_state = StringVar(value="全部")
+        self.detail_filter_text = StringVar(value="更多 ▼")
+        self.result_view = StringVar(value="单号")
         self.status_text = StringVar(value="就绪")
+        self.last_refresh_text = StringVar(value="尚未刷新")
         self.workflow_stage_text = StringVar(value="未开始")
         self.workflow_progress = IntVar(value=0)
         self.summary_text = {
             "all": StringVar(value="0"),
+            "pending_all": StringVar(value="0"),
             VerificationState.NOT_MIGRATED.value: StringVar(value="0"),
             VerificationState.PENDING_COMMIT.value: StringVar(value="0"),
             VerificationState.COMPLETE.value: StringVar(value="0"),
@@ -175,6 +222,14 @@ class MigrationGuardApp:
             VerificationState.NEEDS_UPDATE.value: StringVar(value="0"),
             VerificationState.NEEDS_REVIEW.value: StringVar(value="0"),
             VerificationState.BLOCKED.value: StringVar(value="0"),
+        }
+        self.summary_button_text = {
+            "all": StringVar(value="全部 0"),
+            "pending_all": StringVar(value="待处理 0"),
+            VerificationState.COMPLETE.value: StringVar(
+                value="已完成 0"
+            ),
+            VerificationState.BLOCKED.value: StringVar(value="阻断 0"),
         }
         self.events: queue.Queue[tuple[str, object]] = queue.Queue()
         self.busy = False
@@ -186,14 +241,34 @@ class MigrationGuardApp:
         self.current_ticket_mapping: TicketMapping | None = None
         self.current_ticket_mappings: tuple[TicketMapping, ...] = ()
         self.visible_files: list[FileVerification] = []
+        self.audit_tree_files: dict[str, FileVerification] = {}
+        self.audit_tree_file_groups: dict[
+            str,
+            tuple[FileVerification, ...],
+        ] = {}
+        self.audit_tree_groups: dict[
+            str,
+            tuple[FileVerification, ...],
+        ] = {}
+        self.audit_tree_cases: dict[str, MigrationAuditResult] = {}
         self.visible_ticket_mappings: list[TicketMapping] = []
         self.visible_ticket_progress: list[TicketJiraProgress] = []
         self.remote_asset_result: RemoteAssetProgressResult | None = None
         self.remote_asset_tree: AssetProgressTree | None = None
+        self.remote_notices: list[tuple[str, str, str]] = []
+        self.remote_tree_assets: dict[str, RemoteAssetProgress] = {}
+        self.remote_tree_groups: dict[
+            str,
+            tuple[RemoteAssetProgress, ...],
+        ] = {}
+        self.remote_tree_mappings: dict[str, TicketMapping] = {}
         self.ticket_snapshot: TicketSheetSnapshot | None = None
         self.ticket_snapshots: dict[str, TicketSheetSnapshot] = {}
         self.jira_client = JiraIssueClient()
         self._jira_request_id = 0
+        self._remote_asset_cache = RemoteAssetProgressCache()
+        self._remote_asset_cancel_event: threading.Event | None = None
+        self._remote_refresh_after_id: str | None = None
         self.active_table_kind = TABLE_TRUNK
         self.table_mode = "audit"
         self.settings_window: Toplevel | None = None
@@ -204,7 +279,87 @@ class MigrationGuardApp:
         self._build_styles()
         self._build_ui()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.root.bind("<F5>", self._refresh_shortcut)
+        self.root.bind(
+            "<Configure>",
+            self._update_summary_layout,
+            add="+",
+        )
+        self.root.after_idle(self._update_summary_layout)
         self.root.after(UI_POLL_MS, self._poll_events)
+
+    def _build_typography(self) -> None:
+        self.ui_font_family = _preferred_ui_font_family(self.root)
+        for name in (
+            "TkDefaultFont",
+            "TkTextFont",
+            "TkMenuFont",
+            "TkCaptionFont",
+            "TkSmallCaptionFont",
+            "TkIconFont",
+            "TkTooltipFont",
+        ):
+            try:
+                tkfont.nametofont(name, root=self.root).configure(
+                    family=self.ui_font_family,
+                    size=9,
+                    weight="normal",
+                )
+            except Exception:
+                continue
+        try:
+            tkfont.nametofont(
+                "TkHeadingFont",
+                root=self.root,
+            ).configure(
+                family=self.ui_font_family,
+                size=10,
+                weight="bold",
+            )
+        except Exception:
+            pass
+        self.type_fonts = {
+            "title": tkfont.Font(
+                root=self.root,
+                family=self.ui_font_family,
+                size=18,
+                weight="bold",
+            ),
+            "dialog_title": tkfont.Font(
+                root=self.root,
+                family=self.ui_font_family,
+                size=12,
+                weight="bold",
+            ),
+            "section_title": tkfont.Font(
+                root=self.root,
+                family=self.ui_font_family,
+                size=11,
+                weight="bold",
+            ),
+            "body": tkfont.Font(
+                root=self.root,
+                family=self.ui_font_family,
+                size=10,
+            ),
+            "body_bold": tkfont.Font(
+                root=self.root,
+                family=self.ui_font_family,
+                size=10,
+                weight="bold",
+            ),
+            "label": tkfont.Font(
+                root=self.root,
+                family=self.ui_font_family,
+                size=9,
+                weight="bold",
+            ),
+            "metadata": tkfont.Font(
+                root=self.root,
+                family=self.ui_font_family,
+                size=9,
+            ),
+        }
 
     def _build_styles(self) -> None:
         style = ttk.Style()
@@ -212,99 +367,250 @@ class MigrationGuardApp:
             style.theme_use("clam")
         except Exception:
             pass
-        style.configure("App.TFrame", background="#F6F7F9")
-        style.configure("Panel.TFrame", background="#FFFFFF")
+        style.configure("App.TFrame", background="#E7EAED")
+        style.configure("Panel.TFrame", background="#F2F2F0")
+        style.configure("Signal.TFrame", background="#FFFA00")
         style.configure(
             "Title.TLabel",
-            background="#F6F7F9",
-            foreground="#1F2937",
-            font=("Segoe UI Semibold", 18),
+            background="#E7EAED",
+            foreground="#191919",
+            font=self.type_fonts["title"],
         )
         style.configure(
             "DialogTitle.TLabel",
-            background="#F6F7F9",
-            foreground="#1F2937",
-            font=("Segoe UI Semibold", 12),
+            background="#E7EAED",
+            foreground="#191919",
+            font=self.type_fonts["dialog_title"],
+        )
+        style.configure(
+            "SectionTitle.TLabel",
+            background="#E7EAED",
+            foreground="#191919",
+            font=self.type_fonts["section_title"],
+        )
+        style.configure(
+            "SectionHint.TLabel",
+            background="#E7EAED",
+            foreground="#686A65",
+            font=self.type_fonts["metadata"],
+        )
+        style.configure(
+            "Field.TLabel",
+            background="#E7EAED",
+            foreground="#475467",
+            font=self.type_fonts["label"],
         )
         style.configure(
             "Muted.TLabel",
-            background="#F6F7F9",
-            foreground="#667085",
-            font=("Segoe UI", 10),
+            background="#E7EAED",
+            foreground="#686A65",
+            font=self.type_fonts["body"],
         )
         style.configure(
             "Panel.TLabel",
-            background="#FFFFFF",
-            foreground="#1F2937",
-            font=("Segoe UI", 10),
+            background="#F2F2F0",
+            foreground="#191919",
+            font=self.type_fonts["body"],
         )
         style.configure(
-            "Summary.TLabel",
-            background="#FFFFFF",
-            foreground="#344054",
-            font=("Segoe UI Semibold", 10),
-            padding=(10, 6),
+            "SummaryStatus.TLabel",
+            background="#F2F2F0",
+            foreground="#686A65",
+            font=self.type_fonts["body"],
+            padding=(4, 0),
         )
         style.configure(
             "Summary.TRadiobutton",
-            background="#FFFFFF",
-            foreground="#344054",
-            font=("Segoe UI Semibold", 10),
+            background="#F2F2F0",
+            foreground="#343C45",
+            font=self.type_fonts["body_bold"],
             padding=(8, 6),
+        )
+        style.map(
+            "Summary.TRadiobutton",
+            background=[
+                ("disabled", "#E9E9E5"),
+                ("active", "#FFFDD1"),
+            ],
+            foreground=[("disabled", "#475467")],
+        )
+        style.configure(
+            "ResultTab.Toolbutton",
+            background="#E9E9E5",
+            foreground="#475467",
+            font=self.type_fonts["body_bold"],
+            padding=(12, 5),
+            borderwidth=1,
+        )
+        style.map(
+            "ResultTab.Toolbutton",
+            background=[
+                ("disabled", "#E9E9E5"),
+                ("pressed", "#191919"),
+                ("selected", "#232B34"),
+                ("active", "#FFFDD1"),
+            ],
+            foreground=[
+                ("disabled", "#475467"),
+                ("pressed", "#FFFFFF"),
+                ("selected", "#FFFFFF"),
+            ],
         )
         style.configure(
             "Primary.TButton",
-            background="#2563EB",
-            foreground="#FFFFFF",
-            font=("Segoe UI Semibold", 10),
+            background="#FFFA00",
+            foreground="#191919",
+            font=self.type_fonts["body_bold"],
             padding=(12, 7),
             borderwidth=0,
         )
         style.map(
             "Primary.TButton",
-            background=[("active", "#1D4ED8"), ("disabled", "#9CA3AF")],
+            background=[
+                ("disabled", "#E4E7EC"),
+                ("pressed", "#C9C500"),
+                ("active", "#DED900"),
+            ],
+            foreground=[("disabled", "#475467")],
         )
         style.configure(
             "Tool.TButton",
-            background="#FFFFFF",
-            foreground="#344054",
-            font=("Segoe UI", 10),
+            background="#F2F2F0",
+            foreground="#343C45",
+            font=self.type_fonts["body"],
             padding=(9, 6),
+        )
+        style.map(
+            "Tool.TButton",
+            background=[
+                ("disabled", "#E4E7EC"),
+                ("pressed", "#191919"),
+                ("active", "#26313A"),
+            ],
+            foreground=[
+                ("disabled", "#475467"),
+                ("pressed", "#FFFFFF"),
+                ("active", "#FFFFFF"),
+            ],
+        )
+        style.configure(
+            "Source.TButton",
+            background="#F2F2F0",
+            foreground="#475467",
+            font=self.type_fonts["body"],
+            padding=(9, 6),
+        )
+        style.map(
+            "Source.TButton",
+            background=[
+                ("disabled", "#E4E7EC"),
+                ("pressed", "#191919"),
+                ("active", "#26313A"),
+            ],
+            foreground=[
+                ("disabled", "#475467"),
+                ("pressed", "#FFFFFF"),
+                ("active", "#FFFFFF"),
+            ],
+        )
+        style.configure(
+            "SourceSelected.TButton",
+            background="#FFFDD1",
+            foreground="#191919",
+            font=self.type_fonts["body_bold"],
+            padding=(9, 6),
+        )
+        style.map(
+            "SourceSelected.TButton",
+            background=[
+                ("disabled", "#E4E7EC"),
+                ("pressed", "#DED900"),
+                ("active", "#FFF7A0"),
+            ],
+            foreground=[("disabled", "#475467")],
+        )
+        style.configure(
+            "Workspace.TButton",
+            background="#FFFFFF",
+            foreground="#191919",
+            font=self.type_fonts["body_bold"],
+            padding=(10, 7),
+        )
+        style.map(
+            "Workspace.TButton",
+            background=[
+                ("disabled", "#E4E7EC"),
+                ("pressed", "#191919"),
+                ("active", "#26313A"),
+            ],
+            foreground=[
+                ("disabled", "#475467"),
+                ("pressed", "#FFFFFF"),
+                ("active", "#FFFFFF"),
+            ],
+        )
+        style.configure(
+            "WorkspaceMenu.TButton",
+            background="#E9E9E5",
+            foreground="#343C45",
+            font=self.type_fonts["label"],
+            padding=(4, 7),
+        )
+        style.map(
+            "WorkspaceMenu.TButton",
+            background=[
+                ("disabled", "#E4E7EC"),
+                ("pressed", "#191919"),
+                ("active", "#26313A"),
+            ],
+            foreground=[
+                ("disabled", "#475467"),
+                ("pressed", "#FFFFFF"),
+                ("active", "#FFFFFF"),
+            ],
         )
         style.configure(
             "Treeview",
             background="#FFFFFF",
             fieldbackground="#FFFFFF",
-            foreground="#1F2937",
-            rowheight=28,
-            font=("Segoe UI", 10),
+            foreground="#191919",
+            rowheight=max(
+                28,
+                self.type_fonts["body"].metrics("linespace") + 6,
+            ),
+            font=self.type_fonts["body"],
+        )
+        style.map(
+            "Treeview",
+            background=[("selected", "#26313A")],
+            foreground=[("selected", "#FFFFFF")],
         )
         style.configure(
             "Treeview.Heading",
-            background="#EEF1F5",
-            foreground="#344054",
-            font=("Segoe UI Semibold", 10),
+            background="#E9E9E5",
+            foreground="#343C45",
+            font=self.type_fonts["body_bold"],
             padding=(6, 6),
         )
         style.configure(
             "Workflow.Horizontal.TProgressbar",
-            troughcolor="#E5E7EB",
-            background="#2563EB",
+            troughcolor="#DCE0E4",
+            background="#18D1FF",
         )
         style.configure(
             "WorkflowSuccess.Horizontal.TProgressbar",
-            troughcolor="#DCFCE7",
-            background="#15803D",
+            troughcolor="#DCEFE7",
+            background="#00B978",
         )
         style.configure(
             "WorkflowWarning.Horizontal.TProgressbar",
-            troughcolor="#FEF3C7",
-            background="#B45309",
+            troughcolor="#FFF5DF",
+            background="#A76816",
         )
         style.configure(
             "WorkflowError.Horizontal.TProgressbar",
-            troughcolor="#FEE2E2",
-            background="#B42318",
+            troughcolor="#FFECE7",
+            background="#C84B3A",
         )
 
     def _build_ui(self) -> None:
@@ -317,11 +623,33 @@ class MigrationGuardApp:
 
         header = ttk.Frame(container, style="App.TFrame")
         header.pack(fill=X)
+        brand_signal = ttk.Frame(
+            header,
+            style="Signal.TFrame",
+            width=5,
+            height=28,
+        )
+        brand_signal.pack(side=LEFT, padx=(0, 8))
+        brand_signal.pack_propagate(False)
         ttk.Label(
             header,
             text=APP_TITLE,
             style="Title.TLabel",
         ).pack(side=LEFT)
+        self.trunk_table_button = ttk.Button(
+            header,
+            text="合海外 Trunk",
+            style="Source.TButton",
+            command=lambda: self._start_ticket_table(TABLE_TRUNK),
+        )
+        self.trunk_table_button.pack(side=LEFT, padx=(14, 4))
+        self.osob_table_button = ttk.Button(
+            header,
+            text="合海外 Trunk-OB",
+            style="Source.TButton",
+            command=lambda: self._start_ticket_table(TABLE_OSOB),
+        )
+        self.osob_table_button.pack(side=LEFT)
         self.sheet_config_button = ttk.Button(
             header,
             text="⚙",
@@ -334,106 +662,53 @@ class MigrationGuardApp:
             self.sheet_config_button,
             "工作区与固定表设置",
         )
-        self.osob_table_button = ttk.Button(
-            header,
-            text="海外 OB 表",
-            style="Tool.TButton",
-            command=lambda: self._start_ticket_table(TABLE_OSOB),
-        )
-        self.osob_table_button.pack(side=RIGHT, padx=(0, 4))
-        self.trunk_table_button = ttk.Button(
-            header,
-            text="Trunk 表",
-            style="Tool.TButton",
-            command=lambda: self._start_ticket_table(TABLE_TRUNK),
-        )
-        self.trunk_table_button.pack(side=RIGHT, padx=(0, 6))
 
         paths = ttk.Frame(container, style="Panel.TFrame", padding=(10, 8))
         paths.pack(fill=X, pady=(10, 6))
         ttk.Label(
             paths,
-            text="源",
+            text="路线",
             style="Panel.TLabel",
         ).grid(row=0, column=0, sticky="w")
-        self.source_workspace_combo = ttk.Combobox(
+        self.route_button = ttk.Button(
             paths,
-            textvariable=self.source_workspace,
-            values=(
-                WORKSPACE_LABELS[WORKSPACE_DOMESTIC],
-                WORKSPACE_LABELS[WORKSPACE_OVERSEAS_TRUNK],
-            ),
-            state="readonly",
-            width=13,
+            textvariable=self.route_summary,
+            style="Workspace.TButton",
+            command=self._show_route_selector,
         )
-        self.source_workspace_combo.grid(
+        self.route_button.grid(
             row=0,
             column=1,
-            sticky="ew",
-            padx=(5, 5),
+            sticky="w",
+            padx=(6, 0),
         )
-        self.source_workspace_combo.bind(
-            "<<ComboboxSelected>>",
-            self._on_source_workspace_selected,
+        self.route_menu_button = ttk.Button(
+            paths,
+            text="▼",
+            width=2,
+            style="WorkspaceMenu.TButton",
+            command=self._show_route_selector,
         )
-        ttk.Entry(
-            paths,
-            textvariable=self.source_root,
-            state="readonly",
-        ).grid(row=0, column=2, sticky="ew", padx=(0, 10))
-        ttk.Label(
-            paths,
-            text="→",
-            style="Panel.TLabel",
-        ).grid(row=0, column=3)
-        ttk.Label(
-            paths,
-            text="目标",
-            style="Panel.TLabel",
-        ).grid(row=0, column=4, sticky="w", padx=(10, 0))
-        self.target_workspace_combo = ttk.Combobox(
-            paths,
-            textvariable=self.target_workspace,
-            values=(
-                WORKSPACE_LABELS[WORKSPACE_OVERSEAS_TRUNK],
-                WORKSPACE_LABELS[WORKSPACE_OSOB],
-            ),
-            state="readonly",
-            width=13,
-        )
-        self.target_workspace_combo.grid(
+        self.route_menu_button.grid(
             row=0,
-            column=5,
-            sticky="ew",
-            padx=(5, 5),
+            column=2,
+            sticky="w",
+            padx=(1, 0),
         )
-        self.target_workspace_combo.bind(
-            "<<ComboboxSelected>>",
-            self._on_target_workspace_selected,
+        route_menu = Menu(paths, tearoff=False)
+        route_menu.add_command(
+            label="国内 trunk → 海外 trunk",
+            command=lambda: self._set_workspace_route(WORKSPACE_DOMESTIC),
         )
-        ttk.Entry(
-            paths,
-            textvariable=self.target_root,
-            state="readonly",
-        ).grid(row=0, column=6, sticky="ew")
-        paths.columnconfigure(2, weight=1)
-        paths.columnconfigure(6, weight=1)
-
-        task_row = ttk.Frame(container, style="Panel.TFrame", padding=(10, 8))
-        task_row.pack(fill=X, pady=(0, 6))
-        command_row = ttk.Frame(task_row, style="Panel.TFrame")
-        command_row.pack(fill=X)
-        option_row = ttk.Frame(task_row, style="Panel.TFrame")
-        option_row.pack(fill=X, pady=(6, 0))
-        actions = ttk.Frame(command_row, style="Panel.TFrame")
-        actions.pack(side=RIGHT)
-        self.audit_button = ttk.Button(
-            actions,
-            text="复核",
-            style="Tool.TButton",
-            command=self._start_audit,
+        route_menu.add_command(
+            label="海外 trunk → 海外 OB",
+            command=lambda: self._set_workspace_route(
+                WORKSPACE_OVERSEAS_TRUNK
+            ),
         )
-        self.audit_button.pack(side=RIGHT)
+        self.route_menu = route_menu
+        actions = ttk.Frame(paths, style="Panel.TFrame")
+        actions.grid(row=0, column=3, sticky="e")
         self.migrate_button = ttk.Button(
             actions,
             text="迁移",
@@ -442,13 +717,35 @@ class MigrationGuardApp:
             state="disabled",
         )
         self.migrate_button.pack(side=RIGHT, padx=(0, 6))
+        self._attach_tooltip(
+            self.migrate_button,
+            "存在待处理资产时执行迁移；全部完成后重新复核",
+        )
         self.update_button = ttk.Button(
             actions,
-            text="更新",
+            text="更新并复核",
             style="Tool.TButton",
             command=self._start_update_and_audit,
         )
         self.update_button.pack(side=RIGHT, padx=(0, 6))
+        paths.columnconfigure(3, weight=1)
+        self._attach_tooltip(
+            self.update_button,
+            "有工作区时更新并复核；无工作区时刷新远端状态",
+        )
+        self._attach_tooltip(
+            self.route_button,
+            "切换迁移路线",
+        )
+        self._attach_tooltip(
+            self.route_menu_button,
+            "切换迁移路线",
+        )
+
+        task_row = ttk.Frame(container, style="Panel.TFrame", padding=(10, 8))
+        task_row.pack(fill=X, pady=(0, 6))
+        command_row = ttk.Frame(task_row, style="Panel.TFrame")
+        command_row.pack(fill=X)
         ttk.Label(
             command_row,
             text="粘贴单号",
@@ -462,7 +759,7 @@ class MigrationGuardApp:
             borderwidth=1,
             background="#FFFFFF",
             foreground="#1F2937",
-            font=("Segoe UI", 10),
+            font=self.type_fonts["body"],
             padx=6,
             pady=4,
         )
@@ -480,84 +777,104 @@ class MigrationGuardApp:
         self.resolve_button = ttk.Button(
             command_row,
             text="解析",
-            style="Tool.TButton",
+            style="Primary.TButton",
             command=self._start_ticket_resolution,
         )
         self.resolve_button.pack(side=LEFT, anchor="n")
-        ttk.Label(
-            option_row,
-            text="源单号",
-            style="Panel.TLabel",
-        ).pack(side=LEFT)
-        ttk.Entry(
-            option_row,
-            textvariable=self.source_issue,
-            width=24,
-            state="readonly",
-        ).pack(side=LEFT, padx=(5, 10), fill=X, expand=True)
-        ttk.Label(
-            option_row,
-            text="海外目标",
-            style="Panel.TLabel",
-        ).pack(side=LEFT)
-        ttk.Entry(
-            option_row,
-            textvariable=self.target_issue,
-            width=24,
-            state="readonly",
-        ).pack(side=LEFT, padx=(5, 12), fill=X, expand=True)
-        for name in ("res", "doc", "bin"):
-            ttk.Checkbutton(
-                option_row,
-                text=name,
-                variable=self.module_enabled[name],
-            ).pack(side=LEFT, padx=(0, 6))
-        ttk.Checkbutton(
-            option_row,
-            text="externals",
-            variable=self.include_externals,
-        ).pack(side=LEFT, padx=(2, 8))
-        ttk.Label(
-            option_row,
-            text="天数",
-            style="Panel.TLabel",
-        ).pack(side=LEFT)
-        ttk.Spinbox(
-            option_row,
-            from_=1,
-            to=3650,
-            width=5,
-            textvariable=self.lookback_days,
-        ).pack(side=LEFT, padx=(5, 0))
 
         summary = ttk.Frame(container, style="Panel.TFrame", padding=(6, 3))
         summary.pack(fill=X, pady=(0, 6))
+        self.summary_bar = summary
+        self.result_view_buttons = []
+        for index, label in enumerate(("单号", "资产")):
+            button = ttk.Radiobutton(
+                summary,
+                text=label,
+                value=label,
+                variable=self.result_view,
+                command=self._on_result_view_changed,
+                style="ResultTab.Toolbutton",
+                width=6,
+            )
+            button.pack(
+                side=LEFT,
+                padx=(0, 10 if index == 1 else 2),
+            )
+            self.result_view_buttons.append(button)
         summary_items = (
             ("全部", "all"),
-            ("未迁移", VerificationState.NOT_MIGRATED.value),
-            ("待提交", VerificationState.PENDING_COMMIT.value),
+            ("待处理", "pending_all"),
             ("已完成", VerificationState.COMPLETE.value),
-            ("已提交", VerificationState.SUBMITTED.value),
-            ("需更新", VerificationState.NEEDS_UPDATE.value),
-            ("需确认", VerificationState.NEEDS_REVIEW.value),
             ("阻断", VerificationState.BLOCKED.value),
         )
         for label, key in summary_items:
             button = ttk.Radiobutton(
                 summary,
-                text=label,
+                textvariable=self.summary_button_text[key],
                 value=label,
                 variable=self.filter_state,
-                command=self._refresh_table,
+                command=lambda: self._set_summary_filter(
+                    self.filter_state.get()
+                ),
                 style="Summary.TRadiobutton",
+                width=8,
             )
             button.pack(side=LEFT, padx=(0, 2))
-            ttk.Label(
-                summary,
-                textvariable=self.summary_text[key],
-                style="Summary.TLabel",
-                width=3,
-            ).pack(side=LEFT, padx=(0, 5))
+        self.detail_filter_button = ttk.Menubutton(
+            summary,
+            textvariable=self.detail_filter_text,
+            style="Tool.TButton",
+            width=6,
+        )
+        self.detail_filter_button.pack(side=LEFT, padx=(4, 0))
+        detail_filter_menu = Menu(
+            self.detail_filter_button,
+            tearoff=False,
+        )
+        for label in (
+            "未迁移",
+            "待提交",
+            "已提交",
+            "需更新",
+            "需确认",
+        ):
+            detail_filter_menu.add_command(
+                label=label,
+                command=lambda value=label: self._set_summary_filter(
+                    value,
+                    detailed=True,
+                ),
+            )
+        self.detail_filter_button.configure(menu=detail_filter_menu)
+        progress_group = ttk.Frame(summary, style="Panel.TFrame")
+        self.progress_group = progress_group
+        progress_group.pack(side=RIGHT)
+        self.workflow_progress_bar = ttk.Progressbar(
+            progress_group,
+            variable=self.workflow_progress,
+            maximum=100,
+            mode="determinate",
+            length=110,
+            takefocus=True,
+            style="Workflow.Horizontal.TProgressbar",
+        )
+        self.workflow_progress_bar.pack(side=LEFT, padx=(8, 4))
+        self.progress_status_label = ttk.Label(
+            progress_group,
+            textvariable=self.last_refresh_text,
+            style="SummaryStatus.TLabel",
+            width=18,
+            anchor="e",
+        )
+        self.progress_status_label.pack(side=LEFT)
+        self._attach_tooltip(
+            self.progress_status_label,
+            self.status_text,
+        )
+        self._attach_tooltip(
+            self.workflow_progress_bar,
+            self.status_text,
+        )
 
         body = ttk.Panedwindow(container, orient=HORIZONTAL)
         body.pack(fill=BOTH, expand=True)
@@ -588,15 +905,15 @@ class MigrationGuardApp:
             "path": "相对路径",
             "source": "源版本",
             "local": "目标本地",
-            "target": "海外提交",
+            "target": "提交",
         }
         widths = {
-            "state": 76,
-            "module": 58,
-            "path": 330,
-            "source": 96,
-            "local": 86,
-            "target": 100,
+            "state": 70,
+            "module": 52,
+            "path": 250,
+            "source": 84,
+            "local": 78,
+            "target": 88,
         }
         for name in columns:
             self.table.heading(name, text=headings[name])
@@ -605,15 +922,10 @@ class MigrationGuardApp:
                 width=widths[name],
                 minwidth=widths[name],
                 stretch=name == "path",
-                anchor="w" if name == "path" else "center",
+                anchor="e" if name == "path" else "center",
             )
-        self.table.tag_configure("complete", foreground="#15803D")
-        self.table.tag_configure("submitted", foreground="#047857")
-        self.table.tag_configure("pending_commit", foreground="#B45309")
-        self.table.tag_configure("not_migrated", foreground="#B42318")
-        self.table.tag_configure("needs_update", foreground="#2563EB")
-        self.table.tag_configure("needs_review", foreground="#6D5BD0")
-        self.table.tag_configure("blocked", foreground="#B42318")
+        for state, color in STATE_COLORS.items():
+            self.table.tag_configure(state.value, foreground=color)
         self.table.tag_configure(
             TicketRoute.DOMESTIC_TO_OVERSEAS.value,
             foreground="#2563EB",
@@ -637,16 +949,15 @@ class MigrationGuardApp:
         self.table.tag_configure("jira-warning", foreground="#B42318")
         self.table.tag_configure(
             "remote-folder",
-            foreground="#344054",
-            font=("Segoe UI Semibold", 10),
+            font=self.type_fonts["body_bold"],
         )
-        self.table.tag_configure("remote-osob", foreground="#15803D")
-        self.table.tag_configure("remote-trunk", foreground="#047857")
-        self.table.tag_configure("remote-domestic", foreground="#B45309")
-        self.table.tag_configure("remote-partial", foreground="#6D5BD0")
-        self.table.tag_configure("remote-warning", foreground="#B42318")
+        self.table.tag_configure(
+            "audit-folder",
+            font=self.type_fonts["body_bold"],
+        )
         self.table.bind("<<TreeviewSelect>>", self._show_selected_detail)
         self.table.bind("<Double-1>", self._on_table_double_click)
+        self._attach_tree_tooltip(self.table)
 
         y_scroll = ttk.Scrollbar(
             table_panel,
@@ -667,6 +978,7 @@ class MigrationGuardApp:
         x_scroll.grid(row=1, column=0, sticky="ew")
         table_panel.rowconfigure(0, weight=1)
         table_panel.columnconfigure(0, weight=1)
+        self._set_result_view_enabled(False)
 
         detail_header = ttk.Frame(detail_panel, style="Panel.TFrame")
         detail_header.pack(fill=X)
@@ -677,19 +989,23 @@ class MigrationGuardApp:
         ).pack(side=LEFT)
         self.open_path_button = ttk.Button(
             detail_header,
-            text="打开位置",
+            text="定位文件",
             style="Tool.TButton",
             command=self._open_selected_path,
+            state="disabled",
         )
         self.open_path_button.pack(side=RIGHT)
+        self._attach_tooltip(
+            self.open_path_button,
+            "在资源管理器中选中该资产的目标工作副本文件",
+        )
         self.use_ticket_button = ttk.Button(
             detail_header,
             text="使用选中",
-            style="Primary.TButton",
+            style="Tool.TButton",
             command=self._use_selected_ticket,
             state="disabled",
         )
-        self.use_ticket_button.pack(side=RIGHT, padx=(0, 6))
         self.detail = Text(
             detail_panel,
             wrap="word",
@@ -697,52 +1013,199 @@ class MigrationGuardApp:
             borderwidth=0,
             background="#FFFFFF",
             foreground="#344054",
-            font=("Consolas", 10),
+            font=self.type_fonts["body"],
             padx=2,
             pady=8,
         )
         self.detail.pack(fill=BOTH, expand=True)
+        for state, color in STATE_COLORS.items():
+            self.detail.tag_configure(
+                f"issue-{state.value}",
+                foreground=color,
+                font=self.type_fonts["body_bold"],
+            )
         self.detail.configure(state="disabled")
 
-        footer = ttk.Frame(container, style="App.TFrame")
-        footer.pack(fill=X, pady=(6, 0), before=body)
-        self.export_button = ttk.Button(
-            footer,
-            text="导出结果",
-            style="Tool.TButton",
-            command=self._export_result,
-            state="disabled",
-        )
-        self.export_button.pack(side=RIGHT)
-        self.workflow_progress_bar = ttk.Progressbar(
-            footer,
-            variable=self.workflow_progress,
-            maximum=100,
-            mode="determinate",
-            length=190,
-            style="Workflow.Horizontal.TProgressbar",
-        )
-        self.workflow_progress_bar.pack(side=RIGHT, padx=(8, 12))
-        ttk.Label(
-            footer,
-            textvariable=self.workflow_stage_text,
-            style="Muted.TLabel",
-        ).pack(side=RIGHT)
-        ttk.Label(
-            footer,
-            textvariable=self.status_text,
-            style="Muted.TLabel",
-        ).pack(side=LEFT)
+        self._update_contextual_action_states()
 
     def _set_initial_sash(self) -> None:
         width = self.body.winfo_width()
         if width > 1:
             self.body.sashpos(0, int(width * 0.7))
 
+    def _mark_refresh_time(self, action: str = "刷新") -> None:
+        self.last_refresh_text.set(
+            f"上次{action} {datetime.now():%H:%M}"
+        )
+
+    def _update_summary_layout(self, _event: object = None) -> None:
+        try:
+            scaling = float(self.root.tk.call("tk", "scaling"))
+        except (TypeError, ValueError):
+            scaling = 1.0
+        compact = (
+            self.root.winfo_width() < 960
+            or (
+                self.root.winfo_width() < 1100
+                and scaling >= 1.75
+            )
+        )
+        visible = bool(self.progress_status_label.winfo_manager())
+        if compact and visible:
+            self.progress_status_label.pack_forget()
+        elif not compact and not visible:
+            self.progress_status_label.pack(
+                side=LEFT,
+                before=self.workflow_progress_bar,
+            )
+
+    def _set_use_ticket_button_visible(self, visible: bool) -> None:
+        if visible:
+            if not self.use_ticket_button.winfo_manager():
+                self.use_ticket_button.pack(
+                    side=RIGHT,
+                    padx=(0, 6),
+                    before=self.open_path_button,
+                )
+            return
+        self.use_ticket_button.pack_forget()
+
+    def _set_result_view_enabled(self, enabled: bool) -> None:
+        state = "normal" if enabled else "disabled"
+        for button in self.result_view_buttons:
+            button.configure(state=state)
+
+    def _on_result_view_changed(self) -> None:
+        if self.table_mode not in {"audit", "remote-assets"}:
+            return
+        self.filter_state.set("全部")
+        self.detail_filter_text.set("更多 ▼")
+        self._refresh_table()
+
+    def _set_summary_filter(
+        self,
+        label: str,
+        *,
+        detailed: bool = False,
+    ) -> None:
+        self.filter_state.set(label)
+        self.detail_filter_text.set(
+            f"{label} ▼" if detailed else "更多 ▼"
+        )
+        self._refresh_table()
+
+    def _set_summary_counts(
+        self,
+        total: int,
+        counts: dict[object, int],
+    ) -> None:
+        def value(state: VerificationState) -> int:
+            return int(
+                counts.get(
+                    state,
+                    counts.get(state.value, 0),
+                )
+            )
+
+        self.summary_text["all"].set(str(total))
+        for state in VerificationState:
+            self.summary_text[state.value].set(str(value(state)))
+        self.summary_text[VerificationState.COMPLETE.value].set(
+            str(
+                value(VerificationState.COMPLETE)
+                + value(VerificationState.SUBMITTED)
+            )
+        )
+        pending = sum(
+            value(state)
+            for state in (
+                VerificationState.NOT_MIGRATED,
+                VerificationState.PENDING_COMMIT,
+                VerificationState.NEEDS_UPDATE,
+                VerificationState.NEEDS_REVIEW,
+            )
+        )
+        self.summary_text["pending_all"].set(str(pending))
+        for label, key in (
+            ("全部", "all"),
+            ("待处理", "pending_all"),
+            ("已完成", VerificationState.COMPLETE.value),
+            ("阻断", VerificationState.BLOCKED.value),
+        ):
+            self.summary_button_text[key].set(
+                f"{label} {self.summary_text[key].get()}"
+            )
+
+    @staticmethod
+    def _show_workspace_menu(
+        menu: Menu,
+        anchor: ttk.Widget,
+    ) -> None:
+        try:
+            menu.tk_popup(
+                anchor.winfo_rootx(),
+                anchor.winfo_rooty() + anchor.winfo_height(),
+            )
+        finally:
+            menu.grab_release()
+
+    def _show_route_selector(self) -> None:
+        self._show_workspace_menu(
+            self.route_menu,
+            self.route_button,
+        )
+
+    def _local_workspaces_available(self) -> bool:
+        enabled = self._effective_module_names()
+        if not enabled:
+            return False
+        source = Path(self.source_root.get().strip())
+        target = Path(self.target_root.get().strip())
+        return all(
+            (source / name).is_dir() and (target / name).is_dir()
+            for name in enabled
+        )
+
+    def _configured_module_names(self) -> tuple[str, ...]:
+        return tuple(
+            name
+            for name, variable in self.module_enabled.items()
+            if variable.get()
+        )
+
+    def _automatic_scan_scope(self) -> bool:
+        return (
+            not self._configured_module_names()
+            and not self.include_externals.get()
+        )
+
+    def _remote_module_names(self) -> tuple[str, ...]:
+        return self._configured_module_names() or ("res", "doc", "bin")
+
+    def _effective_module_names(self) -> tuple[str, ...]:
+        configured = self._configured_module_names()
+        if configured:
+            return configured
+        result = self.remote_asset_result
+        if result is None or result.warnings:
+            return ("res", "doc", "bin")
+        inferred = tuple(
+            name
+            for name in ("res", "doc", "bin")
+            if any(asset.module == name for asset in result.assets)
+        )
+        return inferred or ("res", "doc", "bin")
+
+    def _effective_include_externals(self) -> bool:
+        return (
+            self.include_externals.get()
+            or self._automatic_scan_scope()
+        )
+
     def _attach_tooltip(
         self,
         widget: ttk.Widget,
-        text: str,
+        text: str | StringVar,
     ) -> None:
         tooltip: Toplevel | None = None
 
@@ -755,9 +1218,15 @@ class MigrationGuardApp:
             tooltip.attributes("-topmost", True)
             ttk.Label(
                 tooltip,
-                text=text,
+                text=(
+                    text.get()
+                    if isinstance(text, StringVar)
+                    else text
+                ),
                 style="Panel.TLabel",
                 padding=(7, 4),
+                wraplength=520,
+                justify="left",
             ).pack()
             tooltip.geometry(
                 f"+{widget.winfo_rootx()}+"
@@ -772,6 +1241,68 @@ class MigrationGuardApp:
 
         widget.bind("<Enter>", show, add="+")
         widget.bind("<Leave>", hide, add="+")
+        widget.bind("<FocusIn>", show, add="+")
+        widget.bind("<FocusOut>", hide, add="+")
+
+    def _attach_tree_tooltip(self, table: ttk.Treeview) -> None:
+        tooltip: Toplevel | None = None
+        active_key: tuple[str, str] | None = None
+
+        def hide(_event: object = None) -> None:
+            nonlocal tooltip, active_key
+            if tooltip is not None:
+                tooltip.destroy()
+                tooltip = None
+            active_key = None
+
+        def show(event: object) -> None:
+            nonlocal tooltip, active_key
+            x = int(getattr(event, "x", 0))
+            y = int(getattr(event, "y", 0))
+            item_id = table.identify_row(y)
+            column = table.identify_column(x)
+            if not item_id or column != "#0":
+                hide()
+                return
+            text = str(table.item(item_id, "text"))
+            bounds = table.bbox(item_id, column)
+            if not text or not bounds:
+                hide()
+                return
+            depth = 0
+            parent_id = table.parent(item_id)
+            while parent_id:
+                depth += 1
+                parent_id = table.parent(parent_id)
+            available = max(0, int(bounds[2]) - 34 - depth * 18)
+            if self.type_fonts["body"].measure(text) <= available:
+                hide()
+                return
+            key = (item_id, text)
+            if active_key != key:
+                hide()
+                tooltip = Toplevel(self.root)
+                tooltip.overrideredirect(True)
+                tooltip.attributes("-topmost", True)
+                ttk.Label(
+                    tooltip,
+                    text=text,
+                    style="Panel.TLabel",
+                    padding=(8, 5),
+                    wraplength=680,
+                    justify="left",
+                ).pack()
+                active_key = key
+            if tooltip is not None:
+                tooltip.geometry(
+                    f"+{int(getattr(event, 'x_root', 0)) + 14}"
+                    f"+{int(getattr(event, 'y_root', 0)) + 18}"
+                )
+
+        table.bind("<Motion>", show, add="+")
+        table.bind("<Leave>", hide, add="+")
+        table.bind("<ButtonPress>", hide, add="+")
+        table.bind("<MouseWheel>", hide, add="+")
 
     def _workspace_path(self, role: str) -> str:
         return {
@@ -807,6 +1338,10 @@ class MigrationGuardApp:
         try:
             self.source_workspace.set(WORKSPACE_LABELS[source_role])
             self.target_workspace.set(WORKSPACE_LABELS[target_role])
+            self.route_summary.set(
+                f"{WORKSPACE_LABELS[source_role]} → "
+                f"{WORKSPACE_LABELS[target_role]}"
+            )
             self.source_root.set(self._workspace_path(source_role))
             self.target_root.set(self._workspace_path(target_role))
         finally:
@@ -814,42 +1349,12 @@ class MigrationGuardApp:
         if save:
             self._save_config()
 
-    def _on_source_workspace_selected(
-        self,
-        _event: object = None,
-    ) -> None:
-        if self._workspace_syncing:
-            return
-        self._set_workspace_route(
-            self._workspace_role(self.source_workspace.get())
-        )
-
-    def _on_target_workspace_selected(
-        self,
-        _event: object = None,
-    ) -> None:
-        if self._workspace_syncing:
-            return
-        target_role = self._workspace_role(self.target_workspace.get())
-        source_role = (
-            WORKSPACE_DOMESTIC
-            if target_role == WORKSPACE_OVERSEAS_TRUNK
-            else WORKSPACE_OVERSEAS_TRUNK
-        )
-        self._set_workspace_route(source_role)
-
     def _selected_modules_for_roots(
         self,
         source_root: str,
         target_root: str,
     ) -> tuple[WorkspaceModule, ...]:
-        enabled = [
-            name
-            for name, variable in self.module_enabled.items()
-            if variable.get()
-        ]
-        if not enabled:
-            raise ValueError("请至少选择一个模块")
+        enabled = self._effective_module_names()
         modules = default_workspace_modules(
             Path(source_root),
             Path(target_root),
@@ -884,6 +1389,7 @@ class MigrationGuardApp:
                 if variable.get()
             ),
             lookback_days=self.lookback_days.get(),
+            remote_refresh_minutes=self.remote_refresh_minutes.get(),
             include_externals=self.include_externals.get(),
             trunk_sheet_url=self.trunk_sheet_url.get().strip(),
             osob_sheet_url=self.osob_sheet_url.get().strip(),
@@ -920,7 +1426,11 @@ class MigrationGuardApp:
         self.task_failed = False
         self.active_task = "table"
         self._set_action_buttons("disabled")
-        table_label = "海外 OB 表" if table_kind == TABLE_OSOB else "Trunk 表"
+        table_label = (
+            "合海外 Trunk-OB"
+            if table_kind == TABLE_OSOB
+            else "合海外 Trunk"
+        )
         self.status_text.set(f"读取{table_label}最新页签...")
         threading.Thread(
             target=self._ticket_table_worker,
@@ -950,20 +1460,68 @@ class MigrationGuardApp:
         self,
         snapshot: TicketSheetSnapshot,
         table_kind: str | None = None,
+        *,
+        start_preview: bool = False,
     ) -> None:
         if table_kind is not None:
             self.active_table_kind = table_kind
         self.ticket_snapshots[self.active_table_kind] = snapshot
+        self._set_table_button_snapshot(
+            self.active_table_kind,
+            snapshot,
+        )
         self._render_ticket_snapshot(snapshot)
+        if start_preview and self.visible_ticket_mappings:
+            mappings = tuple(self.visible_ticket_mappings)
+            self._use_ticket_mappings(
+                snapshot,
+                mappings,
+                start_audit=False,
+            )
+            self._start_jira_progress(mappings)
+
+    def _set_table_button_snapshot(
+        self,
+        table_kind: str,
+        snapshot: TicketSheetSnapshot,
+    ) -> None:
+        if table_kind == TABLE_OSOB:
+            button = self.osob_table_button
+            label = "合海外 Trunk-OB"
+        else:
+            button = self.trunk_table_button
+            label = "合海外 Trunk"
+        marker = _sheet_tab_marker(snapshot.sheet_name)
+        button.configure(text=f"{label} · {marker}")
+        self.trunk_table_button.configure(
+            style=(
+                "SourceSelected.TButton"
+                if table_kind == TABLE_TRUNK
+                else "Source.TButton"
+            )
+        )
+        self.osob_table_button.configure(
+            style=(
+                "SourceSelected.TButton"
+                if table_kind == TABLE_OSOB
+                else "Source.TButton"
+            )
+        )
 
     def _render_ticket_snapshot(
         self,
         snapshot: TicketSheetSnapshot,
     ) -> None:
+        self._set_use_ticket_button_visible(True)
+        self._set_result_view_enabled(False)
         self.table_mode = "tickets"
         self.table.configure(show="headings", displaycolumns="#all")
         self.ticket_snapshot = snapshot
         self.current_result = None
+        self.current_ticket_mapping = None
+        self.current_ticket_mappings = ()
+        self.source_issue.set("")
+        self.target_issue.set("")
         self.migrate_button.configure(state="disabled")
         self.visible_files = []
         self.visible_ticket_progress = []
@@ -982,12 +1540,12 @@ class MigrationGuardApp:
             "target": "来源",
         }
         widths = {
-            "state": 145,
-            "module": 46,
-            "path": 310,
-            "source": 105,
-            "local": 105,
-            "target": 58,
+            "state": 112,
+            "module": 42,
+            "path": 220,
+            "source": 90,
+            "local": 90,
+            "target": 52,
         }
         for name in self.table["columns"]:
             self.table.heading(name, text=headings[name])
@@ -1032,18 +1590,17 @@ class MigrationGuardApp:
         self.use_ticket_button.configure(
             text=f"核验选中（{len(self.table.selection())}）",
             state="normal",
+            style="Primary.TButton",
         )
         self.open_path_button.configure(state="disabled")
-        self.export_button.configure(state="disabled")
-        self.summary_text["all"].set(
-            str(len(self.visible_ticket_mappings))
-        )
-        for state in VerificationState:
-            self.summary_text[state.value].set("0")
+        self._set_summary_counts(len(self.visible_ticket_mappings), {})
+        self.filter_state.set("全部")
+        self.detail_filter_text.set("更多 ▼")
         self.status_text.set(
             f"{snapshot.sheet_name}："
             f"{len(self.visible_ticket_mappings)} 条，选择后开始核验"
         )
+        self._update_contextual_action_states()
         self._show_selected_detail()
 
     def _configure_ticket_sheet(self) -> None:
@@ -1058,8 +1615,8 @@ class MigrationGuardApp:
         window = Toplevel(self.root)
         self.settings_window = window
         window.title("迁移设置")
-        window.geometry("760x340")
-        window.minsize(680, 320)
+        window.geometry("940x470")
+        window.minsize(820, 440)
         window.transient(self.root)
         if APP_ICON_PATH.is_file():
             try:
@@ -1074,17 +1631,19 @@ class MigrationGuardApp:
             "trunk_sheet": StringVar(value=self.trunk_sheet_url.get()),
             "osob_sheet": StringVar(value=self.osob_sheet_url.get()),
         }
+        module_values = {
+            name: BooleanVar(value=variable.get())
+            for name, variable in self.module_enabled.items()
+        }
+        external_value = BooleanVar(value=self.include_externals.get())
+        lookback_value = IntVar(value=self.lookback_days.get())
+        refresh_value = IntVar(value=self.remote_refresh_minutes.get())
         container = ttk.Frame(
             window,
             style="App.TFrame",
-            padding=(14, 12),
+            padding=(14, 8),
         )
         container.pack(fill=BOTH, expand=True)
-        ttk.Label(
-            container,
-            text="工作区与固定表",
-            style="DialogTitle.TLabel",
-        ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 10))
 
         def choose_path(variable: StringVar) -> None:
             selected = filedialog.askdirectory(
@@ -1095,46 +1654,271 @@ class MigrationGuardApp:
             if selected:
                 variable.set(selected)
 
-        rows = (
-            ("国内 trunk", "domestic", True),
-            ("海外 trunk", "overseas", True),
-            ("海外 OB", "osob", True),
-            ("Trunk 固定表", "trunk_sheet", False),
-            ("海外 OB 固定表", "osob_sheet", False),
+        heading = ttk.Frame(container, style="App.TFrame")
+        heading.grid(row=0, column=0, sticky="ew", pady=(0, 4))
+        settings_signal = ttk.Frame(
+            heading,
+            style="Signal.TFrame",
+            width=5,
+            height=26,
         )
-        for row, (label, key, is_path) in enumerate(rows, start=1):
-            ttk.Label(
-                container,
-                text=label,
-                style="Muted.TLabel",
-            ).grid(row=row, column=0, sticky="w", pady=4)
-            ttk.Entry(
-                container,
-                textvariable=values[key],
-            ).grid(
-                row=row,
-                column=1,
-                sticky="ew",
-                padx=(10, 6),
-                pady=4,
-            )
-            if is_path:
-                ttk.Button(
-                    container,
-                    text="...",
-                    width=4,
-                    style="Tool.TButton",
-                    command=lambda variable=values[key]: choose_path(variable),
-                ).grid(row=row, column=2, pady=4)
+        settings_signal.pack(side=LEFT, padx=(0, 8))
+        settings_signal.pack_propagate(False)
+        title_group = ttk.Frame(heading, style="App.TFrame")
+        title_group.pack(side=LEFT, fill=X)
+        ttk.Label(
+            title_group,
+            text="迁移设置",
+            style="DialogTitle.TLabel",
+        ).pack(side=LEFT)
+        ttk.Label(
+            title_group,
+            text="工作区、固定表与核验策略",
+            style="SectionHint.TLabel",
+        ).pack(side=LEFT, padx=(10, 0), pady=(5, 0))
+        ttk.Separator(container).grid(
+            row=1,
+            column=0,
+            sticky="ew",
+        )
 
-        container.columnconfigure(1, weight=1)
+        workspace_section = ttk.Frame(
+            container,
+            style="App.TFrame",
+        )
+        workspace_section.grid(
+            row=2,
+            column=0,
+            sticky="ew",
+            pady=(6, 8),
+        )
+        ttk.Label(
+            workspace_section,
+            text="工作区",
+            style="SectionTitle.TLabel",
+        ).grid(row=0, column=0, sticky="w")
+        ttk.Label(
+            workspace_section,
+            text="三段迁移路线使用的本地根目录",
+            style="SectionHint.TLabel",
+        ).grid(
+            row=0,
+            column=1,
+            columnspan=2,
+            sticky="w",
+            padx=(8, 0),
+        )
+        workspace_entries: dict[str, ttk.Entry] = {}
+        for column, (label, key) in enumerate(
+            (
+                ("国内 trunk", "domestic"),
+                ("海外 trunk", "overseas"),
+                ("海外 OB", "osob"),
+            )
+        ):
+            field = ttk.Frame(
+                workspace_section,
+                style="App.TFrame",
+            )
+            field.grid(
+                row=1,
+                column=column,
+                sticky="ew",
+                padx=(0 if column == 0 else 8, 0),
+                pady=(5, 0),
+            )
+            ttk.Label(
+                field,
+                text=label,
+                style="Field.TLabel",
+            ).pack(anchor="w", pady=(0, 2))
+            input_row = ttk.Frame(field, style="App.TFrame")
+            input_row.pack(fill=X)
+            entry = ttk.Entry(
+                input_row,
+                textvariable=values[key],
+                width=16,
+            )
+            entry.pack(side=LEFT, fill=X, expand=True)
+            workspace_entries[key] = entry
+            choose_button = ttk.Button(
+                input_row,
+                text="...",
+                width=3,
+                style="Tool.TButton",
+                command=lambda variable=values[key]: choose_path(variable),
+            )
+            choose_button.pack(side=LEFT, padx=(4, 0))
+            self._attach_tooltip(choose_button, f"选择{label}目录")
+            workspace_section.columnconfigure(column, weight=1)
+
+        ttk.Separator(container).grid(
+            row=3,
+            column=0,
+            sticky="ew",
+        )
+        sheet_section = ttk.Frame(container, style="App.TFrame")
+        sheet_section.grid(
+            row=4,
+            column=0,
+            sticky="ew",
+            pady=(6, 8),
+        )
+        ttk.Label(
+            sheet_section,
+            text="固定表",
+            style="SectionTitle.TLabel",
+        ).grid(row=0, column=0, sticky="w")
+        ttk.Label(
+            sheet_section,
+            text="每次读取排序最前的可见页签",
+            style="SectionHint.TLabel",
+        ).grid(
+            row=0,
+            column=1,
+            sticky="w",
+            padx=(8, 0),
+        )
+        sheet_entries: dict[str, ttk.Entry] = {}
+        for column, (label, key) in enumerate(
+            (
+                ("合海外 Trunk", "trunk_sheet"),
+                ("合海外 Trunk-OB", "osob_sheet"),
+            )
+        ):
+            field = ttk.Frame(sheet_section, style="App.TFrame")
+            field.grid(
+                row=1,
+                column=column,
+                sticky="ew",
+                padx=(0 if column == 0 else 10, 0),
+                pady=(5, 0),
+            )
+            ttk.Label(
+                field,
+                text=label,
+                style="Field.TLabel",
+            ).pack(anchor="w", pady=(0, 2))
+            entry = ttk.Entry(
+                field,
+                textvariable=values[key],
+            )
+            entry.pack(fill=X)
+            sheet_entries[key] = entry
+            sheet_section.columnconfigure(column, weight=1)
+
+        ttk.Separator(container).grid(
+            row=5,
+            column=0,
+            sticky="ew",
+        )
+        strategy_section = ttk.Frame(container, style="App.TFrame")
+        strategy_section.grid(
+            row=6,
+            column=0,
+            sticky="ew",
+            pady=(6, 0),
+        )
+        ttk.Label(
+            strategy_section,
+            text="核验策略",
+            style="SectionTitle.TLabel",
+        ).grid(row=0, column=0, sticky="w")
+        ttk.Label(
+            strategy_section,
+            text="范围全部未选时按单据自动推导",
+            style="SectionHint.TLabel",
+        ).grid(
+            row=0,
+            column=1,
+            columnspan=2,
+            sticky="w",
+            padx=(8, 0),
+        )
+
+        scope = ttk.Frame(strategy_section, style="App.TFrame")
+        scope.grid(row=1, column=0, sticky="w", pady=(5, 0))
+        ttk.Label(
+            scope,
+            text="扫描范围",
+            style="Field.TLabel",
+        ).pack(anchor="w", pady=(0, 2))
+        checks = ttk.Frame(scope, style="App.TFrame")
+        checks.pack(anchor="w")
+        for name in ("res", "doc", "bin"):
+            ttk.Checkbutton(
+                checks,
+                text=name,
+                variable=module_values[name],
+            ).pack(side=LEFT, padx=(0, 10))
+        ttk.Checkbutton(
+            checks,
+            text="externals",
+            variable=external_value,
+        ).pack(side=LEFT)
+
+        lookback = ttk.Frame(strategy_section, style="App.TFrame")
+        lookback.grid(
+            row=1,
+            column=1,
+            sticky="w",
+            padx=(24, 0),
+            pady=(5, 0),
+        )
+        ttk.Label(
+            lookback,
+            text="最大回溯",
+            style="Field.TLabel",
+        ).pack(anchor="w", pady=(0, 2))
+        lookback_control = ttk.Frame(lookback, style="App.TFrame")
+        lookback_control.pack(anchor="w")
+        ttk.Spinbox(
+            lookback_control,
+            from_=1,
+            to=3650,
+            width=7,
+            textvariable=lookback_value,
+        ).pack(side=LEFT)
+        ttk.Label(
+            lookback_control,
+            text="天",
+            style="Field.TLabel",
+        ).pack(side=LEFT, padx=(6, 0))
+
+        refresh = ttk.Frame(strategy_section, style="App.TFrame")
+        refresh.grid(
+            row=1,
+            column=2,
+            sticky="w",
+            padx=(24, 0),
+            pady=(5, 0),
+        )
+        ttk.Label(
+            refresh,
+            text="自动刷新",
+            style="Field.TLabel",
+        ).pack(anchor="w", pady=(0, 2))
+        refresh_choices = ttk.Frame(refresh, style="App.TFrame")
+        refresh_choices.pack(anchor="w")
+        for minutes in (2, 5):
+            ttk.Radiobutton(
+                refresh_choices,
+                text=f"{minutes} 分钟",
+                value=minutes,
+                variable=refresh_value,
+            ).pack(side=LEFT, padx=(0, 12))
+
+        strategy_section.columnconfigure(0, weight=2)
+        strategy_section.columnconfigure(1, weight=1)
+        strategy_section.columnconfigure(2, weight=1)
+        container.columnconfigure(0, weight=1)
+        container.rowconfigure(7, weight=1)
         footer = ttk.Frame(container, style="App.TFrame")
         footer.grid(
-            row=len(rows) + 1,
+            row=8,
             column=0,
-            columnspan=3,
             sticky="ew",
-            pady=(12, 0),
+            pady=(8, 0),
         )
 
         def close_window() -> None:
@@ -1142,9 +1926,10 @@ class MigrationGuardApp:
             window.destroy()
 
         def save_settings() -> None:
+            root_keys = ("domestic", "overseas", "osob")
             roots = tuple(
                 values[key].get().strip()
-                for key in ("domestic", "overseas", "osob")
+                for key in root_keys
             )
             if not all(roots):
                 messagebox.showwarning(
@@ -1152,10 +1937,28 @@ class MigrationGuardApp:
                     "三个工作区目录都必须填写。",
                     parent=window,
                 )
+                missing_key = next(
+                    key
+                    for key in root_keys
+                    if not values[key].get().strip()
+                )
+                workspace_entries[missing_key].focus_set()
                 return
+            try:
+                lookback_days = int(lookback_value.get())
+            except (TypeError, ValueError):
+                lookback_days = 0
+            if not 1 <= lookback_days <= 3650:
+                messagebox.showwarning(
+                    "回溯天数无效",
+                    "最大回溯天数必须在 1 到 3650 之间。",
+                    parent=window,
+                )
+                return
+            sheet_keys = ("trunk_sheet", "osob_sheet")
             sheet_urls = tuple(
                 values[key].get().strip()
-                for key in ("trunk_sheet", "osob_sheet")
+                for key in sheet_keys
             )
             if not all(
                 value
@@ -1174,21 +1977,50 @@ class MigrationGuardApp:
                     "请配置两个飞书 Wiki 或电子表格链接。",
                     parent=window,
                 )
+                invalid_key = next(
+                    key
+                    for key in sheet_keys
+                    if not values[key].get().strip()
+                    or not any(
+                        marker in values[key].get()
+                        for marker in (
+                            "/wiki/",
+                            "/sheets/",
+                            "/spreadsheets/",
+                        )
+                    )
+                )
+                sheet_entries[invalid_key].focus_set()
                 return
             self.domestic_root.set(roots[0])
             self.overseas_trunk_root.set(roots[1])
             self.overseas_ob_root.set(roots[2])
             self.trunk_sheet_url.set(sheet_urls[0])
             self.osob_sheet_url.set(sheet_urls[1])
+            for name, variable in self.module_enabled.items():
+                variable.set(module_values[name].get())
+            self.include_externals.set(external_value.get())
+            self.lookback_days.set(lookback_days)
+            self.remote_refresh_minutes.set(refresh_value.get())
             source_role = self._workspace_role(
                 self.source_workspace.get()
             )
             self._set_workspace_route(source_role, save=False)
             self.ticket_snapshots.clear()
+            self.trunk_table_button.configure(
+                text="合海外 Trunk",
+                style="Source.TButton",
+            )
+            self.osob_table_button.configure(
+                text="合海外 Trunk-OB",
+                style="Source.TButton",
+            )
             self.current_ticket_mapping = None
             self.current_ticket_mappings = ()
+            self._cancel_remote_asset_query()
             self._save_config()
             self.status_text.set("迁移设置已保存")
+            self._update_contextual_action_states()
             close_window()
 
         ttk.Button(
@@ -1203,7 +2035,11 @@ class MigrationGuardApp:
             style="Primary.TButton",
             command=save_settings,
         ).pack(side=RIGHT, padx=(0, 6))
+        window.bind("<Escape>", lambda _event: close_window())
+        window.bind("<Return>", lambda _event: save_settings())
         window.protocol("WM_DELETE_WINDOW", close_window)
+        window.grab_set()
+        window.after_idle(workspace_entries["domestic"].focus_set)
 
     def _schedule_ticket_resolution(
         self,
@@ -1291,6 +2127,10 @@ class MigrationGuardApp:
         resolution: TicketTextResolution | tuple[TicketMapping, ...],
         issue_text: str,
     ) -> None:
+        self._set_table_button_snapshot(
+            self.active_table_kind,
+            snapshot,
+        )
         if isinstance(resolution, tuple):
             resolution = TicketTextResolution(
                 mappings=resolution,
@@ -1323,6 +2163,7 @@ class MigrationGuardApp:
                     "映射不唯一：" + ", ".join(resolution.ambiguous_keys)
                 )
             self._set_detail("\n".join(details))
+            self._update_contextual_action_states()
             return
         self.ticket_snapshots[self.active_table_kind] = snapshot
         self.ticket_snapshot = snapshot
@@ -1351,20 +2192,24 @@ class MigrationGuardApp:
     def _start_jira_progress(
         self,
         mappings: tuple[TicketMapping, ...],
+        *,
+        force_refresh: bool = False,
     ) -> None:
+        self._cancel_remote_asset_query()
         self._jira_request_id += 1
         request_id = self._jira_request_id
-        enabled_modules = tuple(
-            name
-            for name, variable in self.module_enabled.items()
-            if variable.get()
-        )
+        cancel_event = threading.Event()
+        self._remote_asset_cancel_event = cancel_event
+        enabled_modules = self._remote_module_names()
+        self.remote_asset_result = None
         try:
             lookback_days = int(self.lookback_days.get())
         except (TypeError, ValueError):
             lookback_days = 90
         self.status_text.set(
-            f"已解析 {len(mappings)} 条，正在读取 Jira 进度..."
+            "正在刷新 Jira 与远端 SVN 状态..."
+            if force_refresh
+            else f"已解析 {len(mappings)} 条，正在读取 Jira 进度..."
         )
         threading.Thread(
             target=self._jira_progress_worker,
@@ -1373,6 +2218,8 @@ class MigrationGuardApp:
                 mappings,
                 enabled_modules,
                 lookback_days,
+                cancel_event,
+                force_refresh,
             ),
             name="migration-jira-progress",
             daemon=True,
@@ -1384,7 +2231,10 @@ class MigrationGuardApp:
         mappings: tuple[TicketMapping, ...],
         enabled_modules: tuple[str, ...],
         lookback_days: int,
+        cancel_event: threading.Event,
+        force_refresh: bool,
     ) -> None:
+        issues = {}
         try:
             issue_keys = tuple(
                 dict.fromkeys(
@@ -1396,46 +2246,113 @@ class MigrationGuardApp:
                     )
                 )
             )
-            issues = self.jira_client.fetch_many(issue_keys)
+            issues = self.jira_client.fetch_many(
+                issue_keys,
+                force_refresh=force_refresh,
+            )
+            if cancel_event.is_set():
+                return
             progress = build_ticket_progress(mappings, issues)
             self.events.put(
                 ("jira-progress", (request_id, progress))
             )
         except Exception as exc:
+            if cancel_event.is_set():
+                return
             self.events.put(
                 ("jira-progress-error", (request_id, str(exc)))
             )
         try:
+            query_start = _jira_query_start(
+                tuple(issues.values()),
+                lookback_days,
+            )
             service = RemoteAssetProgressService(
-                svn=SvnClient(log=self._queue_log),
+                svn=SvnClient(
+                    runner=create_cancellable_svn_runner(cancel_event),
+                    log=self._queue_log,
+                ),
                 progress=lambda stage, message: self.events.put(
                     (
                         "remote-assets-progress",
                         (request_id, stage, message),
                     )
                 ),
+                cache=self._remote_asset_cache,
+                cancel_event=cancel_event,
             )
             result = service.scan(
                 mappings,
                 enabled_modules=enabled_modules,
                 lookback_days=lookback_days,
+                start_date=query_start,
+                force_refresh=force_refresh,
             )
+            if cancel_event.is_set():
+                return
             self.events.put(
                 ("remote-assets", (request_id, result))
             )
+        except RemoteAssetScanCancelled:
+            return
         except Exception as exc:
+            if cancel_event.is_set():
+                return
             self.events.put(
                 ("remote-assets-error", (request_id, str(exc)))
             )
+
+    def _cancel_remote_asset_query(self) -> None:
+        if self._remote_refresh_after_id is not None:
+            try:
+                self.root.after_cancel(self._remote_refresh_after_id)
+            except Exception:
+                pass
+            self._remote_refresh_after_id = None
+        if self._remote_asset_cancel_event is not None:
+            self._remote_asset_cancel_event.set()
+            self._remote_asset_cancel_event = None
+
+    def _schedule_remote_auto_refresh(self) -> None:
+        if self._remote_refresh_after_id is not None:
+            try:
+                self.root.after_cancel(self._remote_refresh_after_id)
+            except Exception:
+                pass
+            self._remote_refresh_after_id = None
+        if (
+            not self.current_ticket_mappings
+            or self._local_workspaces_available()
+        ):
+            return
+        delay = max(1, self.remote_refresh_minutes.get()) * 60_000
+        self._remote_refresh_after_id = self.root.after(
+            delay,
+            self._auto_refresh_remote_progress,
+        )
+
+    def _auto_refresh_remote_progress(self) -> None:
+        self._remote_refresh_after_id = None
+        if self.busy:
+            self._schedule_remote_auto_refresh()
+            return
+        mappings = self.current_ticket_mappings
+        if not mappings or self._local_workspaces_available():
+            return
+        self.status_text.set("自动刷新 Jira 与远端 SVN 状态...")
+        self._start_jira_progress(mappings, force_refresh=True)
 
     def _render_jira_progress(
         self,
         progress: tuple[TicketJiraProgress, ...],
     ) -> None:
+        self._set_use_ticket_button_visible(True)
+        self._set_result_view_enabled(False)
         self.table_mode = "jira"
         self.table.configure(show="headings", displaycolumns="#all")
         self.current_result = None
         self.visible_files = []
+        self.remote_notices = []
         self.visible_ticket_mappings = []
         self.visible_ticket_progress = list(progress)
         self.table.delete(*self.table.get_children())
@@ -1448,12 +2365,12 @@ class MigrationGuardApp:
             "target": "版本登记",
         }
         widths = {
-            "state": 80,
-            "module": 64,
-            "path": 210,
-            "source": 130,
-            "local": 130,
-            "target": 150,
+            "state": 74,
+            "module": 58,
+            "path": 185,
+            "source": 110,
+            "local": 110,
+            "target": 115,
         }
         for name in self.table["columns"]:
             self.table.heading(name, text=headings[name])
@@ -1465,14 +2382,18 @@ class MigrationGuardApp:
                 anchor="w" if name == "path" else "center",
             )
         self.open_path_button.configure(state="disabled")
-        self.export_button.configure(state="disabled")
-        self.summary_text["all"].set(str(len(progress)))
         counts = {state: 0 for state in VerificationState}
+        require_osob = self.active_table_kind == TABLE_OSOB
         for item in progress:
-            counts[_jira_summary_state(item)] += 1
-        for state in VerificationState:
-            self.summary_text[state.value].set(str(counts[state]))
+            counts[
+                _jira_summary_state(
+                    item,
+                    require_osob=require_osob,
+                )
+            ] += 1
+        self._set_summary_counts(len(progress), counts)
         self.filter_state.set("全部")
+        self.detail_filter_text.set("更多 ▼")
         self._refresh_jira_table()
         failed = sum(
             1
@@ -1483,16 +2404,17 @@ class MigrationGuardApp:
             f"Jira 进度已更新：{len(progress)} 条"
             + (f"，{failed} 条读取失败" if failed else "")
         )
+        self._mark_refresh_time()
 
     def _refresh_jira_table(self) -> None:
         self.table.delete(*self.table.get_children())
         selected_filter = self.filter_state.get()
         for index, item in enumerate(self.visible_ticket_progress):
-            summary_state = _jira_summary_state(item)
-            if (
-                selected_filter != "全部"
-                and summary_state.label != selected_filter
-            ):
+            summary_state = _jira_summary_state(
+                item,
+                require_osob=self.active_table_kind == TABLE_OSOB,
+            )
+            if not _filter_matches(selected_filter, summary_state):
                 continue
             title = (
                 item.mapping.target_text
@@ -1530,6 +2452,7 @@ class MigrationGuardApp:
         self.use_ticket_button.configure(
             text=f"核验选中（{len(children)}）",
             state="normal" if children else "disabled",
+            style="Tool.TButton",
         )
         self._show_selected_detail()
 
@@ -1537,38 +2460,76 @@ class MigrationGuardApp:
         self,
         result: RemoteAssetProgressResult,
     ) -> None:
-        if not result.assets:
-            warning = (
-                "\n".join(result.warnings)
-                if result.warnings
-                else "查询范围内没有找到相关资产提交。"
-            )
-            self.status_text.set("未找到远端资产提交")
-            self._set_detail(warning)
-            return
+        self._set_use_ticket_button_visible(False)
+        self._set_result_view_enabled(True)
         self.table_mode = "remote-assets"
         self.current_result = None
         self.remote_asset_result = result
+        self.remote_notices = list(
+            _remote_asset_notices(
+                self.current_ticket_mappings,
+                result,
+            )
+        )
         self.visible_files = []
         self.visible_ticket_mappings = []
+        self.filter_state.set("全部")
+        self.detail_filter_text.set("更多 ▼")
+        self.open_path_button.configure(state="disabled")
+        self._refresh_remote_result()
+        count_text = result.counts
+        source_note = "缓存" if result.from_cache else (
+            f"{result.elapsed_seconds:.1f}s"
+        )
+        refresh_note = (
+            f" · {self.remote_refresh_minutes.get()} 分钟自动刷新"
+            if not self._local_workspaces_available()
+            else ""
+        )
+        review_note = (
+            f" · {len(self.remote_notices)} 单无源 SVN 变更"
+            if self.remote_notices
+            else ""
+        )
+        self.status_text.set(
+            f"资产 {len(result.assets)} · {source_note} · "
+            f"起点 {result.query_start or '-'}：国内 "
+            f"{count_text['domestic']}，海外 trunk "
+            f"{count_text['overseas_trunk']}，OB "
+            f"{count_text['osob']}{review_note}{refresh_note}"
+        )
+        self._mark_refresh_time()
+
+    def _configure_remote_result_table(self) -> None:
         self.table.configure(
             show="tree headings",
             displaycolumns=("state", "module", "path", "source"),
         )
-        self.table.heading("#0", text="资产位置")
+        self.table.heading(
+            "#0",
+            text=(
+                "单号 / 资产"
+                if self.result_view.get() == "单号"
+                else "资产位置"
+            ),
+        )
         self.table.column(
             "#0",
-            width=360,
-            minwidth=240,
+            width=280,
+            minwidth=200,
             stretch=True,
             anchor="w",
         )
-        for name, title, width in (
-            ("state", "国内 trunk", 102),
-            ("module", "海外 trunk", 102),
-            ("path", "海外 OB", 102),
-            ("source", "当前阶段", 92),
+        for name, title, sample in (
+            ("state", "国内 trunk", "国内 trunk"),
+            ("module", "海外 trunk", "海外 trunk"),
+            ("path", "海外 OB", "海外 OB"),
+            ("source", "状态", "海外 trunk"),
         ):
+            width = max(
+                96,
+                self.type_fonts["body_bold"].measure(sample) + 22,
+            )
             self.table.heading(name, text=title)
             self.table.column(
                 name,
@@ -1577,66 +2538,181 @@ class MigrationGuardApp:
                 stretch=False,
                 anchor="center",
             )
-        counts = {state: 0 for state in VerificationState}
-        for asset in result.assets:
-            counts[_remote_asset_summary_state(asset)] += 1
-        self.summary_text["all"].set(str(len(result.assets)))
-        for state in VerificationState:
-            self.summary_text[state.value].set(str(counts[state]))
-        self.filter_state.set("全部")
-        self.open_path_button.configure(state="disabled")
-        self.export_button.configure(state="disabled")
-        self._refresh_remote_asset_tree()
-        count_text = result.counts
-        self.status_text.set(
-            f"资产 {len(result.assets)}：国内 "
-            f"{count_text['domestic']}，海外 trunk "
-            f"{count_text['overseas_trunk']}，OB "
-            f"{count_text['osob']}"
+
+    def _refresh_remote_result(self) -> None:
+        if self.remote_asset_result is None:
+            return
+        self._configure_remote_result_table()
+        self.remote_tree_assets = {}
+        self.remote_tree_groups = {}
+        self.remote_tree_mappings = {}
+        if self.result_view.get() == "单号":
+            self._refresh_remote_ticket_tree()
+        else:
+            self._refresh_remote_asset_tree()
+
+    def _refresh_remote_ticket_tree(self) -> None:
+        result = self.remote_asset_result
+        if result is None:
+            return
+        require_osob = self.active_table_kind == TABLE_OSOB
+        mapping_rows = tuple(
+            (
+                mapping,
+                _remote_assets_for_mapping(mapping, result),
+            )
+            for mapping in self.current_ticket_mappings
         )
+        states = tuple(
+            _remote_mapping_state(
+                mapping,
+                assets,
+                require_osob=require_osob,
+            )
+            for mapping, assets in mapping_rows
+        )
+        self._set_summary_counts(
+            len(mapping_rows),
+            _count_states(states),
+        )
+        selected_filter = self.filter_state.get()
+        self.table.delete(*self.table.get_children())
+        for index, ((mapping, assets), state) in enumerate(
+            zip(mapping_rows, states)
+        ):
+            if not _filter_matches(selected_filter, state):
+                continue
+            node_id = f"remote-ticket-{index}"
+            self.remote_tree_mappings[node_id] = mapping
+            total = len(assets)
+            self.table.insert(
+                "",
+                END,
+                iid=node_id,
+                text=_ticket_tree_label(
+                    mapping.source_issue,
+                    mapping.target_issue,
+                    total,
+                    description=_mapping_description(mapping),
+                ),
+                values=(
+                    _remote_stage_count(assets, "domestic"),
+                    _remote_stage_count(assets, "overseas_trunk"),
+                    _remote_stage_count(assets, "osob"),
+                    state.label,
+                ),
+                open=state != VerificationState.COMPLETE,
+                tags=("remote-folder", state.value),
+            )
+            if assets:
+                tree = AssetProgressTree(assets)
+                self._insert_remote_progress_tree(
+                    tree,
+                    parent_id=node_id,
+                    prefix=f"remote-ticket-{index}",
+                    initial_depth=0,
+                )
+        self._select_first_result_row()
 
     def _refresh_remote_asset_tree(self) -> None:
         result = self.remote_asset_result
         if result is None:
             return
+        require_osob = self.active_table_kind == TABLE_OSOB
+        states = tuple(
+            _remote_asset_summary_state(
+                asset,
+                require_osob=require_osob,
+            )
+            for asset in result.assets
+        )
+        self._set_summary_counts(
+            len(result.assets),
+            _count_states(states),
+        )
         selected_filter = self.filter_state.get()
         assets = tuple(
             asset
             for asset in result.assets
-            if (
-                selected_filter == "全部"
-                or _remote_asset_summary_state(asset).label
-                == selected_filter
+            if _filter_matches(
+                selected_filter,
+                _remote_asset_summary_state(
+                    asset,
+                    require_osob=require_osob,
+                ),
             )
         )
         tree = AssetProgressTree(assets)
         self.remote_asset_tree = tree
         self.table.delete(*self.table.get_children())
+        self._insert_remote_progress_tree(
+            tree,
+            parent_id="",
+            prefix="remote-asset",
+            initial_depth=0,
+        )
+        self._select_first_result_row(
+            empty_message="当前筛选下没有资产。",
+        )
 
+    def _insert_remote_progress_tree(
+        self,
+        tree: AssetProgressTree,
+        *,
+        parent_id: str,
+        prefix: str,
+        initial_depth: int,
+    ) -> None:
         def insert_node(
-            parent_id: str,
-            node_id: str,
+            current_parent_id: str,
+            source_node_id: str,
             depth: int,
         ) -> None:
-            node = tree.nodes[node_id]
+            node = tree.nodes[source_node_id]
+            node_id = f"{prefix}-{source_node_id}"
             label = node.name
             if not node.is_asset:
-                label += f" ({len(tree.descendant_assets(node_id))})"
-            stage = tree.stage(node_id)
+                descendants = tree.descendant_assets(source_node_id)
+                label += f" ({len(descendants)})"
+                self.remote_tree_groups[node_id] = descendants
+                state = _aggregate_states(
+                    tuple(
+                        _remote_asset_summary_state(
+                            asset,
+                            require_osob=(
+                                self.active_table_kind == TABLE_OSOB
+                            ),
+                        )
+                        for asset in descendants
+                    )
+                )
+            else:
+                asset = tree.asset_for_node(source_node_id)
+                if asset is not None:
+                    self.remote_tree_assets[node_id] = asset
+                    state = _remote_asset_summary_state(
+                        asset,
+                        require_osob=(
+                            self.active_table_kind == TABLE_OSOB
+                        ),
+                    )
+                else:
+                    state = VerificationState.NEEDS_REVIEW
+            stage = tree.stage(source_node_id)
             tags = (
-                ("remote-folder", _remote_tree_tag(stage))
+                ("remote-folder", state.value)
                 if not node.is_asset
-                else (_remote_tree_tag(stage),)
+                else (state.value,)
             )
             self.table.insert(
-                parent_id,
+                current_parent_id,
                 END,
                 iid=node_id,
                 text=label,
                 values=(
-                    tree.stage_label(node_id, "domestic"),
-                    tree.stage_label(node_id, "overseas_trunk"),
-                    tree.stage_label(node_id, "osob"),
+                    tree.stage_label(source_node_id, "domestic"),
+                    tree.stage_label(source_node_id, "overseas_trunk"),
+                    tree.stage_label(source_node_id, "osob"),
                     _remote_stage_label(stage),
                 ),
                 open=depth < 2,
@@ -1646,16 +2722,20 @@ class MigrationGuardApp:
                 insert_node(node_id, child_id, depth + 1)
 
         for root_id in tree.root_ids:
-            insert_node("", root_id, 0)
+            insert_node(parent_id, root_id, initial_depth)
+
+    def _select_first_result_row(
+        self,
+        *,
+        empty_message: str = "当前筛选下没有单号。",
+    ) -> None:
         roots = self.table.get_children()
         if roots:
             self.table.selection_set(roots[0])
             self.table.focus(roots[0])
             self.table.see(roots[0])
-        self.use_ticket_button.configure(
-            text="SVN 精确核验",
-            state="normal" if self.current_ticket_mappings else "disabled",
-        )
+        else:
+            self._set_detail(empty_message)
         self._show_selected_detail()
 
     def _mapping_allowed_for_active_table(
@@ -1704,6 +2784,7 @@ class MigrationGuardApp:
         self.status_text.set(
             f"已识别：{mapping.route.label} · 第 {mapping.row} 行"
         )
+        self._update_contextual_action_states()
         if mapping.route == TicketRoute.OSOB_ONLY:
             messagebox.showwarning(
                 "仅提交 OSOB",
@@ -1777,6 +2858,7 @@ class MigrationGuardApp:
         self.status_text.set(
             f"已选择 {len(mappings)} 条，准备统一核验"
         )
+        self._update_contextual_action_states()
         if start_audit:
             self.root.after(120, self._start_batch_audit)
 
@@ -1798,6 +2880,12 @@ class MigrationGuardApp:
 
     def _start_update_and_audit(self) -> None:
         if self._current_mapping_selection_is_valid():
+            if not self._local_workspaces_available():
+                self._start_jira_progress(
+                    self.current_ticket_mappings,
+                    force_refresh=True,
+                )
+                return
             self._start_batch_background(update_first=True)
             return
         self._start_background("更新工作区", self._update_and_audit)
@@ -1835,6 +2923,7 @@ class MigrationGuardApp:
         if self.busy:
             messagebox.showinfo("任务执行中", "当前任务尚未完成。")
             return
+        self._cancel_remote_asset_query()
         mappings = self._active_stage_mappings()
         if not mappings:
             messagebox.showwarning(
@@ -1845,7 +2934,7 @@ class MigrationGuardApp:
         try:
             modules = self._selected_modules()
             lookback_days = int(self.lookback_days.get())
-            include_externals = self.include_externals.get()
+            include_externals = self._effective_include_externals()
             self._save_config()
         except (ValueError, OSError) as exc:
             messagebox.showwarning("无法开始", str(exc))
@@ -1974,6 +3063,7 @@ class MigrationGuardApp:
         if self.busy:
             messagebox.showinfo("任务执行中", "当前任务尚未完成。")
             return
+        self._cancel_remote_asset_query()
         if not isinstance(self.current_result, BatchMigrationAuditResult):
             messagebox.showwarning(
                 "缺少批量清单",
@@ -1987,7 +3077,7 @@ class MigrationGuardApp:
         try:
             modules = self._selected_modules()
             lookback_days = int(self.lookback_days.get())
-            include_externals = self.include_externals.get()
+            include_externals = self._effective_include_externals()
             target_branch_dir = Path(self.target_root.get())
             expected_cases = {
                 (item.source_issue, item.target_issue)
@@ -2361,7 +3451,7 @@ class MigrationGuardApp:
         table.tag_configure(
             "folder",
             foreground="#344054",
-            font=("Segoe UI Semibold", 10),
+            font=self.type_fonts["body_bold"],
         )
         table.tag_configure("asset", foreground="#1F2937")
 
@@ -2596,6 +3686,7 @@ class MigrationGuardApp:
         if self.busy:
             messagebox.showinfo("任务执行中", "当前任务尚未完成。")
             return
+        self._cancel_remote_asset_query()
         try:
             modules = self._selected_modules()
             source_issue = self.source_issue.get().strip()
@@ -2618,7 +3709,7 @@ class MigrationGuardApp:
                     f"合并表将该单标记为“{mapping.route.label}”"
                 )
             lookback_days = int(self.lookback_days.get())
-            include_externals = self.include_externals.get()
+            include_externals = self._effective_include_externals()
             self._save_config()
         except (ValueError, OSError) as exc:
             messagebox.showwarning("无法开始", str(exc))
@@ -2732,47 +3823,142 @@ class MigrationGuardApp:
     def _queue_log(self, message: str) -> None:
         self.events.put(("log", message))
 
+    def _refresh_shortcut(self, _event: object = None) -> str:
+        if str(self.update_button.cget("state")) != "disabled":
+            self._start_update_and_audit()
+        return "break"
+
     def _set_action_buttons(self, state: str) -> None:
         self.update_button.configure(state=state)
-        self.audit_button.configure(state=state)
         self.migrate_button.configure(state=state)
+        self.route_button.configure(state=state)
+        self.route_menu_button.configure(state=state)
         self.resolve_button.configure(state=state)
         self.trunk_table_button.configure(state=state)
         self.osob_table_button.configure(state=state)
         self.sheet_config_button.configure(state=state)
+        if self.use_ticket_button.winfo_manager():
+            self.use_ticket_button.configure(state=state)
         if state == "normal":
-            self._update_migrate_button_state()
+            self._update_contextual_action_states()
 
-    def _update_migrate_button_state(self) -> None:
-        enabled = (
-            not self.busy
-            and isinstance(
+    def _update_contextual_action_states(self) -> None:
+        if self.busy:
+            return
+        has_mapping = self._current_mapping_selection_is_valid()
+        has_workspace = (
+            has_mapping and self._local_workspaces_available()
+        )
+        can_migrate = (
+            isinstance(
                 self.current_result,
                 BatchMigrationAuditResult,
             )
             and bool(self.current_ticket_mappings)
         )
-        self.migrate_button.configure(
-            state="normal" if enabled else "disabled"
+        self.update_button.configure(
+            text=(
+                "更新并复核"
+                if has_workspace
+                else "刷新状态"
+            ),
+            state="normal" if has_mapping else "disabled",
+            style=(
+                "Primary.TButton"
+                if (
+                    has_mapping
+                    and not can_migrate
+                    and self.table_mode != "tickets"
+                )
+                else "Tool.TButton"
+            ),
         )
+        self.resolve_button.configure(
+            state="normal",
+            style=(
+                "Tool.TButton"
+                if has_mapping or self.table_mode == "tickets"
+                else "Primary.TButton"
+            ),
+        )
+        if can_migrate and self.current_result is not None:
+            if self.current_result.complete:
+                self.migrate_button.configure(
+                    text="复核",
+                    command=self._start_audit,
+                    state="normal",
+                )
+            else:
+                self.migrate_button.configure(
+                    text="迁移",
+                    command=self._start_batch_migration,
+                    state="normal",
+                )
+        else:
+            self.migrate_button.configure(
+                text="迁移",
+                command=self._start_batch_migration,
+                state="disabled",
+            )
+        if self.use_ticket_button.winfo_manager():
+            selectable = bool(self.table.get_children())
+            self.use_ticket_button.configure(
+                state="normal" if selectable else "disabled",
+                style=(
+                    "Primary.TButton"
+                    if self.table_mode == "tickets"
+                    else "Tool.TButton"
+                ),
+            )
 
-    def _configure_audit_table(self) -> None:
-        self.table.configure(show="headings", displaycolumns="#all")
+    def _update_migrate_button_state(self) -> None:
+        self._update_contextual_action_states()
+
+    def _configure_audit_table(self, *, tree: bool = True) -> None:
+        self._set_use_ticket_button_visible(False)
+        self._set_result_view_enabled(tree)
+        self.table.configure(
+            show="tree headings" if tree else "headings",
+            displaycolumns=(
+                ("state", "source", "local", "target")
+                if tree
+                else "#all"
+            ),
+        )
+        self.table.heading(
+            "#0",
+            text=(
+                (
+                    "单号 / 资产"
+                    if self.result_view.get() == "单号"
+                    else "资产位置"
+                )
+                if tree
+                else ""
+            ),
+        )
+        self.table.column(
+            "#0",
+            width=300 if tree else 0,
+            minwidth=200 if tree else 0,
+            stretch=tree,
+            anchor="w",
+        )
         headings = {
             "state": "状态",
             "module": "模块",
             "path": "相对路径",
             "source": "源版本",
             "local": "目标本地",
-            "target": "海外提交",
+            "target": "提交",
         }
         widths = {
-            "state": 76,
-            "module": 58,
-            "path": 330,
-            "source": 96,
-            "local": 86,
-            "target": 100,
+            "state": 70,
+            "module": 52,
+            "path": 250,
+            "source": 84,
+            "local": 78,
+            "target": 88,
         }
         for name in self.table["columns"]:
             self.table.heading(name, text=headings[name])
@@ -2781,11 +3967,11 @@ class MigrationGuardApp:
                 width=widths[name],
                 minwidth=widths[name],
                 stretch=name == "path",
-                anchor="w" if name == "path" else "center",
+                anchor="e" if name == "path" else "center",
             )
         self.table_mode = "audit"
         self.use_ticket_button.configure(state="disabled")
-        self.open_path_button.configure(state="normal")
+        self.open_path_button.configure(state="disabled")
 
     def _show_progress_row(
         self,
@@ -2794,8 +3980,7 @@ class MigrationGuardApp:
         state: str = "进行中",
         stage: str = "",
     ) -> None:
-        if self.table_mode != "audit":
-            self._configure_audit_table()
+        self._configure_audit_table(tree=False)
         progress_id = "__progress__"
         values = (state, stage, message, "", "", "")
         if self.table.exists(progress_id):
@@ -2949,7 +4134,11 @@ class MigrationGuardApp:
                     )
                 elif event == "ticket-table":
                     table_kind, snapshot = payload
-                    self._show_ticket_table(snapshot, table_kind)
+                    self._show_ticket_table(
+                        snapshot,
+                        table_kind,
+                        start_preview=True,
+                    )
                 elif event == "jira-progress":
                     request_id, progress = payload
                     if (
@@ -2974,12 +4163,14 @@ class MigrationGuardApp:
                         and self.active_task not in {"audit", "migration"}
                     ):
                         self._render_remote_assets(result)
+                        self._schedule_remote_auto_refresh()
                 elif event == "remote-assets-error":
                     request_id, message = payload
                     if request_id == self._jira_request_id:
                         self.status_text.set(
                             f"远端资产记录读取失败：{message}"
                         )
+                        self._schedule_remote_auto_refresh()
                 elif event == "workspace-stage":
                     self._set_workspace_route(str(payload))
                 elif event == "asset-selection-request":
@@ -3019,28 +4210,38 @@ class MigrationGuardApp:
                         and not self.task_failed
                         and self.current_result is not None
                     ):
+                        pending = _audit_pending_summary(
+                            self.current_result
+                        )
                         self.status_text.set(
                             "核验完成"
                             if self.current_result.complete
-                            else "核验完成，存在待处理项"
+                            else f"核验完成：{pending}"
                         )
                         self._finish_workflow_progress(
                             complete=self.current_result.complete
                         )
+                        if not self.current_result.complete:
+                            self.workflow_stage_text.set(pending)
                     elif (
                         finished_task == "migration"
                         and payload == "migration"
                         and not self.task_failed
                         and self.current_result is not None
                     ):
+                        pending = _audit_pending_summary(
+                            self.current_result
+                        )
                         self.status_text.set(
                             "批量迁移与复核完成"
                             if self.current_result.complete
-                            else "批量迁移完成，仍有待处理项"
+                            else f"迁移完成：{pending}"
                         )
                         self._finish_workflow_progress(
                             complete=self.current_result.complete
                         )
+                        if not self.current_result.complete:
+                            self.workflow_stage_text.set(pending)
         except queue.Empty:
             pass
         self.root.after(UI_POLL_MS, self._poll_events)
@@ -3049,23 +4250,21 @@ class MigrationGuardApp:
         self,
         result: MigrationAuditResult | BatchMigrationAuditResult,
     ) -> None:
-        self._configure_audit_table()
+        self._configure_audit_table(tree=True)
         self.ticket_snapshot = None
         self.visible_ticket_mappings = []
         self.visible_ticket_progress = []
-        counts = result.counts
-        self.summary_text["all"].set(str(len(result.files)))
-        for state in VerificationState:
-            self.summary_text[state.value].set(
-                str(counts.get(state.value, 0))
-            )
-        self.export_button.configure(state="normal")
+        self.filter_state.set("全部")
+        self.detail_filter_text.set("更多 ▼")
         self._update_migrate_button_state()
         self._refresh_table()
-        if result.warnings:
+        self._mark_refresh_time("复核")
+        if result.warnings and not self.table.get_children():
             self._set_detail("\n".join(result.warnings))
         elif not result.files:
-            self._set_detail("没有找到需要核验的文件。")
+            self._set_detail(
+                "没有找到可核验资产；单号页签中仍会显示需确认任务。"
+            )
 
     def _refresh_table(self) -> None:
         if self.table_mode == "tickets":
@@ -3074,46 +4273,268 @@ class MigrationGuardApp:
             self._refresh_jira_table()
             return
         if self.table_mode == "remote-assets":
-            self._refresh_remote_asset_tree()
+            self._refresh_remote_result()
             return
+        self._configure_audit_table(tree=True)
         self.table.delete(*self.table.get_children())
         self.visible_files = []
+        self.audit_tree_files = {}
+        self.audit_tree_file_groups = {}
+        self.audit_tree_groups = {}
+        self.audit_tree_cases = {}
         if self.current_result is None:
             return
+        if self.result_view.get() == "单号":
+            self._refresh_audit_ticket_tree()
+        else:
+            self._refresh_audit_asset_tree()
+
+    def _refresh_audit_ticket_tree(self) -> None:
+        result = self.current_result
+        if result is None:
+            return
+        cases = _audit_cases(result)
+        states = tuple(_audit_case_state(case) for case in cases)
+        self._set_summary_counts(len(cases), _count_states(states))
         selected_filter = self.filter_state.get()
-        for item in self.current_result.files:
-            if (
-                selected_filter != "全部"
-                and item.state.label != selected_filter
-            ):
+        for index, (case, state) in enumerate(zip(cases, states)):
+            if not _filter_matches(selected_filter, state):
                 continue
-            relative_path = _display_relative_path(
-                item.expected.target_local_path,
-                self.target_root.get(),
+            node_id = f"audit-ticket-{index}"
+            self.audit_tree_cases[node_id] = case
+            file_groups = self._audit_file_groups(case.files)
+            total = len(file_groups)
+            complete = sum(
+                _state_is_complete(
+                    _audit_group_state(group)
+                )
+                for group in file_groups
             )
-            source_revisions = ",".join(
-                f"r{revision}"
-                for revision in item.expected.source_revisions
+            target_revisions = len(
+                {
+                    revision
+                    for item in case.files
+                    for revision in item.target_revisions
+                }
             )
-            target_revisions = ",".join(
-                f"r{revision}"
-                for revision in item.target_revisions
-            ) or "-"
-            index = len(self.visible_files)
-            self.visible_files.append(item)
             self.table.insert(
                 "",
                 END,
-                iid=str(index),
+                iid=node_id,
+                text=_ticket_tree_label(
+                    case.source_issue,
+                    case.target_issue,
+                    total,
+                    description=_audit_case_description(
+                        case,
+                        self.current_ticket_mappings,
+                    ),
+                ),
                 values=(
-                    item.state.label,
+                    state.label,
+                    "任务",
+                    "",
+                    f"{total} 项" if total else "-",
+                    (
+                        f"{complete}/{total} 完成"
+                        if total
+                        else "无源 SVN 变更"
+                    ),
+                    (
+                        f"{target_revisions} 个版本"
+                        if target_revisions
+                        else "-"
+                    ),
+                ),
+                open=state != VerificationState.COMPLETE,
+                tags=("audit-folder", state.value),
+            )
+            if file_groups:
+                self._insert_audit_file_groups(
+                    file_groups,
+                    parent_id=node_id,
+                    prefix=f"audit-ticket-{index}",
+                    initial_depth=0,
+                )
+        self._select_first_result_row(
+            empty_message="当前筛选下没有单号。",
+        )
+
+    def _refresh_audit_asset_tree(self) -> None:
+        result = self.current_result
+        if result is None:
+            return
+        file_groups = self._audit_file_groups(result.files)
+        states = tuple(
+            _audit_group_state(group)
+            for group in file_groups
+        )
+        self._set_summary_counts(
+            len(file_groups),
+            _count_states(states),
+        )
+        selected_filter = self.filter_state.get()
+        filtered_groups = tuple(
+            group
+            for group, state in zip(file_groups, states)
+            if _filter_matches(selected_filter, state)
+        )
+        self._insert_audit_file_groups(
+            filtered_groups,
+            parent_id="",
+            prefix="audit-asset",
+            initial_depth=0,
+        )
+        self._select_first_result_row(
+            empty_message=(
+                "当前筛选下没有资产；无资产任务请在单号页签查看。"
+            ),
+        )
+
+    def _audit_file_groups(
+        self,
+        files: tuple[FileVerification, ...],
+    ) -> tuple[tuple[FileVerification, ...], ...]:
+        groups: dict[str, list[FileVerification]] = {}
+        for item in files:
+            display_path = _audit_display_path(
+                item,
+                self.source_root.get(),
+                self.target_root.get(),
+            )
+            key = (
+                f"{item.expected.module}/"
+                f"{display_path.replace(chr(92), '/').strip('/')}"
+            ).casefold()
+            groups.setdefault(key, []).append(item)
+        return tuple(tuple(group) for group in groups.values())
+
+    def _insert_audit_file_groups(
+        self,
+        file_groups: tuple[tuple[FileVerification, ...], ...],
+        *,
+        parent_id: str,
+        prefix: str,
+        initial_depth: int,
+    ) -> None:
+        directory_ids: dict[str, str] = {}
+        directory_files: dict[str, list[FileVerification]] = {}
+        directory_depth: dict[str, int] = {}
+        root_parent_id = parent_id
+        for file_group in file_groups:
+            item = file_group[0]
+            state = _audit_group_state(file_group)
+            relative_path = _audit_display_path(
+                item,
+                self.source_root.get(),
+                self.target_root.get(),
+            )
+            parts = [
+                part
+                for part in relative_path.replace("\\", "/").split("/")
+                if part
+            ]
+            if not parts:
+                parts = [item.expected.module, "未知资产"]
+            if parts[0].casefold() != item.expected.module.casefold():
+                parts.insert(0, item.expected.module)
+            current_parent_id = root_parent_id
+            path_parts: list[str] = []
+            for depth, part in enumerate(parts[:-1]):
+                path_parts.append(part)
+                key = "/".join(path_parts).casefold()
+                node_id = directory_ids.get(key)
+                if node_id is None:
+                    node_id = (
+                        f"{prefix}-dir-{len(directory_ids)}"
+                    )
+                    directory_ids[key] = node_id
+                    directory_files[node_id] = []
+                    directory_depth[node_id] = initial_depth + depth
+                    self.table.insert(
+                        current_parent_id,
+                        END,
+                        iid=node_id,
+                        text=part,
+                        values=("", "", "", "", "", ""),
+                        open=initial_depth + depth < 2,
+                        tags=("audit-folder",),
+                    )
+                directory_files[node_id].extend(file_group)
+                current_parent_id = node_id
+            source_revisions = ",".join(
+                f"r{revision}"
+                for revision in sorted(
+                    {
+                        revision
+                        for grouped_item in file_group
+                        for revision in (
+                            grouped_item.expected.source_revisions
+                        )
+                    }
+                )
+            )
+            target_revisions = ",".join(
+                f"r{revision}"
+                for revision in sorted(
+                    {
+                        revision
+                        for grouped_item in file_group
+                        for revision in grouped_item.target_revisions
+                    }
+                )
+            ) or "-"
+            local_statuses = tuple(
+                dict.fromkeys(
+                    grouped_item.local_status
+                    for grouped_item in file_group
+                )
+            )
+            index = len(self.visible_files)
+            self.visible_files.append(item)
+            item_id = f"{prefix}-file-{index}"
+            self.audit_tree_files[item_id] = item
+            self.audit_tree_file_groups[item_id] = file_group
+            self.table.insert(
+                current_parent_id,
+                END,
+                iid=item_id,
+                text=parts[-1],
+                values=(
+                    state.label,
                     item.expected.module,
                     relative_path,
                     source_revisions,
-                    item.local_status,
+                    (
+                        local_statuses[0]
+                        if len(local_statuses) == 1
+                        else "混合"
+                    ),
                     target_revisions,
                 ),
-                tags=(item.state.value,),
+                tags=(state.value,),
+            )
+        for node_id, files in directory_files.items():
+            grouped_files = self._audit_file_groups(tuple(files))
+            states = tuple(
+                _audit_group_state(group)
+                for group in grouped_files
+            )
+            state = _aggregate_states(states)
+            complete = sum(_state_is_complete(value) for value in states)
+            self.audit_tree_groups[node_id] = tuple(files)
+            self.table.item(
+                node_id,
+                values=(
+                    state.label,
+                    "",
+                    "",
+                    f"{len(grouped_files)} 项",
+                    f"{complete}/{len(grouped_files)} 完成",
+                    "",
+                ),
+                open=directory_depth[node_id] < 2,
+                tags=("audit-folder", state.value),
             )
 
     def _selected_item(self) -> FileVerification | None:
@@ -3122,10 +4543,7 @@ class MigrationGuardApp:
         selection = self.table.selection()
         if not selection:
             return None
-        try:
-            return self.visible_files[int(selection[0])]
-        except (ValueError, IndexError):
-            return None
+        return self.audit_tree_files.get(selection[0])
 
     def _selected_tickets(self) -> tuple[TicketMapping, ...]:
         if self.table_mode == "remote-assets":
@@ -3197,34 +4615,112 @@ class MigrationGuardApp:
         self._copy_selected_path(event)
 
     def _show_selected_detail(self, _event: object = None) -> None:
+        self.open_path_button.configure(state="disabled")
         if self.table_mode == "remote-assets":
-            tree = self.remote_asset_tree
             selection = self.table.selection()
-            if tree is None or not selection:
+            if not selection:
                 return
-            node = tree.nodes.get(selection[0])
-            if node is None:
+            selected_id = selection[0]
+            mapping = self.remote_tree_mappings.get(selected_id)
+            if mapping is not None:
+                result = self.remote_asset_result
+                if result is None:
+                    return
+                assets = _remote_assets_for_mapping(mapping, result)
+                state = _remote_mapping_state(
+                    mapping,
+                    assets,
+                    require_osob=self.active_table_kind == TABLE_OSOB,
+                )
+                complete = sum(
+                    _state_is_complete(
+                        _remote_asset_summary_state(
+                            asset,
+                            require_osob=(
+                                self.active_table_kind == TABLE_OSOB
+                            ),
+                        )
+                    )
+                    for asset in assets
+                )
+                lines = [
+                    f"单号状态：{state.label}",
+                    f"路线：{mapping.route.label}",
+                    "",
+                    f"源单号：{mapping.source_issue}",
+                    f"目标单号：{mapping.target_issue or '-'}",
+                    "任务描述："
+                    f"{_mapping_description(mapping) or '-'}",
+                    f"关联资产：{len(assets)}",
+                    f"已完成资产：{complete}",
+                    "",
+                    "国内 trunk："
+                    f"{_remote_stage_count(assets, 'domestic')}",
+                    "海外 trunk："
+                    f"{_remote_stage_count(assets, 'overseas_trunk')}",
+                    f"海外 OB：{_remote_stage_count(assets, 'osob')}",
+                ]
+                if not assets:
+                    lines.extend(
+                        (
+                            "",
+                            "未找到源阶段 SVN 变更；这不表示迁移失败，"
+                            "请确认该任务是否没有资产改动或使用了其他单号。",
+                        )
+                    )
+                self._set_detail("\n".join(lines), issue_state=state)
                 return
-            asset = tree.asset_for_node(node.node_id)
-            if asset is None:
-                descendants = tree.descendant_assets(node.node_id)
+            descendants = self.remote_tree_groups.get(selected_id)
+            if descendants is not None:
+                pairs = _remote_issue_pairs(
+                    descendants,
+                    self.current_ticket_mappings,
+                )
+                state = _aggregate_states(
+                    tuple(
+                        _remote_asset_summary_state(
+                            asset,
+                            require_osob=(
+                                self.active_table_kind == TABLE_OSOB
+                            ),
+                        )
+                        for asset in descendants
+                    )
+                )
                 self._set_detail(
                     "\n".join(
                         (
-                            f"目录：{node.path}",
                             f"资产数：{len(descendants)}",
+                            *_issue_pair_lines(
+                                "涉及单号",
+                                pairs,
+                                self.current_ticket_mappings,
+                            ),
+                            "",
                             "国内 trunk："
-                            f"{tree.stage_label(node.node_id, 'domestic')}",
+                            f"{_remote_stage_count(descendants, 'domestic')}",
                             "海外 trunk："
-                            f"{tree.stage_label(node.node_id, 'overseas_trunk')}",
+                            f"{_remote_stage_count(descendants, 'overseas_trunk')}",
                             "海外 OB："
-                            f"{tree.stage_label(node.node_id, 'osob')}",
+                            f"{_remote_stage_count(descendants, 'osob')}",
                             "",
                             "展开目录可查看每个资产的提交版本。",
                         )
-                    )
+                    ),
+                    issue_state=state,
                 )
                 return
+            asset = self.remote_tree_assets.get(selected_id)
+            if asset is None:
+                return
+            pairs = _remote_issue_pairs(
+                (asset,),
+                self.current_ticket_mappings,
+            )
+            state = _remote_asset_summary_state(
+                asset,
+                require_osob=self.active_table_kind == TABLE_OSOB,
+            )
             self._set_detail(
                 "\n".join(
                     (
@@ -3232,13 +4728,12 @@ class MigrationGuardApp:
                         "动作一致："
                         f"{'否' if asset.has_action_mismatch else '是'}",
                         f"模块：{asset.module}",
-                        f"资产：{asset.display_path}",
-                        f"相对路径：{asset.relative_path}",
                         "",
-                        "国内单号："
-                        f"{'、'.join(asset.source_issues) or '-'}",
-                        "海外单号："
-                        f"{'、'.join(asset.target_issues) or '-'}",
+                        *_issue_pair_lines(
+                            "关联单号",
+                            pairs,
+                            self.current_ticket_mappings,
+                        ),
                         "",
                         "国内 trunk："
                         f"{_remote_evidence_detail(asset.domestic)}",
@@ -3250,7 +4745,8 @@ class MigrationGuardApp:
                         "数据来源：按 Jira 单号查询远端 SVN 提交记录；"
                         "不依赖本地工作副本。",
                     )
-                )
+                ),
+                issue_state=state,
             )
             return
         if self.table_mode == "jira":
@@ -3294,7 +4790,11 @@ class MigrationGuardApp:
                         "Jira 进度适用于无工程查看；"
                         "文件级完成状态仍以 SVN 核验为准。",
                     )
-                )
+                ),
+                issue_state=_jira_summary_state(
+                    item,
+                    require_osob=self.active_table_kind == TABLE_OSOB,
+                ),
             )
             return
         if self.table_mode == "tickets":
@@ -3322,41 +4822,130 @@ class MigrationGuardApp:
                 )
             )
             return
+        selection = self.table.selection()
+        if selection and selection[0] in self.audit_tree_cases:
+            case = self.audit_tree_cases[selection[0]]
+            state = _audit_case_state(case)
+            file_groups = self._audit_file_groups(case.files)
+            complete = sum(
+                _state_is_complete(_audit_group_state(group))
+                for group in file_groups
+            )
+            lines = [
+                f"单号状态：{state.label}",
+                f"源单号：{case.source_issue}",
+                f"目标单号：{case.target_issue or '-'}",
+                "任务描述："
+                f"{_audit_case_description(case, self.current_ticket_mappings) or '-'}",
+                "",
+                f"关联资产：{len(file_groups)}",
+                f"已完成资产：{complete}",
+                f"待处理资产：{len(file_groups) - complete}",
+            ]
+            if case.warnings:
+                lines.extend(("", *case.warnings))
+            self._set_detail("\n".join(lines), issue_state=state)
+            return
+        selection = self.table.selection()
+        if selection and selection[0] in self.audit_tree_groups:
+            node_id = selection[0]
+            files = self.audit_tree_groups[node_id]
+            file_groups = self._audit_file_groups(files)
+            states = tuple(
+                _audit_group_state(group)
+                for group in file_groups
+            )
+            pending = sum(
+                not _state_is_complete(state)
+                for state in states
+            )
+            state = _aggregate_states(states)
+            self._set_detail(
+                "\n".join(
+                    (
+                        f"资产数：{len(file_groups)}",
+                        f"已完成：{len(file_groups) - pending}",
+                        f"待处理：{pending}",
+                        *_issue_pair_lines(
+                            "涉及单号",
+                            _audit_issue_pairs(files),
+                            self.current_ticket_mappings,
+                        ),
+                        "",
+                        "展开目录可查看每个资产的本地状态和提交证据。",
+                    )
+                ),
+                issue_state=state,
+            )
+            return
         item = self._selected_item()
         if item is None:
             return
+        file_group = self.audit_tree_file_groups.get(
+            selection[0],
+            (item,),
+        )
+        if item.expected.target_local_path:
+            self.open_path_button.configure(state="normal")
         expected = item.expected
+        state = _audit_group_state(file_group)
+        reasons = tuple(
+            dict.fromkeys(
+                grouped_item.reason
+                for grouped_item in file_group
+                if grouped_item.reason
+            )
+        )
+        source_revisions = sorted(
+            {
+                revision
+                for grouped_item in file_group
+                for revision in grouped_item.expected.source_revisions
+            }
+        )
+        source_authors = tuple(
+            dict.fromkeys(
+                author
+                for grouped_item in file_group
+                for author in grouped_item.expected.source_authors
+            )
+        )
+        target_revisions = sorted(
+            {
+                revision
+                for grouped_item in file_group
+                for revision in grouped_item.target_revisions
+            }
+        )
         content = "\n".join(
             (
-                f"状态：{item.state.label}",
-                f"原因：{item.reason}",
+                f"状态：{state.label}",
+                f"原因：{'；'.join(reasons) or '-'}",
                 "",
-                f"源单号：{expected.source_issue}",
-                f"目标单号：{expected.target_issue}",
+                *_issue_pair_lines(
+                    "关联单号",
+                    _audit_issue_pairs(file_group),
+                    self.current_ticket_mappings,
+                ),
                 f"模块：{expected.module}",
                 f"源动作：{expected.action}",
-                f"源路径：{expected.source_path}",
-                f"源本地：{expected.source_local_path}",
-                f"源版本：{', '.join(f'r{x}' for x in expected.source_revisions)}",
-                f"源作者：{', '.join(expected.source_authors) or '-'}",
+                f"源版本：{', '.join(f'r{x}' for x in source_revisions)}",
+                f"源作者：{', '.join(source_authors) or '-'}",
                 "",
-                f"目标路径：{expected.target_path or '-'}",
-                f"目标本地：{expected.target_local_path or '-'}",
                 f"目标状态：{item.local_status}",
                 f"远端状态：{item.repository_status or 'normal'}",
-                f"目标版本：{', '.join(f'r{x}' for x in item.target_revisions) or '-'}",
+                f"目标版本：{', '.join(f'r{x}' for x in target_revisions) or '-'}",
                 f"SVN external：{'是' if expected.is_external else '否'}",
             )
         )
-        self._set_detail(content)
+        self._set_detail(content, issue_state=state)
 
     def _copy_selected_path(self, _event: object = None) -> None:
         if self.table_mode == "remote-assets":
-            tree = self.remote_asset_tree
             selection = self.table.selection()
-            if tree is None or not selection:
+            if not selection:
                 return
-            asset = tree.asset_for_node(selection[0])
+            asset = self.remote_tree_assets.get(selection[0])
             if asset is None:
                 return
             self.root.clipboard_clear()
@@ -3384,41 +4973,25 @@ class MigrationGuardApp:
         elif os.name == "nt":
             os.startfile(str(target))
 
-    def _set_detail(self, value: str) -> None:
+    def _set_detail(
+        self,
+        value: str,
+        *,
+        issue_state: VerificationState | None = None,
+    ) -> None:
         self.detail.configure(state="normal")
         self.detail.delete("1.0", END)
         self.detail.insert("1.0", value)
+        if issue_state is not None:
+            tag = f"issue-{issue_state.value}"
+            for line_number, line in enumerate(value.splitlines(), start=1):
+                if ISSUE_KEY_PATTERN.search(line):
+                    self.detail.tag_add(
+                        tag,
+                        f"{line_number}.0",
+                        f"{line_number}.end",
+                    )
         self.detail.configure(state="disabled")
-
-    def _export_result(self) -> None:
-        if self.current_result is None:
-            return
-        if isinstance(self.current_result, BatchMigrationAuditResult):
-            default_name = (
-                f"batch_{len(self.current_result.cases)}_migration_audit.json"
-            )
-        else:
-            default_name = (
-                f"{self.current_result.source_issue}_"
-                f"{self.current_result.target_issue}.json"
-            )
-        target = filedialog.asksaveasfilename(
-            title="导出核验结果",
-            defaultextension=".json",
-            filetypes=(("JSON", "*.json"), ("所有文件", "*.*")),
-            initialfile=default_name,
-        )
-        if not target:
-            return
-        Path(target).write_text(
-            json.dumps(
-                self.current_result.to_dict(),
-                ensure_ascii=False,
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
-        self.status_text.set("核验结果已导出")
 
     def _on_close(self) -> None:
         if self.busy and not messagebox.askyesno(
@@ -3426,6 +4999,7 @@ class MigrationGuardApp:
             "核验任务仍在执行，确定要退出吗？",
         ):
             return
+        self._cancel_remote_asset_query()
         self._save_config()
         self.root.destroy()
 
@@ -3437,6 +5011,532 @@ def _display_relative_path(path: str, root: str) -> str:
         return str(Path(path).resolve().relative_to(Path(root).resolve()))
     except (OSError, ValueError):
         return path
+
+
+def _audit_display_path(
+    item: FileVerification,
+    source_root: str,
+    target_root: str,
+) -> str:
+    expected = item.expected
+    if expected.target_local_path:
+        value = _display_relative_path(
+            expected.target_local_path,
+            target_root,
+        )
+    else:
+        value = _display_relative_path(
+            expected.source_local_path,
+            source_root,
+        )
+    if value == "-":
+        value = expected.target_path or expected.source_path
+    return value
+
+
+def _sheet_tab_marker(sheet_name: str) -> str:
+    value = sheet_name.strip()
+    year_match = re.search(
+        r"(?<!\d)(20\d{2})[-/.年]?(\d{1,2})[-/.月]?(\d{1,2})日?",
+        value,
+    )
+    if year_match:
+        year, month, day = map(int, year_match.groups())
+        try:
+            return date(year, month, day).strftime("%Y/%m/%d")
+        except ValueError:
+            pass
+    compact_match = re.search(r"(?<!\d)(\d{2})(\d{2})(?!\d)", value)
+    if compact_match:
+        month, day = map(int, compact_match.groups())
+        try:
+            date(date.today().year, month, day)
+            return f"{month:02d}/{day:02d}"
+        except ValueError:
+            pass
+    month_day_match = re.search(
+        r"(?<!\d)(\d{1,2})[-/.月](\d{1,2})日?",
+        value,
+    )
+    if month_day_match:
+        month, day = map(int, month_day_match.groups())
+        try:
+            date(date.today().year, month, day)
+            return f"{month:02d}/{day:02d}"
+        except ValueError:
+            pass
+    return value[:12] + ("..." if len(value) > 12 else "")
+
+
+def _jira_query_start(
+    issues: tuple[object, ...],
+    lookback_days: int,
+    *,
+    grace_days: int = 3,
+) -> date:
+    default_start = date.today() - timedelta(days=lookback_days)
+    created_dates = []
+    for issue in issues:
+        value = str(getattr(issue, "create_date", "") or "").strip()
+        if not value:
+            continue
+        try:
+            created_dates.append(
+                datetime.fromisoformat(
+                    value.replace("Z", "+00:00")
+                ).date()
+            )
+        except ValueError:
+            continue
+    if not created_dates:
+        return default_start
+    jira_start = min(created_dates) - timedelta(days=grace_days)
+    return max(default_start, min(jira_start, date.today()))
+
+
+def _audit_notices(
+    result: MigrationAuditResult | BatchMigrationAuditResult,
+) -> tuple[tuple[str, str, str], ...]:
+    cases = (
+        result.cases
+        if isinstance(result, BatchMigrationAuditResult)
+        else (result,)
+    )
+    notices = []
+    for case in cases:
+        if case.files:
+            continue
+        reason = (
+            "；".join(case.warnings)
+            or f"查询范围内未找到 {case.source_issue} 的文件提交"
+        )
+        issue_pair = (
+            f"{case.source_issue} → {case.target_issue}"
+            if case.target_issue
+            else case.source_issue
+        )
+        notices.append(
+            (
+                issue_pair,
+                "无源 SVN 变更",
+                "\n".join(
+                    (
+                        "状态：需确认",
+                        f"原因：{reason}",
+                        "",
+                        f"源单号：{case.source_issue}",
+                        f"目标单号：{case.target_issue or '-'}",
+                        "",
+                        "这不表示迁移失败。该任务可能没有 SVN 资产改动，"
+                        "也可能使用了其他 Jira 单号提交。",
+                        "请确认单号、扫描范围和源 SVN 提交信息。",
+                    )
+                ),
+            )
+        )
+    return tuple(notices)
+
+
+def _audit_pending_summary(
+    result: MigrationAuditResult | BatchMigrationAuditResult,
+) -> str:
+    labels = (
+        (VerificationState.NOT_MIGRATED, "未迁移"),
+        (VerificationState.PENDING_COMMIT, "待提交"),
+        (VerificationState.NEEDS_UPDATE, "需更新"),
+        (VerificationState.NEEDS_REVIEW, "需确认"),
+        (VerificationState.BLOCKED, "阻断"),
+    )
+    counts = result.counts
+    parts = [
+        f"{label} {counts.get(state.value, 0)}"
+        for state, label in labels
+        if counts.get(state.value, 0)
+    ]
+    notices = _audit_notices(result)
+    notice_count = len(notices)
+    if notice_count:
+        sources = [
+            notice[0].split(" → ", 1)[0]
+            for notice in notices[:3]
+        ]
+        suffix = " 等" if notice_count > len(sources) else ""
+        parts.append(
+            f"无源 SVN 变更 {notice_count} 单"
+            f"（{'、'.join(sources)}{suffix}）"
+        )
+    return " · ".join(parts) or "没有可核验任务"
+
+
+def _remote_asset_notices(
+    mappings: tuple[TicketMapping, ...],
+    result: RemoteAssetProgressResult,
+) -> tuple[tuple[str, str, str], ...]:
+    if result.warnings:
+        return ()
+    notices = []
+    for mapping in mappings:
+        has_source_evidence = any(
+            mapping.source_issue in asset.source_issues
+            and (
+                asset.domestic.present
+                if mapping.route == TicketRoute.DOMESTIC_TO_OVERSEAS
+                else asset.overseas_trunk.present
+            )
+            for asset in result.assets
+        )
+        if has_source_evidence:
+            continue
+        issue_pair = (
+            f"{mapping.source_issue} → {mapping.target_issue}"
+            if mapping.target_issue
+            else mapping.source_issue
+        )
+        notices.append(
+            (
+                issue_pair,
+                "需确认",
+                "\n".join(
+                    (
+                        "状态：需确认",
+                        "原因：源阶段未找到带该 Jira 单号的 SVN 变更",
+                        "",
+                        f"源单号：{mapping.source_issue}",
+                        f"目标单号：{mapping.target_issue or '-'}",
+                        "",
+                        "这不表示迁移失败。该任务可能没有 SVN 资产改动，"
+                        "也可能使用了其他 Jira 单号提交。",
+                    )
+                ),
+            )
+        )
+    return tuple(notices)
+
+
+def _state_is_complete(state: VerificationState) -> bool:
+    return state in {
+        VerificationState.COMPLETE,
+        VerificationState.SUBMITTED,
+    }
+
+
+def _count_states(
+    states: tuple[VerificationState, ...],
+) -> dict[VerificationState, int]:
+    counts = {state: 0 for state in VerificationState}
+    for state in states:
+        counts[state] += 1
+    return counts
+
+
+def _aggregate_states(
+    states: tuple[VerificationState, ...],
+) -> VerificationState:
+    if not states:
+        return VerificationState.NEEDS_REVIEW
+    if all(_state_is_complete(state) for state in states):
+        return VerificationState.COMPLETE
+    priority = (
+        VerificationState.BLOCKED,
+        VerificationState.NOT_MIGRATED,
+        VerificationState.NEEDS_UPDATE,
+        VerificationState.PENDING_COMMIT,
+        VerificationState.NEEDS_REVIEW,
+        VerificationState.SUBMITTED,
+        VerificationState.COMPLETE,
+    )
+    available = set(states)
+    return next(
+        state
+        for state in priority
+        if state in available
+    )
+
+
+def _audit_cases(
+    result: MigrationAuditResult | BatchMigrationAuditResult,
+) -> tuple[MigrationAuditResult, ...]:
+    if isinstance(result, BatchMigrationAuditResult):
+        return result.cases
+    return (result,)
+
+
+def _audit_case_state(
+    case: MigrationAuditResult,
+) -> VerificationState:
+    return _aggregate_states(tuple(item.state for item in case.files))
+
+
+def _audit_group_state(
+    files: list[FileVerification] | tuple[FileVerification, ...],
+) -> VerificationState:
+    return _aggregate_states(
+        tuple(item.state for item in files)
+    )
+
+
+def _audit_issue_pairs(
+    files: tuple[FileVerification, ...],
+) -> tuple[str, ...]:
+    return tuple(
+        dict.fromkeys(
+            (
+                f"{item.expected.source_issue} → "
+                f"{item.expected.target_issue or '-'}"
+            )
+            for item in files
+        )
+    )
+
+
+def _compact_issue_key(issue_key: str) -> str:
+    prefix, separator, number = issue_key.partition("-")
+    if not separator:
+        return issue_key
+    return f"{prefix[:3].upper()}-{number}"
+
+
+def _clean_ticket_description(
+    candidates: tuple[str, ...],
+    issue_keys: tuple[str, ...],
+) -> str:
+    for candidate in candidates:
+        value = candidate.strip()
+        for issue_key in issue_keys:
+            if issue_key:
+                value = re.sub(
+                    re.escape(issue_key),
+                    "",
+                    value,
+                    flags=re.IGNORECASE,
+                )
+        value = value.replace("&&&&", " ")
+        value = re.sub(r"[【】\[\]（）()]+", "", value)
+        value = re.sub(r"\s+", " ", value)
+        value = value.strip(" -—|:：")
+        if value:
+            return value
+    return ""
+
+
+def _mapping_description(mapping: TicketMapping | None) -> str:
+    if mapping is None:
+        return ""
+    return _clean_ticket_description(
+        (mapping.target_text, mapping.source_text),
+        (mapping.source_issue, mapping.target_issue),
+    )
+
+
+def _audit_case_description(
+    case: MigrationAuditResult,
+    mappings: tuple[TicketMapping, ...],
+) -> str:
+    if case.label:
+        description = _clean_ticket_description(
+            (case.label,),
+            (case.source_issue, case.target_issue),
+        )
+        if description:
+            return description
+    return _mapping_description(
+        _find_ticket_mapping(
+            mappings,
+            case.source_issue,
+            case.target_issue,
+        )
+    )
+
+
+def _find_ticket_mapping(
+    mappings: tuple[TicketMapping, ...],
+    source_issue: str,
+    target_issue: str,
+) -> TicketMapping | None:
+    exact = next(
+        (
+            mapping
+            for mapping in mappings
+            if mapping.source_issue == source_issue
+            and mapping.target_issue == target_issue
+        ),
+        None,
+    )
+    if exact is not None:
+        return exact
+    if source_issue == target_issue:
+        return next(
+            (
+                mapping
+                for mapping in mappings
+                if mapping.target_issue == target_issue
+            ),
+            None,
+        )
+    return None
+
+
+def _ticket_tree_label(
+    source_issue: str,
+    target_issue: str,
+    asset_count: int,
+    *,
+    description: str = "",
+) -> str:
+    label = (
+        f"{_compact_issue_key(source_issue)} → "
+        f"{_compact_issue_key(target_issue) if target_issue else '-'}"
+    )
+    if description:
+        short_description = (
+            description
+            if len(description) <= 42
+            else f"{description[:39]}..."
+        )
+        label += f" · {short_description}"
+    return f"{label} ({asset_count})"
+
+
+def _issue_pair_lines(
+    label: str,
+    pairs: tuple[str, ...],
+    mappings: tuple[TicketMapping, ...],
+) -> tuple[str, ...]:
+    if not pairs:
+        return (f"{label}：-",)
+    descriptions = []
+    for pair in pairs:
+        source_issue, separator, target_issue = pair.partition(" → ")
+        matching_mappings = tuple(
+            mapping
+            for mapping in mappings
+            if mapping.source_issue == source_issue
+            and mapping.target_issue == (
+                target_issue if separator else ""
+            )
+        )
+        if not matching_mappings:
+            matching = _find_ticket_mapping(
+                mappings,
+                source_issue,
+                target_issue if separator else "",
+            )
+            matching_mappings = (matching,) if matching else ()
+        base = (
+            f"{_compact_issue_key(source_issue)}"
+            + (
+                " → "
+                f"{_compact_issue_key(target_issue)}"
+                if separator
+                else ""
+            )
+        )
+        mapping_descriptions = tuple(
+            dict.fromkeys(
+                description
+                for mapping in matching_mappings
+                if (description := _mapping_description(mapping))
+            )
+        )
+        if mapping_descriptions:
+            descriptions.extend(
+                f"{base} · {description}"
+                for description in mapping_descriptions
+            )
+        else:
+            descriptions.append(base)
+    return (
+        f"{label}：",
+        *(f"  {description}" for description in descriptions),
+    )
+
+
+def _remote_assets_for_mapping(
+    mapping: TicketMapping,
+    result: RemoteAssetProgressResult,
+) -> tuple[RemoteAssetProgress, ...]:
+    target_issue = mapping.target_issue or mapping.source_issue
+    return tuple(
+        asset
+        for asset in result.assets
+        if mapping.source_issue in asset.source_issues
+        and target_issue in asset.target_issues
+    )
+
+
+def _remote_mapping_state(
+    mapping: TicketMapping,
+    assets: tuple[RemoteAssetProgress, ...],
+    *,
+    require_osob: bool,
+) -> VerificationState:
+    if not assets:
+        return VerificationState.NEEDS_REVIEW
+    has_source_evidence = any(
+        (
+            asset.domestic.present
+            if mapping.route == TicketRoute.DOMESTIC_TO_OVERSEAS
+            else asset.overseas_trunk.present
+        )
+        for asset in assets
+    )
+    if not has_source_evidence:
+        return VerificationState.NEEDS_REVIEW
+    return _aggregate_states(
+        tuple(
+            _remote_asset_summary_state(
+                asset,
+                require_osob=require_osob,
+            )
+            for asset in assets
+        )
+    )
+
+
+def _remote_stage_count(
+    assets: tuple[RemoteAssetProgress, ...],
+    stage: str,
+) -> str:
+    if not assets:
+        return "-"
+    done = sum(
+        getattr(asset, stage).present
+        for asset in assets
+    )
+    return f"{done}/{len(assets)}"
+
+
+def _remote_issue_pairs(
+    assets: tuple[RemoteAssetProgress, ...],
+    mappings: tuple[TicketMapping, ...],
+) -> tuple[str, ...]:
+    matched = tuple(
+        (
+            f"{mapping.source_issue} → "
+            f"{mapping.target_issue or '-'}"
+        )
+        for mapping in mappings
+        if any(
+            mapping.source_issue in asset.source_issues
+            and (
+                mapping.target_issue or mapping.source_issue
+            )
+            in asset.target_issues
+            for asset in assets
+        )
+    )
+    if matched:
+        return tuple(dict.fromkeys(matched))
+    return tuple(
+        dict.fromkeys(
+            issue
+            for asset in assets
+            for issue in (
+                *asset.source_issues,
+                *asset.target_issues,
+            )
+        )
+    )
 
 
 def _ticket_commit_message(mapping: TicketMapping) -> str:
@@ -3464,6 +5564,8 @@ def _jira_progress_tag(item: TicketJiraProgress) -> str:
 
 def _jira_summary_state(
     item: TicketJiraProgress,
+    *,
+    require_osob: bool,
 ) -> VerificationState:
     if (
         not item.source.available
@@ -3471,23 +5573,35 @@ def _jira_summary_state(
         or item.consistency_label == "版本异常"
     ):
         return VerificationState.BLOCKED
-    if item.target.has_osob:
+    if require_osob:
+        if item.target.has_osob:
+            return VerificationState.COMPLETE
+        if item.target.has_trunk or item.source.has_trunk:
+            return VerificationState.PENDING_COMMIT
+        return VerificationState.NOT_MIGRATED
+    if item.target.has_trunk or item.target.has_osob:
         return VerificationState.COMPLETE
-    if item.target.has_trunk:
-        return VerificationState.SUBMITTED
     if item.source.has_trunk:
         return VerificationState.PENDING_COMMIT
     return VerificationState.NOT_MIGRATED
 
 
-def _remote_tree_tag(stage: str) -> str:
-    return {
-        "osob": "remote-osob",
-        "overseas_trunk": "remote-trunk",
-        "domestic": "remote-domestic",
-        "partial": "remote-partial",
-        "warning": "remote-warning",
-    }.get(stage, "remote-partial")
+def _filter_matches(
+    selected_filter: str,
+    state: VerificationState,
+) -> bool:
+    if selected_filter == "全部":
+        return True
+    if selected_filter == "已完成":
+        return _state_is_complete(state)
+    if selected_filter == "待处理":
+        return state in {
+            VerificationState.NOT_MIGRATED,
+            VerificationState.PENDING_COMMIT,
+            VerificationState.NEEDS_UPDATE,
+            VerificationState.NEEDS_REVIEW,
+        }
+    return state.label == selected_filter
 
 
 def _remote_stage_label(stage: str) -> str:
@@ -3503,14 +5617,18 @@ def _remote_stage_label(stage: str) -> str:
 
 def _remote_asset_summary_state(
     asset: RemoteAssetProgress,
+    *,
+    require_osob: bool,
 ) -> VerificationState:
     if asset.has_action_mismatch:
         return VerificationState.BLOCKED
-    if asset.osob.present:
+    if (
+        asset.osob.present
+        if require_osob
+        else asset.overseas_trunk.present or asset.osob.present
+    ):
         return VerificationState.COMPLETE
-    if asset.overseas_trunk.present:
-        return VerificationState.SUBMITTED
-    if asset.domestic.present:
+    if asset.overseas_trunk.present or asset.domestic.present:
         return VerificationState.PENDING_COMMIT
     return VerificationState.NOT_MIGRATED
 
