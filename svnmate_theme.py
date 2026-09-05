@@ -144,11 +144,11 @@ def configure_svnmate_styles(
         font=(UI_FONT, 9),
     )
     style.configure(
-        "Status.TLabel",
+        "TitleStatus.TLabel",
         background=colors["bg"],
         foreground=colors["accent"],
         font=(UI_FONT_SEMIBOLD, 10),
-        padding=(8, 5),
+        padding=(6, 1),
     )
     for style_name, foreground in (
         ("RunSummary.TLabel", colors["muted"]),

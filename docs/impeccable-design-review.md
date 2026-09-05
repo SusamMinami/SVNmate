@@ -34,6 +34,8 @@ Impeccable 的 canonical 八段结构与机器可读 frontmatter。旧需求、�
 - [x] `distill`：音乐与托盘保留为高频图标，保存、日志、指南、更新和退出进入
   顶部“更多”菜单。
 - [x] `layout`：工具模块收敛为“名称/版本状态 + 主动作 + 更多菜单”的固定单行。
+- [x] `layout` 第二轮：状态移动到产品名右侧，定时设置并入执行区标题行，删除
+  重复说明与分隔行，把垂直空间交还实时输出。
 - [x] `harden`：增加 Tooltip、`Alt+M` / `Alt+H` / `Alt+A` / `Ctrl+S`、
   首次托盘提示、完整模块路径入口和跨 DPI 最小窗口尺寸更新。
 - [x] `polish`：主题色板与 ttk 样式抽到 `svnmate_theme.py`，并增加独立的

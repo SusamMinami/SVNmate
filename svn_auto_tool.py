@@ -896,18 +896,22 @@ class SvnAutoTool:
         header.pack(fill=X)
         title_block = ttk.Frame(header, style="App.TFrame")
         title_block.pack(side=LEFT)
-        ttk.Label(title_block, text="SVNmate", style="Title.TLabel").pack(anchor="w")
+        title_line = ttk.Frame(title_block, style="App.TFrame")
+        title_line.pack(anchor="w")
+        ttk.Label(title_line, text="SVNmate", style="Title.TLabel").pack(
+            side=LEFT
+        )
+        ttk.Label(
+            title_line,
+            textvariable=self.status_text,
+            width=14,
+            anchor="w",
+            style="TitleStatus.TLabel",
+        ).pack(side=LEFT, padx=(10, 0), pady=(3, 0))
         ttk.Label(title_block, text="P6 文案小组 · SVN 工作区自动化", style="Subtitle.TLabel").pack(anchor="w")
 
         header_actions = ttk.Frame(header, style="App.TFrame")
         header_actions.pack(side=RIGHT)
-        ttk.Label(
-            header_actions,
-            textvariable=self.status_text,
-            width=14,
-            anchor="e",
-            style="Status.TLabel",
-        ).pack(side=LEFT, padx=(0, 8))
         self.music_button = ttk.Button(
             header_actions,
             text=ICON_MUSIC_ON,
@@ -968,59 +972,68 @@ class SvnAutoTool:
         self._build_folder_column(columns_frame, "right", "栏目二")
 
         settings = ttk.Frame(main, style="App.TFrame")
-        settings.pack(fill=X, pady=(0, 6))
+        settings.pack(fill=X, pady=(0, 4))
 
-        options = ttk.Frame(settings, style="Card.TFrame", padding=(12, 8))
+        options = ttk.Frame(settings, style="Card.TFrame", padding=(12, 6))
         options.pack(side=LEFT, fill=BOTH, expand=True, padx=(0, 5))
-        ttk.Label(options, text="执行与自动化", style="SectionTitle.TLabel").pack(anchor="w", pady=(0, 5))
-        self._build_option_script_row(
-            options,
-            self.run_bin_update,
-            text="每日更新主干Bin包",
-            choose_text="Update位置",
-            choose_command=self._choose_update_bat_path,
-            clear_command=self._clear_update_bat_path,
+        options_header = ttk.Frame(options, style="Card.TFrame")
+        options_header.pack(fill=X, pady=(0, 3))
+        ttk.Label(
+            options_header,
+            text="执行与自动化",
+            style="SectionTitle.TLabel",
+        ).pack(side=LEFT)
+        ttk.Label(
+            options_header,
+            textvariable=self.next_run_text,
+            style="CardMuted.TLabel",
+        ).pack(side=RIGHT)
+        ttk.Label(
+            options_header,
+            text="下次",
+            style="CardMuted.TLabel",
+        ).pack(side=RIGHT, padx=(8, 4))
+        time_entry = ttk.Entry(
+            options_header,
+            width=6,
+            textvariable=self.schedule_time,
         )
-        self._build_option_script_row(
-            options,
-            self.run_build_after_cleanup,
-            text="Clean up完成后，自动运行res目录Build.bat",
-            choose_text="Build位置",
-            choose_command=self._choose_build_bat_path,
-            clear_command=self._clear_build_bat_path,
-            pady=(4, 0),
+        time_entry.pack(side=RIGHT)
+        time_entry.bind(
+            "<FocusOut>",
+            lambda _event: self._on_schedule_changed(),
         )
-        ttk.Label(options, text="脚本位置留空时使用默认规则；Update 后仍会执行 Cleanup。", style="CardMuted.TLabel").pack(
-            anchor="w",
-            pady=(5, 0),
+        time_entry.bind(
+            "<Return>",
+            lambda _event: self._on_schedule_changed(),
         )
-        ttk.Separator(options, orient="horizontal").pack(fill=X, pady=(7, 6))
-        schedule_controls = ttk.Frame(options, style="Card.TFrame")
-        schedule_controls.pack(fill=X)
         ttk.Checkbutton(
-            schedule_controls,
+            options_header,
             text="每日定时",
             variable=self.enable_schedule,
             command=self._on_schedule_changed,
             style="Card.TCheckbutton",
-        ).pack(side=LEFT)
-        ttk.Label(schedule_controls, text="时间", style="Card.TLabel").pack(side=LEFT, padx=(8, 4))
-        time_entry = ttk.Entry(schedule_controls, width=7, textvariable=self.schedule_time)
-        time_entry.pack(side=LEFT)
-        time_entry.bind("<FocusOut>", lambda _event: self._on_schedule_changed())
-        time_entry.bind("<Return>", lambda _event: self._on_schedule_changed())
-        ttk.Label(
-            schedule_controls,
-            text="下次：",
-            style="CardMuted.TLabel",
-        ).pack(side=LEFT, padx=(12, 0))
-        ttk.Label(
-            schedule_controls,
-            textvariable=self.next_run_text,
-            style="CardMuted.TLabel",
-        ).pack(side=LEFT)
+        ).pack(side=RIGHT, padx=(0, 7))
+        self._build_option_script_row(
+            options,
+            self.run_bin_update,
+            text="每日更新主干 Bin 包",
+            choose_text="Update位置",
+            choose_command=self._choose_update_bat_path,
+            clear_command=self._clear_update_bat_path,
+            pady=(2, 0),
+        )
+        self._build_option_script_row(
+            options,
+            self.run_build_after_cleanup,
+            text="Cleanup 后运行 res 目录 Build.bat",
+            choose_text="Build位置",
+            choose_command=self._choose_build_bat_path,
+            clear_command=self._clear_build_bat_path,
+            pady=(2, 0),
+        )
 
-        modules = ttk.Frame(settings, style="Card.TFrame", padding=(12, 8))
+        modules = ttk.Frame(settings, style="Card.TFrame", padding=(12, 6))
         modules.pack(side=LEFT, fill=BOTH, expand=True, padx=(5, 0))
         ttk.Label(modules, text="工具模块", style="SectionTitle.TLabel").pack(
             anchor="w",
@@ -1030,7 +1043,7 @@ class SvnAutoTool:
             self._build_tool_module_row(
                 modules,
                 spec,
-                pady=(0, 0) if index == 0 else (6, 0),
+                pady=(0, 0) if index == 0 else (3, 0),
             )
 
         live_header = ttk.Frame(main, style="App.TFrame")
