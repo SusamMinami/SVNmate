@@ -1,5 +1,10 @@
 # 任务目标物与 Blueprint 工作流
 
+> 文档状态：现行专题规范
+>
+> 最近核对：2026-09-05，对应镜头沙盘 `0.23.2`。覆盖任务解析、UE 预览、
+> BP 创建/注册、节点最终站位、双向位置同步、背景资产与 SceneObject NPC。
+
 ## 数据链路
 
 任务节点按以下关系解析：
@@ -22,6 +27,14 @@ MissionPosition.BluePrint -> Model.id -> Model.path
 MissionPosition.NPCID -> NPC.id -> NPC.resource_id -> Model.id -> Model.path
 ```
 
+目标物同时检查环境对话配置：
+
+```text
+MissionPosition.NPCID -> NPC.npcchat2 -> 复杂闲话文件
+MissionPosition.NPCID -> NPC.npcchat3 -> 冒泡对话文件
+MissionPosition.npcchat2             -> 复杂闲话文件
+```
+
 类型 1 的 NPC 和类型 4 的蓝图目标通常可以加载实际资产。没有可解析模型的
 类型 2、类型 3 或异常配置使用 `/Script/Engine.TargetPoint` 定位标记。
 
@@ -32,6 +45,12 @@ MissionPosition.NPCID -> NPC.id -> NPC.resource_id -> Model.id -> Model.path
 `.资源名_C` 后缀；完整类路径通过悬停查看。首次搜索任务 ID 使用当前内存
 数据；同一任务 ID 连续搜索时，第二次会从实时目录重新读取任务表，并从配置
 文档目录补齐 NPC、模型、目标物和地图表，适合确认外部配表修改。
+
+“闲话 / 冒泡”栏直接显示对应的四位对话文件 ID：`NPC.npcchat2` 与
+`MissionPosition.npcchat2` 标为“闲话”，`NPC.npcchat3` 标为“冒泡”。
+配置值为六位节点 ID 时只取前四位文件 ID。
+空值和零值不显示为已配置；同一类型、同一文件由多栏同时引用时只显示一次，
+悬停可查看全部来源字段。
 
 列表中的目标物默认全选。用户可逐项取消或通过表头复选框全选/取消全选，
 调用 UE 时只发送当前勾选项；未选择任何目标物时禁用“加载到 UE”。表格内容

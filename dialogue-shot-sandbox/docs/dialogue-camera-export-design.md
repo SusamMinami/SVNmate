@@ -1,5 +1,10 @@
 # Dialog Graph 分镜导出设计
 
+> 文档状态：现行专题规范
+>
+> 最近核对：2026-09-05，对应镜头沙盘 `0.23.2`。当前实现同时支持镜头、
+> 角色动作、音效和音乐的独立勾选、预检、回读与保存。
+
 ## 目标
 
 将镜头沙盘中已经确认的当前分镜写入 UE4 对应的 `SeriaDialogGraph` 台词
@@ -80,7 +85,7 @@ Roll  = 沙盘镜头横滚角
 FOV = 2 * atan(35 / (2 * focalLength))
 ```
 
-## 首版运镜映射
+## 当前运镜映射
 
 静态、Pan、Tracking、Dolly in 和 Dolly out 统一写为 `EPush`：
 
@@ -92,7 +97,7 @@ FOV = 2 * atan(35 / (2 * focalLength))
 - `FOV` 使用镜头起始焦距。
 
 当前 `FMoveCamera` 只有单个 FOV 字段，尚未验证连续焦距动画的无损表达。
-因此首版对 Zoom 和 Dolly zoom 给出阻断项，不会静默丢失焦距变化。
+因此当前版本对 Zoom 和 Dolly zoom 给出阻断项，不会静默丢失焦距变化。
 
 ## 交互流程
 
@@ -169,7 +174,7 @@ FOV = 2 * atan(35 / (2 * focalLength))
 UE TCP 连接由 `server/ue/transport.ts` 管理，HTTP 入口位于
 `server/ue/routes.ts`，并统一通过 `server/ue/services.ts` 调用上述业务实现。
 
-## 后续验证
+## 待验证能力
 
 - 在 UE 中对一个专用测试对话执行真实写入，确认
   `reflect.write_object_property` 可稳定写入 `TArray<FMoveCamera>`。

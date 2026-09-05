@@ -9,7 +9,13 @@ const WORKSPACE_ORDER: Record<WorkspaceView, number> = {
   targets: 2,
   migration: 3,
 };
-const WORKSPACE_TRANSITION_MS = 720;
+const WORKSPACE_TRANSITION_MS = 480;
+
+function workspaceTransitionDuration(): number {
+  return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
+    ? 0
+    : WORKSPACE_TRANSITION_MS;
+}
 
 export function useWorkspaceNavigation(
   initialWorkspace: WorkspaceView = "storyboard",
@@ -40,7 +46,7 @@ export function useWorkspaceNavigation(
       transitionTimerRef.current = window.setTimeout(() => {
         setOutgoingWorkspace(null);
         transitionTimerRef.current = null;
-      }, WORKSPACE_TRANSITION_MS);
+      }, workspaceTransitionDuration());
     },
     [activeWorkspace],
   );

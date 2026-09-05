@@ -13,9 +13,9 @@ const starts = `##&DialogStart.id,DialogStart.Outline
 ##对话ID,剧情梗概
 100000,测试`;
 
-const npcs = `##&NPC.id,NPC.name,NPC.npcintroduce,NPC.resource_id
-##id,名称,介绍,资源
-1001,守卫,测试 NPC,200001`;
+const npcs = `##&NPC.id,NPC.name,NPC.npcintroduce,NPC.resource_id,NPC.npcchat2,NPC.npcchat3
+##id,名称,介绍,资源,复杂闲话,冒泡对白
+1001,守卫,测试 NPC,200001,704000,704100`;
 
 const models = `##&Model.id,,Model.path
 ##id,配置填写在此列，Model.path保存时自动生成，由程序调用,生成路径
@@ -27,12 +27,12 @@ const missions = `##&字段标记,Mission.id,Mission.Name,Mission.ShowNPC
 ,900001,测试任务,"500001,500002,500003"
 ,900002,错误地图任务,"500001,500004"`;
 
-const positions = `##&MissionPosition.ID,,,MissionPosition.type,MissionPosition.NPCID,MissionPosition.ItemID,MissionPosition.BluePrint,MissionPosition.MapID,MissionPosition.Position,MissionPosition.Rotation
-##ID,类型,描述,坐标类型,NPCID,物品ID,蓝图路径,地图ID,座标,旋转
-500001,剧情NPC,守卫,1,1001,0,,1204,"(X=10,Y=20,Z=30)","(Pitch=0,Yaw=90,Roll=0)"
-500002,任务物件,装置,4,0,0,400001,1204,"(X=40,Y=50,Z=60)","(Pitch=1,Yaw=2,Roll=3)"
-500003,触发器,抵达区域,3,0,0,,1204,"(X=70,Y=80,Z=90)","(Pitch=0,Yaw=0,Roll=0)"
-500004,触发器,错误地图,3,0,0,,1205,"(X=1,Y=2,Z=3)","(Pitch=0,Yaw=0,Roll=0)"`;
+const positions = `##&MissionPosition.ID,,,MissionPosition.type,MissionPosition.NPCID,MissionPosition.ItemID,MissionPosition.BluePrint,MissionPosition.MapID,MissionPosition.Position,MissionPosition.Rotation,MissionPosition.npcchat2
+##ID,类型,描述,坐标类型,NPCID,物品ID,蓝图路径,地图ID,座标,旋转,复杂闲话
+500001,剧情NPC,守卫,1,1001,0,,1204,"(X=10,Y=20,Z=30)","(Pitch=0,Yaw=90,Roll=0)",704200
+500002,任务物件,装置,4,0,0,400001,1204,"(X=40,Y=50,Z=60)","(Pitch=1,Yaw=2,Roll=3)",704300
+500003,触发器,抵达区域,3,0,0,,1204,"(X=70,Y=80,Z=90)","(Pitch=0,Yaw=0,Roll=0)",
+500004,触发器,错误地图,3,0,0,,1205,"(X=1,Y=2,Z=3)","(Pitch=0,Yaw=0,Roll=0)",`;
 
 const maps = `##&MapConfig.id,MapConfig.name,,,MapConfig.resourceid
 ##ID,地图名称,地图备注,地图资源（注释用）,资源ID
@@ -89,12 +89,50 @@ describe("resolveMissionTargets", () => {
       rotation: { pitch: 0, yaw: 90, roll: 0 },
       scale: { x: 1, y: 1, z: 1 },
     });
+    expect(plan.targets[0].ambientDialogues).toEqual([
+      {
+        kind: "complex_chat",
+        dialogueFileId: "7040",
+        sources: ["NPC.npcchat2"],
+      },
+      {
+        kind: "complex_chat",
+        dialogueFileId: "7042",
+        sources: ["MissionPosition.npcchat2"],
+      },
+      {
+        kind: "bubble",
+        dialogueFileId: "7041",
+        sources: ["NPC.npcchat3"],
+      },
+    ]);
+    expect(plan.targets[1].ambientDialogues).toEqual([
+      {
+        kind: "complex_chat",
+        dialogueFileId: "7043",
+        sources: ["MissionPosition.npcchat2"],
+      },
+    ]);
+    expect(plan.targets[2].ambientDialogues).toEqual([]);
   });
 
   it("stops before loading when target MapIDs differ", () => {
     expect(() => resolveMissionTargets(database(), "900002")).toThrow(
       "目标物 MapID 不一致",
     );
+  });
+
+  it("merges duplicate complex-chat files while retaining every source", () => {
+    const source = database();
+    source.missionPositions[0].complexChatDialogueIds = ["704000"];
+
+    expect(
+      resolveMissionTargets(source, "900001").targets[0].ambientDialogues,
+    ).toContainEqual({
+      kind: "complex_chat",
+      dialogueFileId: "7040",
+      sources: ["NPC.npcchat2", "MissionPosition.npcchat2"],
+    });
   });
 
   it("rejects malformed target references", () => {

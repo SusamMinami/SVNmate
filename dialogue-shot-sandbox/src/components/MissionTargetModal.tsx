@@ -100,6 +100,10 @@ function modelAssetName(classPath: string): string {
   return leaf.split(".")[0] || leaf;
 }
 
+function ambientDialogueLabel(kind: "complex_chat" | "bubble"): string {
+  return kind === "bubble" ? "冒泡" : "闲话";
+}
+
 function loadSummary(
   plan: MissionTargetPreviewPlan,
   result: MissionTargetPreviewLoadResult,
@@ -2048,6 +2052,7 @@ export function MissionTargetModal({
                          <th>类型</th>
                          <th>NPC</th>
                          <th>模型资源</th>
+                         <th>闲话 / 冒泡</th>
                          <th>位置</th>
                          <th>旋转</th>
                          <th>预览</th>
@@ -2156,6 +2161,28 @@ export function MissionTargetModal({
                                {target.modelId
                                  ? `${target.modelId} · ${modelAssetName(target.modelClassPath)}`
                                  : "N/A"}
+                             </td>
+                             <td>
+                               <div className="mission-target-dialogues">
+                                 {(target.ambientDialogues?.length ?? 0) > 0 ? (
+                                   target.ambientDialogues?.map((dialogue) => (
+                                     <span
+                                       key={`${dialogue.kind}:${dialogue.dialogueFileId}`}
+                                       className={`mission-target-dialogue mission-target-dialogue--${dialogue.kind}`}
+                                       title={`${dialogue.kind === "bubble" ? "冒泡对话" : "复杂闲话"} ${dialogue.dialogueFileId} · 来源：${dialogue.sources.join("、")}`}
+                                     >
+                                       <b>
+                                         {ambientDialogueLabel(dialogue.kind)}
+                                       </b>
+                                       <code>{dialogue.dialogueFileId}</code>
+                                     </span>
+                                   ))
+                                 ) : (
+                                   <span className="mission-target-dialogues__empty">
+                                     无
+                                   </span>
+                                 )}
+                               </div>
                              </td>
                              <td>
                                <code>

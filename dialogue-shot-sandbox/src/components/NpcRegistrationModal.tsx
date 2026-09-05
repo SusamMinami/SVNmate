@@ -148,13 +148,36 @@ function turnLabel(canTurn: boolean | null | undefined): string {
   return "转身未配置";
 }
 
+function dialogueFileIds(dialogueIds: readonly string[] | undefined): string[] {
+  return Array.from(
+    new Set((dialogueIds ?? []).map((dialogueId) => dialogueId.slice(0, 4))),
+  );
+}
+
+function npcDialogueLabels(npc: NpcProfile): string[] {
+  const complexChatFileIds = dialogueFileIds(npc.complexChatDialogueIds);
+  const bubbleFileIds = dialogueFileIds(npc.bubbleDialogueIds);
+  const labels = [
+    complexChatFileIds.length
+      ? `复杂闲话 ${complexChatFileIds.join("/")}`
+      : null,
+    bubbleFileIds.length
+      ? `冒泡 ${bubbleFileIds.join("/")}`
+      : null,
+  ].filter((value): value is string => value !== null);
+  if (labels.length > 0) {
+    return labels;
+  }
+  return [npc.hasDialogue ? "有对白（未区分）" : "无闲话/冒泡"];
+}
+
 function npcReuseLabel(npc: NpcProfile): string {
   return [
     npc.id,
     npc.name,
+    ...npcDialogueLabels(npc),
     npc.title || "无头衔",
     turnLabel(npc.canTurn),
-    npc.hasDialogue ? "有对白" : null,
     npc.hasAvatar ? "有头像" : null,
   ]
     .filter((value) => value !== null)

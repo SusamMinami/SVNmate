@@ -2,6 +2,9 @@
 
 更新日期：2026-08-23
 
+> 文档状态：研究参考。本文保存来源提炼，不作为当前机器协议；现行规则以
+> `shot-language-rulebook.md` 和 `shot-language-rules.v1.json` 为准。
+
 本文把 Adobe《Different types of shots and camera angles in film》主文及其
 专题页整理为镜头沙盘可执行规则。焦距均按全画幅等效值理解。Adobe 的示例
 是叙事建议，不是跨项目都成立的硬定律；系统只把协议一致性、连续性和安全

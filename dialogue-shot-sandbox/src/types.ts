@@ -52,6 +52,8 @@ export interface NpcProfile {
   canTurn?: boolean | null;
   hasDialogue?: boolean;
   hasAvatar?: boolean;
+  complexChatDialogueIds?: string[];
+  bubbleDialogueIds?: string[];
 }
 
 export interface ModelResource {
@@ -80,6 +82,7 @@ export interface MissionPositionRow {
   positionText: string;
   rotationText: string;
   rowNumber: number;
+  complexChatDialogueIds?: string[];
 }
 
 export interface MapConfigRow {
@@ -250,7 +253,16 @@ export interface MissionTargetPreviewTarget {
   mapId: string;
   previewKind: "asset" | "marker";
   transform: UnrealTransform;
+  ambientDialogues?: MissionTargetDialogueReference[];
   dialogueAdjustment?: DialoguePositionAdjustment;
+}
+
+export interface MissionTargetDialogueReference {
+  kind: "complex_chat" | "bubble";
+  dialogueFileId: string;
+  sources: Array<
+    "NPC.npcchat2" | "NPC.npcchat3" | "MissionPosition.npcchat2"
+  >;
 }
 
 export interface MissionTargetPreviewPlan {

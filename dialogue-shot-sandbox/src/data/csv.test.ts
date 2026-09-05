@@ -90,8 +90,8 @@ describe("dialogue CSV parsing", () => {
     const richNpcText = [
       "##&NPC.id,NPC.name,NPC.resource_id,NPC.avatarpath,NPC.headicon,NPC.title,NPC.npcintroduce,NPC.npcchat2,NPC.npcchat3,NPC.ifturn",
       "##id,名称,资源,半身像,头像,头衔,介绍,复杂闲话,冒泡对白,转身",
-      "101968,商会安保,200135,144,0,安保,测试 NPC,704000,,TRUE",
-      "101969,普通守卫,200135,0,,守卫,测试 NPC,,,FALSE",
+      "101968,商会安保,200135,144,0,安保,测试 NPC,704000;704001,704100,TRUE",
+      "101969,普通守卫,200135,0,,守卫,测试 NPC,0,0,FALSE",
       "101970,,200135,0,,守卫,测试 NPC,,,TRUE",
     ].join("\n");
 
@@ -105,10 +105,14 @@ describe("dialogue CSV parsing", () => {
     expect(database.npcs.get(101968)).toMatchObject({
       hasDialogue: true,
       hasAvatar: true,
+      complexChatDialogueIds: ["704000", "704001"],
+      bubbleDialogueIds: ["704100"],
     });
     expect(database.npcs.get(101969)).toMatchObject({
       hasDialogue: false,
       hasAvatar: false,
+      complexChatDialogueIds: [],
+      bubbleDialogueIds: [],
     });
     expect(database.npcs.get(101970)).toMatchObject({
       name: "NPC 101970",

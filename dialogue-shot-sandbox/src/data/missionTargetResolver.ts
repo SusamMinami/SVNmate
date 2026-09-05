@@ -1,8 +1,10 @@
 import type {
   DialogueDatabase,
   MissionPositionRow,
+  MissionTargetDialogueReference,
   MissionTargetPreviewPlan,
   MissionTargetPreviewTarget,
+  NpcProfile,
   UnrealTransform,
 } from "../types";
 import { getDialogueDatabaseIndex } from "./databaseIndex";
@@ -165,6 +167,52 @@ function generatedClassPath(configuredPath: string): string {
   return assetName ? `${path}.${assetName}_C` : "";
 }
 
+function ambientDialoguesFor(
+  target: MissionPositionRow,
+  npc: NpcProfile | undefined,
+): MissionTargetDialogueReference[] {
+  const references = new Map<string, MissionTargetDialogueReference>();
+  const addReferences = (
+    kind: MissionTargetDialogueReference["kind"],
+    dialogueIds: readonly string[],
+    source: MissionTargetDialogueReference["sources"][number],
+  ) => {
+    for (const dialogueId of dialogueIds) {
+      const dialogueFileId = dialogueId.slice(0, 4);
+      const key = `${kind}:${dialogueFileId}`;
+      const existing = references.get(key);
+      if (existing) {
+        if (!existing.sources.includes(source)) {
+          existing.sources.push(source);
+        }
+        continue;
+      }
+      references.set(key, {
+        kind,
+        dialogueFileId,
+        sources: [source],
+      });
+    }
+  };
+
+  addReferences(
+    "complex_chat",
+    npc?.complexChatDialogueIds ?? [],
+    "NPC.npcchat2",
+  );
+  addReferences(
+    "complex_chat",
+    target.complexChatDialogueIds ?? [],
+    "MissionPosition.npcchat2",
+  );
+  addReferences(
+    "bubble",
+    npc?.bubbleDialogueIds ?? [],
+    "NPC.npcchat3",
+  );
+  return Array.from(references.values());
+}
+
 export function resolveMissionTargets(
   database: DialogueDatabase,
   rawTaskId: string,
@@ -288,6 +336,7 @@ export function resolveMissionTargets(
       mapId: target.mapId,
       previewKind: modelClassPath ? "asset" as const : "marker" as const,
       transform: transformFor(target),
+      ambientDialogues: ambientDialoguesFor(target, npc),
     };
   });
 

@@ -244,12 +244,15 @@ test("keeps rail icons fixed and slides between workspace levels", async ({
     "workspace-page-enter-up",
   );
   await expect(
+    page.locator('[data-workspace-state="entering"]'),
+  ).toHaveCSS("animation-duration", "0.48s");
+  await expect(
     page.locator('[data-workspace-state="exiting"]'),
   ).toHaveCSS(
     "animation-name",
     "workspace-page-exit-up",
   );
-  await page.waitForTimeout(320);
+  await page.waitForTimeout(160);
   const enteringPage = page.locator('[data-workspace-state="entering"]');
   const exitingPage = page.locator('[data-workspace-state="exiting"]');
   const enteringMotion = await enteringPage.evaluate((element) => ({
@@ -263,7 +266,6 @@ test("keeps rail icons fixed and slides between workspace levels", async ({
   expect(enteringMotion.shadow).not.toBe("none");
   expect(enteringMotion.y).toBeGreaterThan(100);
   expect(exitingY).toBeLessThan(-100);
-  await page.waitForTimeout(460);
   await expect(page.locator('[data-workspace-state="exiting"]')).toHaveCount(0);
 
   const refreshButton = page.locator(
@@ -296,6 +298,25 @@ test("keeps rail icons fixed and slides between workspace levels", async ({
     "animation-name",
     "workspace-page-exit-down",
   );
+});
+
+test("cleans up workspace transitions immediately with reduced motion", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.addInitScript(() => {
+    window.sessionStorage.setItem("shot-sandbox.launch-screen-seen", "1");
+  });
+  await page.goto("/");
+
+  await page.getByRole("button", { name: "注册 NPC" }).click({
+    position: { x: 22, y: 22 },
+  });
+
+  await expect(page.getByRole("heading", { name: "注册 NPC" })).toBeVisible();
+  await expect(
+    page.locator('[data-workspace-state="exiting"]'),
+  ).toHaveCount(0, { timeout: 250 });
 });
 
 test("renders nonblank shot and blocking canvases without horizontal overflow", async ({
@@ -5049,6 +5070,16 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
       resourceId: 200135,
       hasDialogue: true,
       hasAvatar: true,
+      complexChatDialogueIds: ["704000"],
+      bubbleDialogueIds: ["704100"],
+    };
+    const npcWithoutAmbientDialogue = {
+      ...npc,
+      id: 101969,
+      name: "普通守卫",
+      hasDialogue: false,
+      complexChatDialogueIds: [],
+      bubbleDialogueIds: [],
     };
     const target = {
       id: "500001",
@@ -5077,7 +5108,7 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
             {
               actor: existingActor,
               modelOptions: [model],
-              npcOptions: [npc],
+              npcOptions: [npc, npcWithoutAmbientDialogue],
               positionMatches: [target],
               targetMatches: [target],
               mapOptions: [
@@ -5288,10 +5319,10 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
       {
         name: "NPC表.csv",
         content: [
-          "##&NPC.id,NPC.name,NPC.npcintroduce,NPC.resource_id",
-          "##id,名称,介绍,资源",
-          "1,玩家,玩家,",
-          "101968,商会安保,守卫,200135",
+          "##&NPC.id,NPC.name,NPC.npcintroduce,NPC.resource_id,NPC.npcchat2,NPC.npcchat3",
+          "##id,名称,介绍,资源,复杂闲话,冒泡对白",
+          "1,玩家,玩家,,,",
+          "101968,商会安保,守卫,200135,704000,704100",
         ].join("\n"),
       },
       {
@@ -5314,11 +5345,11 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
       {
         name: "m目标物表.csv",
         content: [
-          "##&MissionPosition.ID,,,MissionPosition.type,MissionPosition.NPCID,MissionPosition.ItemID,MissionPosition.BluePrint,MissionPosition.MapID,MissionPosition.Position,MissionPosition.Rotation",
-          "##ID,类型,描述,坐标类型,NPCID,物品ID,蓝图路径,地图ID,座标,旋转",
-          '500001,剧情NPC,商会安保,1,101968,0,,1204,"(X=10,Y=20,Z=30)","(Pitch=0,Yaw=90,Roll=0)"',
-          '500002,触发器,抵达区域,3,0,0,,1204,"(X=40,Y=50,Z=60)","(Pitch=0,Yaw=0,Roll=0)"',
-          '500003,触发器,错误地图,3,0,0,,1205,"(X=70,Y=80,Z=90)","(Pitch=0,Yaw=0,Roll=0)"',
+          "##&MissionPosition.ID,,,MissionPosition.type,MissionPosition.NPCID,MissionPosition.ItemID,MissionPosition.BluePrint,MissionPosition.MapID,MissionPosition.Position,MissionPosition.Rotation,MissionPosition.npcchat2",
+          "##ID,类型,描述,坐标类型,NPCID,物品ID,蓝图路径,地图ID,座标,旋转,复杂闲话",
+          '500001,剧情NPC,商会安保,1,101968,0,,1204,"(X=10,Y=20,Z=30)","(Pitch=0,Yaw=90,Roll=0)",704200',
+          '500002,触发器,抵达区域,3,0,0,,1204,"(X=40,Y=50,Z=60)","(Pitch=0,Yaw=0,Roll=0)",',
+          '500003,触发器,错误地图,3,0,0,,1205,"(X=70,Y=80,Z=90)","(Pitch=0,Yaw=0,Roll=0)",',
         ].join("\n"),
       },
       {
@@ -5382,6 +5413,22 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
     "title",
     "/Game/Seria/NPC/Guard/BP_Guard.BP_Guard_C",
   );
+  const firstTargetDialogueCell = dialog
+    .locator(".mission-target-table tbody tr")
+    .first()
+    .locator("td")
+    .nth(5);
+  await expect(firstTargetDialogueCell).toContainText("闲话7040");
+  await expect(firstTargetDialogueCell).toContainText("闲话7042");
+  await expect(firstTargetDialogueCell).toContainText("冒泡7041");
+  await expect(
+    firstTargetDialogueCell.locator('[title*="NPC.npcchat2"]'),
+  ).toBeVisible();
+  await expect(
+    firstTargetDialogueCell.locator(
+      '[title*="MissionPosition.npcchat2"]',
+    ),
+  ).toBeVisible();
   const selectionResult = dialog.getByRole("region", {
     name: "UE 当前选择识别结果",
   });
@@ -5537,7 +5584,14 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
     registration
       .getByLabel("守卫预览 NPC 复用方式")
       .locator('option[value="101968"]'),
-  ).toHaveText(/有对白 · 有头像/);
+  ).toHaveText(
+    /商会安保 · 复杂闲话 7040 · 冒泡 7041 · 无头衔 · 转身未配置 · 有头像/,
+  );
+  await expect(
+    registration
+      .getByLabel("守卫预览 NPC 复用方式")
+      .locator('option[value="101969"]'),
+  ).toContainText("无闲话/冒泡");
   await expect(
     registration.getByLabel("选择待注册 Actor 守卫预览"),
   ).toBeChecked();

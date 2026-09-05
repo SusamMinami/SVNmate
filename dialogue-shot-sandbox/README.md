@@ -1,4 +1,4 @@
-# 镜头沙盘 v0.23.1
+# 镜头沙盘 v0.23.2
 
 面向 UE4 镜头对话制作的 Three.js 原型。输入四位数对话 ID 或对白文字，工具从
 配置的 `res` 与 `doc` 数据源读取真实对话链，通过规则导演、内部 TRAE 协作或
@@ -6,6 +6,8 @@ Mira AI 生成 2-12 人分镜。
 
 面向使用者的近两周功能概览见 [`UPDATE_NOTES.md`](UPDATE_NOTES.md)；完整逐版本
 记录继续保留在 [`RELEASE_NOTES.md`](RELEASE_NOTES.md)。
+产品、设计、现行专题、研究与历史问题的分层入口见
+[`docs/README.md`](docs/README.md)。
 
 ## 平台范围
 

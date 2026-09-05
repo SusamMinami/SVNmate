@@ -1,7 +1,30 @@
 :root {
-  font-family:
-    "Space Grotesk", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei",
+  --font-ui: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  --font-data: "Cascadia Code", Consolas, monospace;
+  --font-display: "Arial Narrow", "Roboto Condensed", "Microsoft YaHei UI",
     sans-serif;
+  --type-micro: 8px;
+  --type-meta: 9px;
+  --type-data: 10px;
+  --type-body: 11px;
+  --type-control: 12px;
+  --type-section: 14px;
+  --type-title: 18px;
+  --radius-control: 2px;
+  --radius-compact: 4px;
+  --radius-hover: 5px;
+  --radius-overlay: 6px;
+  --motion-press: 80ms;
+  --motion-probe: 110ms;
+  --motion-disclosure: 140ms;
+  --motion-feedback: 180ms;
+  --motion-fast: 200ms;
+  --motion-panel: 300ms;
+  --motion-view: 420ms;
+  --motion-launch-exit: 430ms;
+  --motion-workspace: 480ms;
+  --motion-launch: 600ms;
+  font-family: var(--font-ui);
   color: #191919;
   background: #d9dad6;
   font-synthesis: none;
@@ -1970,8 +1993,8 @@ textarea:focus-visible {
 .actor-label small {
   padding: 0 6px 3px;
   color: #707982;
-  font-size: 7px;
-  line-height: 9px;
+  font-size: var(--type-micro);
+  line-height: 10px;
 }
 
 .actor-label--on-body {
@@ -4435,7 +4458,7 @@ textarea:focus-visible {
   gap: 7px;
   margin: 0;
   padding: 8px 18px;
-  font-size: 10px;
+  font-size: var(--type-body);
   line-height: 16px;
 }
 
@@ -4695,7 +4718,7 @@ textarea:focus-visible {
   min-width: 0;
   gap: 8px;
   color: #4c5761;
-  font-size: 10px;
+  font-size: var(--type-body);
   line-height: 16px;
 }
 
@@ -5301,7 +5324,7 @@ textarea:focus-visible {
 
 .mission-target-table {
   width: 100%;
-  min-width: 1240px;
+  min-width: 1400px;
   border-collapse: collapse;
   table-layout: fixed;
 }
@@ -5313,7 +5336,7 @@ textarea:focus-visible {
   border-right: 1px solid #e4e7e9;
   border-bottom: 1px solid #e4e7e9;
   color: #3d4852;
-  font-size: 10px;
+  font-size: var(--type-data);
   text-align: left;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -5325,7 +5348,7 @@ textarea:focus-visible {
   top: 0;
   color: #56616b;
   background: #f1f3f4;
-  font-size: 9px;
+  font-size: var(--type-meta);
   font-weight: 750;
 }
 
@@ -5334,35 +5357,39 @@ textarea:focus-visible {
 }
 
 .mission-target-table th:nth-child(2) {
-  width: 170px;
+  width: 160px;
 }
 
 .mission-target-table th:nth-child(3) {
-  width: 80px;
+  width: 70px;
 }
 
 .mission-target-table th:nth-child(4) {
-  width: 170px;
+  width: 155px;
 }
 
 .mission-target-table th:nth-child(5) {
-  width: 260px;
+  width: 220px;
 }
 
 .mission-target-table th:nth-child(6) {
-  width: 140px;
+  width: 170px;
 }
 
 .mission-target-table th:nth-child(7) {
-  width: 150px;
+  width: 125px;
 }
 
 .mission-target-table th:nth-child(8) {
-  width: 90px;
+  width: 135px;
 }
 
 .mission-target-table th:nth-child(9) {
-  width: 150px;
+  width: 80px;
+}
+
+.mission-target-table th:nth-child(10) {
+  width: 145px;
 }
 
 .mission-target-table td:last-child,
@@ -5430,26 +5457,76 @@ textarea:focus-visible {
   color: #2d6b82;
   background: #dceff6;
   border-radius: 3px;
-  font-size: 8px;
+  font-size: var(--type-micro);
   font-weight: 750;
 }
 
 .mission-target-table td strong {
   color: #26313a;
-  font-family: "Cascadia Code", Consolas, monospace;
-  font-size: 10px;
+  font-family: var(--font-data);
+  font-size: var(--type-data);
 }
 
 .mission-target-table td small {
   overflow: hidden;
   color: var(--text-muted);
-  font-size: 9px;
+  font-size: var(--type-meta);
   text-overflow: ellipsis;
 }
 
 .mission-target-table td code {
-  font-family: "Cascadia Code", Consolas, monospace;
-  font-size: 9px;
+  font-family: var(--font-data);
+  font-size: var(--type-data);
+}
+
+.mission-target-dialogues {
+  display: flex;
+  align-items: center;
+  min-height: 22px;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.mission-target-dialogue {
+  display: inline-flex;
+  align-items: center;
+  overflow: hidden;
+  min-height: 21px;
+  border: 1px solid;
+  border-radius: var(--radius-control);
+}
+
+.mission-target-dialogue b,
+.mission-target-dialogue code {
+  padding: 2px 5px;
+  font-size: var(--type-data);
+}
+
+.mission-target-dialogue b {
+  font-family: var(--font-ui);
+  font-weight: 700;
+}
+
+.mission-target-dialogue code {
+  background: var(--surface);
+  font-variant-numeric: tabular-nums;
+}
+
+.mission-target-dialogue--complex_chat {
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 8%, var(--surface));
+  border-color: color-mix(in srgb, var(--warning) 35%, var(--border));
+}
+
+.mission-target-dialogue--bubble {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--ark-cyan) 10%, var(--surface));
+  border-color: color-mix(in srgb, var(--ark-cyan) 42%, var(--border));
+}
+
+.mission-target-dialogues__empty {
+  color: var(--text-muted);
+  font-size: var(--type-data);
 }
 
 .mission-target-table td:last-child > code {
@@ -5486,8 +5563,8 @@ textarea:focus-visible {
   min-height: 20px;
   padding: 0 6px;
   border: 1px solid;
-  border-radius: 4px;
-  font-size: 9px;
+  border-radius: var(--radius-compact);
+  font-size: var(--type-meta);
   font-weight: 700;
 }
 
@@ -5526,8 +5603,8 @@ textarea:focus-visible {
   min-height: 22px;
   padding: 0 7px;
   border: 1px solid;
-  border-radius: 4px;
-  font-size: 9px;
+  border-radius: var(--radius-compact);
+  font-size: var(--type-meta);
   font-weight: 700;
 }
 
@@ -5872,7 +5949,7 @@ textarea:focus-visible {
   border-right: 1px solid #e4e7e9;
   border-bottom: 1px solid #e4e7e9;
   color: #3d4852;
-  font-size: 10px;
+  font-size: var(--type-data);
   text-align: left;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -5884,7 +5961,7 @@ textarea:focus-visible {
   top: 0;
   color: #56616b;
   background: #f1f3f4;
-  font-size: 9px;
+  font-size: var(--type-meta);
   font-weight: 750;
 }
 
@@ -5960,7 +6037,7 @@ textarea:focus-visible {
   display: block;
   overflow: hidden;
   color: #26313a;
-  font-size: 10px;
+  font-size: var(--type-data);
   text-overflow: ellipsis;
 }
 
@@ -5969,19 +6046,19 @@ textarea:focus-visible {
   overflow: hidden;
   margin-top: 2px;
   color: var(--text-muted);
-  font-size: 9px;
+  font-size: var(--type-meta);
   text-overflow: ellipsis;
 }
 
 .npc-registration-table small.npc-registration-actor-target-id {
   color: #16825c;
-  font-family: "Cascadia Code", Consolas, monospace;
+  font-family: var(--font-data);
   font-weight: 750;
 }
 
 .npc-registration-table code {
-  font-family: "Cascadia Code", Consolas, monospace;
-  font-size: 9px;
+  font-family: var(--font-data);
+  font-size: var(--type-data);
 }
 
 .npc-registration-table select {
@@ -5992,8 +6069,8 @@ textarea:focus-visible {
   color: #34404a;
   background: #ffffff;
   border: 1px solid var(--border-strong);
-  border-radius: 4px;
-  font-size: 9px;
+  border-radius: var(--radius-compact);
+  font-size: var(--type-data);
 }
 
 .npc-registration-bulk-choice {
@@ -6014,7 +6091,7 @@ textarea:focus-visible {
   background: #edf6f9;
   border: 1px solid #bfd6df;
   border-radius: 3px;
-  font-size: 8px;
+  font-size: var(--type-data);
   font-weight: 750;
   cursor: pointer;
 }
@@ -6065,9 +6142,9 @@ textarea:focus-visible {
   color: #34404a;
   background: #ffffff;
   border: 1px solid var(--border-strong);
-  border-radius: 4px;
-  font-family: "Cascadia Code", Consolas, monospace;
-  font-size: 9px;
+  border-radius: var(--radius-compact);
+  font-family: var(--font-data);
+  font-size: var(--type-data);
 }
 
 .npc-target-edit-table input:focus {
@@ -6084,7 +6161,7 @@ textarea:focus-visible {
 
 .npc-target-edit-table td:nth-child(4) small,
 .npc-target-edit-table td:nth-child(5) small {
-  font-family: "Cascadia Code", Consolas, monospace;
+  font-family: var(--font-data);
 }
 
 .npc-registration-table td.registration-match {
@@ -6113,8 +6190,8 @@ textarea:focus-visible {
   color: #34404a;
   background: #ffffff;
   border: 1px solid var(--border-strong);
-  border-radius: 4px;
-  font-size: 9px;
+  border-radius: var(--radius-compact);
+  font-size: var(--type-body);
 }
 
 .npc-registration-turn-field {
@@ -6123,7 +6200,7 @@ textarea:focus-visible {
   align-items: center;
   gap: 4px;
   color: var(--text-muted);
-  font-size: 9px;
+  font-size: var(--type-meta);
   white-space: nowrap;
 }
 
@@ -6143,8 +6220,8 @@ textarea:focus-visible {
   color: #5b6570;
   background: #f1f3f4;
   border: 1px solid #d6dadd;
-  border-radius: 4px;
-  font-size: 9px;
+  border-radius: var(--radius-compact);
+  font-size: var(--type-meta);
   font-weight: 700;
 }
 
@@ -7259,7 +7336,7 @@ textarea:focus-visible {
   grid-column: 2;
   margin-left: 8px;
   color: var(--signal);
-  font: 800 28px/31px "Arial Narrow", "Roboto Condensed", sans-serif;
+  font: 800 28px/31px var(--font-display);
 }
 
 .stage-sequence small {
@@ -7522,8 +7599,7 @@ textarea:focus-visible {
 
 .launch-screen__copy h1 {
   margin: 0;
-  font-family: "Arial Narrow", "Roboto Condensed", "Microsoft YaHei UI",
-    sans-serif;
+  font-family: var(--font-display);
   font-size: 82px;
   font-weight: 900;
   line-height: 78px;
@@ -7945,7 +8021,7 @@ textarea:focus-visible {
 
 .app-shell[data-ark-theme="endfield"] .brand p {
   color: #8d9089;
-  font-size: 7px;
+  font-size: var(--type-micro);
 }
 
 .app-shell[data-ark-theme="endfield"] .version {
@@ -8016,25 +8092,25 @@ textarea:focus-visible {
 
 .app-shell[data-workspace-direction="up"]
   > :is(.workspace, .tool-workspace)[data-workspace-state="entering"] {
-  animation: workspace-page-enter-up 720ms
+  animation: workspace-page-enter-up var(--motion-workspace)
     cubic-bezier(0.455, 0.03, 0.515, 0.955) both;
 }
 
 .app-shell[data-workspace-direction="up"]
   > :is(.workspace, .tool-workspace)[data-workspace-state="exiting"] {
-  animation: workspace-page-exit-up 720ms
+  animation: workspace-page-exit-up var(--motion-workspace)
     cubic-bezier(0.455, 0.03, 0.515, 0.955) both;
 }
 
 .app-shell[data-workspace-direction="down"]
   > :is(.workspace, .tool-workspace)[data-workspace-state="entering"] {
-  animation: workspace-page-enter-down 720ms
+  animation: workspace-page-enter-down var(--motion-workspace)
     cubic-bezier(0.455, 0.03, 0.515, 0.955) both;
 }
 
 .app-shell[data-workspace-direction="down"]
   > :is(.workspace, .tool-workspace)[data-workspace-state="exiting"] {
-  animation: workspace-page-exit-down 720ms
+  animation: workspace-page-exit-down var(--motion-workspace)
     cubic-bezier(0.455, 0.03, 0.515, 0.955) both;
 }
 
@@ -8625,8 +8701,8 @@ textarea:focus-visible {
 .npc-migration-result p {
   margin: 7px 0 0;
   color: #656862;
-  font-size: 9px;
-  line-height: 14px;
+  font-size: var(--type-body);
+  line-height: 16px;
 }
 
 .npc-migration-review-list.is-blocked {
@@ -9000,7 +9076,7 @@ textarea:focus-visible {
   align-items: center;
   gap: 4px;
   color: #555852;
-  font-size: 8px;
+  font-size: var(--type-data);
   cursor: pointer;
 }
 
@@ -9385,7 +9461,9 @@ textarea:focus-visible {
 
 .inspector-summary small {
   color: #7b7e77;
-  font: 7px/1 "Cascadia Code", Consolas, monospace;
+  font-family: var(--font-data);
+  font-size: var(--type-micro);
+  line-height: 1;
 }
 
 .inspector-summary strong {
@@ -9518,7 +9596,7 @@ textarea:focus-visible {
 .launch-screen__system-mark strong {
   grid-row: 1 / span 2;
   grid-column: 2;
-  font: 800 88px/70px "Arial Narrow", "Roboto Condensed", sans-serif;
+  font: 800 88px/70px var(--font-display);
 }
 
 .launch-screen__system-mark i {

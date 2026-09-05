@@ -1,6 +1,106 @@
-# 镜头沙盘设计规范
+---
+name: 镜头沙盘
+description: A desktop field-engineering interface for UE4 dialogue staging and shot design.
+colors:
+  ink: "#191919"
+  paper: "#F2F2F0"
+  surface: "#FFFFFF"
+  surface-muted: "#E9E9E5"
+  border: "#CACBC5"
+  text-muted: "#686A65"
+  signal: "#FFFA00"
+  state: "#00B978"
+  spatial-cyan: "#18D1FF"
+  warning: "#A76816"
+  danger: "#C84B3A"
+  actor-warm: "#F06B4F"
+  actor-cool: "#2F96E8"
+typography:
+  display:
+    fontFamily: "Arial Narrow, Roboto Condensed, Microsoft YaHei UI, sans-serif"
+    fontSize: "82px"
+    fontWeight: 600
+    lineHeight: 0.95
+    letterSpacing: "normal"
+  title:
+    fontFamily: "Segoe UI Semibold, Microsoft YaHei UI, sans-serif"
+    fontSize: "18px"
+    fontWeight: 600
+    lineHeight: 1.2
+    letterSpacing: "normal"
+  section:
+    fontFamily: "Segoe UI Semibold, Microsoft YaHei UI, sans-serif"
+    fontSize: "14px"
+    fontWeight: 600
+    lineHeight: 1.3
+    letterSpacing: "normal"
+  control:
+    fontFamily: "Segoe UI, Microsoft YaHei UI, sans-serif"
+    fontSize: "12px"
+    fontWeight: 600
+    lineHeight: 1.3
+    letterSpacing: "normal"
+  body:
+    fontFamily: "Segoe UI, Microsoft YaHei UI, sans-serif"
+    fontSize: "11px"
+    fontWeight: 400
+    lineHeight: 1.4
+    letterSpacing: "normal"
+  data:
+    fontFamily: "Cascadia Code, Consolas, monospace"
+    fontSize: "10px"
+    fontWeight: 400
+    lineHeight: 1.35
+    letterSpacing: "normal"
+  metadata:
+    fontFamily: "Segoe UI, Microsoft YaHei UI, sans-serif"
+    fontSize: "9px"
+    fontWeight: 400
+    lineHeight: 1.35
+    letterSpacing: "normal"
+  micro:
+    fontFamily: "Segoe UI, Microsoft YaHei UI, sans-serif"
+    fontSize: "8px"
+    fontWeight: 400
+    lineHeight: 1.25
+    letterSpacing: "normal"
+rounded:
+  control: "2px"
+  compact: "4px"
+  control-hover: "5px"
+  overlay: "6px"
+spacing:
+  xs: "4px"
+  sm: "8px"
+  md: "12px"
+  lg: "16px"
+  xl: "24px"
+components:
+  button-primary:
+    backgroundColor: "{colors.signal}"
+    textColor: "{colors.ink}"
+    typography: "{typography.body}"
+    rounded: "{rounded.control}"
+    padding: "8px 14px"
+  button-secondary:
+    backgroundColor: "{colors.paper}"
+    textColor: "{colors.ink}"
+    typography: "{typography.body}"
+    rounded: "{rounded.control}"
+    padding: "8px 12px"
+  inspector-panel:
+    backgroundColor: "{colors.paper}"
+    textColor: "{colors.ink}"
+    rounded: "{rounded.control}"
+  modal:
+    backgroundColor: "{colors.surface}"
+    textColor: "{colors.ink}"
+    rounded: "{rounded.overlay}"
+---
 
-## 设计定位
+# Design System: 镜头沙盘
+
+## Overview
 
 镜头沙盘是面向 UE4 对白制作的 Windows 桌面工具。界面首先服务于检索、站位确认、
 镜头检查、对白编辑和安全导出，其次才表达游戏化视觉风格。
@@ -13,7 +113,7 @@
 所有实现必须是原创代码与项目自有内容。不得复制官网 Logo、图片、视频、字体、
 着色器或生产代码。
 
-## 设计合同
+### Design Contract
 
 - 主风格：Endfield field engineering
 - 辅助风格：Arknights information system
@@ -22,7 +122,7 @@
 - 主任务：定位对白、选择站位、检查分镜、编辑对白、审核并导出 UE
 - 核心原则：内容主导、状态真实、动作明确、动效不改变业务数据
 
-## 页面结构
+### Page Structure
 
 ### 全局轨道
 
@@ -31,7 +131,9 @@
 1. 分镜工作台
 2. NPC 注册
 3. 任务目标物
-4. 设置与更新（包含数据目录）
+4. NPC 迁移
+
+轨道底部另有“设置与更新”入口，它打开设置层，不属于会保留业务草稿的一级工作区。
 
 轨道折叠宽度为 56px，鼠标悬停或键盘可见焦点时展开到 196px。展开覆盖内容但不
 重排工作区。鼠标离开后收起，普通点击焦点不得使轨道持续展开。
@@ -46,13 +148,14 @@
 ### 顶栏身份
 
 顶栏左侧只显示当前工作区自身的标识、名称和英文类别；分镜工作区显示“分镜
-工作台”，NPC 和目标物工作区显示各自名称，不重复显示产品名与版本。数据源在
-顶栏右侧使用状态图标表示，悬停显示摘要，点击后只展开来源、数据量和案例库
-状态；详细目录路径统一在设置中查看。
+工作台”，NPC 注册、任务目标物和 NPC 迁移工作区显示各自名称，不重复显示产品名
+与版本。数据源在顶栏右侧使用状态图标表示，悬停显示摘要，点击后只展开来源、
+数据量和案例库状态；详细目录路径统一在设置中查看。
 
 ### 工作区状态
 
-分镜、NPC 和目标物工作区始终挂载，仅隐藏非活动工作区。切换时保留：
+分镜、NPC 注册、任务目标物和 NPC 迁移工作区始终挂载，仅隐藏非活动工作区。
+切换时保留：
 
 - 输入内容
 - 勾选状态
@@ -64,7 +167,7 @@
 旧状态。
 
 工作区按照轨道顺序上下切换。进入下一层时旧页面整体向上滑出，新页面从底部完整
-滑入；返回上一层时方向相反。进出页面在 720ms 内同时存在，动画结束后才隐藏旧
+滑入；返回上一层时方向相反。进出页面在 480ms 内同时存在，动画结束后才隐藏旧
 页面。进入页使用中性灰页边阴影强化边界，不使用扫线、黄色分隔、局部遮罩或短距
 离假位移。
 
@@ -119,7 +222,7 @@ Excel 源表从 `<doc>\xlsdir` 推导。两个根目录分别显示就绪状态�
 只更新路径却继续显示旧数据。首次设置弹窗不显示额外产品标题栏，但必须保留
 显式关闭入口。
 
-## 色彩
+## Colors
 
 ```css
 --ink: #191919;
@@ -145,17 +248,41 @@ Excel 源表从 `<doc>\xlsdir` 推导。两个根目录分别显示就绪状态�
 - A/B 角色色属于业务数据，不能被品牌强调色替代。
 - 同一屏只允许一个主要黄色焦点。
 
-## 排版
+## Typography
 
 - 中文界面：`Segoe UI`、`Microsoft YaHei UI`、系统无衬线字体。
 - 技术数据：`Cascadia Code`、`Consolas`、等宽字体。
 - 大编号：窄体无衬线回退栈。
 - 中文正文使用正常字距。
 - 英文微标签只用于类别、单位和状态，不重复翻译完整中文内容。
-- 正文不小于 11px；次级元数据不小于 8px。
+- 正文不小于 11px；紧凑表格数据为 10px，次级元数据为 9px，非必要微标签
+  最小 8px。
 - 镜头编号、焦距、时长、节点 ID 使用等宽数字。
 
-## 几何
+## Layout
+
+全局采用“56px 可展开工具轨道 + 顶部工作区身份 + 常驻工作区”的桌面结构。
+分镜工作台使用左侧镜头列表、中央 3D 视口、右侧检查器；NPC、目标物与迁移工作区
+沿用同一壳层，但按各自主任务使用完整表格、审核层或专用编辑窗口。详细工作区结构
+与状态保留规则见上方 **Page Structure**。
+
+布局只面向常规 Windows 桌面窗口。主视口、表格和连续编辑区域优先获得剩余空间；
+设置、授权、冲突比较和高风险确认使用模态层，低频状态收纳进顶栏图标。任何工作区
+都不得产生页面级横向滚动。
+
+**The Single Visual Owner Rule.** 同一数据只在一个固定区域承担主要展示，其他位置
+只提供状态摘要或跳转入口。
+
+## Elevation & Depth
+
+常驻工作区主要通过 1px 分隔线、浅色层级和视口材质建立深度。阴影只用于真正覆盖
+内容的模态层、弹层、工具轨道展开态和中央镜头视口的局部工程感，不用于把普通页面
+区块包装成漂浮卡片。
+
+**The Structural Depth Rule.** 阴影表达层级或暂态，不表达“重要”；业务重要性由位置、
+标签、信号条和状态语义承担。
+
+## Shapes
 
 - 功能控件默认圆角 2px，悬停最多变为 5px。
 - 面板使用 1px 分隔线，不使用卡片嵌套。
@@ -163,7 +290,7 @@ Excel 源表从 `<doc>\xlsdir` 推导。两个根目录分别显示就绪状态�
 - 斜切、网格和刻度只用于启动页、镜头视口和空白状态。
 - 表格使用完整工作区、固定表头和固定操作栏。
 
-## 交互
+## Components
 
 ### 通用按钮
 
@@ -260,7 +387,7 @@ Excel 源表从 `<doc>\xlsdir` 推导。两个根目录分别显示就绪状态�
 
 此模式来源于《明日方舟》官网世界观页的交互原则，但不复制其图片和着色器。
 
-## 动效时序
+### Motion Timing
 
 | 场景 | 时长 | 方式 |
 | --- | ---: | --- |
@@ -269,13 +396,13 @@ Excel 源表从 `<doc>\xlsdir` 推导。两个根目录分别显示就绪状态�
 | 工具轨道展开 | 300ms | 宽度与标签透明度 |
 | 标签页切换 | 300ms | 裁切与 8px 位移 |
 | 镜头或视图切换 | 420ms | 遮罩横向揭示 |
-| 主工作区切换 | 720ms | 整页进出 + 中性页边阴影 |
+| 主工作区切换 | 480ms | 整页进出 + 中性页边阴影 |
 | 启动内容进入 | 600ms | 裁切和分层进入 |
 | 启动页退出 | 430ms | 连续揭示工作区 |
 
 动效应可以被打断。除明确的加载指示外，不使用超过 2 秒的循环动画。
 
-## 启动页
+### Launch Screen
 
 - 使用深色背景、产品标志、数据源和版本。
 - 黄色只作为进度基线和退出边界。
@@ -284,7 +411,7 @@ Excel 源表从 `<doc>\xlsdir` 推导。两个根目录分别显示就绪状态�
 - 退出时连续揭示已经挂载的工作区。
 - `prefers-reduced-motion` 下近即时完成。
 
-## 检查器
+### Inspector
 
 右侧检查器分为四个互斥页签：
 
@@ -335,7 +462,7 @@ UE 动作编辑按台词节点折叠显示。节点内先添加场内角色，�
 原因和预期模型路径；刷新 BP 后保留仍缺失项的忽略选择，全部确认忽略后才允许
 使用规则占位继续分镜。
 
-## 可访问性与性能
+### Accessibility and Performance
 
 - 所有交互支持键盘。
 - 焦点提示不得只依赖颜色。
@@ -347,7 +474,16 @@ UE 动作编辑按台词节点折叠显示。节点内先添加场内角色，�
 - 指针探针直接更新 DOM transform，不触发 React 高频重渲染。
 - 所有工作区在支持的桌面尺寸下不得产生页面级横向滚动。
 
-## 禁止事项
+## Do's and Don'ts
+
+### Do:
+
+- 保持中央镜头视口、镜头列表和当前检查器之间的稳定空间关系。
+- 让状态、进度、错误和高风险写入范围在动作发生前后都可见。
+- 使用真实配置、UE 状态和项目资产，不用虚构内容填充界面。
+- 在所有动效与 3D 改动后检查桌面截图、Canvas 非空和减少动态效果模式。
+
+### Don't:
 
 - 不添加无业务含义的坐标、系统代码、扫描线或随机 HUD。
 - 不用大面积黄色覆盖正文或数据表。

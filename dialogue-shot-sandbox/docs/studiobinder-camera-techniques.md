@@ -2,6 +2,9 @@
 
 更新日期：2026-08-23
 
+> 文档状态：研究参考。本文保存来源提炼，不作为当前机器协议；现行规则以
+> `shot-language-rulebook.md` 和 `shot-language-rules.v1.json` 为准。
+
 本文整理 StudioBinder Camera Shots 目录及其景别、角度、画面关系、运动、
 焦点、镜头、构图和灯光子项，并记录哪些内容已经进入镜头沙盘规则。
 

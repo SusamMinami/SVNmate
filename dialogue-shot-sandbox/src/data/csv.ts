@@ -175,9 +175,14 @@ function optionalBoolean(value: string): boolean | null {
   return null;
 }
 
-function hasConfiguredValue(value: string): boolean {
-  const normalized = value.trim();
-  return Boolean(normalized) && !/^0(?:\.0+)?$/.test(normalized);
+function configuredNumericReferences(value: string): string[] {
+  return Array.from(
+    new Set(
+      (value.match(/\d+/g) ?? []).filter(
+        (reference) => Number.parseInt(reference, 10) > 0,
+      ),
+    ),
+  );
 }
 
 function hasPositiveInteger(value: string): boolean {
@@ -322,6 +327,12 @@ function parseNpcs(text: string): Map<number, NpcProfile> {
         return;
       }
       const configuredName = valueAt(row, indexes, "NPC.name");
+      const complexChatDialogueIds = configuredNumericReferences(
+        optionalValueAt(row, chat2Index),
+      );
+      const bubbleDialogueIds = configuredNumericReferences(
+        optionalValueAt(row, chat3Index),
+      );
       npcs.set(id, {
         id,
         name: configuredName || `NPC ${id}`,
@@ -332,11 +343,13 @@ function parseNpcs(text: string): Map<number, NpcProfile> {
         title: optionalValueAt(row, titleIndex),
         canTurn: optionalBoolean(optionalValueAt(row, canTurnIndex)),
         hasDialogue:
-          hasConfiguredValue(optionalValueAt(row, chat2Index)) ||
-          hasConfiguredValue(optionalValueAt(row, chat3Index)),
+          complexChatDialogueIds.length > 0 ||
+          bubbleDialogueIds.length > 0,
         hasAvatar:
           hasPositiveInteger(optionalValueAt(row, avatarPathIndex)) ||
           hasPositiveInteger(optionalValueAt(row, headIconIndex)),
+        complexChatDialogueIds,
+        bubbleDialogueIds,
       });
     },
   );
@@ -428,12 +441,21 @@ function parseMissionPositions(text: string): MissionPositionRow[] {
       "MissionPosition.Position",
       "MissionPosition.Rotation",
     ],
-    ({ descriptions }) => ({
+    ({ members, descriptions }) => ({
       descriptionIndex: descriptions.findIndex(
         (value) => value.trim() === "描述",
       ),
+      complexChatIndex: optionalIndex(
+        members,
+        "MissionPosition.npcchat2",
+      ),
     }),
-    (row, rowNumber, { indexes }, { descriptionIndex }) => {
+    (
+      row,
+      rowNumber,
+      { indexes },
+      { descriptionIndex, complexChatIndex },
+    ) => {
       const id = valueAt(row, indexes, "MissionPosition.ID");
       if (!id) {
         return;
@@ -451,6 +473,9 @@ function parseMissionPositions(text: string): MissionPositionRow[] {
         positionText: valueAt(row, indexes, "MissionPosition.Position"),
         rotationText: valueAt(row, indexes, "MissionPosition.Rotation"),
         rowNumber,
+        complexChatDialogueIds: configuredNumericReferences(
+          optionalValueAt(row, complexChatIndex),
+        ),
       });
     },
   );
