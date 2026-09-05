@@ -29,6 +29,16 @@ Impeccable 的 canonical 八段结构与机器可读 frontmatter。旧需求、�
 
 ## 1. SVNmate
 
+### 执行进度
+
+- [x] `distill`：音乐与托盘保留为高频图标，保存、日志、指南、更新和退出进入
+  顶部“更多”菜单。
+- [x] `layout`：工具模块收敛为“名称/版本状态 + 主动作 + 更多菜单”的固定单行。
+- [x] `harden`：增加 Tooltip、`Alt+M` / `Alt+H` / `Alt+A` / `Ctrl+S`、
+  首次托盘提示、完整模块路径入口和跨 DPI 最小窗口尺寸更新。
+- [x] `polish`：主题色板与 ttk 样式抽到 `svnmate_theme.py`，并增加独立的
+  成功、部分完成、失败与跳过摘要。
+
 ### 当前优势
 
 - 主任务、工作目录、执行设置、工具模块和日志的区域边界清楚。
@@ -48,13 +58,12 @@ Impeccable 的 canonical 八段结构与机器可读 frontmatter。旧需求、�
 
 ### 下一步
 
-1. 运行 `/impeccable distill`：把音乐、托盘、帮助和日志目录收进标题栏图标菜单，
-   保留“立即执行”为唯一填充主按钮。
-2. 运行 `/impeccable layout`：将工具模块行改为“名称/版本状态 + 主动作 + 更多菜单”
-   的稳定列，避免三枚文字按钮重复。
-3. 运行 `/impeccable harden`：补齐键盘焦点、非颜色状态、长路径、模块下载失败和
-   DPI 切换后的布局验收。
-4. 运行 `/impeccable polish`：将主题字典和 ttk 组件样式抽到独立设计 token 模块。
+1. [已完成] `/impeccable distill`：顶部只保留状态、两个图标、高频主动作和
+   “更多”菜单。
+2. [已完成] `/impeccable layout`：模块行使用固定主动作与行级菜单。
+3. [已完成] `/impeccable harden`：补齐键盘入口、Tooltip、长路径访问、
+   部分失败摘要和 DPI 切换处理。
+4. [已完成] `/impeccable polish`：主题 token 与 ttk 样式已移入独立模块。
 
 ## 2. MigrationGuard
 

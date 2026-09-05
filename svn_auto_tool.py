@@ -13,10 +13,12 @@ import webbrowser
 from collections import deque
 from collections.abc import Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
 from module_updates import ModuleManifest, ModuleUpdateError, download_archive
+from svnmate_theme import configure_svnmate_styles
 from svnmate_core import (
     CommandExecution,
     UpdateEvent,
@@ -54,7 +56,7 @@ def _enable_windows_dpi_awareness() -> None:
 
 _enable_windows_dpi_awareness()
 
-from tkinter import BOTH, END, LEFT, RIGHT, X, Y, BooleanVar, Menu, StringVar, Tk, filedialog, messagebox
+from tkinter import BOTH, END, LEFT, RIGHT, X, Y, BooleanVar, Label, Menu, StringVar, Tk, Toplevel, filedialog, messagebox
 from tkinter import ttk
 
 
@@ -82,6 +84,21 @@ def _configure_tk_dpi(root: Tk) -> int:
     return dpi
 
 
+def _window_dimensions_for_dpi(
+    dpi: int,
+    screen_width: int,
+    screen_height: int,
+) -> tuple[int, int, int, int]:
+    dpi_scale = max(96, dpi) / 96.0
+    available_width = max(640, screen_width - 48)
+    available_height = max(480, screen_height - 80)
+    width = min(round(1140 * dpi_scale), available_width)
+    height = min(round(760 * dpi_scale), available_height)
+    minimum_width = min(round(1000 * dpi_scale), width)
+    minimum_height = min(round(650 * dpi_scale), height)
+    return width, height, minimum_width, minimum_height
+
+
 if os.name == "nt":
     import winsound
     from ctypes import wintypes
@@ -96,7 +113,7 @@ CONFIG_PATH = APP_DIR / "svn_auto_tool_config.json"
 LOG_DIR = APP_DIR / "logs"
 LOG_RETENTION_DAYS = 7
 MUSIC_EXTENSIONS = (".mp3", ".wav")
-APP_VERSION = "v1.4.4"
+APP_VERSION = "v1.4.5"
 LATEST_RELEASE_URL = "https://github.com/SusamMinami/SVNmate/releases/latest"
 RELEASE_DOWNLOAD_URL = "https://github.com/SusamMinami/SVNmate/releases/download/{tag}/{asset}"
 RELEASE_ASSET_NAME = "SVNmate.zip"
@@ -117,6 +134,109 @@ SCHEDULE_POLL_MS = 5000
 DPI_VISIBLE_POLL_MS = 1000
 DPI_HIDDEN_POLL_MS = 10000
 IPC_REQUEST_TIMEOUT_SECONDS = 6 * 60 * 60
+ICON_MUSIC_ON = "\ue767"
+ICON_MUSIC_OFF = "\ue74f"
+ICON_HIDE_TO_TRAY = "\ue921"
+ICON_MORE = "\ue712"
+
+
+@dataclass(frozen=True)
+class TaskRunSummary:
+    trigger: str
+    succeeded: int
+    failed: int
+    skipped: int
+
+    @property
+    def status_text(self) -> str:
+        if not self.succeeded and not self.failed and not self.skipped:
+            return "未产生结果"
+        if self.failed:
+            return "部分完成" if self.succeeded or self.skipped else "执行失败"
+        if self.skipped:
+            return "已完成（有跳过）"
+        return "已完成"
+
+    @property
+    def detail_text(self) -> str:
+        if not self.succeeded and not self.failed and not self.skipped:
+            return "完成 · 无可统计步骤"
+        return (
+            f"{self.status_text} · 步骤：成功 {self.succeeded} · "
+            f"失败 {self.failed} · 跳过 {self.skipped}"
+        )
+
+    @property
+    def tone(self) -> str:
+        if not self.succeeded and not self.failed and not self.skipped:
+            return "warning"
+        if self.failed:
+            return "warning" if self.succeeded or self.skipped else "error"
+        if self.skipped:
+            return "warning"
+        return "success"
+
+
+class ToolTip:
+    def __init__(self, widget: object, text: str) -> None:
+        self.widget = widget
+        self.text = text
+        self.window: Toplevel | None = None
+        widget.bind("<Enter>", self._show, add="+")
+        widget.bind("<Leave>", self._hide, add="+")
+        widget.bind("<FocusIn>", self._show, add="+")
+        widget.bind("<FocusOut>", self._hide, add="+")
+        widget.bind("<ButtonPress>", self._hide, add="+")
+
+    def set_text(self, text: str) -> None:
+        self.text = text
+        if self.window is not None:
+            self._hide()
+
+    def _show(self, _event: object = None) -> None:
+        if self.window is not None or not self.text:
+            return
+        self.window = Toplevel(self.widget)
+        self.window.wm_overrideredirect(True)
+        self.window.attributes("-topmost", True)
+        x = min(
+            self.widget.winfo_rootx(),
+            self.widget.winfo_screenwidth() - 340,
+        )
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 5
+        self.window.wm_geometry(f"+{max(0, x)}+{max(0, y)}")
+        Label(
+            self.window,
+            text=self.text,
+            background="#202020",
+            foreground="#FFFFFF",
+            padx=8,
+            pady=5,
+            font=("Segoe UI", 9),
+            relief="solid",
+            borderwidth=1,
+        ).pack()
+
+    def _hide(self, _event: object = None) -> None:
+        if self.window is None:
+            return
+        self.window.destroy()
+        self.window = None
+
+
+def tool_module_primary_label(
+    spec: ToolModuleSpec,
+    *,
+    installed: bool,
+    state: str,
+) -> str:
+    if state in {"checking", "downloading"}:
+        return "处理中"
+    if state == "ready":
+        return "更新" if installed else "安装"
+    if installed:
+        return "打开"
+    return "安装" if spec.supports_updates else "选择"
 
 
 if os.name == "nt":
@@ -247,6 +367,8 @@ class WindowsTrayIcon:
     NIF_MESSAGE = 0x1
     NIF_ICON = 0x2
     NIF_TIP = 0x4
+    NIF_INFO = 0x10
+    NIIF_INFO = 0x1
     WM_TRAYICON = 0x8000 + 27
     WM_LBUTTONDBLCLK = 0x0203
     WM_RBUTTONUP = 0x0205
@@ -355,6 +477,33 @@ class WindowsTrayIcon:
             return True
         self.available = self._add_icon()
         return self.available
+
+    def show_notification(self, title: str, message: str) -> bool:
+        if (
+            os.name != "nt"
+            or not self.available
+            or self._notify_data is None
+        ):
+            return False
+        shell32 = ctypes.windll.shell32
+        shell32.Shell_NotifyIconW.argtypes = [
+            wintypes.DWORD,
+            ctypes.POINTER(_NotifyIconData),
+        ]
+        original_flags = self._notify_data.uFlags
+        self._notify_data.uFlags = self.NIF_INFO
+        self._notify_data.szInfoTitle = title[:63]
+        self._notify_data.szInfo = message[:255]
+        self._notify_data.dwInfoFlags = self.NIIF_INFO
+        try:
+            return bool(
+                shell32.Shell_NotifyIconW(
+                    self.NIM_MODIFY,
+                    ctypes.byref(self._notify_data),
+                )
+            )
+        finally:
+            self._notify_data.uFlags = original_flags
 
     def _message_loop(self) -> None:
         user32 = ctypes.windll.user32
@@ -629,13 +778,8 @@ class SvnAutoTool:
         }
         self.launch_kindle_status_on_startup = BooleanVar(value=detected_kindle_status is not None)
         self.kindle_status_path = self.tool_module_paths[KINDLE_STATUS.module_id]
-        self.kindle_status_path_text = StringVar(value="未选择程序")
         self.tool_module_status = {
             spec.module_id: StringVar(value="未检查")
-            for spec in TOOL_MODULES
-        }
-        self.tool_module_path_text = {
-            spec.module_id: StringVar(value="")
             for spec in TOOL_MODULES
         }
         self.tool_module_states = {
@@ -645,15 +789,22 @@ class SvnAutoTool:
         self.tool_module_manifests: dict[str, ModuleManifest] = {}
         self.tool_module_install_after_check: set[str] = set()
         self.tool_module_action_buttons: dict[str, ttk.Button] = {}
-        self.tool_module_update_buttons: dict[str, ttk.Button] = {}
+        self.tool_module_status_labels: dict[str, ttk.Label] = {}
+        self.tool_module_path_tooltips: dict[str, ToolTip] = {}
+        self.tooltips: list[ToolTip] = []
         self.schedule_time = StringVar(value="09:00")
         self.next_run_text = StringVar(value="未启用")
         self.status_text = StringVar(value="就绪")
+        self.completion_summary_text = StringVar(value="尚未执行")
+        self.completion_summary_state = "idle"
+        self.run_outcomes: dict[tuple[str, str], str] = {}
+        self.run_outcomes_lock = threading.Lock()
         self.music_file = self._find_music_file()
         self.music_alias = f"svnmate_music_{id(self)}"
         self.music_backend = ""
         self.music_fading = False
         self.music_paused_after_task = False
+        self.tray_hint_shown = False
         self.update_info: dict[str, str] | None = None
         self.update_state = "checking"
         self.current_theme = ""
@@ -703,14 +854,25 @@ class SvnAutoTool:
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _set_initial_window_geometry(self, dpi: int) -> None:
-        dpi_scale = dpi / 96.0
-        available_width = max(640, self.root.winfo_screenwidth() - 48)
-        available_height = max(480, self.root.winfo_screenheight() - 80)
-        window_width = min(round(1140 * dpi_scale), available_width)
-        window_height = min(round(760 * dpi_scale), available_height)
-        minimum_width = min(round(1000 * dpi_scale), window_width)
-        minimum_height = min(round(650 * dpi_scale), window_height)
+        (
+            window_width,
+            window_height,
+            minimum_width,
+            minimum_height,
+        ) = _window_dimensions_for_dpi(
+            dpi,
+            self.root.winfo_screenwidth(),
+            self.root.winfo_screenheight(),
+        )
         self.root.geometry(f"{window_width}x{window_height}")
+        self.root.minsize(minimum_width, minimum_height)
+
+    def _refresh_window_minimum_size(self, dpi: int) -> None:
+        _, _, minimum_width, minimum_height = _window_dimensions_for_dpi(
+            dpi,
+            self.root.winfo_screenwidth(),
+            self.root.winfo_screenheight(),
+        )
         self.root.minsize(minimum_width, minimum_height)
 
     def _finalize_initial_dpi(self) -> None:
@@ -739,23 +901,57 @@ class SvnAutoTool:
 
         header_actions = ttk.Frame(header, style="App.TFrame")
         header_actions.pack(side=RIGHT)
-        ttk.Label(header_actions, textvariable=self.status_text, style="Status.TLabel").pack(side=LEFT, padx=(0, 10))
-        self.music_button = ttk.Checkbutton(
+        ttk.Label(
             header_actions,
-            text="音乐开",
-            variable=self.music_enabled,
-            command=self._on_music_toggle,
-            style="Header.TCheckbutton",
-        )
-        self.music_button.pack(side=LEFT, padx=(0, 8))
-        ttk.Button(
-            header_actions,
-            text="隐藏到托盘",
-            style="Subtle.TButton",
-            command=self._hide_to_tray,
+            textvariable=self.status_text,
+            width=14,
+            anchor="e",
+            style="Status.TLabel",
         ).pack(side=LEFT, padx=(0, 8))
+        self.music_button = ttk.Button(
+            header_actions,
+            text=ICON_MUSIC_ON,
+            width=3,
+            command=self._on_music_toggle,
+            style="HeaderIconActive.TButton",
+            takefocus=True,
+        )
+        self.music_button.pack(side=LEFT, padx=(0, 4))
+        self.music_tooltip = ToolTip(self.music_button, "关闭背景音乐 (Alt+M)")
+        self.tooltips.append(self.music_tooltip)
+        self.hide_to_tray_button = ttk.Button(
+            header_actions,
+            text=ICON_HIDE_TO_TRAY,
+            width=3,
+            style="HeaderIcon.TButton",
+            command=self._hide_to_tray,
+            takefocus=True,
+        )
+        self.hide_to_tray_button.pack(side=LEFT, padx=(0, 4))
+        self.tooltips.append(
+            ToolTip(
+                self.hide_to_tray_button,
+                "隐藏到系统托盘 (Alt+H)",
+            )
+        )
+        self.header_menu_button = ttk.Button(
+            header_actions,
+            text=ICON_MORE,
+            width=3,
+            style="HeaderIcon.TButton",
+            command=self._show_header_menu,
+            takefocus=True,
+        )
+        self.header_menu_button.pack(side=LEFT, padx=(0, 8))
+        self.tooltips.append(
+            ToolTip(self.header_menu_button, "更多操作 (Alt+A)")
+        )
         self.run_button = ttk.Button(header_actions, text="立即执行", style="Accent.TButton", command=self._run_now)
         self.run_button.pack(side=LEFT)
+        self.root.bind_all("<Alt-m>", self._on_music_shortcut)
+        self.root.bind_all("<Alt-h>", self._on_hide_to_tray_shortcut)
+        self.root.bind_all("<Alt-a>", self._on_header_menu_shortcut)
+        self.root.bind_all("<Control-s>", self._on_save_shortcut)
 
         folder_frame = ttk.Frame(main, style="Card.TFrame", padding=(12, 9))
         folder_frame.pack(fill=BOTH, expand=False, pady=(12, 6))
@@ -840,15 +1036,14 @@ class SvnAutoTool:
         live_header = ttk.Frame(main, style="App.TFrame")
         live_header.pack(fill=X, pady=(2, 6))
         ttk.Label(live_header, text="实时输出", style="SectionTitleApp.TLabel").pack(side=LEFT)
-        ttk.Button(live_header, text="使用指南", style="Subtle.TButton", command=self._open_user_guide).pack(side=RIGHT)
-        ttk.Button(live_header, text="日志文件夹", style="Subtle.TButton", command=self._open_log_folder).pack(
-            side=RIGHT,
-            padx=(0, 6),
+        self.completion_summary_label = ttk.Label(
+            live_header,
+            textvariable=self.completion_summary_text,
+            width=34,
+            anchor="e",
+            style="RunSummary.TLabel",
         )
-        ttk.Button(live_header, text="保存配置", style="Subtle.TButton", command=self._save_config).pack(
-            side=RIGHT,
-            padx=(0, 6),
-        )
+        self.completion_summary_label.pack(side=RIGHT)
 
         live_frame = ttk.Frame(main, style="Card.TFrame", padding=1)
         live_frame.pack(fill=BOTH, expand=True, pady=(0, 16))
@@ -864,8 +1059,71 @@ class SvnAutoTool:
         self.update_dot = ttk.Label(main, text="○", style="UpdateDot.TLabel", cursor="hand2")
         self.update_dot.place(relx=1.0, rely=1.0, x=-90, y=-3, anchor="se")
         self.update_dot.bind("<Button-1>", lambda _event: self._on_update_dot_clicked())
+        self.update_tooltip = ToolTip(self.update_dot, "检查 SVNmate 更新")
+        self.tooltips.append(self.update_tooltip)
         self.signature_label = ttk.Label(main, text="SusamMinami", style="Signature.TLabel")
         self.signature_label.place(relx=1.0, rely=1.0, x=-6, y=-2, anchor="se")
+
+    def _on_music_shortcut(self, _event: object = None) -> str:
+        if str(self.music_button.cget("state")) != "disabled":
+            self._on_music_toggle()
+        return "break"
+
+    def _on_hide_to_tray_shortcut(self, _event: object = None) -> str:
+        self._hide_to_tray()
+        return "break"
+
+    def _on_header_menu_shortcut(self, _event: object = None) -> str:
+        self._show_header_menu()
+        return "break"
+
+    def _on_save_shortcut(self, _event: object = None) -> str:
+        if not self.running:
+            self._save_config_with_feedback()
+        return "break"
+
+    def _save_config_with_feedback(self) -> None:
+        self._save_config()
+        self.status_text.set("配置已保存")
+
+    def _show_header_menu(self) -> None:
+        menu = Menu(self.root, tearoff=False)
+        menu.add_command(
+            label="保存配置",
+            accelerator="Ctrl+S",
+            state="disabled" if self.running else "normal",
+            command=self._save_config_with_feedback,
+        )
+        menu.add_command(
+            label="打开日志文件夹",
+            command=self._open_log_folder,
+        )
+        menu.add_command(label="使用指南", command=self._open_user_guide)
+        menu.add_separator()
+        update_busy = self.update_state in {"checking", "downloading"}
+        menu.add_command(
+            label=(
+                "下载并应用 SVNmate 更新"
+                if self.update_state == "ready"
+                else "检查 SVNmate 更新"
+            ),
+            state="disabled" if update_busy else "normal",
+            command=self._on_update_dot_clicked,
+        )
+        menu.add_separator()
+        menu.add_command(label="退出 SVNmate", command=self._exit_application)
+        self._popup_menu(menu, self.header_menu_button)
+
+    @staticmethod
+    def _popup_menu(menu: Menu, button: ttk.Button) -> None:
+        try:
+            menu.tk_popup(
+                button.winfo_rootx(),
+                button.winfo_rooty() + button.winfo_height(),
+            )
+        finally:
+            menu.grab_release()
+            button.focus_set()
 
     def _build_folder_column(self, parent: ttk.Frame, group_key: str, title: str) -> None:
         column = ttk.Frame(parent, style="Card.TFrame")
@@ -950,53 +1208,115 @@ class SvnAutoTool:
             style="CardTitle.TLabel",
             width=14,
         ).pack(side=LEFT)
-        ttk.Label(
+        status_label = ttk.Label(
             controls,
             textvariable=self.tool_module_status[spec.module_id],
-            style="CardMuted.TLabel",
-        ).pack(side=LEFT, fill=X, expand=True)
+            style="ModuleStatus.TLabel",
+            anchor="w",
+        )
+        status_label.pack(side=LEFT, fill=X, expand=True)
         action_button = ttk.Button(
             controls,
             text="安装",
-            width=6,
+            width=8,
             style="Compact.TButton",
             command=lambda current=spec: self._on_tool_module_primary(current),
         )
         action_button.pack(side=LEFT, padx=(4, 0))
-        update_button = ttk.Button(
+        menu_button = ttk.Button(
             controls,
-            text="检查",
-            width=6,
-            style="Compact.TButton",
-            command=lambda current=spec: self._on_tool_module_update(current),
+            text=ICON_MORE,
+            width=3,
+            style="CompactIcon.TButton",
+            command=lambda current=spec: self._show_tool_module_menu(
+                current,
+                menu_button,
+            ),
+            takefocus=True,
         )
-        update_button.pack(side=LEFT, padx=(4, 0))
-        ttk.Button(
-            controls,
-            text="选择",
-            width=6,
-            style="Compact.TButton",
-            command=lambda current=spec: self._choose_tool_module_path(current),
-        ).pack(side=LEFT, padx=(4, 0))
+        menu_button.pack(side=LEFT, padx=(4, 0))
         self.tool_module_action_buttons[spec.module_id] = action_button
-        self.tool_module_update_buttons[spec.module_id] = update_button
+        self.tool_module_status_labels[spec.module_id] = status_label
+        self.tool_module_path_tooltips[spec.module_id] = ToolTip(
+            status_label,
+            "程序位置将在检查后显示",
+        )
+        self.tooltips.append(self.tool_module_path_tooltips[spec.module_id])
+        self.tooltips.append(
+            ToolTip(menu_button, f"{spec.display_name}更多操作")
+        )
 
-        meta = ttk.Frame(row, style="Card.TFrame")
-        meta.pack(fill=X, pady=(2, 0))
+    def _show_tool_module_menu(
+        self,
+        spec: ToolModuleSpec,
+        button: ttk.Button,
+    ) -> None:
+        configured_path = self._configured_tool_module_path(spec)
+        executable = self.tool_module_manager.executable_path(
+            spec,
+            configured_path,
+        )
+        installed = executable.is_file()
+        state = self.tool_module_states.get(spec.module_id, "idle")
+        busy = state in {"checking", "downloading"}
+        manifest = self.tool_module_manifests.get(spec.module_id)
+
+        menu = Menu(self.root, tearoff=False)
+        menu.add_command(
+            label=f"打开{spec.display_name}",
+            state="normal" if installed and not busy else "disabled",
+            command=lambda: self._launch_tool_module(spec, manual=True),
+        )
+        if spec.supports_updates:
+            menu.add_command(
+                label=(
+                    f"更新到 v{manifest.version}"
+                    if state == "ready" and manifest
+                    else "检查更新"
+                ),
+                state="disabled" if busy else "normal",
+                command=lambda: self._on_tool_module_update(spec),
+            )
+        menu.add_separator()
+        menu.add_command(
+            label="选择现有程序...",
+            state="disabled" if busy else "normal",
+            command=lambda: self._choose_tool_module_path(spec),
+        )
+        menu.add_command(
+            label="打开安装位置",
+            state="normal" if installed else "disabled",
+            command=lambda: self._open_tool_module_folder(spec),
+        )
+        menu.add_command(
+            label="复制程序路径",
+            command=lambda: self._copy_tool_module_path(spec),
+        )
         if spec == KINDLE_STATUS:
-            ttk.Checkbutton(
-                meta,
-                text="启动时联动",
+            menu.add_separator()
+            menu.add_checkbutton(
+                label="启动时联动",
                 variable=self.launch_kindle_status_on_startup,
                 command=self._on_kindle_status_setting_changed,
-                style="Card.TCheckbutton",
-            ).pack(side=LEFT, padx=(0, 7))
-        ttk.Label(
-            meta,
-            textvariable=self.tool_module_path_text[spec.module_id],
-            style="CardMuted.TLabel",
-            anchor="w",
-        ).pack(side=LEFT, fill=X, expand=True)
+            )
+        self._popup_menu(menu, button)
+
+    def _open_tool_module_folder(self, spec: ToolModuleSpec) -> None:
+        executable = self.tool_module_manager.executable_path(
+            spec,
+            self._configured_tool_module_path(spec),
+        )
+        if executable.parent.is_dir():
+            os.startfile(str(executable.parent))
+
+    def _copy_tool_module_path(self, spec: ToolModuleSpec) -> None:
+        executable = self.tool_module_manager.executable_path(
+            spec,
+            self._configured_tool_module_path(spec),
+        )
+        self.root.clipboard_clear()
+        self.root.clipboard_append(str(executable))
+        self.status_text.set(f"已复制{spec.display_name}路径")
 
     def _load_config(self) -> None:
         if not CONFIG_PATH.exists():
@@ -1202,52 +1522,37 @@ class SvnAutoTool:
                 status = "未安装"
             self.tool_module_status[spec.module_id].set(status)
 
-            path_text = str(executable)
-            if len(path_text) > 58:
-                path_text = "..." + path_text[-55:]
-            self.tool_module_path_text[spec.module_id].set(path_text)
-            if spec == KINDLE_STATUS:
-                self.kindle_status_path_text.set(path_text)
-
             action_button = self.tool_module_action_buttons.get(spec.module_id)
-            update_button = self.tool_module_update_buttons.get(spec.module_id)
+            status_label = self.tool_module_status_labels.get(spec.module_id)
+            path_tooltip = self.tool_module_path_tooltips.get(spec.module_id)
             busy = state in {"checking", "downloading"}
             if action_button:
                 action_button.configure(
-                    text=(
-                        "打开"
-                        if installed
-                        else "选择"
-                        if not spec.supports_updates
-                        else "安装"
+                    text=tool_module_primary_label(
+                        spec,
+                        installed=installed,
+                        state=state,
                     ),
                     state="disabled" if busy else "normal",
                 )
-            if update_button:
-                update_button.configure(
-                    text=(
-                        "本地"
-                        if not spec.supports_updates
-                        else "更新"
-                        if state == "ready" and installed
-                        else "检查"
-                    ),
-                    state=(
-                        "disabled"
-                        if busy or not spec.supports_updates
-                        else "normal"
-                    ),
+            if status_label:
+                status_label.configure(
+                    style=(
+                        "ModuleStatusBusy.TLabel"
+                        if busy
+                        else "ModuleStatusError.TLabel"
+                        if state == "failed"
+                        else "ModuleStatusReady.TLabel"
+                        if state == "ready"
+                        else "ModuleStatusSuccess.TLabel"
+                        if installed
+                        else "ModuleStatus.TLabel"
+                    )
                 )
-
-    def _refresh_kindle_status_path_text(self) -> None:
-        executable = self._resolve_kindle_status_executable()
-        if executable is None:
-            self.kindle_status_path_text.set("未选择或路径不可用")
-            return
-        path_text = str(executable)
-        if len(path_text) > 44:
-            path_text = "..." + path_text[-41:]
-        self.kindle_status_path_text.set(path_text)
+            if path_tooltip:
+                path_tooltip.set_text(
+                    f"{status}\n程序位置：{executable}"
+                )
 
     def _on_kindle_status_setting_changed(self) -> None:
         self._save_config()
@@ -1325,6 +1630,12 @@ class SvnAutoTool:
         self._log(f"已启动{spec.display_name}：{executable}")
 
     def _on_tool_module_primary(self, spec: ToolModuleSpec) -> None:
+        if (
+            self.tool_module_states.get(spec.module_id) == "ready"
+            and spec.module_id in self.tool_module_manifests
+        ):
+            self._start_tool_module_install(spec)
+            return
         if self.tool_module_manager.is_installed(
             spec,
             self._configured_tool_module_path(spec),
@@ -1598,7 +1909,11 @@ class SvnAutoTool:
 
     def _on_music_toggle(self) -> None:
         self.music_fading = False
-        self.music_paused_after_task = False
+        if self.music_paused_after_task and self.music_enabled.get():
+            self.music_paused_after_task = False
+        else:
+            self.music_enabled.set(not self.music_enabled.get())
+            self.music_paused_after_task = False
         self._apply_music_setting()
         self._refresh_music_button()
         self._save_config()
@@ -1651,7 +1966,6 @@ class SvnAutoTool:
 
             def mark_paused() -> None:
                 self.music_paused_after_task = True
-                self.music_enabled.set(False)
                 self.music_fading = False
                 self._refresh_music_button()
                 self._save_config()
@@ -1680,9 +1994,35 @@ class SvnAutoTool:
         if not hasattr(self, "music_button"):
             return
         if not self.music_file:
-            self.music_button.configure(text="无音乐", state="disabled")
+            self.music_button.configure(
+                text=ICON_MUSIC_OFF,
+                state="disabled",
+                style="HeaderIcon.TButton",
+            )
+            tooltip = "未找到可播放的背景音乐"
+        elif self.music_paused_after_task:
+            self.music_button.configure(
+                text=ICON_MUSIC_OFF,
+                state="normal",
+                style="HeaderIcon.TButton",
+            )
+            tooltip = "任务结束后已暂停，点击继续播放 (Alt+M)"
+        elif self.music_enabled.get():
+            self.music_button.configure(
+                text=ICON_MUSIC_ON,
+                state="normal",
+                style="HeaderIconActive.TButton",
+            )
+            tooltip = "关闭背景音乐 (Alt+M)"
         else:
-            self.music_button.configure(text="音乐开" if self.music_enabled.get() else "音乐关", state="normal")
+            self.music_button.configure(
+                text=ICON_MUSIC_OFF,
+                state="normal",
+                style="HeaderIcon.TButton",
+            )
+            tooltip = "开启背景音乐 (Alt+M)"
+        if hasattr(self, "music_tooltip"):
+            self.music_tooltip.set_text(tooltip)
 
     def _theme_tick(self) -> None:
         theme = "night" if self._is_night_time() else "day"
@@ -1698,6 +2038,7 @@ class SvnAutoTool:
             if dpi > 0 and dpi != self.current_dpi:
                 self.current_dpi = dpi
                 self.root.tk.call("tk", "scaling", dpi / 72.0)
+                self._refresh_window_minimum_size(dpi)
                 self._apply_visual_theme(self.current_theme)
         delay = DPI_VISIBLE_POLL_MS if visible else DPI_HIDDEN_POLL_MS
         self.root.after(delay, self._dpi_tick)
@@ -1708,285 +2049,9 @@ class SvnAutoTool:
         return hour >= 19 or hour < 6
 
     def _apply_visual_theme(self, theme: str) -> None:
-        try:
-            self.ui_style.theme_use("clam")
-        except Exception:
-            pass
-        if theme == "night":
-            colors = {
-                "bg": "#202020",
-                "card": "#2B2B2B",
-                "text": "#FFFFFF",
-                "muted": "#C8C8C8",
-                "accent": "#60CDFF",
-                "accent_fill": "#0078D4",
-                "accent_hover": "#1686D9",
-                "accent_pressed": "#0067B8",
-                "border": "#454545",
-                "button": "#383838",
-                "button_active": "#454545",
-                "button_pressed": "#303030",
-                "entry": "#353535",
-                "entry_focus": "#3D3D3D",
-                "tree": "#252525",
-                "tree_text": "#F7F7F7",
-                "heading": "#333333",
-                "heading_text": "#FFFFFF",
-                "selected": "#005A9E",
-                "selected_text": "#FFFFFF",
-                "completed": "#244B32",
-                "completed_text": "#F3FFF6",
-                "scrollbar": "#666666",
-                "scroll_trough": "#2B2B2B",
-                "disabled": "#777777",
-            }
-        else:
-            colors = {
-                "bg": "#F3F3F3",
-                "card": "#FFFFFF",
-                "text": "#1A1A1A",
-                "muted": "#666666",
-                "accent": "#0067C0",
-                "accent_fill": "#0067C0",
-                "accent_hover": "#1976D2",
-                "accent_pressed": "#005A9E",
-                "border": "#D1D1D1",
-                "button": "#F7F7F7",
-                "button_active": "#E9E9E9",
-                "button_pressed": "#DDDDDD",
-                "entry": "#FFFFFF",
-                "entry_focus": "#FFFFFF",
-                "tree": "#FFFFFF",
-                "tree_text": "#1A1A1A",
-                "heading": "#F5F5F5",
-                "heading_text": "#333333",
-                "selected": "#0078D4",
-                "selected_text": "#FFFFFF",
-                "completed": "#DFF6DD",
-                "completed_text": "#153B1B",
-                "scrollbar": "#B8B8B8",
-                "scroll_trough": "#F3F3F3",
-                "disabled": "#9A9A9A",
-            }
-
-        self.root.configure(bg=colors["bg"])
-        self.ui_style.configure(".", font=("Segoe UI", 10), background=colors["card"], foreground=colors["text"])
-        self.ui_style.configure("TFrame", background=colors["card"])
-        self.ui_style.configure("App.TFrame", background=colors["bg"])
-        self.ui_style.configure("Card.TFrame", background=colors["card"])
-        self.ui_style.configure("TLabel", background=colors["card"], foreground=colors["text"])
-        self.ui_style.configure("Card.TLabel", background=colors["card"], foreground=colors["text"])
-        self.ui_style.configure(
-            "Title.TLabel",
-            background=colors["bg"],
-            foreground=colors["text"],
-            font=("Segoe UI Semibold", 22),
-        )
-        self.ui_style.configure(
-            "Subtitle.TLabel",
-            background=colors["bg"],
-            foreground=colors["muted"],
-            font=("Segoe UI", 9),
-        )
-        self.ui_style.configure(
-            "SectionTitle.TLabel",
-            background=colors["card"],
-            foreground=colors["text"],
-            font=("Segoe UI Semibold", 11),
-        )
-        self.ui_style.configure(
-            "SectionTitleApp.TLabel",
-            background=colors["bg"],
-            foreground=colors["text"],
-            font=("Segoe UI Semibold", 11),
-        )
-        self.ui_style.configure(
-            "CardTitle.TLabel",
-            background=colors["card"],
-            foreground=colors["accent"],
-            font=("Segoe UI Semibold", 10),
-        )
-        self.ui_style.configure(
-            "CardMuted.TLabel",
-            background=colors["card"],
-            foreground=colors["muted"],
-            font=("Segoe UI", 9),
-        )
-        self.ui_style.configure(
-            "Status.TLabel",
-            background=colors["bg"],
-            foreground=colors["accent"],
-            font=("Segoe UI Semibold", 10),
-            padding=(8, 5),
-        )
-        self.ui_style.configure("TCheckbutton", background=colors["card"], foreground=colors["text"])
-        self.ui_style.configure("Card.TCheckbutton", background=colors["card"], foreground=colors["text"])
-        self.ui_style.configure("Header.TCheckbutton", background=colors["bg"], foreground=colors["text"])
-        for style_name, background in (("TCheckbutton", colors["card"]), ("Card.TCheckbutton", colors["card"]), ("Header.TCheckbutton", colors["bg"])):
-            self.ui_style.map(
-                style_name,
-                background=[("active", background), ("pressed", background)],
-                foreground=[("disabled", colors["disabled"])],
-            )
-        self.ui_style.configure(
-            "TButton",
-            background=colors["button"],
-            foreground=colors["text"],
-            bordercolor=colors["border"],
-            lightcolor=colors["button"],
-            darkcolor=colors["button"],
-            relief="flat",
-            borderwidth=1,
-            padding=(10, 5),
-            font=("Segoe UI", 9),
-        )
-        self.ui_style.map(
-            "TButton",
-            background=[
-                ("disabled", colors["card"]),
-                ("pressed", colors["button_pressed"]),
-                ("active", colors["button_active"]),
-            ],
-            foreground=[("disabled", colors["disabled"])],
-        )
-        self.ui_style.configure(
-            "Accent.TButton",
-            background=colors["accent_fill"],
-            foreground="#FFFFFF",
-            bordercolor=colors["accent_fill"],
-            lightcolor=colors["accent_fill"],
-            darkcolor=colors["accent_fill"],
-            relief="flat",
-            borderwidth=1,
-            padding=(18, 8),
-            font=("Segoe UI Semibold", 10),
-        )
-        self.ui_style.map(
-            "Accent.TButton",
-            background=[
-                ("disabled", colors["disabled"]),
-                ("pressed", colors["accent_pressed"]),
-                ("active", colors["accent_hover"]),
-            ],
-            foreground=[("disabled", colors["card"])],
-        )
-        self.ui_style.configure(
-            "Subtle.TButton",
-            background=colors["bg"],
-            foreground=colors["text"],
-            bordercolor=colors["bg"],
-            lightcolor=colors["bg"],
-            darkcolor=colors["bg"],
-            relief="flat",
-            padding=(9, 5),
-        )
-        self.ui_style.map(
-            "Subtle.TButton",
-            background=[("pressed", colors["button_pressed"]), ("active", colors["button_active"])],
-            foreground=[("disabled", colors["disabled"])],
-        )
-        self.ui_style.configure(
-            "Compact.TButton",
-            background=colors["button"],
-            foreground=colors["text"],
-            bordercolor=colors["border"],
-            lightcolor=colors["button"],
-            darkcolor=colors["button"],
-            relief="flat",
-            padding=(8, 3),
-            font=("Segoe UI", 9),
-        )
-        self.ui_style.map(
-            "Compact.TButton",
-            background=[("pressed", colors["button_pressed"]), ("active", colors["button_active"])],
-            foreground=[("disabled", colors["disabled"])],
-        )
-        self.ui_style.configure(
-            "TEntry",
-            fieldbackground=colors["entry"],
-            foreground=colors["text"],
-            bordercolor=colors["border"],
-            lightcolor=colors["border"],
-            darkcolor=colors["border"],
-            padding=(5, 4),
-        )
-        self.ui_style.map(
-            "TEntry",
-            fieldbackground=[
-                ("disabled", colors["card"]),
-                ("focus", colors["entry_focus"]),
-            ],
-            foreground=[("disabled", colors["disabled"])],
-        )
-        self.ui_style.configure(
-            "Treeview",
-            background=colors["tree"],
-            fieldbackground=colors["tree"],
-            foreground=colors["tree_text"],
-            bordercolor=colors["border"],
-            lightcolor=colors["border"],
-            darkcolor=colors["border"],
-            borderwidth=0,
-            rowheight=25,
-            font=("Segoe UI", 9),
-        )
-        self.ui_style.map(
-            "Treeview",
-            background=[("selected", colors["selected"])],
-            foreground=[("selected", colors["selected_text"])],
-        )
-        self.ui_style.configure(
-            "Treeview.Heading",
-            background=colors["heading"],
-            foreground=colors["heading_text"],
-            bordercolor=colors["border"],
-            lightcolor=colors["border"],
-            darkcolor=colors["border"],
-            relief="flat",
-            font=("Segoe UI Semibold", 9),
-            padding=(6, 5),
-        )
-        self.ui_style.map("Treeview.Heading", background=[("active", colors["button_active"])])
-        self.ui_style.configure(
-            "TScrollbar",
-            background=colors["scrollbar"],
-            troughcolor=colors["scroll_trough"],
-            bordercolor=colors["border"],
-            lightcolor=colors["scrollbar"],
-            darkcolor=colors["border"],
-            arrowcolor=colors["text"],
-        )
-        self.ui_style.configure("TSeparator", background=colors["border"])
-        self.ui_style.configure(
-            "Signature.TLabel",
-            background=colors["bg"],
-            foreground=colors["muted"],
-            font=("Segoe UI", 9, "italic"),
-        )
-        self.ui_style.configure(
-            "UpdateDot.TLabel",
-            background=colors["bg"],
-            foreground=colors["muted"],
-            font=("Segoe UI", 11, "bold"),
-        )
-        self.ui_style.configure(
-            "UpdateDotReady.TLabel",
-            background=colors["bg"],
-            foreground="#D93636",
-            font=("Segoe UI", 11, "bold"),
-        )
-        self.ui_style.configure("LiveLog.Treeview", background=colors["tree"], fieldbackground=colors["tree"], foreground=colors["tree_text"])
-        self.ui_style.configure(
-            "Completed.LiveLog.Treeview",
-            background=colors["completed"],
-            fieldbackground=colors["completed"],
-            foreground=colors["completed_text"],
-        )
+        configure_svnmate_styles(self.root, self.ui_style, theme)
         self._refresh_update_dot()
-        if self.status_text.get() == "已完成":
-            self.live_log.configure(style="Completed.LiveLog.Treeview")
-        else:
-            self.live_log.configure(style="LiveLog.Treeview")
+        self._refresh_completion_summary_style()
 
     def _load_folder_groups(self, data: dict[str, object]) -> dict[str, list[dict[str, object]]]:
         loaded = data.get("folder_groups")
@@ -2270,6 +2335,7 @@ class SvnAutoTool:
         )[:80]
         trigger = f"外部更新（{source}）"
         self.running = True
+        self._begin_run_summary()
         self.run_button.configure(state="disabled")
         self.live_log.configure(style="LiveLog.Treeview")
         self.status_text.set("外部更新中...")
@@ -2305,8 +2371,10 @@ class SvnAutoTool:
                 request_id=request_id,
             )
             response.update(result.to_dict(executed_by="svnmate"))
+            if not result.folders:
+                self._record("", trigger, "失败", "没有可更新目录")
         except Exception as exc:
-            self._log(f"外部更新任务异常：{exc}")
+            self._record("", trigger, "失败", f"任务异常：{exc}")
             response.update(
                 {
                     "protocol_version": IPC_PROTOCOL_VERSION,
@@ -2320,7 +2388,7 @@ class SvnAutoTool:
             )
         finally:
             completed.set()
-            self.log_queue.put(("done", trigger))
+            self.log_queue.put(("done", self._make_run_summary(trigger)))
 
     def _start_worker(self, trigger: str) -> None:
         if self.running:
@@ -2332,6 +2400,7 @@ class SvnAutoTool:
             return
         self._save_config()
         self.running = True
+        self._begin_run_summary()
         self.run_button.configure(state="disabled")
         self.live_log.configure(style="LiveLog.Treeview")
         self.status_text.set(f"{trigger}中...")
@@ -2384,8 +2453,10 @@ class SvnAutoTool:
 
             if run_daily_bin_update and bin_update_attempted and bin_update_all_success:
                 self.last_bin_update_date = today
+        except Exception as exc:
+            self._record("", trigger, "失败", f"任务异常：{exc}")
         finally:
-            self.log_queue.put(("done", trigger))
+            self.log_queue.put(("done", self._make_run_summary(trigger)))
 
     def _queue_update_bat_scripts(
         self,
@@ -3125,7 +3196,69 @@ class SvnAutoTool:
             return subprocess.CREATE_NEW_CONSOLE
         return 0
 
+    def _begin_run_summary(self) -> None:
+        lock = getattr(self, "run_outcomes_lock", None)
+        if lock is not None:
+            with lock:
+                self.run_outcomes.clear()
+        self._set_completion_summary("运行中 · 等待首个结果", "running")
+
+    def _track_run_outcome(
+        self,
+        folder: str,
+        action: str,
+        status: str,
+    ) -> None:
+        if not getattr(self, "running", False):
+            return
+        outcomes = getattr(self, "run_outcomes", None)
+        lock = getattr(self, "run_outcomes_lock", None)
+        if outcomes is None or lock is None:
+            return
+        key = (folder, action)
+        with lock:
+            if status in {"自动恢复", "重试"}:
+                outcomes.pop(key, None)
+            elif status in {"成功", "完成", "失败", "跳过"}:
+                outcomes[key] = status
+
+    def _make_run_summary(self, trigger: str) -> TaskRunSummary:
+        outcomes = getattr(self, "run_outcomes", {})
+        lock = getattr(self, "run_outcomes_lock", None)
+        if lock is not None:
+            with lock:
+                values = tuple(outcomes.values())
+        else:
+            values = tuple(outcomes.values())
+        return TaskRunSummary(
+            trigger=trigger,
+            succeeded=sum(status in {"成功", "完成"} for status in values),
+            failed=sum(status == "失败" for status in values),
+            skipped=sum(status == "跳过" for status in values),
+        )
+
+    def _set_completion_summary(self, text: str, tone: str) -> None:
+        self.completion_summary_state = tone
+        if hasattr(self, "completion_summary_text"):
+            self.completion_summary_text.set(text)
+        self._refresh_completion_summary_style()
+
+    def _refresh_completion_summary_style(self) -> None:
+        if not hasattr(self, "completion_summary_label"):
+            return
+        style = {
+            "running": "RunSummaryRunning.TLabel",
+            "success": "RunSummarySuccess.TLabel",
+            "warning": "RunSummaryWarning.TLabel",
+            "error": "RunSummaryError.TLabel",
+        }.get(
+            getattr(self, "completion_summary_state", "idle"),
+            "RunSummary.TLabel",
+        )
+        self.completion_summary_label.configure(style=style)
+
     def _record(self, folder: str, action: str, status: str, message: str) -> None:
+        self._track_run_outcome(folder, action, status)
         finished_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self._log(f"[{status}] {finished_at} | {action} | {folder} | {message}")
 
@@ -3190,18 +3323,40 @@ class SvnAutoTool:
             if excess > 0:
                 self.live_log.delete(*children[:excess])
             self.live_log.yview_moveto(1.0)
+        if self.running and not done_payloads:
+            current = self._make_run_summary("")
+            if current.succeeded or current.failed or current.skipped:
+                self._set_completion_summary(
+                    "运行中 · 步骤："
+                    f"成功 {current.succeeded} · "
+                    f"失败 {current.failed} · "
+                    f"跳过 {current.skipped}",
+                    "running",
+                )
         for payload in done_payloads:
+            summary = (
+                payload
+                if isinstance(payload, TaskRunSummary)
+                else TaskRunSummary(str(payload), 0, 0, 0)
+            )
             self.running = False
             self.worker_thread = None
             self.run_button.configure(state="normal")
-            self.status_text.set("已完成")
+            self.status_text.set(summary.status_text)
+            self._set_completion_summary(summary.detail_text, summary.tone)
             self._save_config()
             self._log(
-                f"========== {payload}结束："
+                f"========== {summary.trigger}结束："
                 f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} =========="
             )
-            self._log("全部任务已完成")
-            self.live_log.configure(style="Completed.LiveLog.Treeview")
+            self._log(summary.detail_text)
+            self.live_log.configure(
+                style={
+                    "success": "Completed.LiveLog.Treeview",
+                    "warning": "Warning.LiveLog.Treeview",
+                    "error": "Failed.LiveLog.Treeview",
+                }[summary.tone]
+            )
             self._fade_out_music_after_tasks()
         delay = (
             LOG_ACTIVE_POLL_MS
@@ -3234,6 +3389,12 @@ class SvnAutoTool:
             )
             return
         self.root.withdraw()
+        if not getattr(self, "tray_hint_shown", False):
+            self.tray_icon.show_notification(
+                "SVNmate 仍在运行",
+                "双击托盘图标可恢复窗口；右键可立即执行或退出。",
+            )
+            self.tray_hint_shown = True
 
     def _show_from_tray(self) -> None:
         self.root.deiconify()
@@ -3319,10 +3480,19 @@ class SvnAutoTool:
             return
         if self.update_state == "ready":
             self.update_dot.configure(text="●", style="UpdateDotReady.TLabel")
+            tooltip = "发现 SVNmate 新版本，点击下载"
         elif self.update_state in {"checking", "downloading"}:
             self.update_dot.configure(text="◌", style="UpdateDot.TLabel")
+            tooltip = (
+                "正在下载 SVNmate 更新"
+                if self.update_state == "downloading"
+                else "正在检查 SVNmate 更新"
+            )
         else:
             self.update_dot.configure(text="○", style="UpdateDot.TLabel")
+            tooltip = "检查 SVNmate 更新"
+        if hasattr(self, "update_tooltip"):
+            self.update_tooltip.set_text(tooltip)
 
     def _on_update_dot_clicked(self) -> None:
         if self.update_state == "checking":
@@ -3424,7 +3594,11 @@ try {{
     Expand-Archive -LiteralPath $zipPath -DestinationPath $extractDir -Force
     $payload = Join-Path $extractDir '一键更新SVN'
     if (-not (Test-Path -LiteralPath $payload -PathType Container)) {{
-        throw "更新包缺少目录：$payload"
+        $payload = $extractDir
+    }}
+    $payloadExe = Join-Path $payload 'SVNAutoTool.exe'
+    if (-not (Test-Path -LiteralPath $payloadExe -PathType Leaf)) {{
+        throw "更新包缺少程序文件：$payloadExe"
     }}
 
     Copy-Item -Path (Join-Path $payload '*') -Destination $appDir -Recurse -Force

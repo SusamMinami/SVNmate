@@ -16,7 +16,10 @@ from svn_auto_tool import (
     RELEASE_DOWNLOAD_URL,
     SingleInstanceGuard,
     SvnAutoTool,
+    TaskRunSummary,
     WindowsTrayIcon,
+    _window_dimensions_for_dpi,
+    tool_module_primary_label,
 )
 from tool_modules import CONFIG_LINKER, KINDLE_STATUS, ToolModuleManager
 
@@ -36,10 +39,189 @@ class ReleaseConfigTests(unittest.TestCase):
     def test_release_asset_name_is_stable_and_url_safe(self) -> None:
         self.assertEqual(RELEASE_ASSET_NAME, "SVNmate.zip")
         asset_url = RELEASE_DOWNLOAD_URL.format(tag=APP_VERSION, asset=RELEASE_ASSET_NAME)
-        self.assertTrue(asset_url.endswith("/v1.4.4/SVNmate.zip"))
+        self.assertTrue(asset_url.endswith("/v1.4.5/SVNmate.zip"))
+
+
+class LayoutAndSummaryTests(unittest.TestCase):
+    def test_window_dimensions_scale_and_stay_inside_available_screen(self) -> None:
+        self.assertEqual(
+            _window_dimensions_for_dpi(96, 1920, 1080),
+            (1140, 760, 1000, 650),
+        )
+        self.assertEqual(
+            _window_dimensions_for_dpi(144, 1440, 900),
+            (1392, 820, 1392, 820),
+        )
+
+    def test_task_summary_distinguishes_success_warning_and_failure(self) -> None:
+        success = TaskRunSummary("手动执行", 4, 0, 0)
+        warning = TaskRunSummary("手动执行", 3, 0, 1)
+        partial = TaskRunSummary("手动执行", 2, 1, 0)
+        failure = TaskRunSummary("手动执行", 0, 2, 0)
+
+        self.assertEqual(success.status_text, "已完成")
+        self.assertEqual(success.tone, "success")
+        self.assertEqual(warning.status_text, "已完成（有跳过）")
+        self.assertEqual(warning.tone, "warning")
+        self.assertEqual(partial.status_text, "部分完成")
+        self.assertEqual(partial.tone, "warning")
+        self.assertEqual(failure.status_text, "执行失败")
+        self.assertEqual(failure.tone, "error")
+        self.assertEqual(
+            partial.detail_text,
+            "部分完成 · 步骤：成功 2 · 失败 1 · 跳过 0",
+        )
+
+    def test_recovered_step_does_not_remain_failed_in_summary(self) -> None:
+        tool = SvnAutoTool.__new__(SvnAutoTool)
+        tool.running = True
+        tool.run_outcomes = {}
+        tool.run_outcomes_lock = threading.Lock()
+
+        tool._track_run_outcome("C:/repo", "svn update", "失败")
+        tool._track_run_outcome("C:/repo", "svn update", "自动恢复")
+        tool._track_run_outcome("C:/repo", "svn cleanup(自动恢复)", "成功")
+        tool._track_run_outcome("C:/repo", "svn update", "重试")
+        tool._track_run_outcome("C:/repo", "svn update", "成功")
+
+        self.assertEqual(
+            tool._make_run_summary("手动执行"),
+            TaskRunSummary("手动执行", 2, 0, 0),
+        )
+
+    def test_header_more_menu_keeps_auxiliary_actions_keyboard_accessible(self) -> None:
+        tool = SvnAutoTool.__new__(SvnAutoTool)
+        tool.root = Mock()
+        tool.header_menu_button = Mock()
+        tool.header_menu_button.winfo_rootx.return_value = 100
+        tool.header_menu_button.winfo_rooty.return_value = 50
+        tool.header_menu_button.winfo_height.return_value = 32
+        tool.running = False
+        tool.update_state = "idle"
+        tool._save_config = Mock()
+        tool._open_log_folder = Mock()
+        tool._open_user_guide = Mock()
+        tool._on_update_dot_clicked = Mock()
+        tool._exit_application = Mock()
+        menu = Mock()
+
+        with patch("svn_auto_tool.Menu", return_value=menu):
+            tool._show_header_menu()
+
+        labels = [
+            call.kwargs["label"]
+            for call in menu.add_command.call_args_list
+        ]
+        self.assertEqual(
+            labels,
+            [
+                "保存配置",
+                "打开日志文件夹",
+                "使用指南",
+                "检查 SVNmate 更新",
+                "退出 SVNmate",
+            ],
+        )
+        menu.tk_popup.assert_called_once()
+        tool.header_menu_button.focus_set.assert_called_once_with()
+
+    def test_partial_completion_uses_warning_summary_and_log_style(self) -> None:
+        tool = SvnAutoTool.__new__(SvnAutoTool)
+        tool.log_queue = queue.Queue()
+        tool.log_queue.put(
+            ("done", TaskRunSummary("手动执行", 3, 1, 2))
+        )
+        tool.dropped_live_log_items = 0
+        tool.running = True
+        tool.worker_thread = Mock()
+        tool.run_button = Mock()
+        tool.status_text = Mock()
+        tool.completion_summary_text = Mock()
+        tool.completion_summary_label = Mock()
+        tool.live_log = Mock()
+        tool.root = Mock()
+        tool._save_config = Mock()
+        tool._log = Mock()
+        tool._fade_out_music_after_tasks = Mock()
+
+        tool._poll_log_queue()
+
+        tool.status_text.set.assert_called_once_with("部分完成")
+        tool.completion_summary_text.set.assert_called_once_with(
+            "部分完成 · 步骤：成功 3 · 失败 1 · 跳过 2"
+        )
+        tool.completion_summary_label.configure.assert_called_once_with(
+            style="RunSummaryWarning.TLabel"
+        )
+        tool.live_log.configure.assert_called_once_with(
+            style="Warning.LiveLog.Treeview"
+        )
+
+
+class MusicControlTests(unittest.TestCase):
+    def _tool(self, *, enabled: bool, paused: bool) -> SvnAutoTool:
+        tool = SvnAutoTool.__new__(SvnAutoTool)
+        tool.music_enabled = _Value(enabled)
+        tool.music_paused_after_task = paused
+        tool.music_fading = True
+        tool._apply_music_setting = Mock()
+        tool._refresh_music_button = Mock()
+        tool._save_config = Mock()
+        return tool
+
+    def test_music_button_turns_playing_music_off(self) -> None:
+        tool = self._tool(enabled=True, paused=False)
+
+        tool._on_music_toggle()
+
+        self.assertFalse(tool.music_enabled.get())
+        self.assertFalse(tool.music_paused_after_task)
+
+    def test_music_button_resumes_task_paused_music(self) -> None:
+        tool = self._tool(enabled=True, paused=True)
+
+        tool._on_music_toggle()
+
+        self.assertTrue(tool.music_enabled.get())
+        self.assertFalse(tool.music_paused_after_task)
+        tool._apply_music_setting.assert_called_once_with()
 
 
 class ToolModuleIntegrationTests(unittest.TestCase):
+    def test_primary_action_label_tracks_module_state(self) -> None:
+        self.assertEqual(
+            tool_module_primary_label(
+                CONFIG_LINKER,
+                installed=False,
+                state="idle",
+            ),
+            "安装",
+        )
+        self.assertEqual(
+            tool_module_primary_label(
+                CONFIG_LINKER,
+                installed=True,
+                state="ready",
+            ),
+            "更新",
+        )
+        self.assertEqual(
+            tool_module_primary_label(
+                CONFIG_LINKER,
+                installed=True,
+                state="idle",
+            ),
+            "打开",
+        )
+        self.assertEqual(
+            tool_module_primary_label(
+                CONFIG_LINKER,
+                installed=True,
+                state="downloading",
+            ),
+            "处理中",
+        )
+
     def test_empty_config_path_uses_managed_module_location(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             tool = SvnAutoTool.__new__(SvnAutoTool)
@@ -73,6 +255,57 @@ class ToolModuleIntegrationTests(unittest.TestCase):
                 tool._resolve_tool_module_executable(KINDLE_STATUS),
                 external.resolve(),
             )
+
+    def test_ready_module_uses_primary_action_for_update(self) -> None:
+        tool = SvnAutoTool.__new__(SvnAutoTool)
+        tool.tool_module_states = {CONFIG_LINKER.module_id: "ready"}
+        tool.tool_module_manifests = {
+            CONFIG_LINKER.module_id: Mock(),
+        }
+        tool._start_tool_module_install = Mock()
+        tool.tool_module_manager = Mock()
+
+        tool._on_tool_module_primary(CONFIG_LINKER)
+
+        tool._start_tool_module_install.assert_called_once_with(CONFIG_LINKER)
+        tool.tool_module_manager.is_installed.assert_not_called()
+
+    def test_module_more_menu_contains_secondary_actions(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            executable = Path(temp_dir) / "ConfigLinker.exe"
+            executable.write_bytes(b"exe")
+            tool = SvnAutoTool.__new__(SvnAutoTool)
+            tool.root = Mock()
+            tool.tool_module_manager = Mock()
+            tool.tool_module_manager.executable_path.return_value = executable
+            tool.tool_module_paths = {CONFIG_LINKER.module_id: _Value("")}
+            tool.tool_module_states = {CONFIG_LINKER.module_id: "ready"}
+            tool.tool_module_manifests = {
+                CONFIG_LINKER.module_id: SimpleNamespace(version="1.5.4"),
+            }
+            button = Mock()
+            button.winfo_rootx.return_value = 100
+            button.winfo_rooty.return_value = 50
+            button.winfo_height.return_value = 28
+            menu = Mock()
+
+            with patch("svn_auto_tool.Menu", return_value=menu):
+                tool._show_tool_module_menu(CONFIG_LINKER, button)
+
+        labels = [
+            call.kwargs["label"]
+            for call in menu.add_command.call_args_list
+        ]
+        self.assertEqual(
+            labels,
+            [
+                "打开配置关系检索器",
+                "更新到 v1.5.4",
+                "选择现有程序...",
+                "打开安装位置",
+                "复制程序路径",
+            ],
+        )
 
 
 class SelfUpdateTests(unittest.TestCase):
@@ -132,6 +365,11 @@ class SelfUpdateTests(unittest.TestCase):
             self.assertIn("$pidToWait = 4321", script)
             self.assertIn("Wait-FileUnlocked $appExe 60", script)
             self.assertIn("[System.IO.FileShare]::None", script)
+            self.assertIn("$payload = $extractDir", script)
+            self.assertIn(
+                "更新包缺少程序文件：$payloadExe",
+                script,
+            )
             self.assertIn("'apply_update.log'", script)
             self.assertIn("Write-UpdateLog '更新完成", script)
             self.assertIn("更新失败：$message", script)
@@ -216,11 +454,17 @@ class TrayInteractionTests(unittest.TestCase):
         tool.root = Mock()
         tool.tray_icon = Mock()
         tool.tray_icon.ensure_visible.return_value = True
+        tool.tray_hint_shown = False
 
         tool._hide_to_tray()
 
         tool.tray_icon.ensure_visible.assert_called_once_with()
         tool.root.withdraw.assert_called_once_with()
+        tool.tray_icon.show_notification.assert_called_once_with(
+            "SVNmate 仍在运行",
+            "双击托盘图标可恢复窗口；右键可立即执行或退出。",
+        )
+        self.assertTrue(tool.tray_hint_shown)
 
     def test_hide_to_tray_keeps_window_open_when_icon_is_unavailable(self) -> None:
         tool = SvnAutoTool.__new__(SvnAutoTool)
