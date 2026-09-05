@@ -213,6 +213,19 @@ BP 输入框右侧的检查按钮会读取 BP、对应数字槽位、同名 Dial
 - 找不到 `DialogNPCTable` 映射的已选模型保持
   `None` 并在结果中列出。
 
+当检查结果包含“未登记”槽位时，任务目标物工作区会在 BP 创建、追加或
+`DialogModels` 写入前打开补登记审核：
+
+- 行名默认从 Character BP 资产名移除 `BP_` 与末尾 `_Npc` 后生成，并允许编辑。
+- `CharacterBPPath`、`AnimClassPath` 与 `MeshPath` 从 BP 默认对象回读；
+  `CameraBPPath` 仅在相同 Mesh/Anim 的历史登记能够唯一确定时自动填写，否则
+  必须从现有 Camera BP 中选择或粘贴完整类路径。
+- 写入前校验 `DialogNPCTable` 未处于脏状态，并使用审核时的整表哈希检查并发
+  修改。写入后逐行回读全部四列，完全一致才保存资产。
+- UE4 暴露的 `data_table_add_row` 是 Blueprint CustomThunk，不能从 Python
+  安全调用。工具使用经过临时表验证的 `fill_data_table_from_csv_string` 重建
+  整表；失败时重载原包，不保留未保存修改。
+
 创建空 BP 时，“创建 BP”会在 BP 保存后同步注册 `player` 和已勾选目标物，
 未勾选项不会进入 `DialogModels`。仅输入并检查已有 BP 时，不需要任务节点，
 按钮直接切换为“注册到对话”。已有 BP 同时加载任务时，如果勾选了候选目标物，

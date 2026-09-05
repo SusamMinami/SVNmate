@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MissionTargetPreviewPlan } from "../types";
-import { getBlueprintFormation, refreshMissionTargetPlan } from "./client";
+import {
+  applyDialogNpcTableRegistration,
+  getBlueprintFormation,
+  inspectDialogNpcTableRegistration,
+  refreshMissionTargetPlan,
+} from "./client";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -79,5 +84,92 @@ describe("refreshMissionTargetPlan", () => {
     expect(
       JSON.parse(String(fetchSpy.mock.calls[0]?.[1]?.body)),
     ).toEqual({ taskId: "900001" });
+  });
+});
+
+describe("DialogNPCTable registration client", () => {
+  it("sends inspect and apply requests without automatic retry", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ok: true,
+          data: {
+            reviewToken: "a".repeat(64),
+            tableAssetPath: "/Game/Seria/Task/Mod/DialogNPCTable",
+            rows: [],
+            cameraClassPaths: [],
+          },
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+
+    await inspectDialogNpcTableRegistration([
+      {
+        modelIndex: 1,
+        targetId: "500001",
+        modelClassPath: "/Game/Test/BP_New.BP_New_C",
+      },
+    ]);
+
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe(
+      "/api/ue/mission-targets/dialog-npc-table/inspect",
+    );
+    expect(JSON.parse(String(fetchSpy.mock.calls[0]?.[1]?.body))).toEqual({
+      slots: [
+        {
+          modelIndex: 1,
+          targetId: "500001",
+          modelClassPath: "/Game/Test/BP_New.BP_New_C",
+        },
+      ],
+    });
+
+    fetchSpy.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          ok: true,
+          data: {
+            status: "registered",
+            tableAssetPath: "/Game/Seria/Task/Mod/DialogNPCTable",
+            registeredRowNames: ["New"],
+            saved: true,
+          },
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+
+    await applyDialogNpcTableRegistration("a".repeat(64), [
+      {
+        rowName: "New",
+        characterClassPath: "/Game/Test/BP_New.BP_New_C",
+        animClassPath: "/Game/Test/ABP_New.ABP_New_C",
+        cameraClassPath: "/Game/Test/Camera_New.Camera_New_C",
+        meshPath: "/Game/Test/SK_New.SK_New",
+      },
+    ]);
+
+    expect(fetchSpy.mock.calls[1]?.[0]).toBe(
+      "/api/ue/mission-targets/dialog-npc-table/apply",
+    );
+    expect(JSON.parse(String(fetchSpy.mock.calls[1]?.[1]?.body))).toEqual({
+      reviewToken: "a".repeat(64),
+      rows: [
+        {
+          rowName: "New",
+          characterClassPath: "/Game/Test/BP_New.BP_New_C",
+          animClassPath: "/Game/Test/ABP_New.ABP_New_C",
+          cameraClassPath: "/Game/Test/Camera_New.Camera_New_C",
+          meshPath: "/Game/Test/SK_New.SK_New",
+        },
+      ],
+    });
   });
 });

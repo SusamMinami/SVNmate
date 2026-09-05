@@ -12,6 +12,10 @@ import {
   prepareSoundEffectPreview,
 } from "../soundEffectPreview";
 import {
+  applyDialogNpcTableRegistration,
+  inspectDialogNpcTableRegistration,
+} from "../dialogNpcTable";
+import {
   applyNpcAssetMigration,
   configureNpcMigrationTarget,
   inspectNpcMigrationPlan,
@@ -49,6 +53,7 @@ import {
 
 export const ueServices = {
   appendMissionTargetBlueprint,
+  applyDialogNpcTableRegistration,
   applyNpcAssetMigration,
   applyNpcSupplement,
   applyBackgroundPropImport,
@@ -56,6 +61,7 @@ export const ueServices = {
   configureNpcMigrationTarget,
   exportDialogueStoryboard,
   inspectBackgroundPropImport,
+  inspectDialogNpcTableRegistration,
   inspectDialogueStoryboardExport,
   inspectMissionTargetBlueprint,
   inspectMissionTargetBlueprintCompatibility,

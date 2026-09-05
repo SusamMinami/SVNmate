@@ -111,6 +111,11 @@
   Generated Class，并使用包装 Actor 的世界 Transform。匹配任务目标物时复用
   普通 NPC 链路；未匹配时也必须从当前最大数字槽后按 UE 选择顺序写入，并同步
   `DialogModels`，不得降级为资产名背景组件。
+- 任务目标物检查到 BP 模型未在 `DialogNPCTable` 登记时，必须先进入补登记
+  审核，不得继续静默写入 `None`。Character BP、Anim Class 与 Mesh 从 BP
+  默认对象回读，Camera BP 必须自动唯一匹配或由用户明确选择。UE4 的
+  `data_table_add_row` CustomThunk 禁止从 Python 调用；使用带快照哈希、脏资产
+  阻断、整表回读和失败重载的 CSV 整表事务。
 - 任务节点与对话节点都为空时，非数字 BP 组件审核必须按 BP 父类分流：
   `TaskActorBase` 使用 UE 当前选择中的目标 BP Actor，或当前关卡中的唯一同类
   实例，确定世界 Transform 后直接写入；`PositionModeBase` 继续查找对应对话

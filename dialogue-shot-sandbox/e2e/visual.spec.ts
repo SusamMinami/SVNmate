@@ -6028,6 +6028,9 @@ test("locks and registers every existing numeric Blueprint slot", async ({
   page,
 }, testInfo) => {
   let registrationRequest: Record<string, unknown> | null = null;
+  let dialogNpcInspectionRequest: Record<string, unknown> | null = null;
+  let dialogNpcApplyRequest: Record<string, unknown> | null = null;
+  let dialogNpcRegistered = false;
   const inspectionRequests: Array<Record<string, unknown>> = [];
   await page.route(
     "**/api/ue/mission-targets/inspect-blueprint",
@@ -6085,14 +6088,69 @@ test("locks and registers every existing numeric Blueprint slot", async ({
                 modelIndex: 3,
                 targetId: null,
                 modelClassPath: "/Game/Test/BP_Three.BP_Three_C",
-                existingModelName: "None",
-                suggestedModelName: null,
-                candidateModelNames: [],
-                status: "unmapped",
+                existingModelName: dialogNpcRegistered ? "Three" : "None",
+                suggestedModelName: dialogNpcRegistered ? "Three" : null,
+                candidateModelNames: dialogNpcRegistered ? ["Three"] : [],
+                status: dialogNpcRegistered ? "available" : "unmapped",
               },
             ],
             message:
               "BP 已识别 4 个角色位（含 0 号玩家）；对话已注册 2 个角色；Formation 未指向当前 BP",
+          },
+        }),
+      });
+    },
+  );
+  await page.route(
+    "**/api/ue/mission-targets/dialog-npc-table/inspect",
+    async (route) => {
+      dialogNpcInspectionRequest = route.request().postDataJSON();
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          data: {
+            reviewToken: "a".repeat(64),
+            tableAssetPath: "/Game/Seria/Task/Mod/DialogNPCTable",
+            rows: [
+              {
+                modelClassPath: "/Game/Test/BP_Three.BP_Three_C",
+                modelIndexes: [3],
+                targetIds: [],
+                rowName: "Three",
+                characterClassPath: "/Game/Test/BP_Three.BP_Three_C",
+                animClassPath: "/Game/Test/ABP_Three.ABP_Three_C",
+                cameraClassPath:
+                  "/Game/Test/Camera_Normal.Camera_Normal_C",
+                meshPath: "/Game/Test/SK_Three.SK_Three",
+                cameraSuggestionSource: "matching_mesh_and_anim",
+                blockedReasons: [],
+              },
+            ],
+            cameraClassPaths: [
+              "/Game/Test/Camera_Normal.Camera_Normal_C",
+            ],
+          },
+        }),
+      });
+    },
+  );
+  await page.route(
+    "**/api/ue/mission-targets/dialog-npc-table/apply",
+    async (route) => {
+      dialogNpcApplyRequest = route.request().postDataJSON();
+      dialogNpcRegistered = true;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          data: {
+            status: "registered",
+            tableAssetPath: "/Game/Seria/Task/Mod/DialogNPCTable",
+            registeredRowNames: ["Three"],
+            saved: true,
           },
         }),
       });
@@ -6114,11 +6172,11 @@ test("locks and registers every existing numeric Blueprint slot", async ({
             dialogueId: registrationRequest?.dialogueId ?? "735200",
             dialogueAssetPath:
               `/Game/Seria/Task/dialoggraph/Test/${registrationRequest?.dialogueId ?? "735200"}.${registrationRequest?.dialogueId ?? "735200"}`,
-            dialogueModels: ["player", "One", "Two", "None"],
-            registeredCount: 2,
-            characterCount: 3,
-            emptyCount: 1,
-            unresolvedIndexes: [3],
+            dialogueModels: ["player", "One", "Two", "Three"],
+            registeredCount: 3,
+            characterCount: 4,
+            emptyCount: 0,
+            unresolvedIndexes: [],
             spatialStatus: "unchanged",
             spatialMapAssetPath: "/Game/Test/Maps/TestMap.TestMap",
           },
@@ -6193,6 +6251,46 @@ test("locks and registers every existing numeric Blueprint slot", async ({
     .getByRole("button", { name: "按 BP 注册到对话" })
     .click();
 
+  const dialogNpcReview = page.getByRole("dialog", {
+    name: "补登记 DialogNPCTable",
+  });
+  await expect(dialogNpcReview).toBeVisible();
+  expect(dialogNpcInspectionRequest).toEqual({
+    slots: [
+      {
+        modelIndex: 3,
+        targetId: null,
+        modelClassPath: "/Game/Test/BP_Three.BP_Three_C",
+      },
+    ],
+  });
+  await expect(
+    dialogNpcReview.getByLabel("槽位 3 的 DialogNPCTable 行名"),
+  ).toHaveValue("Three");
+  await expect(dialogNpcReview.getByLabel("槽位 3 的 Camera BP")).toHaveValue(
+    "/Game/Test/Camera_Normal.Camera_Normal_C",
+  );
+  await dialogNpcReview.screenshot({
+    path: testInfo.outputPath("dialog-npc-table-registration.png"),
+  });
+  await dialogNpcReview.getByRole("button", { name: "保存登记" }).click();
+  await expect(dialogNpcReview).toHaveCount(0);
+  expect(dialogNpcApplyRequest).toMatchObject({
+    reviewToken: "a".repeat(64),
+    rows: [
+      {
+        rowName: "Three",
+        characterClassPath: "/Game/Test/BP_Three.BP_Three_C",
+        animClassPath: "/Game/Test/ABP_Three.ABP_Three_C",
+        cameraClassPath: "/Game/Test/Camera_Normal.Camera_Normal_C",
+        meshPath: "/Game/Test/SK_Three.SK_Three",
+      },
+    ],
+  });
+  await workspace
+    .getByRole("button", { name: "按 BP 注册到对话" })
+    .click();
+
   expect(registrationRequest).toEqual({
     blueprintName: "7352",
     dialogueId: "846500",
@@ -6200,7 +6298,7 @@ test("locks and registers every existing numeric Blueprint slot", async ({
     targetOverrides: [],
   });
   await expect(
-    workspace.getByText(/角色 3 个（含 0 号玩家）/),
+    workspace.getByText(/角色 4 个（含 0 号玩家）/),
   ).toBeVisible();
 });
 

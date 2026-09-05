@@ -1,58 +1,18 @@
-# 镜头沙盘 v0.23.2
+# 镜头沙盘 v0.23.3
 
-> 2026-09-05 · 目标物对话识别与界面基础优化
+> 2026-09-05 · DialogNPCTable 补登记
 
-## 任务目标物环境对话
+## 任务目标物
 
-- 读取任务目标物时同步检查 `NPC.npcchat2`、`NPC.npcchat3` 和
-  `MissionPosition.npcchat2`。
-- 目标物列表直接显示对应的“闲话”与“冒泡”四位对话文件 ID，并可查看配置
-  来源，便于判断目标物应移动还是删除。
-- 注册 NPC 的复用下拉项同步显示每个候选 NPC 的复杂闲话、冒泡文件 ID；
-  六位节点配置只展示前四位，未配置时明确标记“无闲话/冒泡”。
+- BP 槽位缺少 `DialogNPCTable` 映射时，会在创建、追加或注册
+  `DialogModels` 前打开补登记审核，不再静默写入 `None`。
+- 自动从 Character BP 默认对象回读 Anim Class 与 Skeletal Mesh；Camera BP
+  能唯一匹配时自动填写，否则由用户明确选择。
+- 行名默认从 BP 资产名生成并允许修改，重复行名、无效路径和脏资产会阻止写入。
 
-## 界面基础优化
+## 写入安全
 
-- 建立字体、字号、圆角和核心动效 token，移除未随应用分发的默认字体依赖。
-- 角色标签、工作区类别和检查器摘要不再使用 7px 字号；导出确认、NPC 注册及
-  迁移阻断说明提高可读性。
-- 主工作区切换由 720ms 缩短到 480ms，减少动态效果模式会立即清理旧页面。
-
-## SceneObject NPC
-
-- 关卡图加载出的 `SceneObject` 现在会识别其中的实际 NPC，不再显示为不支持。
-- 未匹配任务目标物时，NPC 也会按选择顺序写入 BP 数字槽，并同步对应对话的
-  `DialogModels`。
-- NPC 的世界位置、旋转和缩放保持不变。
-- 相同模型位于不同位置时会分别创建槽位，不会因模型重复而阻断。
-- 已由旧版写成资产名组件时会提示目标数字槽，可先重命名或清理旧组件，避免
-  重复生成同一个 NPC。
-
-## NPC 工作流分流
-
-- 进入“NPC 迁移”后，可选择“全新 NPC”“动作补充与修改”或“面部补充”。
-- 全新 NPC 保留原有的美术 UE 扫描、跨工程迁移和策划 UE 完整配置流程。
-- 已有 NPC 的动作和面部更新直接连接策划 UE，不再重复迁移模型或创建 BP/ABP。
-
-## 动作补充
-
-- 从已有 NPC BP 或 Body Skeletal Mesh 自动确定 NPC、Skeleton 和 Animation
-  目录。
-- 清单明确区分新增与覆盖；目标动作存在未保存修改时会阻断。
-- 新识别的 Idle / Turn 动作可自动创建对应 Montage，既有 Montage 保持复用。
-
-## 面部补充
-
-- 自动识别 Face Skeletal Mesh 与 Face Skeleton，并将 `_Face.fbx` 与同名
-  Body 动作配对。
-- 每个动作可分别审核是否复制 Morph Target 曲线、是否生成 Montage。
-- 自动导入或更新 Face 动作、锁定根骨骼并保存。
-- 直接调用 `SeriaAssetHelperBlueprintFunctionLibrary` 完成曲线复制和 Montage
-  生成，不再要求拖入或操作 `BP_FaceConfigHelper`。
-- 写入后回读 Body/Face 配对、动作数量、根骨骼锁定和 Montage 结果。
-
-## 稳定性
-
-- NPC 目录扫描改用 Asset Registry 按类型筛选，不再递归加载全部动画资产，
-  避免大量 DDC 构建导致 UE 卡顿或 MCP 断连。
-- 清单勾选、曲线或 Montage 选项变化后，必须重新审核才能执行。
+- 使用整表快照哈希检查审核后的并发变化。
+- 写入后逐行回读 `CharacterBPPath`、`AnimClassPath`、`CameraBPPath` 与
+  `MeshPath`，完全一致才保存 UE 资产。
+- 写入或回读失败时重载原包，不保留未保存的 DataTable 修改。

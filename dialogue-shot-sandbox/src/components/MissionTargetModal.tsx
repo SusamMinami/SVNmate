@@ -8,6 +8,7 @@ import {
   ChevronDown,
   ChevronRight,
   Crosshair,
+  Database,
   FileSearch,
   Link2,
   LoaderCircle,
@@ -21,6 +22,7 @@ import {
   X,
 } from "lucide-react";
 import { type FormEvent, useMemo, useRef, useState } from "react";
+import { DialogNpcRegistrationModal } from "./DialogNpcRegistrationModal";
 import { MissionTargetDialoguePreview } from "./MissionTargetDialoguePreview";
 import { NpcRegistrationModal } from "./NpcRegistrationModal";
 import { findDialogueTimeline } from "../data/dialogueRepository";
@@ -34,6 +36,8 @@ import {
 } from "../data/missionTargetSelection";
 import type {
   BackgroundPropImportPreview,
+  DialogNpcTableRegistrationDraft,
+  DialogNpcTableRegistrationReview,
   DialogueModelRegistrationSlot,
   DialogueDatabase,
   MissionTargetBlueprintInspection,
@@ -45,6 +49,7 @@ import type {
 } from "../types";
 import {
   appendMissionTargetBlueprint,
+  applyDialogNpcTableRegistration,
   applyBackgroundPropImport,
   clearMissionTargetPreview,
   checkMissionTargetBlueprint,
@@ -52,6 +57,7 @@ import {
   inspectMissionTargetMap,
   inspectMissionTargetBlueprint,
   inspectBackgroundPropImport,
+  inspectDialogNpcTableRegistration,
   loadMissionTargetPreview,
   readSelectedLevelActors,
   refreshMissionTargetPlan,
@@ -219,6 +225,12 @@ export function MissionTargetModal({
     useState<UeTargetSelectionReview | null>(null);
   const [existingSlotsExpanded, setExistingSlotsExpanded] = useState(false);
   const [backgroundPropError, setBackgroundPropError] = useState("");
+  const [dialogNpcReview, setDialogNpcReview] =
+    useState<DialogNpcTableRegistrationReview | null>(null);
+  const [dialogNpcRegistrationBusy, setDialogNpcRegistrationBusy] =
+    useState(false);
+  const [dialogNpcRegistrationError, setDialogNpcRegistrationError] =
+    useState("");
   const [mapLoadDecision, setMapLoadDecision] =
     useState<MapLoadDecision | null>(null);
   const [busy, setBusy] = useState(false);
@@ -374,10 +386,30 @@ export function MissionTargetModal({
       (match) => match.targetId,
     ) ?? [],
   );
+  const selectedAppendTargetIds = new Set(
+    selectedAppendTargets.map((target) => target.targetId),
+  );
+  const dialogNpcRegistrationSlots = (
+    blueprintInspection?.blueprintState === "populated"
+      ? [
+          ...blueprintModelSlots,
+          ...(blueprintInspection.appendSlots?.filter(
+            (slot) =>
+              slot.targetId !== null &&
+              selectedAppendTargetIds.has(slot.targetId),
+          ) ?? []),
+        ]
+      : blueprintRegistrationSlots.filter(
+          (slot) =>
+            slot.modelIndex > 0 &&
+            (slot.targetId === null || selectedTargetIds.has(slot.targetId)),
+        )
+  ).filter((slot) => slot.status === "unmapped");
 
   function applyBlueprintInspection(
     inspection: MissionTargetBlueprintInspection,
     updateStatus = true,
+    preserveSelection = false,
   ) {
     setBlueprintInspection(inspection);
     if (inspection.refreshedPlan) {
@@ -387,22 +419,26 @@ export function MissionTargetModal({
           (target) => target.targetId,
         ),
       );
-      setSelectedTargetIds((current) =>
-        plan
-          ? new Set(
-              Array.from(current).filter((targetId) =>
-                refreshedIds.has(targetId),
-              ),
-            )
-          : refreshedIds,
-      );
+      if (!preserveSelection) {
+        setSelectedTargetIds((current) =>
+          plan
+            ? new Set(
+                Array.from(current).filter((targetId) =>
+                  refreshedIds.has(targetId),
+                ),
+              )
+            : refreshedIds,
+        );
+      }
     }
     if (inspection.blueprintState === "populated") {
-      setSelectedTargetIds(
-        new Set(
-          inspection.sync?.mappings.map((mapping) => mapping.targetId) ?? [],
-        ),
-      );
+      if (!preserveSelection) {
+        setSelectedTargetIds(
+          new Set(
+            inspection.sync?.mappings.map((mapping) => mapping.targetId) ?? [],
+          ),
+        );
+      }
       setExistingSlotsExpanded(
         inspection.slots.some(
           (slot) =>
@@ -415,6 +451,86 @@ export function MissionTargetModal({
     }
     if (updateStatus) {
       setStatus(inspection.message);
+    }
+  }
+
+  async function openDialogNpcRegistration(
+    slots = dialogNpcRegistrationSlots,
+  ): Promise<void> {
+    if (slots.length === 0) {
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setStatus("");
+    setDialogNpcRegistrationError("");
+    try {
+      const review = await inspectDialogNpcTableRegistration(
+        slots.map((slot) => ({
+          modelIndex: slot.modelIndex,
+          targetId: slot.targetId,
+          modelClassPath: slot.modelClassPath,
+        })),
+      );
+      if (review.rows.length === 0) {
+        setStatus("相关 Character BP 已完成 DialogNPCTable 登记，请重新检查");
+        return;
+      }
+      setDialogNpcReview(review);
+    } catch (registrationError) {
+      setError(
+        registrationError instanceof Error
+          ? registrationError.message
+          : "DialogNPCTable 登记预检失败",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveDialogNpcRegistration(
+    rows: Array<
+      Pick<
+        DialogNpcTableRegistrationDraft,
+        | "rowName"
+        | "characterClassPath"
+        | "animClassPath"
+        | "cameraClassPath"
+        | "meshPath"
+      >
+    >,
+  ): Promise<void> {
+    if (!dialogNpcReview || !blueprintName.trim()) {
+      return;
+    }
+    setDialogNpcRegistrationBusy(true);
+    setDialogNpcRegistrationError("");
+    try {
+      const result = await applyDialogNpcTableRegistration(
+        dialogNpcReview.reviewToken,
+        rows,
+      );
+      const inspection = await inspectMissionTargetBlueprint(
+        blueprintName.trim(),
+        plan ?? undefined,
+        plan?.taskId,
+        targetOverrideItems,
+        configuredDialogueId,
+        configuredDialogueTimeline,
+      );
+      applyBlueprintInspection(inspection, false, true);
+      setDialogNpcReview(null);
+      setStatus(
+        `已登记并保存 DialogNPCTable：${result.registeredRowNames.join("、")}；请继续原 BP 注册操作`,
+      );
+    } catch (registrationError) {
+      setDialogNpcRegistrationError(
+        registrationError instanceof Error
+          ? registrationError.message
+          : "DialogNPCTable 登记失败",
+      );
+    } finally {
+      setDialogNpcRegistrationBusy(false);
     }
   }
 
@@ -996,6 +1112,16 @@ export function MissionTargetModal({
     ) {
       return;
     }
+    const missingSlots = blueprintInspection.slots.filter(
+      (slot) =>
+        slot.modelIndex > 0 &&
+        slot.status === "unmapped" &&
+        (slot.targetId === null || selectedTargetIds.has(slot.targetId)),
+    );
+    if (missingSlots.length > 0) {
+      await openDialogNpcRegistration(missingSlots);
+      return;
+    }
     const selectedAssetTargetIds = blueprintCreationTargets.map(
       (target) => target.targetId,
     );
@@ -1075,6 +1201,10 @@ export function MissionTargetModal({
     ) {
       return;
     }
+    if (dialogNpcRegistrationSlots.length > 0) {
+      await openDialogNpcRegistration();
+      return;
+    }
     const additions = selectedAppendTargets.map((target) => {
       const slot = blueprintInspection.appendSlots?.find(
         (candidate) => candidate.targetId === target.targetId,
@@ -1132,6 +1262,13 @@ export function MissionTargetModal({
       !blueprintName.trim() ||
       blueprintInspection?.blueprintState !== "populated"
     ) {
+      return;
+    }
+    const missingSlots = blueprintModelSlots.filter(
+      (slot) => slot.status === "unmapped",
+    );
+    if (missingSlots.length > 0) {
+      await openDialogNpcRegistration(missingSlots);
       return;
     }
     setBusy(true);
@@ -1697,6 +1834,26 @@ export function MissionTargetModal({
         )}
 
         <div className="mission-target-body">
+          {blueprintInspection && dialogNpcRegistrationSlots.length > 0 && (
+            <section className="mission-target-dialog-npc-warning">
+              <span>
+                <AlertTriangle size={15} />
+                <strong>
+                  {dialogNpcRegistrationSlots.length} 个槽位未登记
+                </strong>
+                <small>DialogModels 将保持 None</small>
+              </span>
+              <button
+                className="button"
+                type="button"
+                onClick={() => void openDialogNpcRegistration()}
+                disabled={busy}
+              >
+                <Database size={15} />
+                补登记
+              </button>
+            </section>
+          )}
           {isDialogueRegistration && blueprintInspection && (
             <>
               <section className="mission-target-summary mission-target-summary--blueprint">
@@ -2411,6 +2568,19 @@ export function MissionTargetModal({
             )}
           </div>
         </footer>
+
+        {dialogNpcReview && (
+          <DialogNpcRegistrationModal
+            review={dialogNpcReview}
+            busy={dialogNpcRegistrationBusy}
+            error={dialogNpcRegistrationError}
+            onClose={() => {
+              setDialogNpcReview(null);
+              setDialogNpcRegistrationError("");
+            }}
+            onSubmit={(rows) => void saveDialogNpcRegistration(rows)}
+          />
+        )}
 
         {backgroundPropPreview && (
           <div className="mission-map-choice-layer" role="presentation">

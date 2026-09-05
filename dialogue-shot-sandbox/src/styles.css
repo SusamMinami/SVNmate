@@ -5267,6 +5267,46 @@ textarea:focus-visible {
   margin-top: 1px;
 }
 
+.mission-target-dialog-npc-warning {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 18px;
+  color: #78451f;
+  background: #fff7ed;
+  border-bottom: 1px solid #e8c7ae;
+}
+
+.mission-target-dialog-npc-warning > span {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+}
+
+.mission-target-dialog-npc-warning svg {
+  flex: 0 0 auto;
+}
+
+.mission-target-dialog-npc-warning strong {
+  font-size: var(--type-data);
+}
+
+.mission-target-dialog-npc-warning small {
+  overflow: hidden;
+  color: #8d6343;
+  font-size: var(--type-meta);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mission-target-dialog-npc-warning .button {
+  flex: 0 0 auto;
+  min-height: 28px;
+  padding: 5px 9px;
+}
+
 .mission-target-section-label {
   display: flex;
   align-items: center;
@@ -5757,6 +5797,205 @@ textarea:focus-visible {
   padding: 12px 16px;
   background: var(--surface-muted);
   border-top: 1px solid var(--border);
+}
+
+.dialog-npc-registration-review {
+  display: flex;
+  flex-direction: column;
+  width: min(1180px, 100%);
+  max-height: min(720px, 92vh);
+}
+
+.dialog-npc-registration-review > header {
+  display: flex;
+  justify-content: space-between;
+}
+
+.dialog-npc-registration-review > header > div {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.dialog-npc-registration-review > header > div > svg {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  padding: 8px;
+  color: #ffffff;
+  background: #26313a;
+  border-radius: 5px;
+}
+
+.dialog-npc-registration-review > header span {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.dialog-npc-registration-review > header strong {
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.dialog-npc-registration-notice,
+.dialog-npc-registration-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 8px 16px;
+  font-size: var(--type-data);
+  line-height: 16px;
+}
+
+.dialog-npc-registration-notice {
+  color: #78501e;
+  background: #fff9ed;
+  border-bottom: 1px solid #ead7ad;
+}
+
+.dialog-npc-registration-error {
+  color: #8d401f;
+  background: #fff1e9;
+  border-top: 1px solid #efc7b2;
+}
+
+.dialog-npc-registration-notice svg,
+.dialog-npc-registration-error svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.dialog-npc-registration-table-wrap {
+  min-height: 180px;
+  overflow: auto;
+}
+
+.dialog-npc-registration-table {
+  width: 100%;
+  min-width: 1080px;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.dialog-npc-registration-table th,
+.dialog-npc-registration-table td {
+  padding: 8px 9px;
+  overflow: hidden;
+  border-right: 1px solid #e4e7e9;
+  border-bottom: 1px solid #e4e7e9;
+  color: #3d4852;
+  font-size: var(--type-data);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.dialog-npc-registration-table th {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+  color: #56616b;
+  background: #f1f3f4;
+  font-size: var(--type-meta);
+  font-weight: 750;
+}
+
+.dialog-npc-registration-table th:nth-child(1) {
+  width: 74px;
+}
+
+.dialog-npc-registration-table th:nth-child(2) {
+  width: 170px;
+}
+
+.dialog-npc-registration-table th:nth-child(3) {
+  width: 190px;
+}
+
+.dialog-npc-registration-table th:nth-child(4) {
+  width: 220px;
+}
+
+.dialog-npc-registration-table th:nth-child(5) {
+  width: 310px;
+}
+
+.dialog-npc-registration-table th:nth-child(6) {
+  width: 130px;
+}
+
+.dialog-npc-registration-table td:last-child,
+.dialog-npc-registration-table th:last-child {
+  border-right: 0;
+}
+
+.dialog-npc-registration-table code,
+.dialog-npc-registration-table small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dialog-npc-registration-table code {
+  color: #31404b;
+  font-family: var(--font-data);
+  font-size: var(--type-data);
+}
+
+.dialog-npc-registration-table small {
+  margin-top: 3px;
+  color: var(--text-muted);
+  font-size: var(--type-meta);
+}
+
+.dialog-npc-registration-table input {
+  width: 100%;
+  min-width: 0;
+  height: 30px;
+  padding: 0 8px;
+  color: #27333c;
+  background: #ffffff;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-compact);
+  font-family: var(--font-data);
+  font-size: var(--type-data);
+}
+
+.dialog-npc-registration-table input:focus {
+  border-color: #5d8292;
+  outline: 2px solid color-mix(in srgb, var(--ark-cyan) 28%, transparent);
+  outline-offset: 0;
+}
+
+.dialog-npc-registration-table input[aria-invalid="true"] {
+  border-color: #c77a54;
+  background: #fffaf7;
+}
+
+.dialog-npc-registration-table .dialogue-model-status {
+  gap: 4px;
+}
+
+.dialog-npc-registration-review > footer {
+  align-items: center;
+  justify-content: space-between;
+}
+
+.dialog-npc-registration-review > footer > span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--type-meta);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dialog-npc-registration-review > footer > div {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
 }
 
 .background-prop-choice {

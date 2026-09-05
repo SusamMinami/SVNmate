@@ -296,6 +296,26 @@ export async function routeUeRequest(
       });
       return true;
     }
+    if (
+      url.pathname ===
+      "/api/ue/mission-targets/dialog-npc-table/inspect"
+    ) {
+      sendJson(response, 200, {
+        ok: true,
+        data: await services.inspectDialogNpcTableRegistration(body),
+      });
+      return true;
+    }
+    if (
+      url.pathname ===
+      "/api/ue/mission-targets/dialog-npc-table/apply"
+    ) {
+      sendJson(response, 200, {
+        ok: true,
+        data: await services.applyDialogNpcTableRegistration(body),
+      });
+      return true;
+    }
     if (url.pathname === "/api/ue/mission-targets/check-blueprint") {
       sendJson(response, 200, {
         ok: true,

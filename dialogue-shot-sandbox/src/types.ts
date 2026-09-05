@@ -343,6 +343,37 @@ export interface DialogueModelRegistrationSlot {
   status: "registered" | "available" | "unmapped";
 }
 
+export interface DialogNpcTableRegistrationDraft {
+  modelClassPath: string;
+  modelIndexes: number[];
+  targetIds: string[];
+  rowName: string;
+  characterClassPath: string;
+  animClassPath: string;
+  cameraClassPath: string;
+  meshPath: string;
+  cameraSuggestionSource:
+    | "matching_mesh_and_anim"
+    | "matching_mesh"
+    | "matching_anim"
+    | null;
+  blockedReasons: string[];
+}
+
+export interface DialogNpcTableRegistrationReview {
+  reviewToken: string;
+  tableAssetPath: string;
+  rows: DialogNpcTableRegistrationDraft[];
+  cameraClassPaths: string[];
+}
+
+export interface DialogNpcTableRegistrationResult {
+  status: "registered" | "unchanged";
+  tableAssetPath: string;
+  registeredRowNames: string[];
+  saved: boolean;
+}
+
 export interface MissionTargetBlueprintSyncMapping {
   modelIndex: number;
   targetId: string;

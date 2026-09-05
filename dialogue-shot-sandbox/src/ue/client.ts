@@ -10,6 +10,10 @@ import type {
   DialogueStoryboardExportPreview,
   DialogueStoryboardExportResult,
   DialogueModelRegistrationResult,
+  DialogueModelRegistrationSlot,
+  DialogNpcTableRegistrationDraft,
+  DialogNpcTableRegistrationResult,
+  DialogNpcTableRegistrationReview,
   DialoguePositionTimelineRow,
   MissionTargetBlueprintToTargetsResult,
   MissionTargetBlueprintAppendResult,
@@ -322,6 +326,41 @@ export function registerBlueprintDialogueModels(
       ...(preserveModels ? { preserveModels: true } : {}),
       dialogueId,
     },
+    false,
+  );
+}
+
+export function inspectDialogNpcTableRegistration(
+  slots: Array<
+    Pick<
+      DialogueModelRegistrationSlot,
+      "modelIndex" | "targetId" | "modelClassPath"
+    >
+  >,
+): Promise<DialogNpcTableRegistrationReview> {
+  return postUe(
+    "/api/ue/mission-targets/dialog-npc-table/inspect",
+    { slots },
+    false,
+  );
+}
+
+export function applyDialogNpcTableRegistration(
+  reviewToken: string,
+  rows: Array<
+    Pick<
+      DialogNpcTableRegistrationDraft,
+      | "rowName"
+      | "characterClassPath"
+      | "animClassPath"
+      | "cameraClassPath"
+      | "meshPath"
+    >
+  >,
+): Promise<DialogNpcTableRegistrationResult> {
+  return postUe(
+    "/api/ue/mission-targets/dialog-npc-table/apply",
+    { reviewToken, rows },
     false,
   );
 }
