@@ -17,6 +17,7 @@ import {
 import * as THREE from "three";
 import { participantSlotLabel } from "../data/dialogueRoles";
 import { participantFacingYawDegrees } from "../director/actorActionPlanner";
+import { characterBody, characterBodySummary } from "../director/characterGeometry";
 import type {
   DialogueParticipant,
   ParticipantSlot,
@@ -105,6 +106,7 @@ function Character({
   const pending = presence === "pending";
   const opacity = pending ? 0.28 : 1;
   const slotLabel = participantSlotLabel(participant);
+  const body = characterBody(participant);
   const facingCenter = Math.atan2(
     participant.facingTarget[0] - participant.position[0],
     participant.facingTarget[2] - participant.position[2],
@@ -112,6 +114,7 @@ function Character({
   return (
     <group position={participant.position}>
       <group rotation={[0, facingCenter, 0]}>
+        <group position={body.footOffset} scale={[body.width / 0.68, body.height / 2.01, body.depth / 0.48]}>
         <mesh position={[0, 0.92, 0]} castShadow={!pending}>
           <capsuleGeometry args={[0.3, 0.86, 5, 12]} />
           <meshStandardMaterial
@@ -172,13 +175,14 @@ function Character({
         {showDirectionIndicator && (
           <DirectionIndicator color={participant.color} pending={pending} />
         )}
+        </group>
       </group>
       <Html
         center
         position={
           labelPlacement === "below"
             ? [0, 0.12, 0.82]
-            : [0, compact ? 1.12 : 1.18, 0]
+            : [0, body.footOffset[1] + (compact ? 1.12 : 1.18) * body.height / 2.01, 0]
         }
         zIndexRange={[20, 0]}
         style={{ pointerEvents: "none" }}
@@ -733,7 +737,7 @@ function SceneCastRoster({
               role="listitem"
               aria-label={`槽位 ${slotLabel} · ${participant.name} · ${detailLabel}`}
               tabIndex={0}
-              title={detailLabel}
+              title={`${detailLabel} · ${characterBodySummary(participant)}`}
             >
               <span style={{ backgroundColor: participant.color }}>
                 {slotLabel}

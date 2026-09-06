@@ -1,6 +1,10 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { expect, test } from "@playwright/test";
 import { PNG } from "pngjs";
+import { DEFAULT_CHARACTER_BODY } from "../src/director/characterGeometry";
+import { createShotPlan } from "../src/director/shotPlanner";
+import { demoDatabase } from "../src/data/demo";
+import { findDialogueSequence } from "../src/data/dialogueRepository";
 
 function imageMetrics(buffer: Buffer) {
   const png = PNG.sync.read(buffer);
@@ -405,7 +409,10 @@ test("renders nonblank shot and blocking canvases without horizontal overflow", 
   await expect(
     page.getByText("前向视线空间", { exact: true }),
   ).toBeVisible();
-  await expect(page.getByText("0.41 / 0.19", { exact: true })).toBeVisible();
+  const expectedShots = createShotPlan(findDialogueSequence(demoDatabase, "2048"));
+  const lookRoomText = (index: number) =>
+    `${expectedShots[index].projection.lookRoom!.toFixed(2)} / ${expectedShots[index].projection.backRoom!.toFixed(2)}`;
+  await expect(page.getByText(lookRoomText(1), { exact: true })).toBeVisible();
 
   const hasHorizontalOverflow = await page.evaluate(
     () => document.documentElement.scrollWidth > window.innerWidth + 1,
@@ -414,7 +421,7 @@ test("renders nonblank shot and blocking canvases without horizontal overflow", 
 
   await page.locator(".shot-row").nth(2).click();
   await expect(page.getByText("固定机位", { exact: true })).toBeVisible();
-  await expect(page.getByText("0.39 / 0.17", { exact: true })).toBeVisible();
+  await expect(page.getByText(lookRoomText(2), { exact: true })).toBeVisible();
   await page.getByRole("tab", { name: "导演" }).click();
   await expect(
     page.getByText(/普通停顿不会被额外解释为孤立|不额外推断孤立/),
@@ -2895,6 +2902,26 @@ test("manually syncs the sound and music catalogs from settings", async ({
       }),
       installUpdate: async () => undefined,
       openUpdatePage: async () => undefined,
+      getAdvisorModelStatus: async () => ({
+        state: "ready",
+        model: "qwen3-vl:4b",
+        runtimeAvailable: true,
+        serviceAvailable: true,
+        modelInstalled: true,
+        percent: 100,
+        message: "端侧导演模型已就绪",
+      }),
+      downloadAdvisorModel: async () => ({
+        state: "ready",
+        model: "qwen3-vl:4b",
+        runtimeAvailable: true,
+        serviceAvailable: true,
+        modelInstalled: true,
+        percent: 100,
+        message: "端侧导演模型已就绪",
+      }),
+      openOllamaDownload: async () => undefined,
+      onAdvisorModelState: () => () => undefined,
       onUpdateState: () => () => undefined,
     };
   });
@@ -2905,6 +2932,7 @@ test("manually syncs the sound and music catalogs from settings", async ({
     name: "运行环境与数据协作",
   });
   await expect(setup.getByText("发现 0.22.15")).toBeVisible();
+  await expect(setup.getByText("端侧导演模型已就绪")).toBeVisible();
   const updateNotes = setup.locator(".setup-update__notes");
   await updateNotes.getByText("查看本次更新内容").click();
   await expect(updateNotes).toContainText("音效与音乐");
@@ -3085,6 +3113,25 @@ test("syncs the selected desktop doc path for registration data", async ({
       getUpdateSnapshot: async () => ({ state: "idle" }),
       installUpdate: async () => undefined,
       openUpdatePage: async () => undefined,
+      getAdvisorModelStatus: async () => ({
+        state: "missing_model",
+        model: "qwen3-vl:4b",
+        runtimeAvailable: true,
+        serviceAvailable: true,
+        modelInstalled: false,
+        message: "模型尚未下载，规则导演仍可独立使用",
+      }),
+      downloadAdvisorModel: async () => ({
+        state: "ready",
+        model: "qwen3-vl:4b",
+        runtimeAvailable: true,
+        serviceAvailable: true,
+        modelInstalled: true,
+        percent: 100,
+        message: "端侧导演模型已就绪",
+      }),
+      openOllamaDownload: async () => undefined,
+      onAdvisorModelState: () => () => undefined,
       onUpdateState: () => () => undefined,
     };
   });
@@ -3944,6 +3991,7 @@ test("offers the detected Blueprint formation before designing shots", async ({
                 componentGuid: "player-guid",
                 modelClassPath:
                   "/Game/Seria/Characters/Eric/BP_Eric.BP_Eric_C",
+                bodyProfile: { ...DEFAULT_CHARACTER_BODY, source: "mesh_bounds", height: 1.8, footOffset: [0, -0.92, 0] },
                 transform: {
                   location: { x: -300, y: 120, z: 92 },
                   rotation: { pitch: 0, yaw: -90, roll: 0 },
@@ -3954,6 +4002,7 @@ test("offers the detected Blueprint formation before designing shots", async ({
                 modelIndex: 1,
                 componentName: "ChildActorComponent_1_GEN_VARIABLE",
                 componentGuid: "guard-guid",
+                bodyProfile: { ...DEFAULT_CHARACTER_BODY, source: "mesh_bounds", height: 2.3, footOffset: [0, -0.92, 0] },
                 modelClassPath:
                   "/Game/Seria/NPC/M63_Cityguard/BP_M63_Cityguard_NPC.BP_M63_Cityguard_NPC_C",
                 transform: {
@@ -3966,6 +4015,7 @@ test("offers the detected Blueprint formation before designing shots", async ({
                 modelIndex: 2,
                 componentName: "ChildActorComponent_2_GEN_VARIABLE",
                 componentGuid: "background-guid",
+                bodyProfile: { ...DEFAULT_CHARACTER_BODY, source: "mesh_bounds", height: 1.3, footOffset: [0, -0.92, 0] },
                 modelClassPath:
                   "/Game/Seria/NPC/N115_Finance_Female/BP_N115_Finance_Female.BP_N115_Finance_Female_C",
                 transform: {
@@ -4163,7 +4213,7 @@ test("offers the detected Blueprint formation before designing shots", async ({
               shotIndex: 0,
               dialogueIds: ["735001", "735002"],
               projectionValid: false,
-              actorActionCount: 2,
+              actorActionCount: request.shots[0]?.actorActions?.length ?? 0,
               blockedReasons: [],
             },
           ],
@@ -4301,11 +4351,11 @@ test("offers the detected Blueprint formation before designing shots", async ({
   ).toBeVisible();
   await expect(
     dialog.locator(".actor-label").filter({ hasText: "玩家" }).first(),
-  ).not.toHaveAttribute("data-facing-target", "-1.500,0.000,4.600");
+  ).not.toHaveAttribute("data-facing-target", "-1.500,0.920,4.600");
   await playerPositionLock.check();
   await expect(
     dialog.locator(".actor-label").filter({ hasText: "玩家" }).first(),
-  ).toHaveAttribute("data-facing-target", "-1.500,0.000,4.600");
+  ).toHaveAttribute("data-facing-target", "-1.500,0.920,4.600");
   await playerPositionLock.uncheck();
   await dialog.screenshot({
     path: testInfo.outputPath("blueprint-formation-choice.png"),
@@ -4322,6 +4372,16 @@ test("offers the detected Blueprint formation before designing shots", async ({
   await expect(formationStatus).toContainText("占位方案");
   await expect(formationStatus).toContainText("BP_735000");
   await expect(formationStatus).not.toContainText("/Game/");
+  await expect(page.locator(".stage-cast__item").filter({ hasText: "玩家" }))
+    .toHaveAttribute("title", /模型包围盒 180 cm/);
+  await expect(page.locator(".stage-cast__item").filter({ hasText: "商会安保" }))
+    .toHaveAttribute("title", /模型包围盒 230 cm/);
+  for (const canvas of await page.locator("canvas").all()) {
+    const metrics = imageMetrics(await canvas.screenshot());
+    expect(metrics.sampledColors).toBeGreaterThan(18);
+    expect(metrics.luminanceSpan).toBeGreaterThan(24);
+  }
+  await page.locator(".stage-view").screenshot({ path: testInfo.outputPath("height-aware-blueprint.png") });
   await page.getByRole("button", { name: "切换占位方案" }).click();
   const switchDialog = page.getByRole("dialog", {
     name: "切换占位方案",
@@ -4482,7 +4542,8 @@ test("offers the detected Blueprint formation before designing shots", async ({
   ).toHaveText("2");
   await page.getByRole("tab", { name: "导演" }).click();
   await expect(page.getByText("演员动作", { exact: true })).toBeVisible();
-  await expect(page.getByText("右转 45°", { exact: true })).toHaveCount(1);
+  await expect(page.getByText("右转 45°", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("本镜沿用上一镜角色朝向，无需新增转身动作。")).toBeVisible();
   await page.waitForTimeout(350);
   await page.screenshot({
     path: testInfo.outputPath("blueprint-facing-and-turn-plan.png"),
@@ -4531,7 +4592,7 @@ test("offers the detected Blueprint formation before designing shots", async ({
     .first();
   await expect(guardFacingLabel).toHaveAttribute(
     "data-position",
-    "0.900,0.000,-1.500",
+    "0.900,0.920,-1.500",
   );
   const facingBeforeTurn = await guardFacingLabel.getAttribute(
     "data-facing-target",
@@ -4740,22 +4801,13 @@ test("offers the detected Blueprint formation before designing shots", async ({
     ],
     shots: [
       expect.objectContaining({
-        actorActions: [
-          expect.objectContaining({
-            modelIndex: 0,
-            montageName: "AM_TurnLeft45",
-          }),
-          expect.objectContaining({
-            modelIndex: 1,
-            montageName: "AM_TurnRight45",
-          }),
-        ],
+        actorActions: [],
       }),
     ],
   });
   await expect(
     exportDialog.getByText(/2 个自动转身建议.*动作编辑器/),
-  ).toBeVisible();
+  ).toHaveCount(0);
   await expect(
     exportDialog.getByRole("checkbox", {
       name: "选择节点 735001 槽 1 的角色动作",

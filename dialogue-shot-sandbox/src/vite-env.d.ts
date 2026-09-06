@@ -45,6 +45,22 @@ interface DesktopUpdateSnapshot {
   releaseNotes?: string;
 }
 
+interface RuleAdvisorModelSnapshot {
+  state:
+    | "checking"
+    | "missing_runtime"
+    | "missing_model"
+    | "downloading"
+    | "ready"
+    | "error";
+  model: string;
+  runtimeAvailable: boolean;
+  serviceAvailable: boolean;
+  modelInstalled: boolean;
+  percent?: number;
+  message: string;
+}
+
 interface Window {
   showDirectoryPicker?: (options?: {
     id?: string;
@@ -85,6 +101,12 @@ interface Window {
     getUpdateSnapshot: () => Promise<DesktopUpdateSnapshot>;
     installUpdate: () => Promise<void>;
     openUpdatePage: () => Promise<void>;
+    getAdvisorModelStatus: () => Promise<RuleAdvisorModelSnapshot>;
+    downloadAdvisorModel: () => Promise<RuleAdvisorModelSnapshot>;
+    openOllamaDownload: () => Promise<void>;
+    onAdvisorModelState: (
+      listener: (snapshot: RuleAdvisorModelSnapshot) => void,
+    ) => () => void;
     onUpdateState: (
       listener: (snapshot: DesktopUpdateSnapshot) => void,
     ) => () => void;

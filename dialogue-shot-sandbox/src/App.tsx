@@ -22,6 +22,8 @@ import {
   Search,
   Settings,
   Square,
+  ThumbsDown,
+  ThumbsUp,
   Upload,
   UserRoundPlus,
   Users,
@@ -63,6 +65,7 @@ import { NpcRegistrationModal } from "./components/NpcRegistrationModal";
 import { MusicRecommendations } from "./components/MusicRecommendations";
 import { SoundEffectRecommendations } from "./components/SoundEffectRecommendations";
 import { StageView } from "./components/StageView";
+import { projectionIssues, projectionStatus, projectionStatusLabel } from "./director/shotValidation";
 import { WorkspaceStatusHub } from "./components/WorkspaceStatusHub";
 import {
   findDocCsvFile,
@@ -103,6 +106,8 @@ import type {
   DirectorSceneAnalysis,
   DirectorSoundEffectRecommendation,
 } from "./director/contracts";
+import { createDirectorInput } from "./director/contracts";
+import { recordDirectorPreference } from "./director/preferenceClient";
 import {
   createSharedPlanPreview,
   designShots,
@@ -433,7 +438,10 @@ function directorLabel(mode: DirectorMode): string {
   if (mode === "trae") {
     return "内部 TRAE";
   }
-  return mode === "mira" ? "Mira AI" : "规则导演";
+  if (mode === "mira") {
+    return "Mira AI";
+  }
+  return "规则导演";
 }
 
 function formationLabel(formation: DirectorBlocking["formation"]): string {
@@ -652,6 +660,13 @@ interface ShotInspectorProps {
   configurationModeBusy: boolean;
   characterActionEditor: CharacterActionEditorController;
   onMove: (offset: number) => void;
+  preference: "accept" | "reject" | null;
+  preferenceBusy: boolean;
+  preferenceError: string;
+  onPreference: (
+    feedbackType: "accept" | "reject",
+    reason: string,
+  ) => void;
   onTabChange: (tab: InspectorTab) => void;
   onConfigurationModeChange: (enabled: boolean) => void;
   onExport: () => void;
@@ -694,6 +709,10 @@ function ShotInspector({
   configurationModeBusy,
   characterActionEditor,
   onMove,
+  preference,
+  preferenceBusy,
+  preferenceError,
+  onPreference,
   onTabChange,
   onConfigurationModeChange,
   onExport,
@@ -748,6 +767,41 @@ function ShotInspector({
           <h2>{shot.label}</h2>
         </div>
         <div className="shot-nav">
+          <div
+            className="shot-preference"
+            title={preferenceError || "将明确反馈同步到导演偏好库"}
+          >
+            <button
+              className={`icon-button ${preference === "accept" ? "is-active" : ""}`}
+              type="button"
+              title="采用此镜头并同步偏好"
+              aria-label="采用此镜头并同步偏好"
+              aria-pressed={preference === "accept"}
+              disabled={preferenceBusy}
+              onClick={() => onPreference("accept", "用户明确采用当前镜头")}
+            >
+              {preferenceBusy && preference !== "reject" ? (
+                <LoaderCircle className="spin" size={16} />
+              ) : (
+                <ThumbsUp size={16} />
+              )}
+            </button>
+            <button
+              className={`icon-button ${preference === "reject" ? "is-active" : ""}`}
+              type="button"
+              title="拒绝此镜头并同步偏好"
+              aria-label="拒绝此镜头并同步偏好"
+              aria-pressed={preference === "reject"}
+              disabled={preferenceBusy}
+              onClick={() => onPreference("reject", "用户明确拒绝当前镜头")}
+            >
+              {preferenceBusy && preference === "reject" ? (
+                <LoaderCircle className="spin" size={16} />
+              ) : (
+                <ThumbsDown size={16} />
+              )}
+            </button>
+          </div>
           <button
             className="icon-button configuration-mode-toggle"
             type="button"
@@ -837,13 +891,9 @@ function ShotInspector({
                 <div>
                   <small>CHECK</small>
                   <strong
-                    className={
-                      shot.projection.valid
-                        ? "projection-status--valid"
-                        : "projection-status--invalid"
-                    }
+                    className={`projection-status--${projectionStatus(shot.projection)}`}
                   >
-                    {shot.projection.valid ? "通过" : "未通过"}
+                    {projectionStatusLabel(shot.projection)}
                   </strong>
                 </div>
               </div>
@@ -975,8 +1025,10 @@ function ShotInspector({
                 <div className="section-label">
                   <span>镜头验收提示</span>
                 </div>
-                {shot.projection.warnings.map((warning) => (
-                  <p key={warning}>{warning}</p>
+                {projectionIssues(shot.projection).map((issue, index) => (
+                  <p key={`${issue.ruleId}-${index}`} className={`projection-issue--${issue.severity}`}>
+                    {issue.severity === "error" ? "未通过" : issue.severity === "warning" ? "建议" : "说明"}：{issue.message}
+                  </p>
                 ))}
               </section>
             )}
@@ -1281,6 +1333,11 @@ export default function App() {
   const [shots, setShots] = useState<ShotPlan[]>(initial.shots);
   const [activeIndex, setActiveIndex] = useState(0);
   const [error, setError] = useState("");
+  const [shotPreferences, setShotPreferences] = useState<
+    Map<string, "accept" | "reject">
+  >(() => new Map());
+  const [preferenceBusyKey, setPreferenceBusyKey] = useState("");
+  const [preferenceError, setPreferenceError] = useState("");
   const [loading, setLoading] = useState(false);
   const [directorMode, setDirectorMode] = useState<DirectorMode>("rule");
   const [appliedDirector, setAppliedDirector] =
@@ -2019,16 +2076,10 @@ export default function App() {
       );
     }
 
-    if (requestedMode === "rule") {
-      if (!keepsBackgroundRequest) {
-        setDirectorLoading(false);
-        setDirectorLoadingMode(null);
-      }
-      return;
+    if (requestedMode !== "rule") {
+      setDirectorLoading(true);
+      setDirectorLoadingMode(requestedMode);
     }
-
-    setDirectorLoading(true);
-    setDirectorLoadingMode(requestedMode);
     const traeAbortController =
       requestedMode === "trae" ? new AbortController() : null;
     if (traeAbortController) {
@@ -2057,6 +2108,10 @@ export default function App() {
             : undefined,
       });
       if (runId !== directorRunRef.current) {
+        return;
+      }
+      if (requestedMode === "rule") {
+        applyDirectorResult(nextSequence, result);
         return;
       }
       if (result.appliedMode !== "rule" && result.analysis) {
@@ -2136,7 +2191,7 @@ export default function App() {
         throw directorError;
       }
     } finally {
-      if (runId === directorRunRef.current) {
+      if (requestedMode !== "rule" && runId === directorRunRef.current) {
         setDirectorLoading(false);
         setDirectorLoadingMode(null);
         activeTraeRequestRef.current = null;
@@ -3357,6 +3412,49 @@ export default function App() {
     cancelDialogueEdit();
   }
 
+  async function submitShotPreference(
+    feedbackType: "accept" | "reject",
+    reason: string,
+  ) {
+    const shot = shots[activeIndex];
+    if (!shot) return;
+    const key = `${sequence.prefix}:${shot.id}`;
+    setPreferenceBusyKey(key);
+    setPreferenceError("");
+    try {
+      const input = createDirectorInput(
+        sequence,
+        `preference-${sequence.prefix}-${Date.now()}`,
+        {
+          preserveInputFormation: activeFormationSource === "blueprint",
+          lockPlayerPosition: playerPositionLockedRef.current,
+        },
+      );
+      await recordDirectorPreference({
+        input,
+        shotIndex: activeIndex,
+        feedbackType,
+        reason,
+        source: appliedDirector,
+        originalShot: shot,
+        finalShot: feedbackType === "accept" ? shot : undefined,
+      });
+      setShotPreferences((current) => {
+        const next = new Map(current);
+        next.set(key, feedbackType);
+        return next;
+      });
+    } catch (feedbackError) {
+      setPreferenceError(
+        feedbackError instanceof Error
+          ? feedbackError.message
+          : "偏好同步失败",
+      );
+    } finally {
+      setPreferenceBusyKey("");
+    }
+  }
+
   function moveShot(offset: number) {
     selectShot(
       Math.min(shots.length - 1, Math.max(0, activeIndex + offset)),
@@ -4078,7 +4176,7 @@ export default function App() {
                 : activeShot
                 ? shots.map((shot, index) => (
                     <button
-                      className={`shot-row ${index === activeIndex ? "is-active" : ""} ${shot.projection.valid ? "" : "is-invalid"}`}
+                      className={`shot-row ${index === activeIndex ? "is-active" : ""} is-${projectionStatus(shot.projection)}`}
                       type="button"
                       key={shot.id}
                       onClick={() => selectShot(index)}
@@ -4104,15 +4202,11 @@ export default function App() {
                       </span>
                       <span
                         className="shot-row__time"
-                        title={
-                          shot.projection.valid
-                            ? undefined
-                            : "投影验收未通过"
-                        }
+                        title={projectionStatusLabel(shot.projection)}
                       >
-                        {!shot.projection.valid && (
+                        {projectionStatus(shot.projection) !== "valid" && (
                           <AlertTriangle
-                            aria-label="投影验收未通过"
+                            aria-label={projectionStatusLabel(shot.projection)}
                             size={13}
                           />
                         )}
@@ -4459,6 +4553,18 @@ export default function App() {
                 configurationModeBusy={configurationModeBusy}
                 characterActionEditor={characterActionEditor}
                 onMove={moveShot}
+                preference={
+                  shotPreferences.get(`${sequence.prefix}:${activeShot.id}`) ??
+                  null
+                }
+                preferenceBusy={
+                  preferenceBusyKey ===
+                  `${sequence.prefix}:${activeShot.id}`
+                }
+                preferenceError={preferenceError}
+                onPreference={(feedbackType, reason) =>
+                  void submitShotPreference(feedbackType, reason)
+                }
                 onTabChange={setInspectorTab}
                 onConfigurationModeChange={(enabled) =>
                   void changeConfigurationMode(enabled)

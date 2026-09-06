@@ -1,6 +1,7 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { larkBridgePlugin } from "./server/larkBridge";
+import { ruleAdvisorBridgePlugin } from "./server/ruleAdvisorBridge";
 import { traeBridgePlugin } from "./server/traeBridge";
 import { restoreDevelopmentConfigDirectories } from "./server/configRepository";
 import { ueBridgePlugin } from "./server/ue/routes";
@@ -14,7 +15,13 @@ export default defineConfig(async () => {
     appDataDirectory: process.env.APPDATA,
   });
   return {
-    plugins: [react(), traeBridgePlugin(), ueBridgePlugin(), larkBridgePlugin()],
+    plugins: [
+      react(),
+      traeBridgePlugin(),
+      ruleAdvisorBridgePlugin(),
+      ueBridgePlugin(),
+      larkBridgePlugin(),
+    ],
     server: {
       host: "127.0.0.1",
     },

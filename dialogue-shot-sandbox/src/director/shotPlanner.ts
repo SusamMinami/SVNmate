@@ -22,7 +22,7 @@ export function createShotPlan(sequence: DialogueSequence): ShotPlan[] {
   return createShotPreview(sequence).shots;
 }
 
-function projectionIssueScore(shots: ShotPlan[]): number {
+export function projectionIssueScore(shots: ShotPlan[]): number {
   return shots.reduce(
     (score, shot) =>
       score +
@@ -30,6 +30,21 @@ function projectionIssueScore(shots: ShotPlan[]): number {
       shot.projection.warnings.length,
     0,
   );
+}
+
+export function resolveRuleShotsWithAdvice(
+  sequence: DialogueSequence,
+  decisions: ReturnType<typeof createRuleDecisions>,
+  baselineDecisions?: ReturnType<typeof createRuleDecisions>,
+): ShotPlan[] {
+  const advisedShots = resolveRuleShotsWithRetry(sequence, decisions);
+  if (!baselineDecisions) {
+    return advisedShots;
+  }
+  const baselineShots = resolveRuleShotsWithRetry(sequence, baselineDecisions);
+  return projectionIssueScore(advisedShots) <= projectionIssueScore(baselineShots)
+    ? advisedShots
+    : baselineShots;
 }
 
 export function resolveRuleShotsWithRetry(
@@ -44,7 +59,7 @@ export function resolveRuleShotsWithRetry(
   try {
     const revisedShots = resolveShotDecisions(
       sequence,
-      reviseRuleDecisionsForProjection(decisions, initialShots),
+      reviseRuleDecisionsForProjection(decisions, initialShots, sequence),
     );
     return projectionIssueScore(revisedShots) < projectionIssueScore(initialShots)
       ? revisedShots

@@ -286,7 +286,11 @@ export function resolveBlocking(
       participant.slot,
       preservesParticipantPosition(participant, options)
         ? participant.position
-        : POSITION_COORDINATES[placement.position],
+        : [
+            POSITION_COORDINATES[placement.position][0],
+            participant.position[1],
+            POSITION_COORDINATES[placement.position][2],
+          ],
     );
   }
 
@@ -350,6 +354,8 @@ export function resolveBlocking(
               ),
           ),
         );
+        const adjusted = positionBySlot.get(player.slot)!;
+        positionBySlot.set(player.slot, [adjusted[0], player.position[1], adjusted[2]]);
       }
     }
   }

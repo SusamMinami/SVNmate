@@ -13,6 +13,7 @@ import {
   PARTICIPANT_SLOTS,
 } from "../types";
 import { PARTICIPANT_COLORS } from "./dialogueRepository";
+import { CharacterBodyProfileSchema, DEFAULT_CHARACTER_BODY } from "../director/characterGeometry";
 
 export interface AppliedBlueprintFormation {
   sequence: DialogueSequence;
@@ -59,7 +60,7 @@ function matchesResource(
 function uePositionToStage(
   location: BlueprintFormationSnapshot["slots"][number]["transform"]["location"],
 ): Vec3 {
-  return [location.y / 100, 0, -location.x / 100];
+  return [location.y / 100, location.z / 100, -location.x / 100];
 }
 
 function ueFacingTarget(
@@ -545,7 +546,7 @@ export function applyBlueprintFormation(
       const positionValue = rawPositions[index];
       const position: Vec3 = [
         Number((positionValue[0] - centerX).toFixed(4)),
-        0,
+        positionValue[1],
         Number((positionValue[2] - centerZ).toFixed(4)),
       ];
       const ordinal = (duplicateOrdinal.get(profile.id) ?? 0) + 1;
@@ -567,6 +568,14 @@ export function applyBlueprintFormation(
         ),
         modelIndex: formationSlot.modelIndex,
         modelClassPath: formationSlot.modelClassPath,
+        bodyProfile: CharacterBodyProfileSchema.safeParse(formationSlot.bodyProfile).success
+          ? formationSlot.bodyProfile
+          : {
+              ...DEFAULT_CHARACTER_BODY,
+              height: DEFAULT_CHARACTER_BODY.height * (Math.abs(formationSlot.transform.scale.z) || 1),
+              width: DEFAULT_CHARACTER_BODY.width * (Math.abs(formationSlot.transform.scale.y) || 1),
+              depth: DEFAULT_CHARACTER_BODY.depth * (Math.abs(formationSlot.transform.scale.x) || 1),
+            },
         positionSource: "blueprint",
         firstDialogueId: sequence.rows[0].id,
         firstDialogueIndex: 0,

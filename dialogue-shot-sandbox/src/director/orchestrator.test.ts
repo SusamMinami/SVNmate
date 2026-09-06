@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { demoDatabase } from "../data/demo";
+import { DEFAULT_CHARACTER_BODY } from "./characterGeometry";
 import { findDialogueSequence } from "../data/dialogueRepository";
 import type { DialogueSequence, Vec3 } from "../types";
 import { createDefaultBlocking } from "./blockingResolver";
@@ -296,6 +297,7 @@ describe("designShots", () => {
         ...participant,
         modelIndex: index,
         modelClassPath: `/Game/Test/BP_${participant.slot}.BP_${participant.slot}_C`,
+        bodyProfile: { ...DEFAULT_CHARACTER_BODY, source: "mesh_bounds" as const, height: 1.4 + index * 0.6 },
         positionSource: "blueprint" as const,
         firstDialogueId: sequence.rows[0].id,
         firstDialogueIndex: 0,
@@ -330,5 +332,7 @@ describe("designShots", () => {
 
     expect(shared.sequence.participants.map((item) => item.modelClassPath))
       .toEqual(blueprintSequence.participants.map((item) => item.modelClassPath));
+    expect(shared.sequence.participants.map((item) => item.bodyProfile))
+      .toEqual(blueprintSequence.participants.map((item) => item.bodyProfile));
   });
 });

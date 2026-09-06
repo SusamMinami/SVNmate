@@ -73,43 +73,6 @@ function nearestTurnDegrees(delta: number): ActorTurnDegrees | 0 {
   }, 0);
 }
 
-function groupCenter(participants: DialogueParticipant[]): Vec3 {
-  const total = participants.reduce<[number, number, number]>(
-    (result, participant) => [
-      result[0] + participant.position[0],
-      result[1] + participant.position[1],
-      result[2] + participant.position[2],
-    ],
-    [0, 0, 0],
-  );
-  return [
-    total[0] / participants.length,
-    total[1] / participants.length,
-    total[2] / participants.length,
-  ];
-}
-
-function nearestOtherPosition(
-  participant: DialogueParticipant,
-  participants: DialogueParticipant[],
-): Vec3 | null {
-  return (
-    participants
-      .filter((candidate) => candidate.slot !== participant.slot)
-      .sort(
-        (left, right) =>
-          Math.hypot(
-            left.position[0] - participant.position[0],
-            left.position[2] - participant.position[2],
-          ) -
-          Math.hypot(
-            right.position[0] - participant.position[0],
-            right.position[2] - participant.position[2],
-          ),
-      )[0]?.position ?? null
-  );
-}
-
 export function planActorTurns(
   participants: DialogueParticipant[],
   focus:
@@ -124,7 +87,6 @@ export function planActorTurns(
   actions: ActorTurnAction[];
   warnings: string[];
 } {
-  const center = groupCenter(participants);
   const participantsBySlot = new Map(
     participants.map((participant) => [participant.slot, participant]),
   );
@@ -133,18 +95,8 @@ export function planActorTurns(
     { position: Vec3; target: ParticipantSlot | "group_center" }
   >();
 
-  if (focus.kind === "group") {
-    for (const participant of participants) {
-      targets.set(participant.slot, {
-        position:
-          targetYawDegrees(participant.position, center) === null
-            ? nearestOtherPosition(participant, participants) ??
-              participant.facingTarget
-            : center,
-        target: "group_center",
-      });
-    }
-  } else if (focus.lookTargetSlot) {
+  // A wide shot observes the formation; it does not direct everyone to turn.
+  if (focus.kind === "conversation" && focus.lookTargetSlot) {
     const subject = participantsBySlot.get(focus.subjectSlot);
     const lookTarget = participantsBySlot.get(focus.lookTargetSlot);
     if (subject && lookTarget) {

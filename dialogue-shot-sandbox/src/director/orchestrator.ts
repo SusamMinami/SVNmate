@@ -6,6 +6,7 @@ import type {
 } from "../types";
 import type { SoundEffectCatalogEntry } from "../data/soundEffectCatalog";
 import { resolveBlocking } from "./blockingResolver";
+import { renderRuleCandidateFrames } from "./candidateFrameRenderer";
 import {
   createDirectorInput,
   type DirectorInput,
@@ -15,11 +16,17 @@ import {
   type DirectorSceneAnalysis,
   type DirectorSoundEffectRecommendation,
   type SharedStoryboardConflict,
+  type ShotDirectorProvider,
 } from "./contracts";
 import { MiraDirectorProvider } from "./miraDirector";
+import {
+  applyRuleAdvice,
+  requestRuleAdvice,
+  requestRuleBeatAdvice,
+} from "./ruleAdvisor";
 import { RuleDirectorProvider } from "./ruleDirector";
 import { resolveShotDecisions } from "./shotResolver";
-import { resolveRuleShotsWithRetry } from "./shotPlanner";
+import { resolveRuleShotsWithAdvice } from "./shotPlanner";
 import { resolveSoundEffectRecommendations } from "./soundEffectRecommender";
 import { TraeDirectorProvider } from "./traeDirector";
 
@@ -61,10 +68,11 @@ interface DirectorRunOptions {
   soundEffectCatalog?: readonly SoundEffectCatalogEntry[];
   forceRegenerate?: boolean;
   signal?: AbortSignal;
+  useRuleAdvisor?: boolean;
   onRequestCreated?: (input: DirectorInput) => void;
 }
 
-const providers = {
+const providers: Record<DirectorMode, ShotDirectorProvider> = {
   rule: new RuleDirectorProvider(),
   trae: new TraeDirectorProvider(),
   mira: new MiraDirectorProvider(),
@@ -82,9 +90,15 @@ async function runProvider(
     soundEffectCatalog: options.soundEffectCatalog,
   });
   options.onRequestCreated?.(input);
+  const beatAdvice =
+    mode === "rule" && options.useRuleAdvisor !== false
+      ? await requestRuleBeatAdvice(input, options.signal)
+      : null;
   const providerResult = await providers[mode].design(input, {
     forceRegenerate: options.forceRegenerate,
     signal: options.signal,
+    useRuleAdvisor: options.useRuleAdvisor,
+    beatAdvice: beatAdvice ?? undefined,
   });
   const participants = resolveBlocking(
     sequence.participants,
@@ -93,17 +107,67 @@ async function runProvider(
     options,
   );
   const stagedSequence = { ...sequence, participants };
-  const shots =
-    mode === "rule"
-      ? resolveRuleShotsWithRetry(stagedSequence, providerResult.decisions)
-      : resolveShotDecisions(stagedSequence, providerResult.decisions);
+  let analysis = providerResult.analysis;
+  let shots: ShotPlan[];
+  if (mode === "rule") {
+    const baselineDecisions = providerResult.decisions;
+    const baselineShots = resolveRuleShotsWithAdvice(
+      stagedSequence,
+      baselineDecisions,
+    );
+    const candidateVisuals =
+      options.useRuleAdvisor === false
+        ? null
+        : renderRuleCandidateFrames(participants, baselineShots);
+    const stagedInput: DirectorInput = {
+      ...input,
+      participants: input.participants.map((participant) => {
+        const stagedParticipant = participants.find(
+          (candidate) => candidate.slot === participant.slot,
+        );
+        return stagedParticipant
+          ? {
+              ...participant,
+              initial_position: stagedParticipant.position,
+              initial_facing_target: stagedParticipant.facingTarget,
+            }
+          : participant;
+      }),
+    };
+    const advice =
+      candidateVisuals && analysis
+        ? await requestRuleAdvice(
+            stagedInput,
+            { decisions: baselineDecisions, analysis },
+            candidateVisuals,
+            options.signal,
+          )
+        : null;
+    if (advice && analysis) {
+      const advised = applyRuleAdvice(
+        stagedInput,
+        { decisions: baselineDecisions, analysis },
+        advice,
+      );
+      shots = resolveRuleShotsWithAdvice(
+        stagedSequence,
+        advised.decisions,
+        baselineDecisions,
+      );
+      analysis = advised.analysis;
+    } else {
+      shots = baselineShots;
+    }
+  } else {
+    shots = resolveShotDecisions(stagedSequence, providerResult.decisions);
+  }
   if (shots.length === 0) {
     throw new Error(`${mode} 导演没有生成镜头`);
   }
   return {
     shots,
     appliedMode: mode,
-    analysis: providerResult.analysis,
+    analysis,
     soundEffects: providerResult.soundEffects,
     blocking: providerResult.blocking,
     participants,
@@ -148,6 +212,7 @@ export async function designShots(
           options.preserveInputPositions,
         lockPlayerPosition: options.lockPlayerPosition,
         soundEffectCatalog: options.soundEffectCatalog,
+        useRuleAdvisor: false,
       })),
       requestedMode,
       fallbackReason,
@@ -202,6 +267,7 @@ function sequenceFromDirectorInput(input: DirectorInput): DialogueSequence {
           participant.initial_facing_target ?? ([0, 0, 0] as const),
         modelIndex: participant.model_index ?? null,
         modelClassPath: participant.model_class_path,
+        bodyProfile: participant.body_profile,
         positionSource: participant.position_source ?? "generated",
         firstDialogueId: participant.first_dialogue_id,
         firstDialogueIndex,

@@ -2,6 +2,7 @@ import {
   Check,
   ChevronDown,
   CircleAlert,
+  Cpu,
   Database,
   Download,
   ExternalLink,
@@ -150,6 +151,15 @@ export function DesktopSetupModal({
   const [update, setUpdate] = useState<DesktopUpdateSnapshot>({
     state: "idle",
   });
+  const [advisorModel, setAdvisorModel] =
+    useState<RuleAdvisorModelSnapshot>({
+      state: "checking",
+      model: "qwen3-vl:4b",
+      runtimeAvailable: false,
+      serviceAvailable: false,
+      modelInstalled: false,
+      message: "正在检测端侧导演模型",
+    });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [uePort, setUePort] = useState(String(initialStatus.ueMcpPort));
@@ -178,6 +188,41 @@ export function DesktopSetupModal({
     }
     void desktop.getUpdateSnapshot().then(setUpdate);
     return desktop.onUpdateState(setUpdate);
+  }, [desktop]);
+
+  useEffect(() => {
+    if (!desktop) {
+      return;
+    }
+    let active = true;
+    const unsubscribe = desktop.onAdvisorModelState((snapshot) => {
+      if (active) {
+        setAdvisorModel(snapshot);
+      }
+    });
+    void desktop
+      .getAdvisorModelStatus()
+      .then((snapshot) => {
+        if (active) {
+          setAdvisorModel(snapshot);
+        }
+      })
+      .catch((modelError) => {
+        if (active) {
+          setAdvisorModel((current) => ({
+            ...current,
+            state: "error",
+            message:
+              modelError instanceof Error
+                ? modelError.message
+                : "无法检测端侧导演模型",
+          }));
+        }
+      });
+    return () => {
+      active = false;
+      unsubscribe();
+    };
   }, [desktop]);
 
   useEffect(() => {
@@ -277,6 +322,30 @@ export function DesktopSetupModal({
       );
     } finally {
       setMusicCatalogBusy(false);
+    }
+  }
+
+  async function downloadAdvisorModel() {
+    if (!desktop || advisorModel.state === "downloading") {
+      return;
+    }
+    setAdvisorModel((current) => ({
+      ...current,
+      state: "downloading",
+      percent: 0,
+      message: "正在准备模型下载",
+    }));
+    try {
+      setAdvisorModel(await desktop.downloadAdvisorModel());
+    } catch (modelError) {
+      setAdvisorModel((current) => ({
+        ...current,
+        state: "error",
+        message:
+          modelError instanceof Error
+            ? modelError.message
+            : "端侧导演模型下载失败，请检查网络后重试",
+      }));
     }
   }
 
@@ -554,6 +623,79 @@ export function DesktopSetupModal({
                       : "尚未生成桌面版集成配置"}
                 </small>
               </span>
+            </div>
+            <div
+              className={`setup-status-item--wide setup-model ${
+                advisorModel.state === "ready" ? "" : "is-warning"
+              }`}
+            >
+              {advisorModel.state === "checking" ||
+              advisorModel.state === "downloading" ? (
+                <LoaderCircle className="spin" size={17} />
+              ) : advisorModel.state === "ready" ? (
+                <Cpu size={17} />
+              ) : (
+                <CircleAlert size={17} />
+              )}
+              <span>
+                <strong>端侧导演模型</strong>
+                <small aria-live="polite">
+                  {advisorModel.message}
+                  {advisorModel.state !== "ready" &&
+                    advisorModel.state !== "downloading" &&
+                    "；不下载也可使用基础规则导演"}
+                </small>
+                <small>
+                  {advisorModel.model} · 约 3.3 GB · 模型权重按需下载
+                </small>
+                {advisorModel.state === "downloading" && (
+                  <progress
+                    className="setup-model__progress"
+                    max={100}
+                    value={advisorModel.percent ?? 0}
+                    aria-label="端侧导演模型下载进度"
+                  >
+                    {advisorModel.percent ?? 0}%
+                  </progress>
+                )}
+              </span>
+              {advisorModel.state !== "ready" &&
+                advisorModel.state !== "checking" && (
+                  <button
+                    type="button"
+                    disabled={advisorModel.state === "downloading"}
+                    onClick={() => {
+                      if (
+                        advisorModel.state === "missing_runtime" ||
+                        (advisorModel.state === "error" &&
+                          !advisorModel.runtimeAvailable)
+                      ) {
+                        void desktop?.openOllamaDownload();
+                        return;
+                      }
+                      void downloadAdvisorModel();
+                    }}
+                  >
+                    {advisorModel.state === "downloading" ? (
+                      <LoaderCircle className="spin" size={14} />
+                    ) : advisorModel.state === "missing_runtime" ||
+                      (advisorModel.state === "error" &&
+                        !advisorModel.runtimeAvailable) ? (
+                      <ExternalLink size={14} />
+                    ) : (
+                      <Download size={14} />
+                    )}
+                    {advisorModel.state === "downloading"
+                      ? `${advisorModel.percent ?? 0}%`
+                      : advisorModel.state === "missing_runtime" ||
+                          (advisorModel.state === "error" &&
+                            !advisorModel.runtimeAvailable)
+                        ? "安装 Ollama"
+                        : advisorModel.state === "error"
+                          ? "重试"
+                          : "下载模型"}
+                  </button>
+                )}
             </div>
             <div
               className={`setup-status-item--wide ${

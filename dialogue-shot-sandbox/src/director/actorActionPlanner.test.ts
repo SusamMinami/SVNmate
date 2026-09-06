@@ -43,6 +43,18 @@ function participant(
 }
 
 describe("actor turn planning", () => {
+  it("observes group blocking without inventing turns for a wide shot", () => {
+    const actors = [
+      participant("A", "固定 NPC", [0, 0, 0], 0, false),
+      participant("B", "玩家", [2, 0, 0], 0),
+    ];
+    const result = planActorTurns(actors, { kind: "group" });
+    expect(result.actions).toEqual([]);
+    expect(result.warnings).toEqual([]);
+    expect(result.participants.map((actor) => actor.facingTarget))
+      .toEqual(actors.map((actor) => actor.facingTarget));
+  });
+
   it("quantizes a required facing change to supported UE turn actions", () => {
     const result = planActorTurns(
       [

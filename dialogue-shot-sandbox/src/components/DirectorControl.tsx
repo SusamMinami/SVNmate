@@ -12,7 +12,10 @@ function modeLabel(mode: DirectorMode): string {
   if (mode === "trae") {
     return "内部 TRAE";
   }
-  return mode === "mira" ? "Mira AI" : "规则导演";
+  if (mode === "mira") {
+    return "Mira AI";
+  }
+  return "规则导演";
 }
 
 export function DirectorControl({

@@ -21,6 +21,9 @@
 - `sound-effect-preview.md`：远端附件优先、本地 Wwise 回退的试听链路。
 - `music-analysis.md`：音乐特征分析、缓存和 Base 发布。
 - `shot-language-rulebook.md`：规则导演与 AI 共用的镜头语言规则。
+- `scene-composition-integration.md`：场景定位、附近几何、RGB/深度参考及独立空镜
+  的后续实施方案，明确已实现基础和待实测边界。
+- `rule-director-edge-advisor.md`：规则导演的可替换端侧模型顾问与部署方式。
 
 ## 研究与历史
 

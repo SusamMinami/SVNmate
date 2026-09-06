@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { BlueprintFormationSnapshot } from "../types";
 import { participantFacingYawDegrees } from "../director/actorActionPlanner";
 import { createDirectorInput } from "../director/contracts";
+import { DEFAULT_CHARACTER_BODY } from "../director/characterGeometry";
 import { createShotPreview } from "../director/shotPlanner";
 import {
   applyBlueprintFormation,
@@ -101,7 +102,17 @@ describe("applyBlueprintFormation", () => {
       warnings: [],
     };
 
+    snapshot.slots[0].bodyProfile = {
+      ...DEFAULT_CHARACTER_BODY, source: "mesh_bounds", height: 1.6,
+      footOffset: [0, -0.8, 0],
+    };
+    snapshot.slots[2].transform.scale.z = 0.5;
     const applied = applyBlueprintFormation(database, sequence, snapshot);
+    expect(applied.sequence.participants[0].position[1]).toBe(0.92);
+    expect(applied.sequence.participants[0].bodyProfile?.height).toBe(1.6);
+    expect(applied.sequence.participants[1].bodyProfile?.height).toBeCloseTo(1.005);
+    expect(createDirectorInput(applied.sequence).participants[0].body_profile)
+      .toEqual(snapshot.slots[0].bodyProfile);
 
     expect(applied.activeSlotCount).toBe(4);
     expect(applied.mappedSlotCount).toBe(4);
@@ -147,6 +158,7 @@ describe("applyBlueprintFormation", () => {
     expect(flexiblePlayerPreview.sequence.participants[0].position).not.toEqual(
       applied.sequence.participants[0].position,
     );
+    expect(flexiblePlayerPreview.sequence.participants[0].position[1]).toBe(0.92);
     expect(
       flexiblePlayerPreview.sequence.participants
         .slice(1)
@@ -502,12 +514,12 @@ describe("applyBlueprintFormation", () => {
     expect(player).toMatchObject({
       modelIndex: 0,
       positionSource: "blueprint",
-      position: [0, 0, 0.5],
+      position: [0, 0.92, 0.5],
     });
     expect(existingBpActor).toMatchObject({
       modelIndex: 1,
       positionSource: "blueprint",
-      position: [0, 0, -0.5],
+      position: [0, 0.92, -0.5],
     });
     expect(ignored).toMatchObject({
       modelIndex: null,

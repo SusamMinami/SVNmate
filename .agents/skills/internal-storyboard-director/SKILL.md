@@ -26,6 +26,8 @@ description: "Designs UE4 dialogue storyboards through the local storyboard MCP 
    - `participants[].initial_position` / `initial_yaw_degrees`：Formation
      BP 中的真实初始位置与朝向
    - `participants[].can_turn`：该角色是否允许规划转身动作
+   - `participants[].body_profile`：米制体型和脚底偏移；`source=default`
+     表示默认估算，`landmarkSource=proportional` 表示眼高等仍按比例估算
    - `participants[].first_dialogue_id`：角色第一次发言节点
    - `participants[].last_dialogue_id`：角色最后一次发言节点
    - `dialogue`：按剧情顺序排列的台词
@@ -102,6 +104,11 @@ description: "Designs UE4 dialogue storyboards through the local storyboard MCP 
 - 以 16:9 为主构图，并检查叠加 21:9 画框后的安全区域。
 - 关键人物的眼睛、表情、手势和叙事动作不得被 21:9 上下裁切。
 - 预判每个镜头中的人物投影，避免重要角色互相遮挡或堆叠。
+- 根据 `body_profile` 的身高、宽深和脚底偏移判断前景肩膀、主体眼高及
+  高矮角色同框；`initial_position` 是槽位原点，不一定在脚底。缺少体型时
+  视为估算，不能声称已经完成实测骨骼或真实场景遮挡验收。
+- 群像只观察当前站位，不要求全员转向中心。固定阵型没有三角或纵深条件时，
+  使用可成立的平衡构图，不能为满足风格偏好移动固定 NPC。
 - 普通对话的单人镜头优先呈现主体正面或四分之三正面；侧面角度只用于
   明确的对峙、疏离、隐藏或观察意图。
 - 使用 BP 站位时，`lock_player_position=true` 表示包括 0 号玩家在内的
@@ -157,8 +164,8 @@ description: "Designs UE4 dialogue storyboards through the local storyboard MCP 
   希望保留关系角色时使用 `speaker_group_medium`。
 - `reverse_medium` 必须和前一个单人镜头构成主体互换、视线互补的
   正反打；没有互补前镜时改用 `close_up` 或其他合适模板。
-- 相邻镜头必须有明确的角度或景别变化；连续拍摄同一主体时，水平机位
-  变化原则上至少 30 度。
+- 同主体且景别变化不足的连续切镜，水平机位变化优先至少 30 度；这是
+  剪辑建议而非所有相邻镜头的硬约束。相同机位优先延续为一个长镜头。
 - 普通对话从建立镜头逐步收紧景别；全景直接跳到特写必须有重大情绪或
   信息转折。特写后优先使用另一角色的匹配特写，或回到建立镜头。
 - 每个 shot 必须声明构图原则、视觉落点、负空间意图和上下镜构图衔接。
@@ -222,10 +229,11 @@ description: "Designs UE4 dialogue storyboards through the local storyboard MCP 
   对峙分组应在阵型中清晰可读。
 - 不要为了变化而频繁切镜头。镜头变化必须对应叙事节点。
 - 按约每秒 4-5 个汉字估算每句台词时长，常规镜头尽量保持 4-8 秒。
-- 普通镜头至少覆盖连续两句台词，不能仅因说话人变化就切到对方。
-- 如果新镜头不足两句或预计不足 4 秒，优先把连续台词并入相邻镜头并
-  保留当前机位；只有进出场边界或明确的重大情绪、动作、信息转折可以
-  保留单句短镜头。
+- 普通镜头优先覆盖连续两句台词，4-8 秒是偏好而非硬限制。没有叙事变化时
+  允许更长的停留；不要因问号或同人连续发言自动选择特写和推近。
+- 听者反应可以承载说话者的画外对白，不必为了轮流展示角色而切换主体。
+- 如果新镜头不足两句或预计不足 4 秒，先判断其反应、动作或信息价值；
+  没有独立节拍才并入相邻镜头。不得跨过进出场边界。
 - 权力变化可使用高低机位，沉默和犹豫可使用反应特写。
 - 开场不一定必须是建立镜头，但第一次空间关系必须清楚。
 

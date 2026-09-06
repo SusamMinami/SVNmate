@@ -64,6 +64,7 @@ import {
   readConfiguredMissionTargetPlan,
 } from "./configRepository";
 import { updateMissionTargetTransforms } from "./excelRegistration";
+import { readCharacterBodies } from "./ue/characterBody";
 import {
   getUnrealMcpEndpoint,
   UnrealMcpConnection,
@@ -5740,6 +5741,11 @@ export async function readBlueprintFormation(
           error instanceof Error ? error.message : "未知错误"
         }`,
       );
+    }
+    try {
+      warnings.push(...await readCharacterBodies(connection, slots));
+    } catch (error) {
+      warnings.push(`模型体型读取不可用，使用默认估算：${error instanceof Error ? error.message : "未知错误"}`);
     }
     return {
       status: slots.length > 0 ? "found" : "unavailable",

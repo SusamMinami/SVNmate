@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { CharacterBodyProfileSchema } from "./characterGeometry";
 import {
   MAX_DIALOGUE_PARTICIPANTS,
   PARTICIPANT_SLOTS,
@@ -79,6 +80,24 @@ export const NEGATIVE_SPACE_MODES = [
   "look_room",
   "isolation",
   "pressure",
+] as const;
+
+export const RULE_BEAT_FUNCTIONS = [
+  "establish",
+  "development",
+  "escalation",
+  "reveal",
+  "reaction",
+  "transition",
+  "release",
+] as const;
+
+export const RULE_BEAT_COVERAGE_STRATEGIES = [
+  "relationship_hold",
+  "speaker_focus",
+  "reaction_focus",
+  "emphasis_focus",
+  "reestablish",
 ] as const;
 
 export const COMPOSITION_TRANSITIONS = [
@@ -350,6 +369,7 @@ export const DirectorInputSchema = z.object({
         instance_id: z.string().min(1).optional(),
         model_index: z.number().int().nonnegative().nullable().optional(),
         model_class_path: z.string().startsWith("/Game/").max(512).optional(),
+        body_profile: CharacterBodyProfileSchema.optional(),
         name: z.string().min(1),
         background: z.string(),
         role: z.enum(["dialogue", "background"]).default("dialogue"),
@@ -421,6 +441,7 @@ export const DirectorInputSchema = z.object({
       .nullable(),
   }),
   constraints: z.object({
+    geometry_version: z.string().optional(),
     dynamic_relationship_axis: z.literal(true),
     composition_projection_validation: z.literal(true),
     relationship_coverage: z.literal(true),
@@ -478,6 +499,7 @@ export interface DirectorInput {
     instance_id?: string;
     model_index?: number | null;
     model_class_path?: string;
+    body_profile?: z.infer<typeof CharacterBodyProfileSchema>;
     name: string;
     background: string;
     role: "dialogue" | "background";
@@ -527,6 +549,7 @@ export interface DirectorInput {
     } | null;
   };
   constraints: {
+    geometry_version?: string;
     dynamic_relationship_axis: true;
     composition_projection_validation: true;
     relationship_coverage: true;
@@ -558,6 +581,21 @@ export interface DirectorSceneAnalysis {
   dramaticGoal: string;
   emotionalProgression: string;
   visualStrategy: string;
+}
+
+export interface RuleBeatAdvice {
+  schema_version: "rule-beat.v1";
+  request_id: string;
+  summary: string;
+  beats: Array<{
+    start_dialogue_id: string;
+    end_dialogue_id: string;
+    narrative_function: (typeof RULE_BEAT_FUNCTIONS)[number];
+    intensity: number;
+    coverage_strategy: (typeof RULE_BEAT_COVERAGE_STRATEGIES)[number];
+    focus_slot?: ParticipantSlot;
+    reason: string;
+  }>;
 }
 
 export function directorDialogueParticipants(
@@ -602,7 +640,12 @@ export interface ShotDirectorProvider {
   readonly id: DirectorMode;
   design(
     input: DirectorInput,
-    options?: { forceRegenerate?: boolean; signal?: AbortSignal },
+    options?: {
+      forceRegenerate?: boolean;
+      signal?: AbortSignal;
+      useRuleAdvisor?: boolean;
+      beatAdvice?: RuleBeatAdvice;
+    },
   ): Promise<DirectorProviderResult>;
 }
 
@@ -652,6 +695,7 @@ export function createDirectorInput(
       instance_id: participant.instanceId,
       model_index: participant.modelIndex,
       model_class_path: participant.modelClassPath,
+      body_profile: participant.bodyProfile,
       name: participant.name,
       background:
         participant.introduction || participant.note || "暂无补充角色背景",
@@ -722,6 +766,7 @@ export function createDirectorInput(
         : null,
     },
     constraints: {
+      geometry_version: "body-profile.v1:validation.v2:rhythm.v2",
       dynamic_relationship_axis: true,
       composition_projection_validation: true,
       relationship_coverage: true,

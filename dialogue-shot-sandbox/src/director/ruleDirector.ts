@@ -3,10 +3,11 @@ import type {
   DirectorDecision,
   DirectorInput,
   DirectorProviderResult,
+  RuleBeatAdvice,
   ShotDirectorProvider,
 } from "./contracts";
 import { directorDialogueParticipants } from "./contracts";
-import type { ParticipantSlot, ShotPlan } from "../types";
+import type { DialogueSequence, ParticipantSlot, ShotPlan } from "../types";
 import {
   createDefaultBlocking,
   defaultEntryDialogueId,
@@ -18,6 +19,7 @@ import {
   PREFERRED_MAXIMUM_SHOT_DURATION_SECONDS,
 } from "./shotTiming";
 import { recommendSoundEffects } from "./soundEffectRecommender";
+import { projectionIssues } from "./shotValidation";
 
 interface AttendanceContext {
   entryIndexBySlot: Map<ParticipantSlot, number>;
@@ -41,7 +43,7 @@ function isPause(content: string): boolean {
 }
 
 function isEmphatic(content: string): boolean {
-  return /[？！!?]|危险|必须|不能|真相|现在|立刻|到底/.test(content);
+  return /[！!]|危险|必须|真相|立刻|到底|原来|竟然|决定|我答应|我拒绝|(?:谁|为什么|怎么会).*[？?]/.test(content);
 }
 
 function hasDisorientationCue(content: string): boolean {
@@ -169,12 +171,7 @@ function relationshipWideDecision(
     camera_movement: "static",
     movement_intensity: "none",
     camera_roll_degrees: 0,
-    composition_mode:
-      activeParticipants.length === 3
-        ? "triangular"
-        : isGroup
-          ? "layered_depth"
-          : "symmetry",
+    composition_mode: "asymmetrical_balance",
     visual_anchor: "balanced",
     negative_space: "balanced",
     composition_transition: "recenter",
@@ -315,7 +312,7 @@ function decisionFor(
           : "停顿构成情绪节点，以稳定近景读取角色没有说出口的反应，不额外推断孤立。",
     };
   }
-  if (isEmphatic(row.content) || previousSpeaker === row.speaker) {
+  if (isEmphatic(row.content)) {
     return {
       dialogue_ids: [row.dialogue_id],
       template: "close_up",
@@ -365,7 +362,7 @@ function decisionFor(
     movement_intensity: "none",
     camera_roll_degrees: 0,
     composition_mode:
-      activeParticipants.length > 2 ? "layered_depth" : "rule_of_thirds",
+      "rule_of_thirds",
     visual_anchor: screenPosition,
     negative_space: "look_room",
     composition_transition:
@@ -389,12 +386,37 @@ function decisionFor(
 export class RuleDirectorProvider implements ShotDirectorProvider {
   readonly id = "rule" as const;
 
-  async design(input: DirectorInput): Promise<DirectorProviderResult> {
+  async design(
+    input: DirectorInput,
+    options: {
+      signal?: AbortSignal;
+      useRuleAdvisor?: boolean;
+      beatAdvice?: RuleBeatAdvice;
+    } = {},
+  ): Promise<DirectorProviderResult> {
     const blocking = createDefaultBlocking(input);
-    return {
-      decisions: createRuleDecisions(input, blocking),
+    const decisions = createRuleDecisions(
+      input,
       blocking,
-      analysis: createRuleAnalysis(input),
+      options.beatAdvice,
+    );
+    const baseAnalysis = createRuleAnalysis(input);
+    const analysis = options.beatAdvice
+      ? {
+          ...baseAnalysis,
+          dramaticGoal: options.beatAdvice.summary,
+          emotionalProgression: options.beatAdvice.beats
+            .map(
+              (beat) =>
+                `${beat.narrative_function} ${beat.intensity}`,
+            )
+            .join(" → "),
+        }
+      : baseAnalysis;
+    return {
+      decisions,
+      blocking,
+      analysis,
       soundEffects: recommendSoundEffects(input),
     };
   }
@@ -413,9 +435,128 @@ export function createRuleAnalysis(
   };
 }
 
+function applyBeatCoverageStrategy(
+  selected: DirectorDecision,
+  beat: RuleBeatAdvice["beats"][number],
+  segmentRows: DirectorInput["dialogue"],
+  activeParticipants: DirectorInput["participants"],
+  input: DirectorInput,
+): DirectorDecision {
+  const activeSlots = new Set(
+    activeParticipants.map((participant) => participant.slot),
+  );
+  const fallbackFocus = segmentRows.at(-1)?.speaker ?? selected.subject;
+  const focus =
+    beat.focus_slot && activeSlots.has(beat.focus_slot)
+      ? beat.focus_slot
+      : fallbackFocus !== "both" && fallbackFocus !== "group"
+        ? fallbackFocus
+        : segmentRows[0].speaker;
+  const lookTarget =
+    activeParticipants.find((participant) => participant.slot !== focus)
+      ?.slot ?? "group_center";
+  const anchor = visualAnchorFor(focus, input);
+  const intent = `${beat.reason}（端侧模型识别为 ${beat.narrative_function} 节拍，规则导演负责执行。）`;
+
+  if (
+    activeParticipants.length >= 2 &&
+    (beat.coverage_strategy === "relationship_hold" ||
+      beat.coverage_strategy === "reestablish")
+  ) {
+    return relationshipWideDecision(
+      segmentRows[0].dialogue_id,
+      activeParticipants,
+      beat.coverage_strategy === "reestablish"
+        ? "reestablish_geography"
+        : "relationship",
+      intent,
+    );
+  }
+  if (beat.coverage_strategy === "reaction_focus") {
+    return {
+      ...selected,
+      template: "reaction_closeup",
+      subject: focus,
+      look_target: lookTarget,
+      lens_mm: beat.intensity >= 75 ? 100 : 85,
+      end_lens_mm: beat.intensity >= 75 ? 100 : 85,
+      lens_intent: "compressed_intimacy",
+      depth_of_field: "shallow",
+      camera_movement: "static",
+      movement_intensity: "none",
+      composition_mode: "golden_ratio",
+      visual_anchor:
+        anchor === "left_third"
+          ? "left_golden"
+          : anchor === "right_third"
+            ? "right_golden"
+            : "center",
+      negative_space: "look_room",
+      composition_transition: "contrast",
+      coverage_intent: "reaction",
+      intent,
+    };
+  }
+  if (beat.coverage_strategy === "emphasis_focus") {
+    return {
+      ...selected,
+      template: "close_up",
+      subject: focus,
+      look_target: lookTarget,
+      lens_mm: beat.intensity >= 80 ? 100 : 85,
+      end_lens_mm: beat.intensity >= 80 ? 100 : 85,
+      lens_intent: "compressed_intimacy",
+      depth_of_field: "shallow",
+      camera_movement: beat.intensity >= 65 ? "dolly_in" : "static",
+      movement_intensity: beat.intensity >= 65 ? "subtle" : "none",
+      composition_mode: "golden_ratio",
+      visual_anchor:
+        anchor === "left_third"
+          ? "left_golden"
+          : anchor === "right_third"
+            ? "right_golden"
+            : "center",
+      negative_space: beat.intensity >= 80 ? "pressure" : "look_room",
+      composition_transition: "progressive_shift",
+      coverage_intent: "individual_emphasis",
+      intent,
+    };
+  }
+  return {
+    ...selected,
+    template:
+      activeParticipants.length > 2
+        ? "speaker_group_medium"
+        : activeParticipants.length === 2
+          ? "reverse_medium"
+          : "close_up",
+    subject: focus,
+    look_target: lookTarget,
+    lens_mm: activeParticipants.length > 2 ? 42 : 50,
+    end_lens_mm: activeParticipants.length > 2 ? 42 : 50,
+    lens_intent:
+      activeParticipants.length > 2
+        ? "natural_perspective"
+        : "subject_isolation",
+    depth_of_field: "moderate",
+    camera_movement: "static",
+    movement_intensity: "none",
+    composition_mode: "rule_of_thirds",
+    visual_anchor: anchor,
+    negative_space: "look_room",
+    composition_transition: "match_eye_trace",
+    coverage_intent:
+      activeParticipants.length > 2
+        ? "shared_reaction"
+        : "individual_perspective",
+    intent,
+  };
+}
+
 export function createRuleDecisions(
   input: DirectorInput,
   blocking = createDefaultBlocking(input),
+  beatAdvice?: RuleBeatAdvice,
 ): DirectorDecision[] {
   let previousSpeaker: ParticipantSlot | null = null;
   const attendance = createAttendanceContext(input, blocking);
@@ -423,6 +564,29 @@ export function createRuleDecisions(
   const dialogueParticipantSlots = new Set(
     dialogueParticipants.map((participant) => participant.slot),
   );
+  const dialogueIndexById = new Map(
+    input.dialogue.map((line, index) => [line.dialogue_id, index]),
+  );
+  const advisedBeatByDialogueIndex = new Map<
+    number,
+    RuleBeatAdvice["beats"][number]
+  >();
+  const advisedBoundaryIndexes = new Set<number>();
+  for (const beat of beatAdvice?.beats ?? []) {
+    const startIndex = dialogueIndexById.get(beat.start_dialogue_id);
+    const endIndex = dialogueIndexById.get(beat.end_dialogue_id);
+    if (
+      startIndex === undefined ||
+      endIndex === undefined ||
+      endIndex < startIndex
+    ) {
+      continue;
+    }
+    advisedBoundaryIndexes.add(startIndex);
+    for (let index = startIndex; index <= endIndex; index += 1) {
+      advisedBeatByDialogueIndex.set(index, beat);
+    }
+  }
   const rawDecisions = input.dialogue.map((row, index) => {
     const decision = decisionFor(
       row,
@@ -497,12 +661,19 @@ export function createRuleDecisions(
     const currentHasEnoughLines =
       current.decision.dialogue_ids.length >=
       MINIMUM_DIALOGUE_LINES_PER_SHOT;
+    const withinAdvisedBeat =
+      advisedBeatByDialogueIndex.get(current.endIndex) !== undefined &&
+      advisedBeatByDialogueIndex.get(current.endIndex) ===
+        advisedBeatByDialogueIndex.get(index);
     const shouldStartNewShot =
       hasHardBoundaryBefore(index) ||
+      advisedBoundaryIndexes.has(index) ||
       pauseCut ||
       (currentHasEnoughLines &&
         (currentIsTooLong ||
-          (currentIsLongEnough && (speakerChanged || dramaticCut))));
+          (!withinAdvisedBeat &&
+            currentIsLongEnough &&
+            (speakerChanged || dramaticCut))));
 
     if (shouldStartNewShot) {
       drafts.push({
@@ -523,6 +694,7 @@ export function createRuleDecisions(
     if (
       current.duration >= MINIMUM_SHOT_DURATION_SECONDS ||
       hasHardBoundaryBefore(current.startIndex) ||
+      advisedBoundaryIndexes.has(current.startIndex) ||
       previous.duration + current.duration >
         PREFERRED_MAXIMUM_SHOT_DURATION_SECONDS
     ) {
@@ -537,11 +709,10 @@ export function createRuleDecisions(
     drafts.splice(index, 1);
   }
 
-  let previousVisualSubject: ParticipantSlot | null = null;
   let previousRelationshipPair: ParticipantSlot[] | null = null;
   let tightSingleRun = 0;
   let relationshipWideInOpening = false;
-  return drafts.map(
+  const selectedDecisions = drafts.map(
     ({ decision, retainedForTiming, startIndex, endIndex }, shotIndex) => {
       const segmentDecisions = rawDecisions.slice(startIndex, endIndex + 1);
       const segmentRows = input.dialogue.slice(startIndex, endIndex + 1);
@@ -577,76 +748,12 @@ export function createRuleDecisions(
       const pauseDecision = segmentDecisions.find((candidate, offset) =>
         isPause(input.dialogue[startIndex + offset].content),
       );
+      const emphasisDecision = segmentDecisions.find((candidate, offset) =>
+        isEmphatic(input.dialogue[startIndex + offset].content),
+      );
       let selected = keepsGroupComposition
         ? decision
-        : (pauseDecision ?? segmentDecisions.at(-1) ?? decision);
-      const selectedIsSingle =
-        selected.subject !== "both" && selected.subject !== "group";
-
-      if (selectedIsSingle && selected.subject === previousVisualSubject) {
-        const differentSegmentDecision = [...segmentDecisions]
-          .reverse()
-          .find(
-            (candidate) =>
-              candidate.subject !== "both" &&
-              candidate.subject !== "group" &&
-              candidate.subject !== previousVisualSubject,
-          );
-        if (differentSegmentDecision) {
-          selected = differentSegmentDecision;
-        } else {
-          const activeAlternative = activeParticipants.find(
-            (participant) =>
-              participant.slot !== previousVisualSubject,
-          );
-          if (activeAlternative) {
-            const previousSubject = selected.subject;
-            selected = {
-              ...selected,
-              subject: activeAlternative.slot,
-              look_target: previousSubject,
-              template:
-                activeParticipants.length > 2
-                  ? "speaker_group_medium"
-                  : selected.template === "reaction_closeup"
-                    ? "reaction_closeup"
-                    : "reverse_medium",
-              lens_mm:
-                selected.template === "reaction_closeup"
-                  ? selected.lens_mm
-                  : activeParticipants.length > 2
-                    ? 42
-                    : 50,
-              end_lens_mm:
-                selected.template === "reaction_closeup"
-                  ? selected.end_lens_mm
-                  : activeParticipants.length > 2
-                    ? 42
-                    : 50,
-              lens_intent:
-                selected.template === "reaction_closeup"
-                  ? selected.lens_intent
-                  : activeParticipants.length > 2
-                    ? "natural_perspective"
-                    : "subject_isolation",
-              depth_of_field:
-                selected.template === "reaction_closeup"
-                  ? selected.depth_of_field
-                  : "moderate",
-              visual_anchor: visualAnchorFor(
-                activeAlternative.slot,
-                input,
-              ),
-              coverage_intent:
-                activeParticipants.length > 2
-                  ? "shared_reaction"
-                  : selected.coverage_intent,
-              intent: `${selected.intent} 保留另一位在场角色的反应，避免连续镜头重复同一主体。`,
-            };
-          }
-        }
-      }
-
+        : (pauseDecision ?? emphasisDecision ?? segmentDecisions.at(-1) ?? decision);
       const currentRelationshipPair =
         selected.subject !== "both" &&
         selected.subject !== "group" &&
@@ -700,6 +807,14 @@ export function createRuleDecisions(
             : "reestablish_geography",
           reason,
         );
+      } else if (advisedBeatByDialogueIndex.has(startIndex)) {
+        selected = applyBeatCoverageStrategy(
+          selected,
+          advisedBeatByDialogueIndex.get(startIndex)!,
+          segmentRows,
+          activeParticipants,
+          input,
+        );
       } else if (
         activeParticipants.length === 2 &&
         (segmentSpeakers.size >= 2 || needsClosingRelationshipShot) &&
@@ -744,7 +859,7 @@ export function createRuleDecisions(
           camera_movement: "static",
           movement_intensity: "none",
           camera_roll_degrees: 0,
-          composition_mode: "layered_depth",
+          composition_mode: "rule_of_thirds",
           negative_space: "look_room",
           composition_transition: "match_eye_trace",
           coverage_intent: "shared_reaction",
@@ -753,11 +868,6 @@ export function createRuleDecisions(
         };
       }
 
-      const selectedSubject =
-        selected.subject === "both" || selected.subject === "group"
-          ? null
-          : selected.subject;
-      previousVisualSubject = selectedSubject;
       if (RELATIONSHIP_WIDE_TEMPLATES.has(selected.template)) {
         if (shotIndex < 3) {
           relationshipWideInOpening = true;
@@ -783,11 +893,44 @@ export function createRuleDecisions(
       };
     },
   );
+  // Adjacent ordinary relationship coverage can remain one sustained shot.
+  // Attendance changes and dramatic beats remain explicit boundaries.
+  const result: DirectorDecision[] = [];
+  const rowById = new Map(input.dialogue.map((row) => [row.dialogue_id, row]));
+  for (const decision of selectedDecisions) {
+    const previous = result.at(-1);
+    const rows = decision.dialogue_ids.map((id) => rowById.get(id)!);
+    const combinedDuration = [...(previous?.dialogue_ids ?? []), ...decision.dialogue_ids]
+      .reduce((sum, id) => sum + estimateDialogueDuration(rowById.get(id)!.content), 0);
+    const ordinary = rows.every((row) => !isPause(row.content) && !isEmphatic(row.content));
+    const canHold = previous &&
+      RELATIONSHIP_WIDE_TEMPLATES.has(previous.template) &&
+      previous.template === decision.template &&
+      previous.subject === decision.subject &&
+      previous.camera_movement === "static" && decision.camera_movement === "static" &&
+      decision.coverage_intent === "relationship" &&
+      !entryDialogueIds.has(decision.dialogue_ids[0]) &&
+      !exitDialogueIds.has(previous.dialogue_ids.at(-1)!) &&
+      !advisedBoundaryIndexes.has(
+        input.dialogue.findIndex(
+          (line) => line.dialogue_id === decision.dialogue_ids[0],
+        ),
+      ) &&
+      ordinary && combinedDuration <= 24;
+    if (canHold) {
+      previous.dialogue_ids.push(...decision.dialogue_ids);
+      previous.intent = "持续观察人物关系与身体语言，在叙事变化前保持机位，不因说话人轮换重复切镜。";
+    } else {
+      result.push({ ...decision, dialogue_ids: [...decision.dialogue_ids] });
+    }
+  }
+  return result;
 }
 
 export function reviseRuleDecisionsForProjection(
   decisions: DirectorDecision[],
   shots: ShotPlan[],
+  sequence: DialogueSequence,
 ): DirectorDecision[] {
   return decisions.map((decision, index) => {
     const shot = shots[index];
@@ -796,43 +939,65 @@ export function reviseRuleDecisionsForProjection(
     }
 
     const warnings = shot.projection.warnings.join("；");
+    const issues = new Set(projectionIssues(shot.projection)
+      .filter((issue) => issue.severity === "error").map((issue) => issue.ruleId));
     const singleSubject =
       decision.subject !== "both" && decision.subject !== "group";
     const needsGroupCoverage =
       singleSubject &&
-      shot.projection.warnings.some((warning) =>
-        warning.includes("单人镜头包含其他主要可见角色"),
-      );
+      issues.has("FRM-002");
+    const needsUnturnedWide = issues.has("ACT-001");
     const template =
       decision.template === "reverse_medium" &&
       shot.projection.warnings.some((warning) =>
         warning.includes("没有可配对的前置反打镜头"),
       )
         ? "close_up"
+        : needsUnturnedWide
+          ? shot.axis.participantSlots.length > 2 ? "master_group_shot" : "master_two_shot"
         : needsGroupCoverage
           ? "speaker_group_medium"
           : decision.template;
     const lensMm = needsGroupCoverage ? 42 : decision.lens_mm;
 
+    const dialogueSlots = new Set(sequence.rows.map((row) => row.speakerSlot));
+    const activeCount = sequence.participants.filter((participant) =>
+      dialogueSlots.has(participant.slot) &&
+      participant.entryIndex <= shot.dialogueEndIndex &&
+      (participant.exitIndex === null || participant.exitIndex >= shot.dialogueEndIndex),
+    ).length;
+    if (needsUnturnedWide && activeCount >= 2) {
+      return {
+        ...decision,
+        template: activeCount === 2 ? "master_two_shot" : "master_group_shot",
+        subject: activeCount === 2 ? "both" : "group",
+        look_target: "group_center",
+        camera_movement: "static",
+        movement_intensity: "none",
+        end_lens_mm: decision.lens_mm,
+        coverage_intent: "relationship",
+        composition_mode: "asymmetrical_balance",
+        visual_anchor: "balanced",
+        negative_space: "balanced",
+        composition_transition: "recenter",
+      };
+    }
+    const unsafeMovement = issues.has("MOV-006") || issues.has("MOV-005") ||
+      (issues.has("CON-005") && decision.camera_movement !== "static");
     return {
       ...decision,
       template,
       lens_mm: lensMm,
-      end_lens_mm: lensMm,
+      end_lens_mm: unsafeMovement || needsGroupCoverage ? lensMm : decision.end_lens_mm,
       lens_intent: needsGroupCoverage
         ? "natural_perspective"
         : decision.lens_intent,
       depth_of_field: needsGroupCoverage
         ? "moderate"
         : decision.depth_of_field,
-      camera_movement: "static",
-      movement_intensity: "none",
-      camera_roll_degrees: 0,
-      camera_height: "eye",
-      composition_mode: "asymmetrical_balance",
-      visual_anchor: "balanced",
-      negative_space: "balanced",
-      composition_transition: "contrast",
+      camera_movement: unsafeMovement ? "static" : decision.camera_movement,
+      movement_intensity: unsafeMovement ? "none" : decision.movement_intensity,
+      camera_height: issues.has("FRM-004") ? "eye" : decision.camera_height,
       intent: `${decision.intent} 投影验收返修：${warnings}。`,
     };
   });

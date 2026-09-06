@@ -112,6 +112,7 @@ export interface DialogueParticipant extends NpcProfile {
   facingTarget: Vec3;
   modelIndex: number | null;
   modelClassPath?: string;
+  bodyProfile?: CharacterBodyProfile;
   positionSource: "generated" | "blueprint";
   firstDialogueId: string;
   firstDialogueIndex: number;
@@ -180,6 +181,18 @@ export interface BlueprintFormationSlot {
   componentGuid: string;
   modelClassPath: string;
   transform: UnrealTransform;
+  bodyProfile?: CharacterBodyProfile;
+}
+
+export interface CharacterBodyProfile {
+  source: "mesh_bounds" | "default";
+  meshPath: string;
+  height: number;
+  width: number;
+  depth: number;
+  /** Metres in actor-facing coordinates: right, up, forward. */
+  footOffset: Vec3;
+  landmarkSource: "proportional";
 }
 
 export interface BlueprintFormationSnapshot {
@@ -1152,6 +1165,13 @@ export interface ShotProjectionValidation {
   eyeTraceDelta: number | null;
   valid: boolean;
   warnings: string[];
+  issues?: ShotValidationIssue[];
+}
+
+export interface ShotValidationIssue {
+  ruleId: string;
+  severity: "error" | "warning" | "info";
+  message: string;
 }
 
 export interface ShotAxis {

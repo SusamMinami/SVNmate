@@ -13,6 +13,7 @@ import { createServer } from "vite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { demoDatabase } from "../src/data/demo";
 import { findDialogueSequence } from "../src/data/dialogueRepository";
+import { DEFAULT_CHARACTER_BODY } from "../src/director/characterGeometry";
 import {
   BLOCKING_POSITIONS,
   createDirectorInput,
@@ -268,12 +269,18 @@ describe("internal storyboard MCP", () => {
     async () => {
       temporaryRoot = await mkdtemp(join(tmpdir(), "storyboard-mcp-"));
       process.env.STORYBOARD_PROJECT_ROOT = temporaryRoot;
-      const sequence = findDialogueSequence(demoDatabase, "3099");
+      const source = findDialogueSequence(demoDatabase, "3099");
+      // Retry must be driven by an execution conflict, not a style preference.
+      const sequence = {
+        ...source,
+        participants: source.participants.map((participant) => ({ ...participant, canTurn: false })),
+      };
       const input = createDirectorInput(sequence, "mcp-integration-request");
       const vite = await createServer({
         configFile: false,
         cacheDir: join(temporaryRoot, ".vite-cache"),
         plugins: [traeBridgePlugin()],
+        optimizeDeps: { noDiscovery: true, include: [] },
         server: { host: "127.0.0.1", port: 0 },
       });
       await vite.listen();
@@ -658,6 +665,20 @@ describe("internal storyboard MCP", () => {
     expect(storyboardInputContentHash(reordered)).toBe(
       storyboardInputContentHash(input),
     );
+  });
+
+  it("invalidates exact caches when body dimensions or geometry policy change", () => {
+    const input = createDirectorInput(findDialogueSequence(demoDatabase, "2048"), "body-cache");
+    const withBody = {
+      ...input,
+      participants: input.participants.map((participant) => ({
+        ...participant, body_profile: { ...DEFAULT_CHARACTER_BODY, height: 1.2 },
+      })),
+    };
+    expect(storyboardInputContentHash(withBody)).not.toBe(storyboardInputContentHash(input));
+    expect(storyboardInputContentHash({
+      ...input, constraints: { ...input.constraints, geometry_version: "next" },
+    })).not.toBe(storyboardInputContentHash(input));
   });
 
   it("does not include the case collection preference in content hashes", () => {

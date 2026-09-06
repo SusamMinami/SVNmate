@@ -83,6 +83,13 @@ UE bridge 从 Blueprint 的 `SimpleConstructionScript` 读取：
 - `VariableGuid`
 - `ChildActorClass`
 - `RelativeLocation`
+- 体型读取新增 `server/ue/characterBody.ts`：从角色 CDO 或可用的 ChildActorTemplate
+  读取主 Skeletal Mesh 包围盒，经组件附件链和槽位缩放转换为米制体型档案。
+  不生成临时 Actor、不运行 Construction Script、不修改或保存 BP。
+  姿态、蓝图构造脚本动态缩放、复杂多 Mesh 和槽位俯仰/横滚仍需 UE 实测；
+  眼肩关键点当前按比例估算，失败时明确回退。
+- 沙盘保留 `RelativeLocation.z`，`bodyProfile.footOffset` 单独表达脚底相对
+  槽位原点的位置；预览、机位求解、投影与共享方案使用同一档案。
 - `RelativeRotation`
 - `RelativeScale3D`
 

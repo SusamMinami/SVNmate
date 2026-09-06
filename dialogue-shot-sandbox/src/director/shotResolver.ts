@@ -9,12 +9,13 @@ import type {
   ShotKind,
   ShotPlan,
   ShotSize,
+  ShotValidationIssue,
   Vec3,
 } from "../types";
 import type { DirectorDecision } from "./contracts";
 import {
   assessProjection,
-  horizontalViewDelta,
+  subjectAzimuthDelta,
   solveGroupCamera,
   solveSingleCamera,
   type CameraGeometry,
@@ -22,6 +23,7 @@ import {
 } from "./shotGeometry";
 import { planActorTurns } from "./actorActionPlanner";
 import { estimateShotDuration } from "./shotTiming";
+import { characterHeight } from "./characterGeometry";
 
 function cameraHeight(
   value: DirectorDecision["camera_height"],
@@ -327,7 +329,8 @@ function geometryFor(
     const geometry = solveGroupCamera({
       participants: primaryParticipants,
       lensMm: decision.lens_mm,
-      cameraHeight: cameraHeight(decision.camera_height, 1.72),
+      cameraHeight: primaryParticipants.reduce((sum, actor) =>
+        sum + characterHeight(actor, cameraHeight(decision.camera_height, 1.72)), 0) / primaryParticipants.length,
       shotSize,
       composition: compositionPlan,
     });
@@ -360,7 +363,7 @@ function geometryFor(
         (candidate) => candidate.slot,
       ),
       lensMm: decision.lens_mm,
-      cameraHeight: cameraHeight(decision.camera_height, fallbackHeight),
+      cameraHeight: characterHeight(participant, cameraHeight(decision.camera_height, fallbackHeight)),
       composition: compositionPlan,
       shotSize,
       coverage,
@@ -548,6 +551,7 @@ export function resolveShotDecisions(
   }
   const coveredIds = new Set<string>();
   let previousGeometry: CameraGeometry | undefined;
+  let previousShotSize: ShotSize | undefined;
   let previousVisualSubjectSlot: DialogueParticipant["slot"] | null = null;
   let previousLookTargetSlot: DialogueParticipant["slot"] | null = null;
   let previousCoverage: ShotCoverage | null = null;
@@ -775,7 +779,7 @@ export function resolveShotDecisions(
       lookTarget,
       activeParticipants,
       activeDialogueParticipants,
-      previousGeometry,
+      previousVisualSubjectSlot === subject.slot ? previousGeometry : undefined,
       previousAxis,
     );
     const motionGeometry = resolveMotionGeometry(
@@ -836,12 +840,19 @@ export function resolveShotDecisions(
       previousAxis?.id === axis.id &&
       previousLookTargetSlot === subject.slot &&
       lookTarget?.slot === previousVisualSubjectSlot;
-    const projectionWarnings = [
-      ...geometry.assessment.warnings,
-      ...actorActionPlan.warnings,
+    const projectionIssues: ShotValidationIssue[] = [
+      ...geometry.assessment.issues.map((issue) =>
+        issue.ruleId === "FRM-002" && resolvedCoverage !== "single"
+          ? { ...issue, severity: "info" as const, message: "已按实际画面标记为过肩或带群镜头" }
+          : issue),
+      ...actorActionPlan.warnings.map((message) => ({
+        ruleId: "ACT-001", severity: "error" as const, message,
+      })),
     ];
+    const warn = (ruleId: string, message: string, severity: ShotValidationIssue["severity"] = "error") =>
+      projectionIssues.push({ ruleId, message, severity });
     if (motionCrossesRelationshipAxis) {
-      projectionWarnings.push(`镜内运动越过了关系轴 ${axis.id}`);
+      warn("CON-005", `镜内运动越过了关系轴 ${axis.id}`);
     }
     let motionEndAssessment: ProjectionAssessment | null = null;
     if (decision.camera_movement !== "static") {
@@ -864,13 +875,13 @@ export function resolveShotDecisions(
         decision.camera_movement !== "pan" &&
         !motionEndAssessment.visibleParticipantSlots.includes(subject.slot)
       ) {
-        projectionWarnings.push("运镜终点未保留当前主体");
+        warn("MOV-006", "运镜终点未保留当前主体");
       }
       if (
         decision.camera_movement !== "pan" &&
         !motionEndAssessment.subjectSafeForUltrawide
       ) {
-        projectionWarnings.push("运镜终点的主体超出 21:9 安全区域");
+        warn("MOV-006", "运镜终点的主体超出 21:9 安全区域");
       }
       if (decision.camera_movement.startsWith("dolly_zoom")) {
         const startArea =
@@ -878,7 +889,7 @@ export function resolveShotDecisions(
         const endArea =
           motionEndAssessment.participantAreaRatios[subject.slot] ?? 0;
         if (Math.abs(startArea - endArea) > 0.03) {
-          projectionWarnings.push("Dolly zoom 起止主体尺寸未能保持稳定");
+          warn("MOV-005", "Dolly zoom 起止主体尺寸未能保持稳定");
         }
       }
     }
@@ -892,8 +903,9 @@ export function resolveShotDecisions(
       decision.composition_transition === "match_eye_trace" &&
       eyeTraceDelta > 0.35
     ) {
-      projectionWarnings.push(
+      warn("CON-EYE-TRACE",
         `上下镜注视落点偏移 ${eyeTraceDelta.toFixed(2)} NDC`,
+        "warning",
       );
     }
     if (
@@ -907,23 +919,27 @@ export function resolveShotDecisions(
         Math.sign(currentX) !== 0 &&
         Math.sign(previousX) !== Math.sign(currentX);
       if (!mirrored || Math.abs(Math.abs(previousX) - Math.abs(currentX)) > 0.2) {
-        projectionWarnings.push("正反打构图未形成左右互补落点");
+        warn("CON-MIRROR", "正反打构图未形成左右互补落点", "warning");
       }
     }
     if (
       decision.composition_transition === "recenter" &&
       Math.abs(geometry.assessment.visualAnchor[0]) > 0.18
     ) {
-      projectionWarnings.push("重新建立空间的镜头未回到中央视觉重心");
+      warn("FRM-ANCHOR", "重新建立空间的镜头未回到中央视觉重心", "warning");
     }
     if (decision.template === "reverse_medium" && !formsReversePair) {
-      projectionWarnings.push("当前镜头没有可配对的前置反打镜头，已按实测画面降级");
+      warn("REV-001", "当前镜头没有可配对的前置反打镜头，已按实测画面降级", "info");
     }
-    if (previousGeometry) {
-      const viewDelta = horizontalViewDelta(previousGeometry, geometry);
-      if (viewDelta < 30) {
-        projectionWarnings.push(
+    if (previousGeometry && previousVisualSubjectSlot === subject.slot && !groupSubject) {
+      const viewDelta = subjectAzimuthDelta(previousGeometry, geometry, subject);
+      const previousSize = previousShotSize;
+      const sizeOrder: ShotSize[] = ["full", "medium-full", "medium", "medium-close-up", "close-up", "extreme-close-up"];
+      const sizeChange = previousSize ? Math.abs(sizeOrder.indexOf(previousSize) - sizeOrder.indexOf(geometry.shotSize)) : 0;
+      if (viewDelta < 30 && sizeChange < 2) {
+        warn("CON-003",
           `与上一镜的水平视角变化仅 ${viewDelta.toFixed(1)}°`,
+          "warning",
         );
       }
     }
@@ -934,7 +950,7 @@ export function resolveShotDecisions(
       previousAxis.cameraSide !== 0 &&
       axis.cameraSide !== previousAxis.cameraSide;
     if (crossesPreviousRelationshipAxis) {
-      projectionWarnings.push(`越过了关系轴 ${axis.id}`);
+      warn("CON-005", `越过了关系轴 ${axis.id}`);
     }
     if (
       previousAxis?.kind === "relationship" &&
@@ -944,7 +960,7 @@ export function resolveShotDecisions(
         axis.participantSlots.includes(slot),
       )
     ) {
-      projectionWarnings.push(
+      warn("CON-006",
         `关系轴从 ${previousAxis.id} 切换到 ${axis.id}，缺少共享角色或群像重建`,
       );
     }
@@ -1035,8 +1051,9 @@ export function resolveShotDecisions(
         depthSpread: geometry.assessment.depthSpread,
         eyeTraceDelta:
           eyeTraceDelta === null ? null : Number(eyeTraceDelta.toFixed(3)),
-        valid: projectionWarnings.length === 0,
-        warnings: projectionWarnings,
+        valid: !projectionIssues.some((issue) => issue.severity === "error"),
+        warnings: projectionIssues.map((issue) => issue.message),
+        issues: projectionIssues,
       },
     } satisfies ShotPlan;
     previousGeometry = {
@@ -1044,6 +1061,7 @@ export function resolveShotDecisions(
       target: shot.cameraEndTarget,
     };
     previousVisualSubjectSlot = shot.visualSubjectSlot;
+    previousShotSize = shot.projection.measuredShotSize;
     previousLookTargetSlot = shot.lookTargetSlot;
     previousCoverage = shot.projection.coverage;
     if (

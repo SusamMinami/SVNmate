@@ -24,6 +24,14 @@ import {
   runStoryboardMcpServer,
 } from "../mcp/storyboardServer";
 import { routeLarkRequest } from "../server/larkBridge";
+import { routeRuleAdvisorRequest } from "../server/ruleAdvisorBridge";
+import {
+  downloadRuleAdvisorModel,
+  ensureRuleAdvisorRuntime,
+  inspectRuleAdvisorModel,
+  stopManagedRuleAdvisorRuntime,
+  type RuleAdvisorModelSnapshot,
+} from "../server/ruleAdvisorRuntime";
 import {
   configureConfigDocDirectory,
   configureLiveResDirectory,
@@ -114,6 +122,7 @@ interface ConfigurationWindowContentSize {
 let mainWindow: BrowserWindow | null = null;
 let localServer: Server | null = null;
 let updateSnapshot: UpdateSnapshot = { state: "idle" };
+let advisorModelDownload: Promise<RuleAdvisorModelSnapshot> | null = null;
 let configurationWindowRestoreState: WindowRestoreState | null = null;
 
 function dataRoot(): string {
@@ -640,8 +649,55 @@ async function setConfigurationWindowMode(
   return false;
 }
 
+function bundledRuleAdvisorExecutable(): string | undefined {
+  return app.isPackaged
+    ? join(process.resourcesPath, "tools", "ollama", "ollama.exe")
+    : undefined;
+}
+
+function emitAdvisorModelState(snapshot: RuleAdvisorModelSnapshot): void {
+  mainWindow?.webContents.send("desktop:advisor-model-state", snapshot);
+}
+
 function registerDesktopIpc(): void {
   ipcMain.handle("desktop:setup-status", () => setupStatus());
+  ipcMain.handle("desktop:advisor-model-status", () =>
+    inspectRuleAdvisorModel({
+      bundledExecutable: bundledRuleAdvisorExecutable(),
+    }),
+  );
+  ipcMain.handle("desktop:download-advisor-model", async () => {
+    if (!advisorModelDownload) {
+      advisorModelDownload = downloadRuleAdvisorModel({
+        bundledExecutable: bundledRuleAdvisorExecutable(),
+        onProgress: emitAdvisorModelState,
+      })
+        .then((snapshot) => {
+          emitAdvisorModelState(snapshot);
+          return snapshot;
+        })
+        .catch(async (error) => {
+          const inspected = await inspectRuleAdvisorModel({
+            bundledExecutable: bundledRuleAdvisorExecutable(),
+          });
+          const snapshot: RuleAdvisorModelSnapshot = {
+            ...inspected,
+            state: "error",
+            message:
+              error instanceof Error ? error.message : "端侧模型下载失败",
+          };
+          emitAdvisorModelState(snapshot);
+          return snapshot;
+        })
+        .finally(() => {
+          advisorModelDownload = null;
+        });
+    }
+    return advisorModelDownload;
+  });
+  ipcMain.handle("desktop:open-ollama-download", () =>
+    shell.openExternal("https://ollama.com/download/windows"),
+  );
   ipcMain.handle("desktop:install-trae-integration", async () => {
     await installTraeIntegration();
     return setupStatus();
@@ -829,6 +885,9 @@ async function startLocalServer(): Promise<number> {
     if (await routeTraeRequest(request, response)) {
       return;
     }
+    if (await routeRuleAdvisorRequest(request, response)) {
+      return;
+    }
     if (await routeUeRequest(request, response)) {
       return;
     }
@@ -891,6 +950,11 @@ async function runDesktop(): Promise<void> {
   }
   await app.whenReady();
   configureRuntimeEnvironment();
+  await ensureRuleAdvisorRuntime({
+    bundledExecutable: app.isPackaged
+      ? join(process.resourcesPath, "tools", "ollama", "ollama.exe")
+      : undefined,
+  });
   const desktopState = await readDesktopState();
   configureUnrealMcpPort(desktopState.ueMcpPort);
   if (desktopState.liveResDirectory) {
@@ -942,5 +1006,6 @@ if (isMcpProcess) {
 
 app.on("window-all-closed", () => {
   localServer?.close();
+  stopManagedRuleAdvisorRuntime();
   app.quit();
 });

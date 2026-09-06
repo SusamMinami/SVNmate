@@ -5,14 +5,14 @@ import type {
   ShotComposition,
   ShotCoverage,
   ShotSize,
+  ShotValidationIssue,
   Vec3,
 } from "../types";
 import type { DirectorDecision } from "./contracts";
+import { characterBody, characterHeight, characterPoint } from "./characterGeometry";
 
 const CAMERA_ASPECT_RATIO = 16 / 9;
 const ULTRAWIDE_SAFE_Y = 16 / 21;
-const CHARACTER_HALF_WIDTH = 0.34;
-const CHARACTER_HALF_DEPTH = 0.24;
 const CHARACTER_TOP = 2.01;
 const SIGNIFICANT_ACTOR_AREA = 0.012;
 
@@ -84,6 +84,7 @@ export interface ProjectionAssessment {
   depthSpread: number;
   valid: boolean;
   warnings: string[];
+  issues: ShotValidationIssue[];
 }
 
 interface SingleCameraRequest {
@@ -310,15 +311,12 @@ function projectedParticipant(
   participant: DialogueParticipant,
 ): ProjectedParticipant {
   const points: THREE.Vector3[] = [];
-  for (const x of [-CHARACTER_HALF_WIDTH, CHARACTER_HALF_WIDTH]) {
+  const body = characterBody(participant);
+  for (const x of [-body.width / 2, body.width / 2]) {
     for (const y of [0, CHARACTER_TOP]) {
-      for (const z of [-CHARACTER_HALF_DEPTH, CHARACTER_HALF_DEPTH]) {
+      for (const z of [-body.depth / 2, body.depth / 2]) {
         points.push(
-          projectPoint(camera, [
-            participant.position[0] + x,
-            y,
-            participant.position[2] + z,
-          ]),
+          projectPoint(camera, characterPoint(participant, y, x, z)),
         );
       }
     }
@@ -356,11 +354,7 @@ function measureShotSize(
     shoulders: 1.32,
   };
   const projectedY = (height: number) =>
-    projectPoint(camera, [
-      subject.position[0],
-      height,
-      subject.position[2],
-    ]).y;
+    projectPoint(camera, characterPoint(subject, height)).y;
   if (projectedY(landmarkY.feet) >= -0.94) {
     return "full";
   }
@@ -396,6 +390,20 @@ export function horizontalViewDelta(
   );
 }
 
+export function subjectAzimuthDelta(
+  left: CameraGeometry,
+  right: CameraGeometry,
+  subject: DialogueParticipant,
+): number {
+  const direction = (geometry: CameraGeometry) => normalize({
+    x: geometry.position[0] - subject.position[0],
+    z: geometry.position[2] - subject.position[2],
+  });
+  return THREE.MathUtils.radToDeg(Math.acos(
+    THREE.MathUtils.clamp(dot(direction(left), direction(right)), -1, 1),
+  ));
+}
+
 export function assessProjection(
   geometry: CameraGeometry,
   subject: DialogueParticipant,
@@ -428,7 +436,7 @@ export function assessProjection(
   );
   const subjectDistance = Math.hypot(
     geometry.position[0] - subject.position[0],
-    geometry.position[1] - 1.1,
+    geometry.position[1] - characterHeight(subject, 1.1),
     geometry.position[2] - subject.position[2],
   );
   const participantBySlot = new Map(
@@ -444,7 +452,7 @@ export function assessProjection(
     }
     const distance = Math.hypot(
       geometry.position[0] - participant.position[0],
-      geometry.position[1] - 1.1,
+      geometry.position[1] - characterHeight(participant, 1.1),
       geometry.position[2] - participant.position[2],
     );
     return distance < subjectDistance - 0.15;
@@ -459,11 +467,7 @@ export function assessProjection(
   const subjectProjection = projected.find(
     (participant) => participant.slot === subject.slot,
   );
-  const subjectEyes = projectPoint(camera, [
-    subject.position[0],
-    1.74,
-    subject.position[2],
-  ]);
+  const subjectEyes = projectPoint(camera, characterPoint(subject, 1.74));
   const targetAnchor = anchorForComposition(composition, coverage);
   const significantProjected = projected.filter(
     (participant) => participant.areaRatio >= SIGNIFICANT_ACTOR_AREA,
@@ -498,11 +502,7 @@ export function assessProjection(
     ? (1 - subjectProjection.bounds.maxY) / 2
     : null;
   const projectedLookTarget = lookTarget
-    ? projectPoint(camera, [
-        lookTarget.position[0],
-        1.74,
-        lookTarget.position[2],
-      ])
+    ? projectPoint(camera, characterPoint(lookTarget, 1.74))
     : null;
   const lookRoom =
     subjectProjection && projectedLookTarget
@@ -537,58 +537,97 @@ export function assessProjection(
     Math.acos(THREE.MathUtils.clamp(dot(facing, cameraDirection), -1, 1)),
   );
   const eyes = subjectEyes;
-  const chin = projectPoint(camera, [
-    subject.position[0],
-    1.43,
-    subject.position[2],
-  ]);
+  const chin = projectPoint(camera, characterPoint(subject, 1.43));
   const subjectSafeForUltrawide =
     Math.abs(eyes.x) <= 0.9 &&
     Math.abs(chin.x) <= 0.9 &&
     Math.abs(eyes.y) <= ULTRAWIDE_SAFE_Y &&
     Math.abs(chin.y) <= ULTRAWIDE_SAFE_Y;
-  const warnings: string[] = [];
+  const issues: ShotValidationIssue[] = [];
+  const warn = (ruleId: string, message: string, severity: ShotValidationIssue["severity"] = "warning") =>
+    issues.push({ ruleId, message, severity });
 
   if (measuredShotSize !== expectedShotSize) {
-    warnings.push(
+    warn("FRM-001",
       `实测景别 ${measuredShotSize} 与目标景别 ${expectedShotSize} 不一致`,
+      "error",
     );
   }
   if (!visibleParticipantSlots.includes(subject.slot)) {
-    warnings.push(`主体 ${subject.slot} 未形成有效画面面积`);
+    warn("FRM-SUBJECT", `主体 ${subject.slot} 未形成有效画面面积`, "error");
   }
   if (
     coverage === "single" &&
     visiblePrimaryParticipantSlots.some((slot) => slot !== subject.slot)
   ) {
-    warnings.push("单人镜头包含其他主要可见角色");
+    warn("FRM-002", "单人镜头包含其他主要可见角色", "error");
   }
   if (
     coverage === "two-shot" &&
     visiblePrimaryParticipantSlots.length !== 2
   ) {
-    warnings.push("双人镜头的主要可见角色数量不是 2");
+    warn("GRP-002", "双人镜头的主要可见角色数量不是 2", "error");
   }
   if (
     coverage === "group" &&
     visiblePrimaryParticipantSlots.length < primaryParticipantSlotSet.size
   ) {
-    warnings.push("群像建立镜头未覆盖全部在场角色");
+    warn("GRP-002", "群像建立镜头未覆盖全部在场角色", "error");
   }
   if (
     coverage === "group-medium" &&
     visiblePrimaryParticipantSlots.length < 2
   ) {
-    warnings.push("带群中景未保留关系角色");
+    warn("GRP-002", "带群中景未保留关系角色", "error");
   }
   if (coverage === "single" && subjectFaceAngle > 45.1) {
-    warnings.push(`单人镜头偏离角色正面 ${subjectFaceAngle.toFixed(1)}°`);
+    warn("ANG-001", `单人镜头偏离角色正面 ${subjectFaceAngle.toFixed(1)}°`);
   }
   if (!subjectSafeForUltrawide) {
-    warnings.push("主体眼部或下巴超出 21:9 安全区域");
+    warn("FRM-004", "主体眼部或下巴超出 21:9 安全区域", "error");
+  }
+  if (coverage === "two-shot" || coverage === "group") {
+    for (const actor of participants.filter((p) => primaryParticipantSlotSet.has(p.slot) && p.slot !== subject.slot)) {
+      const safe = [1.74, 1.43].every((height) => {
+        const point = projectPoint(camera, characterPoint(actor, height));
+        return point.z >= -1 && point.z <= 1 && Math.abs(point.x) <= 0.9 && Math.abs(point.y) <= ULTRAWIDE_SAFE_Y;
+      });
+      if (!safe) warn("FRM-004", `角色 ${actor.slot} 的眼部或下巴超出 21:9 安全区域`, "error");
+    }
+  }
+  if (coverage === "two-shot" || coverage === "group" || coverage === "group-medium") {
+    const heads = participants
+      .filter((actor) => visiblePrimaryParticipantSlots.includes(actor.slot))
+      .map((actor) => {
+        const halfWidth = characterBody(actor).width * 0.3;
+        const halfDepth = characterBody(actor).depth * 0.4;
+        const points = [1.43, CHARACTER_TOP].flatMap((height) =>
+          [-halfWidth, halfWidth].flatMap((x) =>
+            [-halfDepth, halfDepth].map((z) => projectPoint(camera, characterPoint(actor, height, x, z)))),
+        );
+        return {
+          slot: actor.slot,
+          left: Math.min(...points.map((p) => p.x)),
+          right: Math.max(...points.map((p) => p.x)),
+          bottom: Math.min(...points.map((p) => p.y)),
+          top: Math.max(...points.map((p) => p.y)),
+        };
+      });
+    for (let i = 0; i < heads.length; i += 1) {
+      for (let j = i + 1; j < heads.length; j += 1) {
+        const a = heads[i];
+        const b = heads[j];
+        const overlap = Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left)) *
+          Math.max(0, Math.min(a.top, b.top) - Math.max(a.bottom, b.bottom));
+        const smallerArea = Math.min((a.right - a.left) * (a.top - a.bottom), (b.right - b.left) * (b.top - b.bottom));
+        if (smallerArea > 0.0001 && overlap / smallerArea > 0.6) {
+          warn("GRP-001", `角色 ${a.slot}/${b.slot} 头部投影严重重叠（体型代理估算）`, "error");
+        }
+      }
+    }
   }
   if (anchorDistance > 0.18) {
-    warnings.push(
+    warn("FRM-ANCHOR",
       `构图落点偏离 ${composition.visualAnchor} ${anchorDistance.toFixed(2)} NDC`,
     );
   }
@@ -597,7 +636,7 @@ export function assessProjection(
     lookRoom !== null &&
     lookRoom < 0.14
   ) {
-    warnings.push("构图视线空间不足");
+    warn("FRM-018", "构图视线空间不足");
   }
   if (
     composition.negativeSpace === "look_room" &&
@@ -605,7 +644,7 @@ export function assessProjection(
     backRoom !== null &&
     lookRoom + 0.04 < backRoom
   ) {
-    warnings.push("视线后方空白大于前向视线空间");
+    warn("FRM-018", "视线后方空白大于前向视线空间");
   }
   if (
     composition.negativeSpace === "pressure" &&
@@ -613,14 +652,14 @@ export function assessProjection(
     backRoom !== null &&
     lookRoom >= backRoom
   ) {
-    warnings.push("构图：压迫意图未形成有意的短边视线");
+    warn("FRM-019", "构图：压迫意图未形成有意的短边视线");
   }
   if (
     composition.negativeSpace === "pressure" &&
     lookRoom !== null &&
     lookRoom < 0.04
   ) {
-    warnings.push("短边视线空间过窄，主体贴近画框边缘");
+    warn("FRM-019", "短边视线空间过窄，主体贴近画框边缘");
   }
   if (
     composition.negativeSpace === "isolation" &&
@@ -628,13 +667,13 @@ export function assessProjection(
     backRoom !== null &&
     Math.max(lookRoom, backRoom) < 0.32
   ) {
-    warnings.push("孤立构图没有形成足够的有意义空白");
+    warn("FRM-020", "孤立构图没有形成足够的有意义空白");
   }
   if (
     composition.mode === "symmetry" &&
     Math.abs(visualWeightBias) > 0.12
   ) {
-    warnings.push(
+    warn("FRM-SYMMETRY",
       `构图视觉重量偏离中心 ${Math.abs(visualWeightBias).toFixed(2)} NDC`,
     );
   }
@@ -642,13 +681,13 @@ export function assessProjection(
     composition.mode === "triangular" &&
     (triangleArea === null || triangleArea < 0.035)
   ) {
-    warnings.push("构图中的三名主要角色未形成清晰三角关系");
+    warn("GRP-003", "构图中的三名主要角色未形成清晰三角关系");
   }
   if (composition.mode === "layered_depth" && depthSpread < 0.6) {
-    warnings.push("构图缺少可读的前中后景纵深");
+    warn("FRM-DEPTH", "构图缺少可读的前中后景纵深");
   }
   if (headroom !== null && (headroom < -0.03 || headroom > 0.22)) {
-    warnings.push(`构图头部空间异常 ${headroom.toFixed(2)}`);
+    warn("FRM-HEADROOM", `构图头部空间异常 ${headroom.toFixed(2)}`);
   }
 
   return {
@@ -671,17 +710,18 @@ export function assessProjection(
     projectedTriangleArea:
       triangleArea === null ? null : Number(triangleArea.toFixed(3)),
     depthSpread: Number(depthSpread.toFixed(3)),
-    valid: warnings.length === 0,
-    warnings,
+    valid: !issues.some((issue) => issue.severity === "error"),
+    warnings: issues.map((issue) => issue.message),
+    issues,
   };
 }
 
-function distanceForShotSize(lensMm: number, shotSize: ShotSize): number {
+function distanceForShotSize(lensMm: number, shotSize: ShotSize, height = CHARACTER_TOP): number {
   const frame = SHOT_FRAMES[shotSize];
   const filmHeight = 35 / CAMERA_ASPECT_RATIO;
   const halfVerticalFov = Math.atan(filmHeight / (2 * lensMm));
   return (
-    (CHARACTER_TOP - frame.bottom) /
+    ((CHARACTER_TOP - frame.bottom) * height / CHARACTER_TOP) /
     (frame.desiredNdcSpan * Math.tan(halfVerticalFov))
   );
 }
@@ -738,10 +778,11 @@ function targetForVisualAnchor(
     z: -cameraDirection.x,
   });
   const targetOffset = -desiredSubjectNdc * halfHorizontalWidth;
+  const center = characterPoint(subject, 0);
   return [
-    subject.position[0] + cameraRight.x * targetOffset,
+    center[0] + cameraRight.x * targetOffset,
     targetY,
-    subject.position[2] + cameraRight.z * targetOffset,
+    center[2] + cameraRight.z * targetOffset,
   ];
 }
 
@@ -785,7 +826,7 @@ export function solveSingleCamera(
     ] as DirectorDecision["visual_anchor"][]
   ).filter((position, index, values) => values.indexOf(position) === index);
   const frame = SHOT_FRAMES[request.shotSize];
-  const baseDistance = distanceForShotSize(request.lensMm, request.shotSize);
+  const baseDistance = distanceForShotSize(request.lensMm, request.shotSize, characterBody(request.subject).height);
   let best:
     | {
         geometry: CameraGeometry;
@@ -816,7 +857,7 @@ export function solveSingleCamera(
           cameraDirection,
           distance,
           request.lensMm,
-          frame.targetY,
+          characterHeight(request.subject, frame.targetY),
           visualAnchor,
         );
         const geometry = { position, target };
@@ -848,7 +889,7 @@ export function solveSingleCamera(
             SHOT_SIZE_INDEX[request.shotSize],
         );
         const viewDelta = request.previousGeometry
-          ? horizontalViewDelta(request.previousGeometry, geometry)
+          ? subjectAzimuthDelta(request.previousGeometry, geometry, request.subject)
           : 90;
         const lookRoomPenalty =
           assessment.lookRoom === null || assessment.backRoom === null
@@ -879,6 +920,7 @@ export function solveSingleCamera(
                     ) * 600
                   : 0;
         const score =
+          assessment.issues.filter((issue) => issue.severity === "error").length * 100_000 +
           sizeDelta * 500 +
           (request.coverage === "single" ? otherVisibleCount * 800 : 0) +
           (request.coverage === "group-medium" &&
@@ -936,15 +978,18 @@ export function solveGroupCamera(
   const center = sceneCenter(request.participants);
   const side = sceneCameraSide(request.participants);
   const frame = SHOT_FRAMES[request.shotSize];
+  const minFoot = Math.min(...request.participants.map((p) => characterHeight(p, 0)));
+  const maxTop = Math.max(...request.participants.map((p) => characterHeight(p, CHARACTER_TOP)));
   const verticalDistance = distanceForShotSize(
     request.lensMm,
     request.shotSize,
+    maxTop - minFoot,
   );
   const axisDirection = { x: side.z, z: -side.x };
   const halfWidth =
     Math.max(
       ...request.participants.map((participant) =>
-        Math.abs(
+        characterBody(participant).width / 2 + Math.abs(
           dot(
             {
               x: participant.position[0] - center[0],
@@ -954,7 +999,7 @@ export function solveGroupCamera(
           ),
         ),
       ),
-    ) + CHARACTER_HALF_WIDTH;
+    );
   const filmHeight = 35 / CAMERA_ASPECT_RATIO;
   const halfVerticalFov = Math.atan(filmHeight / (2 * request.lensMm));
   const halfHorizontalFov = Math.atan(
@@ -962,12 +1007,31 @@ export function solveGroupCamera(
   );
   const horizontalDistance = halfWidth / (0.78 * Math.tan(halfHorizontalFov));
   const distance = Math.max(verticalDistance, horizontalDistance) * 1.08;
-  return {
-    position: [
-      center[0] + side.x * distance,
-      request.cameraHeight,
-      center[2] + side.z * distance,
-    ],
-    target: [center[0], frame.targetY, center[2]],
-  };
+  let best: { geometry: CameraGeometry; score: number } | undefined;
+  for (const degrees of [0, 15, -15, 30, -30]) {
+    const radians = THREE.MathUtils.degToRad(degrees);
+    const direction = {
+      x: side.x * Math.cos(radians) - side.z * Math.sin(radians),
+      z: side.x * Math.sin(radians) + side.z * Math.cos(radians),
+    };
+    for (const distanceScale of [1, 1.15, 1.4]) {
+      const geometry: CameraGeometry = {
+        position: [
+          center[0] + direction.x * distance * distanceScale,
+          request.cameraHeight,
+          center[2] + direction.z * distance * distanceScale,
+        ],
+        target: [center[0], minFoot + frame.targetY * (maxTop - minFoot) / CHARACTER_TOP, center[2]],
+      };
+      const assessment = assessProjection(
+        geometry, request.participants[0], request.participants, request.lensMm,
+        request.shotSize, request.participants.length === 2 ? "two-shot" : "group",
+        request.composition,
+      );
+      const score = assessment.issues.filter((issue) => issue.severity === "error").length * 100_000 +
+        assessment.issues.length * 10 + Math.abs(degrees) + (distanceScale - 1) * 20;
+      if (!best || score < best.score) best = { geometry, score };
+    }
+  }
+  return best!.geometry;
 }

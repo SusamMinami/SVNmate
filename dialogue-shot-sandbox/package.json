@@ -1,7 +1,7 @@
 {
   "name": "dialogue-shot-sandbox",
   "private": true,
-  "version": "0.23.3",
+  "version": "0.23.4",
   "description": "面向 UE4 对话制作的 AI 分镜与角色调度工具",
   "author": "Shot Sandbox Team",
   "main": "desktop-dist/main.cjs",
@@ -13,6 +13,8 @@
     "desktop": "npm run build:desktop && electron .",
     "dist:win": "npm run build:desktop && electron-builder --win nsis portable --publish never",
     "mcp:storyboard": "tsx mcp/storyboardServer.ts",
+    "advisor:start": "powershell -ExecutionPolicy Bypass -File scripts/start-rule-advisor.ps1",
+    "advisor:smoke": "tsx scripts/smoke-rule-advisor.ts",
     "analyze:music": "python scripts/analyze-music-library.py --publish",
     "sync:sound-effect-previews": "tsx scripts/sync-sound-effect-previews.ts",
     "test": "vitest run src server",

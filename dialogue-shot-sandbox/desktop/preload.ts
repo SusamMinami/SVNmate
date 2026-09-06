@@ -46,6 +46,39 @@ contextBridge.exposeInMainWorld("shotSandboxDesktop", {
   getUpdateSnapshot: () => ipcRenderer.invoke("desktop:update-snapshot"),
   installUpdate: () => ipcRenderer.invoke("desktop:install-update"),
   openUpdatePage: () => ipcRenderer.invoke("desktop:open-update-page"),
+  getAdvisorModelStatus: () =>
+    ipcRenderer.invoke("desktop:advisor-model-status"),
+  downloadAdvisorModel: () =>
+    ipcRenderer.invoke("desktop:download-advisor-model"),
+  openOllamaDownload: () =>
+    ipcRenderer.invoke("desktop:open-ollama-download"),
+  onAdvisorModelState: (
+    listener: (snapshot: {
+      state: string;
+      model: string;
+      runtimeAvailable: boolean;
+      serviceAvailable: boolean;
+      modelInstalled: boolean;
+      percent?: number;
+      message: string;
+    }) => void,
+  ) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      snapshot: {
+        state: string;
+        model: string;
+        runtimeAvailable: boolean;
+        serviceAvailable: boolean;
+        modelInstalled: boolean;
+        percent?: number;
+        message: string;
+      },
+    ) => listener(snapshot);
+    ipcRenderer.on("desktop:advisor-model-state", handler);
+    return () =>
+      ipcRenderer.removeListener("desktop:advisor-model-state", handler);
+  },
   onUpdateState: (
     listener: (snapshot: {
       state: string;

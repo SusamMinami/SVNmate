@@ -6,11 +6,11 @@ import {
   createDefaultBlocking,
   resolveBlocking,
 } from "./blockingResolver";
-import { createDirectorInput } from "./contracts";
+import { createDirectorInput, type RuleBeatAdvice } from "./contracts";
 import { createRuleDecisions } from "./ruleDirector";
 import { horizontalViewDelta } from "./shotGeometry";
 import { resolveShotDecisions } from "./shotResolver";
-import { createShotPlan, createShotPreview } from "./shotPlanner";
+import { createShotPlan, createShotPreview, resolveRuleShotsWithRetry } from "./shotPlanner";
 import { estimateDialogueDuration } from "./shotTiming";
 
 function facingTargetAt(position: Vec3, angleDegrees: number): Vec3 {
@@ -276,7 +276,10 @@ describe("createShotPlan", () => {
       preserveInputPositions: true,
     });
 
-    expect(preview.shots[0].actorActions).toEqual([
+    expect(preview.shots[0].actorActions).toEqual([]);
+    expect(preview.shots[0].facingOverrides.A).toEqual(facingTargets[0]);
+    expect(preview.shots[0].facingOverrides.B).toEqual(facingTargets[1]);
+    expect(preview.shots[1].actorActions).toEqual([
       expect.objectContaining({
         participantSlot: "A",
         angleDegrees: 90,
@@ -379,7 +382,7 @@ describe("createShotPlan", () => {
 
   it("selects narrative composition modes and validates screen anchors", () => {
     expect(shots.map((shot) => shot.compositionPlan.mode)).toEqual([
-      "symmetry",
+      "asymmetrical_balance",
       "golden_ratio",
       "golden_ratio",
       "asymmetrical_balance",
@@ -557,7 +560,7 @@ describe("createShotPlan", () => {
     }
   });
 
-  it("revises projection failures and keeps unresolved shots for review", () => {
+  it("keeps coincident actors as explicit failures instead of hiding overlap with styling", () => {
     const groupSequence = findDialogueSequence(demoDatabase, "3099");
     const overlappingSequence = {
       ...groupSequence,
@@ -587,24 +590,45 @@ describe("createShotPlan", () => {
     const preview = createShotPreview(overlappingSequence, {
       preserveInputPositions: true,
     });
-    const issueScore = (candidateShots: typeof preview.shots) =>
-      candidateShots.reduce(
-        (score, shot) =>
-          score +
-          (shot.projection.valid ? 0 : 1_000) +
-          shot.projection.warnings.length,
-        0,
-      );
+    expect(preview.shots).toHaveLength(initialShots.length);
+    expect(preview.shots.flatMap((shot) => shot.dialogueIds)).toEqual(
+      stagedSequence.rows.map((row) => row.id),
+    );
+    expect(preview.shots.every((shot) => !shot.projection.valid)).toBe(true);
+    expect(preview.shots[0].projection.issues).toContainEqual(
+      expect.objectContaining({ ruleId: "GRP-001", severity: "error" }),
+    );
+  });
 
-    expect(issueScore(preview.shots)).toBeLessThan(issueScore(initialShots));
-    expect(
-      preview.shots.some((shot) =>
-        shot.rationale.includes("投影验收返修"),
-      ),
-    ).toBe(true);
-    expect(
-      preview.shots.some((shot) => !shot.projection.valid),
-    ).toBe(true);
+  it("repairs impossible turns with observational relationship coverage", () => {
+    const fixed = {
+      ...sequence,
+      participants: sequence.participants.map((participant, index) => ({
+        ...participant, canTurn: false, positionSource: "blueprint" as const,
+        position: [index * 2, 0, 0] as const,
+        facingTarget: [index * 2, 0, -2] as const,
+      })),
+    };
+    const decisions = createRuleDecisions(createDirectorInput(fixed));
+    const initial = resolveShotDecisions(fixed, decisions);
+    expect(initial.some((shot) => shot.projection.issues?.some((issue) => issue.ruleId === "ACT-001"))).toBe(true);
+    const repaired = resolveRuleShotsWithRetry(fixed, decisions);
+    expect(repaired.every((shot) => shot.projection.valid)).toBe(true);
+    expect(repaired.every((shot) => shot.actorActions.length === 0)).toBe(true);
+    expect(repaired.flatMap((shot) => shot.dialogueIds)).toEqual(sequence.rows.map((row) => row.id));
+  });
+
+  it("holds ordinary relationship coverage without creating repeated camera cuts", () => {
+    const ordinary = {
+      ...sequence,
+      rows: sequence.rows.map((row) => ({ ...row, content: "我们先核对当前的巡逻路线，再确认下一步的计划。" })),
+    };
+    const preview = createShotPreview(ordinary);
+    expect(preview.shots[0].dialogueIds).toHaveLength(4);
+    expect(preview.shots[0].duration).toBeGreaterThan(8);
+    expect(preview.shots.flatMap((shot) => shot.dialogueIds)).toEqual(ordinary.rows.map((row) => row.id));
+    expect(preview.shots.every((shot) => shot.projection.valid)).toBe(true);
+    expect(preview.shots.flatMap((shot) => shot.projection.issues ?? []).some((issue) => issue.ruleId === "CON-003")).toBe(false);
   });
 
   it("keeps a departing character in the exit shot and removes it afterward", () => {
@@ -655,5 +679,55 @@ describe("createShotPlan", () => {
       "D",
       "E",
     ]);
+  });
+});
+
+describe("rule beat guidance", () => {
+  it("keeps advised beat boundaries and applies constrained coverage", () => {
+    const sequence = findDialogueSequence(demoDatabase, "2048");
+    const input = createDirectorInput(sequence, "beat-guidance-test");
+    const boundaryIndex = 2;
+    const advice: RuleBeatAdvice = {
+      schema_version: "rule-beat.v1",
+      request_id: input.request_id,
+      summary: "先建立关系，再突出 B 的信息揭示。",
+      beats: [
+        {
+          start_dialogue_id: input.dialogue[0].dialogue_id,
+          end_dialogue_id: input.dialogue[boundaryIndex - 1].dialogue_id,
+          narrative_function: "establish",
+          intensity: 30,
+          coverage_strategy: "relationship_hold",
+          reason: "保持双人关系。",
+        },
+        {
+          start_dialogue_id: input.dialogue[boundaryIndex].dialogue_id,
+          end_dialogue_id: input.dialogue.at(-1)!.dialogue_id,
+          narrative_function: "reveal",
+          intensity: 82,
+          coverage_strategy: "emphasis_focus",
+          focus_slot: "B",
+          reason: "突出 B 的信息揭示。",
+        },
+      ],
+    };
+
+    const decisions = createRuleDecisions(
+      input,
+      createDefaultBlocking(input),
+      advice,
+    );
+    const emphasized = decisions.find((decision) =>
+      decision.dialogue_ids.includes(
+        input.dialogue[boundaryIndex].dialogue_id,
+      ),
+    );
+
+    expect(emphasized?.dialogue_ids[0]).toBe(
+      input.dialogue[boundaryIndex].dialogue_id,
+    );
+    expect(emphasized?.template).toBe("close_up");
+    expect(emphasized?.subject).toBe("B");
+    expect(emphasized?.coverage_intent).toBe("individual_emphasis");
   });
 });
