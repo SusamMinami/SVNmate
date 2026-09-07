@@ -1,3 +1,5 @@
+import type { SceneReference } from "./scene/sceneReference";
+
 export type Vec3 = readonly [number, number, number];
 
 export const PARTICIPANT_SLOTS = [
@@ -137,6 +139,8 @@ export interface AdjacentDialogueContext {
 }
 
 export interface DialogueSequence {
+  sceneReference?: SceneReference;
+  formationOrigin?: Vec3;
   prefix: string;
   startId: string;
   outline: string;

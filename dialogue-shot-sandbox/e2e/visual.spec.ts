@@ -3809,6 +3809,7 @@ test("offers BP or rule placement after ignored missing models", async ({
 test("offers the detected Blueprint formation before designing shots", async ({
   page,
 }, testInfo) => {
+  test.setTimeout(90_000);
   let traeDirectorInput: {
     constraints: {
       preserve_input_formation?: boolean;
@@ -4934,6 +4935,83 @@ test("offers the detected Blueprint formation before designing shots", async ({
     path: testInfo.outputPath("blueprint-invalid-shot.png"),
     fullPage: true,
   });
+  await exportDialog.getByRole("button", { name: "完成", exact: true }).click();
+  const anchor = {
+    id: "scene-root-1", label: "测试 Formation 1", source: "level_actor",
+    transform: { location: { x: 1000, y: 2000, z: 0 }, rotation: { pitch: 0, yaw: 90, roll: 0 }, scale: { x: 1, y: 1, z: 1 } },
+  };
+  let sceneReads = 0;
+  let failSceneRead = false;
+  await page.route("**/api/ue/scene/read", async (route) => {
+    sceneReads += 1;
+    if (failSceneRead) {
+      await route.fulfill({ status: 400, json: { ok: false, error: { message: "UE 离线，场景快照未更新" } } });
+      return;
+    }
+    const request = route.request().postDataJSON();
+    const inspection = {
+      mapPath: "/Game/Maps/SceneReferenceTest",
+      candidates: [anchor, { ...anchor, id: "scene-root-2", label: "测试 Formation 2" }],
+      fingerprint: "a".repeat(64), warnings: ["测试快照，仅含已加载的静态网格。"],
+    };
+    await route.fulfill({ json: { ok: true, data: { inspection, snapshot: request.anchorId ? {
+      version: "scene-reference.v1", dialogueId: request.dialogueId,
+      formationClassPath: request.formationClassPath, mapPath: inspection.mapPath,
+      anchor, stageOrigin: request.stageOrigin, radiusMeters: request.radiusMeters,
+      capturedAt: "2026-09-06T00:00:00.000Z", fingerprint: "b".repeat(64),
+      shareWithDirector: false, truncated: false, warnings: inspection.warnings,
+      objects: [
+        { id: "wall", label: "测试北侧墙体", assetPath: "/Game/Test/Wall.Wall", kind: "static_mesh", center: [3, 1, -1], size: [0.5, 2, 5] },
+        { id: "floor", label: "测试地面边界", assetPath: "/Game/Test/Floor.Floor", kind: "mesh_instance", center: [0, 0.03, 0], size: [6, 0.06, 6] },
+      ],
+    } : undefined } } });
+  });
+  await page.getByRole("button", { name: "场景参考", exact: true }).click();
+  const scenePanel = page.getByRole("region", { name: "场景参考工具" });
+  await scenePanel.getByRole("button", { name: "读取落点", exact: true }).click();
+  const captureButton = scenePanel.getByRole("button", { name: "确认落点并采集附近模型" });
+  await expect(captureButton).toBeDisabled();
+  await scenePanel.getByLabel("场景落点", { exact: true }).selectOption("scene-root-1");
+  await captureButton.click();
+  await expect(scenePanel.getByText("测试北侧墙体", { exact: true })).toBeVisible();
+  const applySceneButton = scenePanel.getByRole("button", { name: "应用并重算规则镜头" });
+  await scenePanel.getByLabel("场景落点", { exact: true }).selectOption("scene-root-2");
+  await expect(applySceneButton).toBeDisabled();
+  await expect(scenePanel.getByText("测试北侧墙体", { exact: true })).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath("scene-reference-anchor-b-invalidated.png"), fullPage: true });
+  await scenePanel.getByLabel("场景落点", { exact: true }).selectOption("");
+  await expect(applySceneButton).toBeDisabled();
+  await page.screenshot({ path: testInfo.outputPath("scene-reference-anchor-empty.png"), fullPage: true });
+  await scenePanel.getByLabel("场景落点", { exact: true }).selectOption("scene-root-1");
+  await expect(applySceneButton).toBeDisabled();
+  await page.screenshot({ path: testInfo.outputPath("scene-reference-anchor-a-needs-recapture.png"), fullPage: true });
+  await captureButton.click();
+  await expect(scenePanel.getByText("测试北侧墙体", { exact: true })).toBeVisible();
+  await expect(applySceneButton).toBeEnabled();
+  await expect(scenePanel.getByRole("checkbox", { name: "允许 AI 接收所选场景名称与空间数据" })).not.toBeChecked();
+  await expect(scenePanel.getByRole("button", { name: "应用并重算规则镜头" })).toBeInViewport();
+  await page.screenshot({ path: testInfo.outputPath("scene-reference-panel.png"), fullPage: true });
+  await scenePanel.getByRole("button", { name: "应用并重算规则镜头" }).click();
+  await expect(scenePanel).toBeHidden();
+  await expect(page.getByRole("button", { name: "场景参考", exact: true })).toContainText("2");
+  const sceneCanvas = page.locator(".stage-main canvas");
+  const pixels = PNG.sync.read(await sceneCanvas.screenshot());
+  let cyanPixels = 0;
+  for (let offset = 0; offset < pixels.data.length; offset += 4) {
+    const [r, g, b] = pixels.data.subarray(offset, offset + 3);
+    if (g > r + 30 && b > r + 40 && b < g + 65) cyanPixels += 1;
+  }
+  expect(cyanPixels).toBeGreaterThan(20);
+  await page.screenshot({ path: testInfo.outputPath("scene-reference-applied.png"), fullPage: true });
+  failSceneRead = true;
+  await page.getByRole("button", { name: "场景参考", exact: true }).click();
+  await scenePanel.getByRole("button", { name: "读取落点", exact: true }).click();
+  await expect(scenePanel.getByRole("alert")).toContainText("UE 离线");
+  await expect(page.getByRole("button", { name: "场景参考", exact: true })).toContainText("2");
+  await scenePanel.getByRole("button", { name: "解除引用并重算" }).click();
+  await expect(page.getByRole("button", { name: "场景参考", exact: true })).not.toContainText("2");
+  expect(sceneReads).toBe(4);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
 test("previews mission targets and blocks mixed MapIDs before UE loading", async ({

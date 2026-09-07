@@ -20,6 +20,8 @@ description: "Designs UE4 dialogue storyboards through the local storyboard MCP 
 2. 如果 `found=false`，明确回复当前没有待处理任务并结束。
 3. 阅读返回的完整 `request`：
    - `outline`：场景梗概
+   - 可选 `scene_reference`：用户明确允许分享的场景快照，`objects.center/size`
+     已转换为沙盘米制坐标；不是世界厘米坐标，也不是实时场景
    - `participants`：2-12 名场景角色、槽位及背景资料
    - `participants[].role`：`dialogue` 为对白角色，`background` 为
      Formation BP 中保留的背景 NPC
@@ -193,6 +195,11 @@ description: "Designs UE4 dialogue storyboards through the local storyboard MCP 
   建立空间时回到中央视觉重心。只有明确制造冲击时使用对比切换。
 - 引导线与框中框依赖场景几何；输入没有门框、走廊、道路等环境信息时，
   不得假装已经完成这两类构图。
+- `scene_reference` 只覆盖已加载、已勾选的静态网格包围盒和 ISM/HISM 实例。
+  `label` 是 UE 对象名称，不是经验证的物件语义；不要将门框整盒当成实心墙。
+  使用它判断背景层次和疑似遮挡，但不能宣称 RGB、深度或三角网格验收已通过。
+  `SCN` 建议不触发硬性返修。没有 scene_reference 时不可推测真实环境，
+  也不得因提供了包围盒而越过协议限制输出独立空镜。
 - 正面群像避免把角色同时放在同侧相邻的前后位置，优先使用横向错列或
   对角关系分离轮廓。
 - 群像通过前后层次与横向间距保持轮廓分离，单人镜头无需强行容纳全员。

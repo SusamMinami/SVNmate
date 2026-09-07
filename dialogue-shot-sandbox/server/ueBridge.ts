@@ -3877,6 +3877,29 @@ async function readDialogueSpatialContext(
   };
 }
 
+export async function readSceneDialogueAnchor(
+  connection: UnrealInvoker,
+  startId: string,
+  formationClassPath: string,
+): Promise<{ mapPath: string; transform: UnrealTransform }> {
+  const paths = await findDialogueAssetPath(connection, startId);
+  if (paths.length !== 1) throw new Error("未唯一定位对话资产");
+  await connection.invoke("asset.get_asset_by_path", { AssetPath: paths[0] });
+  const node = await findDialogueStartNodeData(connection, paths[0]);
+  const formation = unrealReferenceText(await readProperty(connection, node, "Formation"));
+  if (normalizeObjectPath(formation) !== normalizeObjectPath(formationClassPath)) {
+    throw new Error("对话 Formation 与当前 BP 不一致");
+  }
+  const spatial = await readDialogueSpatialContext(connection, node);
+  if (!dialogueSpatialMetadataComplete(spatial)) {
+    throw new Error("对话没有完整且启用的固定预览落点");
+  }
+  return {
+    mapPath: normalizeObjectPath(spatial.previewLevel).split(".")[0],
+    transform: { ...spatial.root.transform, scale: { x: 1, y: 1, z: 1 } },
+  };
+}
+
 function dialogueSpatialMetadataComplete(
   context: DialogueSpatialContext,
 ): boolean {

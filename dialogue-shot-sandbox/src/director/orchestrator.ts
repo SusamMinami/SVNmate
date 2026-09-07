@@ -229,6 +229,8 @@ function sequenceFromDirectorInput(input: DirectorInput): DialogueSequence {
   );
   return {
     prefix: input.dialogue_prefix,
+    formationOrigin: input.formation_origin,
+    sceneReference: input.scene_reference,
     startId: input.start_id,
     outline: input.outline,
     rows: input.dialogue.map((line, index) => ({

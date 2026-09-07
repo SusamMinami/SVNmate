@@ -27,6 +27,7 @@ import {
   inspectNpcSupplementPlan,
   scanNpcSupplementTarget,
 } from "../npcSupplement";
+import { readSceneReference } from "./sceneReference";
 import {
   appendMissionTargetBlueprint,
   applyBackgroundPropImport,
@@ -52,6 +53,7 @@ import {
 } from "../ueBridge";
 
 export const ueServices = {
+  readSceneReference,
   appendMissionTargetBlueprint,
   applyDialogNpcTableRegistration,
   applyNpcAssetMigration,

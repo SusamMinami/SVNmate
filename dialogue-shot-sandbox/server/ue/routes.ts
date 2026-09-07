@@ -101,6 +101,10 @@ export async function routeUeRequest(
       return true;
     }
     const body = (await readJson(request)) as Record<string, unknown>;
+    if (url.pathname === "/api/ue/scene/read") {
+      sendJson(response, 200, { ok: true, data: await services.readSceneReference(body) });
+      return true;
+    }
     if (url.pathname === "/api/ue/npc-migration/plan") {
       sendJson(response, 200, {
         ok: true,

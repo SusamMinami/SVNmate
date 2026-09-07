@@ -720,6 +720,9 @@ export function applyBlueprintFormation(
   return {
     sequence: {
       ...sequence,
+      formation: { classPath: snapshot.blueprintClassPath, modelNames },
+      formationOrigin: [centerX, 0, centerZ],
+      sceneReference: undefined,
       rows,
       participants: timedParticipants,
       warnings,

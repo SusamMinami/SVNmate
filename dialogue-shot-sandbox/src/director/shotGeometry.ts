@@ -10,6 +10,7 @@ import type {
 } from "../types";
 import type { DirectorDecision } from "./contracts";
 import { characterBody, characterHeight, characterPoint } from "./characterGeometry";
+import { sceneGeometryPenalty, type SceneReference } from "../scene/sceneReference";
 
 const CAMERA_ASPECT_RATIO = 16 / 9;
 const ULTRAWIDE_SAFE_Y = 16 / 21;
@@ -88,6 +89,7 @@ export interface ProjectionAssessment {
 }
 
 interface SingleCameraRequest {
+  sceneReference?: SceneReference;
   subject: DialogueParticipant;
   lookTarget?: DialogueParticipant;
   participants: DialogueParticipant[];
@@ -104,6 +106,7 @@ interface SingleCameraRequest {
 }
 
 interface GroupCameraRequest {
+  sceneReference?: SceneReference;
   participants: DialogueParticipant[];
   lensMm: number;
   cameraHeight: number;
@@ -920,6 +923,7 @@ export function solveSingleCamera(
                     ) * 600
                   : 0;
         const score =
+          sceneGeometryPenalty(request.sceneReference, geometry.position, geometry.target) +
           assessment.issues.filter((issue) => issue.severity === "error").length * 100_000 +
           sizeDelta * 500 +
           (request.coverage === "single" ? otherVisibleCount * 800 : 0) +
@@ -1029,6 +1033,7 @@ export function solveGroupCamera(
         request.composition,
       );
       const score = assessment.issues.filter((issue) => issue.severity === "error").length * 100_000 +
+        sceneGeometryPenalty(request.sceneReference, geometry.position, geometry.target) +
         assessment.issues.length * 10 + Math.abs(degrees) + (distanceScale - 1) * 20;
       if (!best || score < best.score) best = { geometry, score };
     }

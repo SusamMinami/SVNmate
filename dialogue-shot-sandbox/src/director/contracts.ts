@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { CharacterBodyProfileSchema } from "./characterGeometry";
+import { SceneReferenceSchema, SceneVectorSchema, type SceneReference } from "../scene/sceneReference";
 import {
   MAX_DIALOGUE_PARTICIPANTS,
   PARTICIPANT_SLOTS,
@@ -356,6 +357,8 @@ export const MiraDirectorResponseSchema = z.discriminatedUnion("status", [
 ]);
 
 export const DirectorInputSchema = z.object({
+  scene_reference: SceneReferenceSchema.optional(),
+  formation_origin: SceneVectorSchema.optional(),
   request_id: z.string().min(1),
   schema_version: z.literal("shot-plan.v5"),
   dialogue_prefix: z.string().regex(/^\d{4}$/),
@@ -442,6 +445,7 @@ export const DirectorInputSchema = z.object({
   }),
   constraints: z.object({
     geometry_version: z.string().optional(),
+    scene_reference_fingerprint: z.string().optional(),
     dynamic_relationship_axis: z.literal(true),
     composition_projection_validation: z.literal(true),
     relationship_coverage: z.literal(true),
@@ -488,6 +492,8 @@ export type DirectorMode = "rule" | "trae" | "mira";
 export type AppliedDirector = DirectorMode;
 
 export interface DirectorInput {
+  scene_reference?: SceneReference;
+  formation_origin?: Vec3;
   request_id: string;
   schema_version: "shot-plan.v5";
   dialogue_prefix: string;
@@ -550,6 +556,7 @@ export interface DirectorInput {
   };
   constraints: {
     geometry_version?: string;
+    scene_reference_fingerprint?: string;
     dynamic_relationship_axis: true;
     composition_projection_validation: true;
     relationship_coverage: true;
@@ -685,6 +692,9 @@ export function createDirectorInput(
     );
   return {
     request_id: requestId,
+    scene_reference: sequence.sceneReference?.shareWithDirector
+      ? sequence.sceneReference : undefined,
+    formation_origin: sequence.formationOrigin,
     schema_version: "shot-plan.v5",
     dialogue_prefix: sequence.prefix,
     start_id: sequence.startId,
@@ -766,7 +776,8 @@ export function createDirectorInput(
         : null,
     },
     constraints: {
-      geometry_version: "body-profile.v1:validation.v2:rhythm.v2",
+      geometry_version: "body-profile.v1:validation.v2:rhythm.v2:scene.v1",
+      scene_reference_fingerprint: sequence.sceneReference?.fingerprint,
       dynamic_relationship_axis: true,
       composition_projection_validation: true,
       relationship_coverage: true,

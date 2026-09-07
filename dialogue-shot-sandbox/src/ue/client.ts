@@ -46,6 +46,27 @@ import type {
   SoundEffectPreviewPrepared,
   StoryboardExportRequest,
 } from "../types";
+import { SceneReadResultSchema, type SceneReadRequest, type SceneReadResult } from "../scene/sceneReference";
+
+export async function getSceneReference(input: SceneReadRequest, signal?: AbortSignal): Promise<SceneReadResult> {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  signal?.addEventListener("abort", abort, { once: true });
+  if (signal?.aborted) controller.abort();
+  const timeout = globalThis.setTimeout(abort, 30_000);
+  try {
+    const response = await fetch("/api/ue/scene/read", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input), signal: controller.signal,
+    });
+    const result = await response.json() as ApiEnvelope<unknown>;
+    if (!response.ok || !result.ok) throw new Error(result.error?.message ?? "场景读取失败");
+    return SceneReadResultSchema.parse(result.data);
+  } finally {
+    clearTimeout(timeout);
+    signal?.removeEventListener("abort", abort);
+  }
+}
 
 export interface BlueprintFormationLookup {
   status: "found" | "not_found" | "editor_offline" | "unavailable";

@@ -65,6 +65,8 @@ import { NpcRegistrationModal } from "./components/NpcRegistrationModal";
 import { MusicRecommendations } from "./components/MusicRecommendations";
 import { SoundEffectRecommendations } from "./components/SoundEffectRecommendations";
 import { StageView } from "./components/StageView";
+import { SceneReferencePanel } from "./components/SceneReferencePanel";
+import { useSceneReference } from "./app/useSceneReference";
 import { projectionIssues, projectionStatus, projectionStatusLabel } from "./director/shotValidation";
 import { WorkspaceStatusHub } from "./components/WorkspaceStatusHub";
 import {
@@ -310,6 +312,7 @@ function createFormationChoice(
 }
 
 interface ApplySequenceOptions {
+  useRuleAdvisor?: boolean;
   preserveInputPositions?: boolean;
   lockPlayerPosition?: boolean;
   fallbackPreserveInputPositions?: boolean;
@@ -1374,6 +1377,7 @@ export default function App() {
   const [sharedComparisonError, setSharedComparisonError] = useState("");
   const [formationChoice, setFormationChoice] =
     useState<FormationChoicePresentation | null>(null);
+  const sceneReference = useSceneReference(sequence, formationChoice?.snapshot, database.sourceName);
   const [formationChoiceMode, setFormationChoiceMode] = useState<
     "initial" | "switch" | "director-request" | null
   >(null);
@@ -2031,11 +2035,22 @@ export default function App() {
     return snapshot;
   }
 
+  async function recalculateSceneReference() {
+    setDirectorMode("rule");
+    await applySequence(sequence, "rule", {
+      preserveInputPositions: activeFormationSource === "blueprint",
+      lockPlayerPosition: playerPositionLockedRef.current,
+      preserveActiveShot: true,
+      useRuleAdvisor: false,
+    });
+  }
+
   async function applySequence(
     nextSequence: DialogueSequence,
     requestedMode: DirectorMode,
     options: ApplySequenceOptions = {},
   ) {
+    nextSequence = sceneReference.attach(nextSequence);
     if (requestedMode !== "rule" && soundEffectCatalogLoadRef.current) {
       await soundEffectCatalogLoadRef.current.catch(() => undefined);
     }
@@ -2089,6 +2104,7 @@ export default function App() {
     }
     try {
       const result = await designShots(nextSequence, requestedMode, {
+        useRuleAdvisor: options.useRuleAdvisor,
         preserveInputPositions,
         lockPlayerPosition,
         fallbackPreserveInputPositions:
@@ -4277,6 +4293,12 @@ export default function App() {
                   </small>
                 </div>
                 <div className="axis-status">
+                  <SceneReferencePanel
+                    control={sceneReference}
+                    applyDisabled={directorLoading || loading || formationChecking}
+                    onApply={recalculateSceneReference}
+                    onClear={recalculateSceneReference}
+                  />
                   <LocateFixed size={15} />
                   <span>
                     {activeShot.axis.kind === "relationship"
@@ -4288,6 +4310,7 @@ export default function App() {
                 </div>
               </div>
               <StageView
+                sceneReference={sceneReference.current}
                 participants={characterActionStage.participants}
                 dialogueParticipantSlots={dialogueParticipantSlotSet}
                 showCastRoster

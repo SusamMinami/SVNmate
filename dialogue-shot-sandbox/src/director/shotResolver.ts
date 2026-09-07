@@ -24,6 +24,7 @@ import {
 import { planActorTurns } from "./actorActionPlanner";
 import { estimateShotDuration } from "./shotTiming";
 import { characterHeight } from "./characterGeometry";
+import { scenePathIssues, type SceneReference } from "../scene/sceneReference";
 
 function cameraHeight(
   value: DirectorDecision["camera_height"],
@@ -290,6 +291,7 @@ function geometryFor(
   primaryParticipants: DialogueParticipant[],
   previousGeometry?: CameraGeometry,
   previousAxis?: ShotAxis | null,
+  sceneReference?: SceneReference,
 ): Geometry {
   const groupSubject =
     decision.subject === "both" || decision.subject === "group";
@@ -327,6 +329,7 @@ function geometryFor(
     assessment: ProjectionAssessment;
   } => {
     const geometry = solveGroupCamera({
+      sceneReference,
       participants: primaryParticipants,
       lensMm: decision.lens_mm,
       cameraHeight: primaryParticipants.reduce((sum, actor) =>
@@ -356,6 +359,7 @@ function geometryFor(
     fallbackHeight: number,
   ) => {
     return solveSingleCamera({
+      sceneReference,
       subject: participant,
       lookTarget: lookTarget ?? undefined,
       participants,
@@ -781,6 +785,7 @@ export function resolveShotDecisions(
       activeDialogueParticipants,
       previousVisualSubjectSlot === subject.slot ? previousGeometry : undefined,
       previousAxis,
+      sequence.sceneReference,
     );
     const motionGeometry = resolveMotionGeometry(
       decision,
@@ -841,6 +846,7 @@ export function resolveShotDecisions(
       previousLookTargetSlot === subject.slot &&
       lookTarget?.slot === previousVisualSubjectSlot;
     const projectionIssues: ShotValidationIssue[] = [
+      ...scenePathIssues(sequence.sceneReference, geometry, { position: motionGeometry.endPosition, target: motionGeometry.endTarget }),
       ...geometry.assessment.issues.map((issue) =>
         issue.ruleId === "FRM-002" && resolvedCoverage !== "single"
           ? { ...issue, severity: "info" as const, message: "已按实际画面标记为过肩或带群镜头" }

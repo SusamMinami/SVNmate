@@ -78,6 +78,7 @@ export function buildDirectorPrompt(
       "role=background 的 NPC 只能作为构图、遮挡和空间层次参考，不得成为 shot.subject、shot.look_target 或关系轴端点；只允许 role=dialogue 的角色参与分镜叙事。",
       "优先修复硬性失败，保留已经成立的镜头意图。30°仅是同主体且景别变化不足时的剪辑建议，不适用于所有相邻镜头；构图偏好不是不可执行错误。继续保护 16:9/21:9、安全区域、关系轴和主体可读性。",
       "participants.body_profile 给出每位角色以米为单位的体型和脚底偏移，landmarkSource=proportional 表示眼高等关键点为比例估算，不能称为实测骨骼。群像不要求全员转向中心。",
+      "若提供 scene_reference，其 objects 是用户确认分享的静态网格包围盒快照；center/size 已在沙盘米制坐标中。SCN 类警告仅表示粗略疑点，不要把门框整盒命中当成真实墙面，不为消除软建议修改有效叙事。",
       revision.referenceCases?.length
         ? `已审核历史案例（仅作经验参考，不得照抄与当前站位冲突的参数）：${JSON.stringify(revision.referenceCases)}`
         : "当前没有匹配的已审核历史案例，请只依据本次验收证据返修。",
@@ -98,6 +99,7 @@ export function buildDirectorPrompt(
     "按约每秒 4-5 个汉字估算台词时长。普通镜头优先覆盖连续两句台词，4-8 秒是偏好而非硬限制。叙事没有变化时允许长镜头延续，不要将相同机位拆成多个 Cut；重要反应可停留在听者身上。不要仅因说话人变化、问号或连续同人发言触发特写和推近；短镜头须有反应、动作、进出场或信息转折依据。",
     "不要输出 XYZ 坐标，软件会根据语义模板计算机位。",
     formationInstruction(input),
+    "可选 scene_reference 包含已确认落点附近的静态网格和逐实例包围盒；objects.center/size 与人物初始位置共用沙盘米制坐标，不再应用 anchor 世界变换。对象 label 是 UE 名称而非已验证的物件语义。优先考虑可成立的背景层次并避开疑似障碍；它不是实时三角网格、RGB 或深度验收，不据此虚构门洞、道具互动或独立空镜。缺少该字段时不得推测真实场景。",
     "participants.body_profile 包含各角色的 height/width/depth 和 footOffset（米）；initial_position 是槽位原点，不一定是脚底。根据不同身高、地面高差与前后景关系设计；source=default 或缺少 body_profile 时必须视为估算，landmarkSource=proportional 时眼高/肩高不是实测骨骼。软件按每个角色体型求解平视、景别和安全框。",
     "群像是观察当前站位，不表示所有角色必须转向群体中心。固定 BP 阵型没有三角或纵深条件时使用可成立的平衡构图，不为满足构图偏好移动固定 NPC。",
     "participants 中 role=dialogue 表示实际说话、参与分镜叙事的角色；role=background 表示从 BP 导入的背景 NPC。背景 NPC 必须保留在场景与 blocking 中，并参与遮挡、画面重量、前中后景和安全区域判断，但不得成为 shot.subject、shot.look_target 或关系轴端点。",

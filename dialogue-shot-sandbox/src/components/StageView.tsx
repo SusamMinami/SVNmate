@@ -17,6 +17,8 @@ import {
 import * as THREE from "three";
 import { participantSlotLabel } from "../data/dialogueRoles";
 import { participantFacingYawDegrees } from "../director/actorActionPlanner";
+import type { SceneReference } from "../scene/sceneReference";
+import { SceneReferenceGeometry } from "./SceneReferenceGeometry";
 import { characterBody, characterBodySummary } from "../director/characterGeometry";
 import type {
   DialogueParticipant,
@@ -26,6 +28,7 @@ import type {
 } from "../types";
 
 interface StageViewProps {
+  sceneReference?: SceneReference;
   participants: DialogueParticipant[];
   shot: ShotPlan;
   shotIndex?: number;
@@ -752,6 +755,7 @@ function SceneCastRoster({
 }
 
 function StageViewComponent({
+  sceneReference,
   participants,
   shot,
   shotIndex = 0,
@@ -873,6 +877,7 @@ function StageViewComponent({
                 participants={stagedPresentParticipants}
                 shot={shot}
               />
+              <SceneReferenceGeometry scene={sceneReference} />
             </Canvas>
           ) : (
             <Canvas
@@ -888,6 +893,7 @@ function StageViewComponent({
                 frameParticipants={participants}
                 shot={shot}
               />
+              <SceneReferenceGeometry scene={sceneReference} />
             </Canvas>
           )}
 
@@ -998,6 +1004,7 @@ function StageViewComponent({
                 shot={shot}
                 inset
               />
+              <SceneReferenceGeometry scene={sceneReference} />
             </Canvas>
           ) : (
             <Canvas
@@ -1013,6 +1020,7 @@ function StageViewComponent({
                 shot={shot}
                 inset
               />
+              <SceneReferenceGeometry scene={sceneReference} />
             </Canvas>
           )}
           {!showingShot && <CameraFrameGuides shot={shot} compact />}
