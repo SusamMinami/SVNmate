@@ -37,12 +37,17 @@ class _FakeSvnClient:
         source_commits: tuple[SvnCommit, ...],
         target_commits: tuple[SvnCommit, ...],
         statuses: dict[str, WorkingCopyStatus],
+        *,
+        target_repository_path: str = (
+            "/project/res/overseas/trunk"
+        ),
     ) -> None:
         self.source = source
         self.target = target
         self.source_commits = source_commits
         self.target_commits = target_commits
         self.statuses = statuses
+        self.target_repository_path = target_repository_path
         self.log_by_issues_calls = 0
         self.log_by_message_pattern_calls = 0
         self.last_message_pattern = ""
@@ -55,12 +60,15 @@ class _FakeSvnClient:
             url=(
                 "https://example.invalid/project/res/trunk"
                 if is_source
-                else "https://example.invalid/project/res/overseas/trunk"
+                else (
+                    "https://example.invalid"
+                    + self.target_repository_path
+                )
             ),
             relative_url=(
                 "^/project/res/trunk"
                 if is_source
-                else "^/project/res/overseas/trunk"
+                else "^" + self.target_repository_path
             ),
             repository_root="https://example.invalid",
             repository_uuid="repository-1",
@@ -426,6 +434,73 @@ class MigrationAuditDecisionTests(unittest.TestCase):
         )
         self.assertEqual(
             result.cases[1].files[0].state,
+            VerificationState.COMPLETE,
+        )
+        self.assertTrue(result.complete)
+
+    def test_batch_accepts_domestic_ob_and_searches_seria_commits(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "source" / "res"
+            target = root / "domestic-ob" / "res"
+            source.mkdir(parents=True)
+            target.mkdir(parents=True)
+            (target / "a.txt").write_text("a", encoding="utf-8")
+            source_commits = (
+                SvnCommit(
+                    10,
+                    "a",
+                    "2026-09-01T00:00:00Z",
+                    "[SERIA-10] source",
+                    (
+                        SvnChange(
+                            "M",
+                            "/project/res/trunk/a.txt",
+                            "file",
+                        ),
+                    ),
+                ),
+            )
+            target_commits = (
+                SvnCommit(
+                    20,
+                    "b",
+                    "2026-09-02T00:00:00Z",
+                    "[SERIA-10] domestic ob",
+                    (
+                        SvnChange(
+                            "M",
+                            "/project/res/branches/domestic-ob/a.txt",
+                            "file",
+                        ),
+                    ),
+                ),
+            )
+            svn = _FakeSvnClient(
+                source,
+                target,
+                source_commits,
+                target_commits,
+                {},
+                target_repository_path=(
+                    "/project/res/branches/domestic-ob"
+                ),
+            )
+
+            result = MigrationAuditService(
+                svn=svn,
+                include_externals=False,
+            ).audit_batch(
+                [WorkspaceModule("res", source, target)],
+                (MigrationCase("SERIA-10", "SERIA-10"),),
+                lookback_days=30,
+            )
+
+        self.assertEqual(svn.last_message_pattern, "*SERIA-*")
+        self.assertEqual(
+            result.files[0].state,
             VerificationState.COMPLETE,
         )
         self.assertTrue(result.complete)

@@ -11,15 +11,20 @@ DEFAULT_TICKET_SHEET_URL = (
     "N7YJwiV4FivSiuko5FCc90O0nEc?sheet=kGEBNH"
 )
 DEFAULT_DOMESTIC_ROOT = r"C:\trunk"
+DEFAULT_DOMESTIC_OB_ROOT = ""
 DEFAULT_OVERSEAS_TRUNK_ROOT = r"D:\Oversea\OStrunk"
 DEFAULT_OVERSEAS_OB_ROOT = r"D:\Oversea\OSOB"
 WORKSPACE_DOMESTIC = "domestic"
+WORKSPACE_DOMESTIC_OB = "domestic_ob"
 WORKSPACE_OVERSEAS_TRUNK = "overseas_trunk"
+ROUTE_DOMESTIC_TO_OSOB = "domestic_to_osob"
+ROUTE_DOMESTIC_TO_DOMESTIC_OB = "domestic_to_domestic_ob"
 
 
 @dataclass(frozen=True)
 class MigrationGuardConfig:
     domestic_root: str = DEFAULT_DOMESTIC_ROOT
+    domestic_ob_root: str = DEFAULT_DOMESTIC_OB_ROOT
     overseas_trunk_root: str = DEFAULT_OVERSEAS_TRUNK_ROOT
     overseas_ob_root: str = DEFAULT_OVERSEAS_OB_ROOT
     source_workspace: str = WORKSPACE_DOMESTIC
@@ -66,6 +71,8 @@ class MigrationGuardConfig:
         if source_workspace not in {
             WORKSPACE_DOMESTIC,
             WORKSPACE_OVERSEAS_TRUNK,
+            ROUTE_DOMESTIC_TO_OSOB,
+            ROUTE_DOMESTIC_TO_DOMESTIC_OB,
         }:
             source_workspace = (
                 WORKSPACE_OVERSEAS_TRUNK
@@ -76,9 +83,18 @@ class MigrationGuardConfig:
             data.get("domestic_root", "")
         ).strip() or (
             legacy_source
-            if source_workspace == WORKSPACE_DOMESTIC and legacy_source
+            if source_workspace
+            in {
+                WORKSPACE_DOMESTIC,
+                ROUTE_DOMESTIC_TO_OSOB,
+                ROUTE_DOMESTIC_TO_DOMESTIC_OB,
+            }
+            and legacy_source
             else DEFAULT_DOMESTIC_ROOT
         )
+        domestic_ob_root = str(
+            data.get("domestic_ob_root", "")
+        ).strip()
         overseas_trunk_root = str(
             data.get("overseas_trunk_root", "")
         ).strip() or (
@@ -97,6 +113,7 @@ class MigrationGuardConfig:
         )
         return cls(
             domestic_root=domestic_root,
+            domestic_ob_root=domestic_ob_root,
             overseas_trunk_root=overseas_trunk_root,
             overseas_ob_root=overseas_ob_root,
             source_workspace=source_workspace,

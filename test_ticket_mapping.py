@@ -7,7 +7,9 @@ from migration_guard.ticket_mapping import (
     TicketMapping,
     TicketRoute,
     TicketSheetSnapshot,
+    as_domestic_to_ob,
     as_overseas_to_osob,
+    parse_domestic_ob_text,
     parse_ticket_rows,
     resolve_ticket_text,
     workbook_url,
@@ -147,6 +149,61 @@ class TicketRowParsingTests(unittest.TestCase):
         self.assertEqual(result[0].source_issue, "OSCOA-20")
         self.assertEqual(result[0].target_issue, "OSCOA-20")
         self.assertEqual(result[0].route, TicketRoute.OVERSEAS_TO_OSOB)
+
+    def test_domestic_ob_stage_uses_each_domestic_ticket_once(self) -> None:
+        mappings = (
+            TicketMapping(
+                "SERIA-10",
+                "OSCOA-20",
+                TicketRoute.DOMESTIC_TO_OVERSEAS,
+                1,
+                "domestic title",
+                "overseas title",
+                "raw",
+            ),
+            TicketMapping(
+                "SERIA-10",
+                "SERIA-10",
+                TicketRoute.DOMESTIC_TO_DOMESTIC_OB,
+                2,
+                "duplicate",
+                "duplicate",
+                "raw",
+            ),
+        )
+
+        result = as_domestic_to_ob(mappings)
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].source_issue, "SERIA-10")
+        self.assertEqual(result[0].target_issue, "SERIA-10")
+        self.assertEqual(
+            result[0].route,
+            TicketRoute.DOMESTIC_TO_DOMESTIC_OB,
+        )
+        self.assertEqual(result[0].source_text, "domestic title")
+
+    def test_domestic_ob_text_parses_seria_without_sheet_mapping(
+        self,
+    ) -> None:
+        mappings = parse_domestic_ob_text(
+            "【SERIA-10】国内任务 A OSCOA-20\n"
+            "网页链接 seria-11 国内任务 B\n"
+            "重复 SERIA-10"
+        )
+
+        self.assertEqual(
+            tuple(item.source_issue for item in mappings),
+            ("SERIA-10", "SERIA-11"),
+        )
+        self.assertTrue(
+            all(
+                item.source_issue == item.target_issue
+                and item.route
+                == TicketRoute.DOMESTIC_TO_DOMESTIC_OB
+                for item in mappings
+            )
+        )
 
     def test_workbook_url_removes_sheet_and_preserves_other_query(self) -> None:
         self.assertEqual(

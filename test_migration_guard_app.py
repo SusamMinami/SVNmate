@@ -5,7 +5,10 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from migration_guard.config import (
+    ROUTE_DOMESTIC_TO_DOMESTIC_OB,
+    ROUTE_DOMESTIC_TO_OSOB,
     WORKSPACE_DOMESTIC,
+    WORKSPACE_DOMESTIC_OB,
     WORKSPACE_OVERSEAS_TRUNK,
     MigrationGuardConfig,
     load_config,
@@ -34,6 +37,7 @@ class MigrationGuardConfigTests(unittest.TestCase):
             path = Path(temp_dir) / "config.json"
             expected = MigrationGuardConfig(
                 domestic_root=r"C:\source",
+                domestic_ob_root=r"C:\domestic-ob",
                 overseas_trunk_root=r"D:\target",
                 overseas_ob_root=r"D:\ob",
                 source_workspace=WORKSPACE_DOMESTIC,
@@ -241,15 +245,16 @@ class MigrationGuardUiSmokeTests(unittest.TestCase):
             self.assertTrue(
                 {"工作区", "固定表", "核验策略"}.issubset(labels)
             )
+            self.assertIn("国内 OB（可选）", labels)
             entries = [
                 widget
                 for widget in _walk_widgets(window)
                 if widget.winfo_class() == "TEntry"
             ]
-            self.assertEqual(len(entries), 5)
+            self.assertEqual(len(entries), 6)
             self.assertEqual(window.grab_current(), window)
             self.assertLessEqual(window.winfo_reqwidth(), 940)
-            self.assertLessEqual(window.winfo_reqheight(), 470)
+            self.assertLessEqual(window.winfo_reqheight(), 560)
 
             self.assertTrue(window.bind("<Escape>"))
             window.destroy()
@@ -338,6 +343,104 @@ class MigrationGuardUiSmokeTests(unittest.TestCase):
 
             self.assertEqual(popup.call_count, 2)
             popup.assert_called_with(app.route_menu, app.route_button)
+        finally:
+            _destroy_root(root)
+
+    def test_route_menu_exposes_four_explicit_routes(self) -> None:
+        from tkinter import Tk
+
+        from migration_guard.app import MigrationGuardApp
+
+        root = Tk()
+        root.withdraw()
+        try:
+            with patch(
+                "migration_guard.app.load_config",
+                return_value=MigrationGuardConfig(),
+            ):
+                app = MigrationGuardApp(root)
+
+            labels = tuple(
+                app.route_menu.entrycget(index, "label")
+                for index in range(app.route_menu.index("end") + 1)
+            )
+
+            self.assertEqual(
+                labels,
+                (
+                    "国内 trunk → 海外 trunk",
+                    "国内 trunk → 海外 trunk → 海外 OB",
+                    "海外 trunk → 海外 OB",
+                    "国内 trunk → 国内 OB",
+                ),
+            )
+        finally:
+            _destroy_root(root)
+
+    def test_domestic_ob_route_parses_seria_without_remote_query(
+        self,
+    ) -> None:
+        from tkinter import Tk
+
+        from migration_guard.app import MigrationGuardApp
+        from migration_guard.ticket_mapping import TicketRoute
+
+        root = Tk()
+        root.withdraw()
+        try:
+            with patch(
+                "migration_guard.app.load_config",
+                return_value=MigrationGuardConfig(),
+            ):
+                app = MigrationGuardApp(root)
+            app._set_workspace_route(ROUTE_DOMESTIC_TO_DOMESTIC_OB)
+            app.ticket_input.insert(
+                "1.0",
+                "网页任务【SERIA-10】国内分支合入 OSCOA-20",
+            )
+
+            with patch.object(app, "_start_jira_progress") as remote:
+                app._start_ticket_resolution()
+
+            remote.assert_not_called()
+            self.assertEqual(
+                app.active_workspace_route,
+                ROUTE_DOMESTIC_TO_DOMESTIC_OB,
+            )
+            self.assertEqual(app.source_issue.get(), "SERIA-10")
+            self.assertEqual(app.target_issue.get(), "SERIA-10")
+            self.assertEqual(
+                app.route_summary.get(),
+                "国内 trunk → 国内 OB",
+            )
+            self.assertEqual(
+                tuple(
+                    (
+                        item.source_issue,
+                        item.target_issue,
+                        item.route,
+                    )
+                    for item in app._active_stage_mappings()
+                ),
+                (
+                    (
+                        "SERIA-10",
+                        "SERIA-10",
+                        TicketRoute.DOMESTIC_TO_DOMESTIC_OB,
+                    ),
+                ),
+            )
+            self.assertEqual(
+                app.update_button.cget("text"),
+                "配置国内 OB",
+            )
+            self.assertIsNone(app._remote_refresh_after_id)
+            app._schedule_remote_auto_refresh()
+            self.assertIsNone(app._remote_refresh_after_id)
+            with patch.object(app, "_configure_ticket_sheet") as settings:
+                app._update_contextual_action_states()
+                app.update_button.invoke()
+            settings.assert_called_once_with()
         finally:
             _destroy_root(root)
 
@@ -1002,6 +1105,24 @@ class MigrationGuardUiSmokeTests(unittest.TestCase):
                 app.route_summary.get(),
                 "海外 trunk → 海外 OB",
             )
+            app.domestic_ob_root.set(r"C:\branches\domestic-ob")
+            app._set_workspace_route(ROUTE_DOMESTIC_TO_DOMESTIC_OB)
+            self.assertEqual(
+                app.source_workspace.get(),
+                WORKSPACE_LABELS[WORKSPACE_DOMESTIC],
+            )
+            self.assertEqual(
+                app.target_workspace.get(),
+                WORKSPACE_LABELS[WORKSPACE_DOMESTIC_OB],
+            )
+            self.assertEqual(
+                app.target_root.get(),
+                r"C:\branches\domestic-ob",
+            )
+            self.assertEqual(
+                app.route_summary.get(),
+                "国内 trunk → 国内 OB",
+            )
         finally:
             _destroy_root(root)
 
@@ -1533,6 +1654,14 @@ class MigrationGuardUiSmokeTests(unittest.TestCase):
             app._show_ticket_table(snapshot, TABLE_OSOB)
 
             self.assertEqual(len(app.table.selection()), 2)
+            self.assertEqual(
+                app.active_workspace_route,
+                ROUTE_DOMESTIC_TO_OSOB,
+            )
+            self.assertEqual(
+                app.route_summary.get(),
+                "国内 trunk → 海外 trunk → 海外 OB",
+            )
             with patch.object(app, "_start_batch_audit") as start_batch:
                 app._use_selected_ticket()
                 root.after(180, root.quit)

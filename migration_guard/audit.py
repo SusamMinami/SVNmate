@@ -349,13 +349,23 @@ class MigrationAuditService:
             target_contexts,
         )
         target_keys = tuple(case.target_issue for case in case_list)
+        target_prefixes = {
+            key.partition("-")[0] + "-"
+            for key in target_keys
+            if "-" in key
+        }
+        target_message_pattern = (
+            f"*{next(iter(target_prefixes))}*"
+            if len(target_prefixes) == 1
+            else ""
+        )
         target_logs = self._batch_logs(
             required_target_contexts,
             target_keys,
             start=start_date,
             stage="target-log",
             verb="检查",
-            message_pattern="*OSCOA-*",
+            message_pattern=target_message_pattern,
         )
 
         unique_target_paths = tuple(
@@ -386,7 +396,10 @@ class MigrationAuditService:
                 matched_issues = tuple(
                     issue
                     for issue in issue_keys_in_message(commit.message)
-                    if issue.startswith("OSCOA-")
+                    if any(
+                        issue.startswith(prefix)
+                        for prefix in target_prefixes
+                    )
                 )
                 if not matched_issues:
                     continue
@@ -880,13 +893,13 @@ class MigrationAuditService:
                 repository_status=repository_status,
                 target_revisions=target_revisions,
                 reason=(
-                    "已由其他海外单号提交："
+                    "已由其他目标单号提交："
                     + "、".join(alternate_issues)
                     if submitted_by_other and alternate_issues
                     else (
-                        "已由本批次其他海外单号提交"
+                        "已由本批次其他目标单号提交"
                         if submitted_by_other
-                        else "海外单号提交已覆盖该路径"
+                        else "目标单号提交已覆盖该路径"
                     )
                 ),
             )
@@ -897,7 +910,7 @@ class MigrationAuditService:
                 state=VerificationState.NEEDS_REVIEW,
                 local_status="absent",
                 repository_status=repository_status,
-                reason="目标文件不存在，但没有海外单号删除证据",
+                reason="目标文件不存在，但没有目标单号删除证据",
             )
         return FileVerification(
             expected=expected,
@@ -905,9 +918,9 @@ class MigrationAuditService:
             local_status=local_status if target_exists else "absent",
             repository_status=repository_status,
             reason=(
-                "目标文件存在但没有本地改动或海外提交证据"
+                "目标文件存在但没有本地改动或目标提交证据"
                 if target_exists
-                else "目标文件不存在且没有海外提交证据"
+                else "目标文件不存在且没有目标提交证据"
             ),
         )
 
@@ -1063,6 +1076,4 @@ def _validate_workspace_roles(
     source_is_overseas = "/overseas/" in source_path
     target_is_overseas = "/overseas/" in target_path
     if source_is_overseas and not target_is_overseas:
-        raise ValueError(f"{module} 的源和海外目标可能配置反向")
-    if not target_is_overseas:
-        raise ValueError(f"{module} 的目标不是 overseas 分支")
+        raise ValueError(f"{module} 的源和目标可能配置反向")

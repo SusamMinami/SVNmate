@@ -31,6 +31,7 @@ CACHE_TTL_SECONDS = 300
 
 class TicketRoute(str, Enum):
     DOMESTIC_TO_OVERSEAS = "domestic_to_overseas"
+    DOMESTIC_TO_DOMESTIC_OB = "domestic_to_domestic_ob"
     OVERSEAS_TO_OSOB = "overseas_to_osob"
     OSOB_ONLY = "osob_only"
     SKIP = "skip"
@@ -40,6 +41,7 @@ class TicketRoute(str, Enum):
     def label(self) -> str:
         return {
             self.DOMESTIC_TO_OVERSEAS: "国内主干 → 海外主干",
+            self.DOMESTIC_TO_DOMESTIC_OB: "国内主干 → 国内 OB",
             self.OVERSEAS_TO_OSOB: "海外主干 → OSOB",
             self.OSOB_ONLY: "仅提交 OSOB",
             self.SKIP: "不合并",
@@ -523,6 +525,65 @@ def as_overseas_to_osob(
                 raw_text=mapping.raw_text,
             )
         )
+    return tuple(result)
+
+
+def as_domestic_to_ob(
+    mappings: tuple[TicketMapping, ...],
+) -> tuple[TicketMapping, ...]:
+    result = []
+    seen = set()
+    for mapping in mappings:
+        issue = next(
+            (
+                value
+                for value in (
+                    mapping.source_issue,
+                    mapping.target_issue,
+                )
+                if value.startswith("SERIA-")
+            ),
+            "",
+        )
+        if not issue or issue in seen:
+            continue
+        seen.add(issue)
+        description = mapping.source_text or mapping.target_text
+        result.append(
+            TicketMapping(
+                source_issue=issue,
+                target_issue=issue,
+                route=TicketRoute.DOMESTIC_TO_DOMESTIC_OB,
+                row=mapping.row,
+                source_text=description,
+                target_text=description,
+                raw_text=mapping.raw_text,
+            )
+        )
+    return tuple(result)
+
+
+def parse_domestic_ob_text(text: str) -> tuple[TicketMapping, ...]:
+    result = []
+    seen = set()
+    for row, line in enumerate(text.splitlines() or (text,), start=1):
+        for match in ISSUE_FINDER.finditer(line):
+            issue = match.group(1).upper()
+            if not issue.startswith("SERIA-") or issue in seen:
+                continue
+            seen.add(issue)
+            description = _text_for_issue(line, issue)
+            result.append(
+                TicketMapping(
+                    source_issue=issue,
+                    target_issue=issue,
+                    route=TicketRoute.DOMESTIC_TO_DOMESTIC_OB,
+                    row=row,
+                    source_text=description,
+                    target_text=description,
+                    raw_text=line.strip(),
+                )
+            )
     return tuple(result)
 
 

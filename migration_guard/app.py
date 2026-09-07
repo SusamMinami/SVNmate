@@ -40,7 +40,10 @@ from .asset_tree import (
 from .audit import MigrationAuditService, default_workspace_modules
 from .batch_workflow import AssetMigrationPlan, BatchMigrationExecutor
 from .config import (
+    ROUTE_DOMESTIC_TO_DOMESTIC_OB,
+    ROUTE_DOMESTIC_TO_OSOB,
     WORKSPACE_DOMESTIC,
+    WORKSPACE_DOMESTIC_OB,
     WORKSPACE_OVERSEAS_TRUNK,
     MigrationGuardConfig,
     load_config,
@@ -77,7 +80,9 @@ from .ticket_mapping import (
     TicketRoute,
     TicketSheetSnapshot,
     TicketTextResolution,
+    as_domestic_to_ob,
     as_overseas_to_osob,
+    parse_domestic_ob_text,
     resolve_ticket_text,
     workbook_url,
 )
@@ -93,11 +98,35 @@ APP_TITLE = "迁移核验助手"
 UI_POLL_MS = 100
 TABLE_TRUNK = "trunk"
 TABLE_OSOB = "osob"
+TABLE_DOMESTIC_OB = "domestic_ob"
 WORKSPACE_OSOB = "osob"
 WORKSPACE_LABELS = {
     WORKSPACE_DOMESTIC: "国内 trunk",
+    WORKSPACE_DOMESTIC_OB: "国内 OB",
     WORKSPACE_OVERSEAS_TRUNK: "海外 trunk",
     WORKSPACE_OSOB: "海外 OB",
+}
+WORKSPACE_ROUTE_SPECS = {
+    WORKSPACE_DOMESTIC: (
+        WORKSPACE_DOMESTIC,
+        WORKSPACE_OVERSEAS_TRUNK,
+        "国内 trunk → 海外 trunk",
+    ),
+    ROUTE_DOMESTIC_TO_OSOB: (
+        WORKSPACE_DOMESTIC,
+        WORKSPACE_OVERSEAS_TRUNK,
+        "国内 trunk → 海外 trunk → 海外 OB",
+    ),
+    WORKSPACE_OVERSEAS_TRUNK: (
+        WORKSPACE_OVERSEAS_TRUNK,
+        WORKSPACE_OSOB,
+        "海外 trunk → 海外 OB",
+    ),
+    ROUTE_DOMESTIC_TO_DOMESTIC_OB: (
+        WORKSPACE_DOMESTIC,
+        WORKSPACE_DOMESTIC_OB,
+        "国内 trunk → 国内 OB",
+    ),
 }
 UI_FONT_CANDIDATES = (
     "Microsoft YaHei UI",
@@ -183,6 +212,7 @@ class MigrationGuardApp:
 
         config = load_config()
         self.domestic_root = StringVar(value=config.domestic_root)
+        self.domestic_ob_root = StringVar(value=config.domestic_ob_root)
         self.overseas_trunk_root = StringVar(
             value=config.overseas_trunk_root
         )
@@ -272,6 +302,7 @@ class MigrationGuardApp:
         self.active_table_kind = TABLE_TRUNK
         self.table_mode = "audit"
         self.settings_window: Toplevel | None = None
+        self.active_workspace_route = WORKSPACE_DOMESTIC
         self._workspace_syncing = False
         self._ticket_parse_after_id: str | None = None
         self._set_workspace_route(config.source_workspace, save=False)
@@ -701,9 +732,21 @@ class MigrationGuardApp:
             command=lambda: self._set_workspace_route(WORKSPACE_DOMESTIC),
         )
         route_menu.add_command(
+            label="国内 trunk → 海外 trunk → 海外 OB",
+            command=lambda: self._set_workspace_route(
+                ROUTE_DOMESTIC_TO_OSOB
+            ),
+        )
+        route_menu.add_command(
             label="海外 trunk → 海外 OB",
             command=lambda: self._set_workspace_route(
                 WORKSPACE_OVERSEAS_TRUNK
+            ),
+        )
+        route_menu.add_command(
+            label="国内 trunk → 国内 OB",
+            command=lambda: self._set_workspace_route(
+                ROUTE_DOMESTIC_TO_DOMESTIC_OB
             ),
         )
         self.route_menu = route_menu
@@ -1307,6 +1350,7 @@ class MigrationGuardApp:
     def _workspace_path(self, role: str) -> str:
         return {
             WORKSPACE_DOMESTIC: self.domestic_root.get(),
+            WORKSPACE_DOMESTIC_OB: self.domestic_ob_root.get(),
             WORKSPACE_OVERSEAS_TRUNK: self.overseas_trunk_root.get(),
             WORKSPACE_OSOB: self.overseas_ob_root.get(),
         }[role]
@@ -1320,34 +1364,58 @@ class MigrationGuardApp:
 
     def _set_workspace_route(
         self,
-        source_role: str,
+        route: str,
         *,
         save: bool = True,
     ) -> None:
-        if source_role not in {
-            WORKSPACE_DOMESTIC,
-            WORKSPACE_OVERSEAS_TRUNK,
-        }:
-            source_role = WORKSPACE_DOMESTIC
-        target_role = (
-            WORKSPACE_OVERSEAS_TRUNK
-            if source_role == WORKSPACE_DOMESTIC
-            else WORKSPACE_OSOB
+        if route not in WORKSPACE_ROUTE_SPECS:
+            route = WORKSPACE_DOMESTIC
+        source_role, target_role, summary = WORKSPACE_ROUTE_SPECS[route]
+        self.active_workspace_route = route
+        self.active_table_kind = (
+            TABLE_DOMESTIC_OB
+            if route == ROUTE_DOMESTIC_TO_DOMESTIC_OB
+            else TABLE_OSOB
+            if route
+            in {
+                ROUTE_DOMESTIC_TO_OSOB,
+                WORKSPACE_OVERSEAS_TRUNK,
+            }
+            else TABLE_TRUNK
         )
         self._workspace_syncing = True
         try:
             self.source_workspace.set(WORKSPACE_LABELS[source_role])
             self.target_workspace.set(WORKSPACE_LABELS[target_role])
-            self.route_summary.set(
-                f"{WORKSPACE_LABELS[source_role]} → "
-                f"{WORKSPACE_LABELS[target_role]}"
-            )
+            self.route_summary.set(summary)
             self.source_root.set(self._workspace_path(source_role))
             self.target_root.set(self._workspace_path(target_role))
         finally:
             self._workspace_syncing = False
+        if (
+            route == ROUTE_DOMESTIC_TO_DOMESTIC_OB
+            and hasattr(self, "_remote_asset_cancel_event")
+        ):
+            self._cancel_remote_asset_query()
         if save:
             self._save_config()
+        if hasattr(self, "trunk_table_button"):
+            self.trunk_table_button.configure(
+                style=(
+                    "SourceSelected.TButton"
+                    if self.active_table_kind == TABLE_TRUNK
+                    else "Source.TButton"
+                )
+            )
+            self.osob_table_button.configure(
+                style=(
+                    "SourceSelected.TButton"
+                    if self.active_table_kind == TABLE_OSOB
+                    else "Source.TButton"
+                )
+            )
+        if hasattr(self, "update_button"):
+            self._update_contextual_action_states()
 
     def _selected_modules_for_roots(
         self,
@@ -1377,12 +1445,12 @@ class MigrationGuardApp:
         )
 
     def _current_config(self) -> MigrationGuardConfig:
-        source_role = self._workspace_role(self.source_workspace.get())
         return MigrationGuardConfig(
             domestic_root=self.domestic_root.get().strip(),
+            domestic_ob_root=self.domestic_ob_root.get().strip(),
             overseas_trunk_root=self.overseas_trunk_root.get().strip(),
             overseas_ob_root=self.overseas_ob_root.get().strip(),
-            source_workspace=source_role,
+            source_workspace=self.active_workspace_route,
             enabled_modules=tuple(
                 name
                 for name, variable in self.module_enabled.items()
@@ -1421,7 +1489,11 @@ class MigrationGuardApp:
             )
             return
         self.active_table_kind = table_kind
-        self._set_workspace_route(WORKSPACE_DOMESTIC)
+        self._set_workspace_route(
+            ROUTE_DOMESTIC_TO_OSOB
+            if table_kind == TABLE_OSOB
+            else WORKSPACE_DOMESTIC
+        )
         self.busy = True
         self.task_failed = False
         self.active_task = "table"
@@ -1464,7 +1536,12 @@ class MigrationGuardApp:
         start_preview: bool = False,
     ) -> None:
         if table_kind is not None:
-            self.active_table_kind = table_kind
+            self._set_workspace_route(
+                ROUTE_DOMESTIC_TO_OSOB
+                if table_kind == TABLE_OSOB
+                else WORKSPACE_DOMESTIC,
+                save=False,
+            )
         self.ticket_snapshots[self.active_table_kind] = snapshot
         self._set_table_button_snapshot(
             self.active_table_kind,
@@ -1485,6 +1562,10 @@ class MigrationGuardApp:
         table_kind: str,
         snapshot: TicketSheetSnapshot,
     ) -> None:
+        if table_kind == TABLE_DOMESTIC_OB:
+            self.trunk_table_button.configure(style="Source.TButton")
+            self.osob_table_button.configure(style="Source.TButton")
+            return
         if table_kind == TABLE_OSOB:
             button = self.osob_table_button
             label = "合海外 Trunk-OB"
@@ -1556,7 +1637,13 @@ class MigrationGuardApp:
                 stretch=name == "path",
                 anchor="w" if name == "path" else "center",
             )
-        source_label = "缓存" if snapshot.from_cache else "飞书"
+        source_label = (
+            "本地"
+            if self.active_table_kind == TABLE_DOMESTIC_OB
+            else "缓存"
+            if snapshot.from_cache
+            else "飞书"
+        )
         for index, mapping in enumerate(self.visible_ticket_mappings):
             self.table.insert(
                 "",
@@ -1581,6 +1668,7 @@ class MigrationGuardApp:
                 )
                 if mapping.route in {
                     TicketRoute.DOMESTIC_TO_OVERSEAS,
+                    TicketRoute.DOMESTIC_TO_DOMESTIC_OB,
                     TicketRoute.OVERSEAS_TO_OSOB,
                 }
             )
@@ -1615,8 +1703,8 @@ class MigrationGuardApp:
         window = Toplevel(self.root)
         self.settings_window = window
         window.title("迁移设置")
-        window.geometry("940x470")
-        window.minsize(820, 440)
+        window.geometry("940x560")
+        window.minsize(820, 520)
         window.transient(self.root)
         if APP_ICON_PATH.is_file():
             try:
@@ -1626,6 +1714,7 @@ class MigrationGuardApp:
 
         values = {
             "domestic": StringVar(value=self.domestic_root.get()),
+            "domestic_ob": StringVar(value=self.domestic_ob_root.get()),
             "overseas": StringVar(value=self.overseas_trunk_root.get()),
             "osob": StringVar(value=self.overseas_ob_root.get()),
             "trunk_sheet": StringVar(value=self.trunk_sheet_url.get()),
@@ -1699,33 +1788,35 @@ class MigrationGuardApp:
         ).grid(row=0, column=0, sticky="w")
         ttk.Label(
             workspace_section,
-            text="三段迁移路线使用的本地根目录",
+            text="跨地域与国内分支路线使用的本地根目录",
             style="SectionHint.TLabel",
         ).grid(
             row=0,
             column=1,
-            columnspan=2,
             sticky="w",
             padx=(8, 0),
         )
         workspace_entries: dict[str, ttk.Entry] = {}
-        for column, (label, key) in enumerate(
+        for index, (label, key) in enumerate(
             (
                 ("国内 trunk", "domestic"),
+                ("国内 OB（可选）", "domestic_ob"),
                 ("海外 trunk", "overseas"),
                 ("海外 OB", "osob"),
             )
         ):
+            row = 1 + index // 2
+            column = index % 2
             field = ttk.Frame(
                 workspace_section,
                 style="App.TFrame",
             )
             field.grid(
-                row=1,
+                row=row,
                 column=column,
                 sticky="ew",
                 padx=(0 if column == 0 else 8, 0),
-                pady=(5, 0),
+                pady=(5 if row == 1 else 6, 0),
             )
             ttk.Label(
                 field,
@@ -1750,7 +1841,8 @@ class MigrationGuardApp:
             )
             choose_button.pack(side=LEFT, padx=(4, 0))
             self._attach_tooltip(choose_button, f"选择{label}目录")
-            workspace_section.columnconfigure(column, weight=1)
+        workspace_section.columnconfigure(0, weight=1)
+        workspace_section.columnconfigure(1, weight=1)
 
         ttk.Separator(container).grid(
             row=3,
@@ -1934,7 +2026,8 @@ class MigrationGuardApp:
             if not all(roots):
                 messagebox.showwarning(
                     "配置不完整",
-                    "三个工作区目录都必须填写。",
+                    "国内 trunk、海外 trunk 和海外 OB 必须填写；"
+                    "国内 OB 仅在对应路线中必填。",
                     parent=window,
                 )
                 missing_key = next(
@@ -1993,6 +2086,9 @@ class MigrationGuardApp:
                 sheet_entries[invalid_key].focus_set()
                 return
             self.domestic_root.set(roots[0])
+            self.domestic_ob_root.set(
+                values["domestic_ob"].get().strip()
+            )
             self.overseas_trunk_root.set(roots[1])
             self.overseas_ob_root.set(roots[2])
             self.trunk_sheet_url.set(sheet_urls[0])
@@ -2002,10 +2098,10 @@ class MigrationGuardApp:
             self.include_externals.set(external_value.get())
             self.lookback_days.set(lookback_days)
             self.remote_refresh_minutes.set(refresh_value.get())
-            source_role = self._workspace_role(
-                self.source_workspace.get()
+            self._set_workspace_route(
+                self.active_workspace_route,
+                save=False,
             )
-            self._set_workspace_route(source_role, save=False)
             self.ticket_snapshots.clear()
             self.trunk_table_button.configure(
                 text="合海外 Trunk",
@@ -2069,6 +2165,32 @@ class MigrationGuardApp:
                     "请粘贴包含 SERIA 或 OSCOA 单号的内容。",
                 )
             return "break" if event is not None else None
+        if (
+            self.active_workspace_route
+            == ROUTE_DOMESTIC_TO_DOMESTIC_OB
+        ):
+            mappings = parse_domestic_ob_text(issue_text)
+            snapshot = TicketSheetSnapshot(
+                url="",
+                sheet_id=TABLE_DOMESTIC_OB,
+                sheet_name="国内 OB 直连",
+                revision=0,
+                fetched_at=datetime.now().astimezone().isoformat(),
+                mappings=mappings,
+            )
+            self._apply_ticket_resolution(
+                snapshot,
+                TicketTextResolution(
+                    mappings=mappings,
+                    issue_keys=tuple(
+                        item.source_issue for item in mappings
+                    ),
+                    unresolved_keys=(),
+                    ambiguous_keys=(),
+                ),
+                issue_text,
+            )
+            return "break" if event is not None else None
         sheet_url = self._table_url(self.active_table_kind)
         if not sheet_url:
             messagebox.showwarning(
@@ -2131,6 +2253,10 @@ class MigrationGuardApp:
             self.active_table_kind,
             snapshot,
         )
+        is_domestic_ob = (
+            self.active_workspace_route
+            == ROUTE_DOMESTIC_TO_DOMESTIC_OB
+        )
         if isinstance(resolution, tuple):
             resolution = TicketTextResolution(
                 mappings=resolution,
@@ -2143,16 +2269,29 @@ class MigrationGuardApp:
             for mapping in resolution.mappings
             if self._mapping_allowed_for_active_table(mapping)
         )
+        self.current_result = None
         if not mappings:
             self.current_ticket_mapping = None
             self.current_ticket_mappings = ()
             self.source_issue.set("")
             self.target_issue.set("")
-            self.status_text.set("固定表中未找到可执行单号")
+            self.status_text.set(
+                "输入中未找到 SERIA 单号"
+                if is_domestic_ob
+                else "固定表中未找到可执行单号"
+            )
             details = [
-                f"工作表：{snapshot.sheet_name}",
+                (
+                    "来源：粘贴文本"
+                    if is_domestic_ob
+                    else f"工作表：{snapshot.sheet_name}"
+                ),
                 f"输入：{issue_text}",
-                "结果：未找到当前流程可执行的映射",
+                (
+                    "结果：国内 OB 路线需要 SERIA 单号"
+                    if is_domestic_ob
+                    else "结果：未找到当前流程可执行的映射"
+                ),
             ]
             if resolution.unresolved_keys:
                 details.append(
@@ -2173,10 +2312,14 @@ class MigrationGuardApp:
             start_audit=False,
         )
         details = [
-            f"工作表：{snapshot.sheet_name}",
+            (
+                "来源：粘贴文本"
+                if is_domestic_ob
+                else f"工作表：{snapshot.sheet_name}"
+            ),
             f"已解析：{len(mappings)} 条",
             f"源单号：{self.source_issue.get() or '-'}",
-            f"海外单号：{self.target_issue.get() or '-'}",
+            f"目标单号：{self.target_issue.get() or '-'}",
         ]
         if resolution.unresolved_keys:
             details.extend(
@@ -2187,6 +2330,12 @@ class MigrationGuardApp:
                 ("", "映射不唯一：" + ", ".join(resolution.ambiguous_keys))
             )
         self._set_detail("\n".join(details))
+        if is_domestic_ob:
+            self.status_text.set(
+                f"已解析 {len(mappings)} 条国内 OB 任务"
+            )
+            self._update_contextual_action_states()
+            return
         self._start_jira_progress(mappings)
 
     def _start_jira_progress(
@@ -2195,6 +2344,11 @@ class MigrationGuardApp:
         *,
         force_refresh: bool = False,
     ) -> None:
+        if (
+            self.active_workspace_route
+            == ROUTE_DOMESTIC_TO_DOMESTIC_OB
+        ):
+            return
         self._cancel_remote_asset_query()
         self._jira_request_id += 1
         request_id = self._jira_request_id
@@ -2323,6 +2477,8 @@ class MigrationGuardApp:
         if (
             not self.current_ticket_mappings
             or self._local_workspaces_available()
+            or self.active_workspace_route
+            == ROUTE_DOMESTIC_TO_DOMESTIC_OB
         ):
             return
         delay = max(1, self.remote_refresh_minutes.get()) * 60_000
@@ -2337,7 +2493,12 @@ class MigrationGuardApp:
             self._schedule_remote_auto_refresh()
             return
         mappings = self.current_ticket_mappings
-        if not mappings or self._local_workspaces_available():
+        if (
+            not mappings
+            or self._local_workspaces_available()
+            or self.active_workspace_route
+            == ROUTE_DOMESTIC_TO_DOMESTIC_OB
+        ):
             return
         self.status_text.set("自动刷新 Jira 与远端 SVN 状态...")
         self._start_jira_progress(mappings, force_refresh=True)
@@ -2742,6 +2903,11 @@ class MigrationGuardApp:
         self,
         mapping: TicketMapping,
     ) -> bool:
+        if self.active_table_kind == TABLE_DOMESTIC_OB:
+            return (
+                mapping.route
+                == TicketRoute.DOMESTIC_TO_DOMESTIC_OB
+            )
         if self.active_table_kind == TABLE_TRUNK:
             return mapping.route == TicketRoute.DOMESTIC_TO_OVERSEAS
         return mapping.route in {
@@ -2760,12 +2926,16 @@ class MigrationGuardApp:
         self.current_ticket_mappings = (mapping,)
         self.source_issue.set(mapping.source_issue)
         self.target_issue.set(mapping.target_issue)
-        source_role = (
-            WORKSPACE_OVERSEAS_TRUNK
+        route = (
+            ROUTE_DOMESTIC_TO_DOMESTIC_OB
+            if mapping.route == TicketRoute.DOMESTIC_TO_DOMESTIC_OB
+            else WORKSPACE_OVERSEAS_TRUNK
             if mapping.route == TicketRoute.OVERSEAS_TO_OSOB
+            else ROUTE_DOMESTIC_TO_OSOB
+            if self.active_table_kind == TABLE_OSOB
             else WORKSPACE_DOMESTIC
         )
-        self._set_workspace_route(source_role)
+        self._set_workspace_route(route)
         cache_note = "（缓存）" if snapshot.from_cache else ""
         lines = [
             f"工作表：{snapshot.sheet_name}{cache_note}",
@@ -2827,21 +2997,25 @@ class MigrationGuardApp:
         )
         self.source_issue.set(", ".join(source_issues))
         self.target_issue.set(", ".join(target_issues))
+        has_domestic_ob = any(
+            item.route == TicketRoute.DOMESTIC_TO_DOMESTIC_OB
+            for item in mappings
+        )
         has_domestic = any(
             item.route == TicketRoute.DOMESTIC_TO_OVERSEAS
             for item in mappings
         )
-        source_role = (
-            WORKSPACE_DOMESTIC
+        route = (
+            ROUTE_DOMESTIC_TO_DOMESTIC_OB
+            if has_domestic_ob
+            else ROUTE_DOMESTIC_TO_OSOB
+            if self.active_table_kind == TABLE_OSOB and has_domestic
+            else WORKSPACE_DOMESTIC
             if has_domestic
             else WORKSPACE_OVERSEAS_TRUNK
         )
-        self._set_workspace_route(source_role)
-        route_text = (
-            "国内主干 → 海外主干 → OSOB"
-            if self.active_table_kind == TABLE_OSOB and has_domestic
-            else mappings[0].route.label
-        )
+        self._set_workspace_route(route)
+        route_text = self.route_summary.get()
         self._set_detail(
             "\n".join(
                 (
@@ -2849,9 +3023,9 @@ class MigrationGuardApp:
                     f"路线：{route_text}",
                     f"已选择：{len(mappings)} 条任务",
                     f"源单号：{len(source_issues)} 个",
-                    f"海外单号：{len(target_issues)} 个",
+                    f"目标单号：{len(target_issues)} 个",
                     "",
-                    "即将统一扫描源提交、目标状态和海外提交记录。",
+                    "即将统一扫描源提交、目标状态和目标提交记录。",
                 )
             )
         )
@@ -2865,12 +3039,17 @@ class MigrationGuardApp:
     def _can_auto_audit(self, mapping: TicketMapping) -> bool:
         return mapping.route in {
             TicketRoute.DOMESTIC_TO_OVERSEAS,
+            TicketRoute.DOMESTIC_TO_DOMESTIC_OB,
             TicketRoute.OVERSEAS_TO_OSOB,
         }
 
     def _active_stage_mappings(self) -> tuple[TicketMapping, ...]:
-        source_role = self._workspace_role(self.source_workspace.get())
-        if source_role == WORKSPACE_OVERSEAS_TRUNK:
+        if (
+            self.active_workspace_route
+            == ROUTE_DOMESTIC_TO_DOMESTIC_OB
+        ):
+            return as_domestic_to_ob(self.current_ticket_mappings)
+        if self.active_workspace_route == WORKSPACE_OVERSEAS_TRUNK:
             return as_overseas_to_osob(self.current_ticket_mappings)
         return tuple(
             mapping
@@ -2881,6 +3060,15 @@ class MigrationGuardApp:
     def _start_update_and_audit(self) -> None:
         if self._current_mapping_selection_is_valid():
             if not self._local_workspaces_available():
+                if (
+                    self.active_workspace_route
+                    == ROUTE_DOMESTIC_TO_DOMESTIC_OB
+                ):
+                    self.status_text.set(
+                        "请先配置可用的国内 OB 工作区"
+                    )
+                    self._configure_ticket_sheet()
+                    return
                 self._start_jira_progress(
                     self.current_ticket_mappings,
                     force_refresh=True,
@@ -3093,16 +3281,9 @@ class MigrationGuardApp:
                 self.current_result,
                 modules,
             )
-            source_role = self._workspace_role(
-                self.source_workspace.get()
-            )
             cascade = (
-                self.active_table_kind == TABLE_OSOB
-                and source_role == WORKSPACE_DOMESTIC
-                and any(
-                    item.route == TicketRoute.DOMESTIC_TO_OVERSEAS
-                    for item in self.current_ticket_mappings
-                )
+                self.active_workspace_route
+                == ROUTE_DOMESTIC_TO_OSOB
             )
             osob_mappings = (
                 as_overseas_to_osob(self.current_ticket_mappings)
@@ -3119,7 +3300,11 @@ class MigrationGuardApp:
             )
             first_stage_label = (
                 "海外 trunk → OSOB"
-                if source_role == WORKSPACE_OVERSEAS_TRUNK
+                if self.active_workspace_route
+                == WORKSPACE_OVERSEAS_TRUNK
+                else "国内 trunk → 国内 OB"
+                if self.active_workspace_route
+                == ROUTE_DOMESTIC_TO_DOMESTIC_OB
                 else "国内 trunk → 海外 trunk"
             )
             osob_target_dir = Path(self.overseas_ob_root.get())
@@ -3132,7 +3317,7 @@ class MigrationGuardApp:
             title=(
                 "第一阶段：国内 trunk → 海外 trunk"
                 if cascade
-                else "选择迁移内容"
+                else f"选择迁移内容：{first_stage_label}"
             ),
         )
         if selected_packages is None:
@@ -3438,7 +3623,7 @@ class MigrationGuardApp:
         )
         for name, title, width in (
             ("source", "源单号", 145),
-            ("target", "海外单号", 145),
+            ("target", "目标单号", 145),
         ):
             table.heading(name, text=title)
             table.column(
@@ -3849,20 +4034,34 @@ class MigrationGuardApp:
         has_workspace = (
             has_mapping and self._local_workspaces_available()
         )
+        needs_domestic_ob_config = (
+            has_mapping
+            and self.active_workspace_route
+            == ROUTE_DOMESTIC_TO_DOMESTIC_OB
+            and not has_workspace
+        )
         can_migrate = (
             isinstance(
                 self.current_result,
                 BatchMigrationAuditResult,
             )
             and bool(self.current_ticket_mappings)
+            and not needs_domestic_ob_config
         )
         self.update_button.configure(
             text=(
-                "更新并复核"
+                "配置国内 OB"
+                if needs_domestic_ob_config
+                else "更新并复核"
                 if has_workspace
                 else "刷新状态"
             ),
             state="normal" if has_mapping else "disabled",
+            command=(
+                self._configure_ticket_sheet
+                if needs_domestic_ob_config
+                else self._start_update_and_audit
+            ),
             style=(
                 "Primary.TButton"
                 if (
