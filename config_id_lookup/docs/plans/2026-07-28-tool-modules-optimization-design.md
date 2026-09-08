@@ -1,7 +1,13 @@
 # 工具模块与配置检索器优化设计
 
+> **文档状态：历史基线。** 本文记录 SVNmate `1.4.0` 与 ConfigLinker `1.1.0`
+> 的模块化改造目标；该方案已经落地并继续演进。当前仓库版本为 SVNmate `1.4.4`、
+> ConfigLinker `1.5.3`、MigrationGuard `1.0.2`。现行使用方式以仓库根
+> `README.md`、`README_svn_auto_tool.md`、ConfigLinker 的 `README.md` /
+> `USER_GUIDE.md` 及各项目 `PRODUCT.md` / `DESIGN.md` 为准。
+
 - 日期：2026-07-28
-- 状态：已确认
+- 状态：已完成并归档
 - 涉及仓库：
   - `C:\Users\Admin\Downloads\ezxss`
   - `C:\Users\Admin\Downloads\提示板\KindleLarkStatus`

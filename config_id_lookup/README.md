@@ -4,6 +4,9 @@
 
 一个只读的 Windows 桌面工具，包含角色查询和武器查询两个功能页。
 
+产品、设计、现行说明与历史计划的分层入口见
+[`docs/README.md`](docs/README.md)。
+
 ```text
 m目标物表.csv -> NPC表.csv -> m模型资源表.csv
 ```

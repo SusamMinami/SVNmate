@@ -1,6 +1,10 @@
 # 工具模块与配置检索器优化实施计划
 
-> **For Coco:** REQUIRED SUB-SKILL: Use `executing-plans` to implement this plan task-by-task.
+> **文档状态：历史实施记录。** 本计划对应 SVNmate `1.4.0`、ConfigLinker
+> `1.1.0` 与当时 Kindle Windows 模块的首次独立更新链路，已经执行完毕。不得再次
+> 直接运行其中的建分支、提交、推送或发布步骤。当前仓库状态与使用方式以根目录
+> `README.md`、`README_svn_auto_tool.md`、`RELEASE_NOTES.md` 和 ConfigLinker
+> 的现行文档为准。
 
 **Goal:** 优化 ConfigLinker 的 DPI、窗口、复制和配置查询体验，并为 SVNmate、ConfigLinker 与 KindleLarkStatus 建立可独立发布和更新的 Windows 工具模块体系。
 

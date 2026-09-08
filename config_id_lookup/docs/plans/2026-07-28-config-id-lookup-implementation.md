@@ -1,6 +1,10 @@
 # 配置关系检索器实施计划
 
-> **For Coco:** REQUIRED SUB-SKILL: Use `executing-plans` to implement this plan task-by-task.
+> **文档状态：历史实施记录。** 本计划对应最初的三表关系检索器，已经执行完毕，
+> 不应再次逐项运行其中的建分支、提交或发布命令。当前版本为 `1.5.3`；现行能力、
+> 操作与设计边界见 [`../../README.md`](../../README.md)、
+> [`../../USER_GUIDE.md`](../../USER_GUIDE.md)、
+> [`../../PRODUCT.md`](../../PRODUCT.md) 和 [`../../DESIGN.md`](../../DESIGN.md)。
 
 **Goal:** 构建一个只读的 Windows 桌面 EXE，可从目标物 ID、NPC ID 或模型资源 ID 出发，展示三表正反向关系并支持逐级返回。
 
