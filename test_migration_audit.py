@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from datetime import date
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 from migration_guard.audit import MigrationAuditService
 from migration_guard.models import (
@@ -51,6 +52,8 @@ class _FakeSvnClient:
         self.log_by_issues_calls = 0
         self.log_by_message_pattern_calls = 0
         self.last_message_pattern = ""
+        self.last_start_revision: int | None = None
+        self.status_paths_calls = 0
 
     def info(self, path: Path | str) -> SvnInfo:
         target = Path(path)
@@ -86,8 +89,10 @@ class _FakeSvnClient:
         _issue_key: str,
         *,
         start: date | str,
+        start_revision: int | None = None,
     ) -> tuple[SvnCommit, ...]:
         del start
+        self.last_start_revision = start_revision
         return (
             self.source_commits
             if Path(target) == self.source
@@ -100,9 +105,15 @@ class _FakeSvnClient:
         _issue_keys: object,
         *,
         start: date | str,
+        start_revision: int | None = None,
     ) -> tuple[SvnCommit, ...]:
         self.log_by_issues_calls += 1
-        return self.log_by_issue(target, "", start=start)
+        return self.log_by_issue(
+            target,
+            "",
+            start=start,
+            start_revision=start_revision,
+        )
 
     def log_by_message_pattern(
         self,
@@ -110,10 +121,16 @@ class _FakeSvnClient:
         search_pattern: str,
         *,
         start: date | str,
+        start_revision: int | None = None,
     ) -> tuple[SvnCommit, ...]:
         self.log_by_message_pattern_calls += 1
         self.last_message_pattern = search_pattern
-        return self.log_by_issue(target, "", start=start)
+        return self.log_by_issue(
+            target,
+            "",
+            start=start,
+            start_revision=start_revision,
+        )
 
     def status_paths(
         self,
@@ -121,6 +138,7 @@ class _FakeSvnClient:
         *,
         show_updates: bool,
     ) -> dict[str, WorkingCopyStatus]:
+        self.status_paths_calls += 1
         self.last_show_updates = show_updates
         return self.statuses
 
@@ -505,8 +523,245 @@ class MigrationAuditDecisionTests(unittest.TestCase):
         )
         self.assertTrue(result.complete)
 
+    def test_batch_status_refresh_reuses_existing_commit_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "source" / "res"
+            target = root / "target" / "res"
+            source.mkdir(parents=True)
+            target.mkdir(parents=True)
+            target_file = target / "asset.uasset"
+            target_file.write_bytes(b"asset")
+            source_commits = (
+                SvnCommit(
+                    10,
+                    "a",
+                    "2026-09-01T00:00:00Z",
+                    "[SERIA-10] source",
+                    (
+                        SvnChange(
+                            "M",
+                            "/project/res/trunk/asset.uasset",
+                            "file",
+                        ),
+                    ),
+                ),
+            )
+            svn = _FakeSvnClient(
+                source,
+                target,
+                source_commits,
+                (),
+                {},
+            )
+            service = MigrationAuditService(
+                svn=svn,
+                include_externals=False,
+            )
+            module = WorkspaceModule("res", source, target)
+            snapshot = service.audit_batch(
+                (module,),
+                (MigrationCase("SERIA-10", "OSCOA-20"),),
+                lookback_days=30,
+            )
+            svn.statuses = {
+                _path_key(target_file): WorkingCopyStatus(
+                    path=str(target_file),
+                    item="modified",
+                    props="none",
+                )
+            }
+
+            refreshed = service.refresh_batch_status(
+                snapshot,
+                (module,),
+            )
+
+        self.assertEqual(
+            refreshed.files[0].state,
+            VerificationState.PENDING_COMMIT,
+        )
+        self.assertEqual(svn.log_by_issues_calls, 1)
+        self.assertEqual(svn.log_by_message_pattern_calls, 1)
+        self.assertEqual(svn.status_paths_calls, 2)
+
+    def test_batch_commit_refresh_queries_only_new_target_revisions(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "source" / "res"
+            target = root / "target" / "res"
+            source.mkdir(parents=True)
+            target.mkdir(parents=True)
+            target_file = target / "asset.uasset"
+            target_file.write_bytes(b"asset")
+            source_commits = (
+                SvnCommit(
+                    10,
+                    "a",
+                    "2026-09-01T00:00:00Z",
+                    "[SERIA-10] source",
+                    (
+                        SvnChange(
+                            "M",
+                            "/project/res/trunk/asset.uasset",
+                            "file",
+                        ),
+                    ),
+                ),
+            )
+            svn = _FakeSvnClient(
+                source,
+                target,
+                source_commits,
+                (),
+                {},
+            )
+            service = MigrationAuditService(
+                svn=svn,
+                include_externals=False,
+            )
+            module = WorkspaceModule("res", source, target)
+            snapshot = service.audit_batch(
+                (module,),
+                (MigrationCase("SERIA-10", "OSCOA-20"),),
+                lookback_days=30,
+            )
+            svn.statuses = {
+                _path_key(target_file): WorkingCopyStatus(
+                    path=str(target_file),
+                    item="modified",
+                    props="none",
+                )
+            }
+            pending = service.refresh_batch_status(snapshot, (module,))
+            svn.statuses = {}
+            svn.target_commits = (
+                SvnCommit(
+                    31,
+                    "b",
+                    "2026-09-02T00:00:00Z",
+                    "[OSCOA-20] target",
+                    (
+                        SvnChange(
+                            "M",
+                            (
+                                "/project/res/overseas/trunk/"
+                                "asset.uasset"
+                            ),
+                            "file",
+                        ),
+                    ),
+                ),
+            )
+
+            completed = service.refresh_batch_commits(
+                pending,
+                (module,),
+                lookback_days=30,
+            )
+
+        self.assertEqual(
+            completed.files[0].state,
+            VerificationState.COMPLETE,
+        )
+        self.assertEqual(completed.files[0].target_revisions, (31,))
+        self.assertEqual(svn.log_by_issues_calls, 1)
+        self.assertEqual(svn.log_by_message_pattern_calls, 3)
+        self.assertEqual(svn.last_start_revision, 30)
+
+    def test_source_change_after_snapshot_requires_full_audit(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "source" / "res"
+            target = root / "target" / "res"
+            source.mkdir(parents=True)
+            target.mkdir(parents=True)
+            target_file = target / "asset.uasset"
+            target_file.write_bytes(b"asset")
+            initial_commit = SvnCommit(
+                10,
+                "a",
+                "2026-09-01T00:00:00Z",
+                "[SERIA-10] source",
+                (
+                    SvnChange(
+                        "M",
+                        "/project/res/trunk/asset.uasset",
+                        "file",
+                    ),
+                ),
+            )
+            svn = _FakeSvnClient(
+                source,
+                target,
+                (initial_commit,),
+                (),
+                {},
+            )
+            service = MigrationAuditService(
+                svn=svn,
+                include_externals=False,
+            )
+            module = WorkspaceModule("res", source, target)
+            snapshot = service.audit_batch(
+                (module,),
+                (MigrationCase("SERIA-10", "OSCOA-20"),),
+                lookback_days=30,
+            )
+            svn.source_commits = (
+                initial_commit,
+                SvnCommit(
+                    21,
+                    "b",
+                    "2026-09-02T00:00:00Z",
+                    "[SERIA-10] follow-up",
+                    (
+                        SvnChange(
+                            "M",
+                            "/project/res/trunk/asset.uasset",
+                            "file",
+                        ),
+                    ),
+                ),
+            )
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "新的源 SVN 提交",
+            ):
+                service.refresh_batch_status(
+                    snapshot,
+                    (module,),
+                    verify_source=True,
+                )
+
 
 class IssueParsingTests(unittest.TestCase):
+    def test_default_runner_hides_child_console_window(self) -> None:
+        completed = Mock(returncode=0, stdout=b"", stderr=b"")
+
+        with patch(
+            "migration_guard.svn_client.subprocess.run",
+            return_value=completed,
+        ) as run:
+            output = SvnClient._default_runner(
+                ["svn", "info", "--xml", "C:\\trunk"],
+                None,
+                30,
+            )
+
+        self.assertEqual(output.return_code, 0)
+        self.assertEqual(
+            run.call_args.kwargs["creationflags"],
+            (
+                getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                if os.name == "nt"
+                else 0
+            ),
+        )
+
     def test_normalize_issue_accepts_decorated_text(self) -> None:
         self.assertEqual(
             normalize_issue_key("【seria-12345】【配置】说明"),
@@ -597,6 +852,31 @@ class IssueParsingTests(unittest.TestCase):
 
         self.assertEqual([item.revision for item in commits], [10, 11])
         self.assertEqual(seen[0].count("--search"), 2)
+
+    def test_incremental_log_search_uses_revision_range(self) -> None:
+        seen: list[tuple[str, ...]] = []
+        xml = '<?xml version="1.0" encoding="UTF-8"?><log />'
+
+        def runner(command, cwd, timeout):
+            del cwd, timeout
+            seen.append(tuple(command))
+            return SvnCommandOutput(
+                command=tuple(command),
+                return_code=0,
+                stdout=xml,
+                stderr="",
+                elapsed_seconds=0,
+            )
+
+        SvnClient(runner=runner).log_by_message_pattern(
+            "https://example.invalid/trunk",
+            "*OSCOA-*",
+            start="2026-09-01",
+            start_revision=30,
+        )
+
+        revision_index = seen[0].index("-r")
+        self.assertEqual(seen[0][revision_index + 1], "30:HEAD")
 
 
 @unittest.skipUnless(

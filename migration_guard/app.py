@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 import threading
+import time
 from collections.abc import Callable
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -146,6 +147,13 @@ ISSUE_KEY_PATTERN = re.compile(
     r"\b(?:SER|OSC|SERIA|OSCOA)-\d+\b",
     re.IGNORECASE,
 )
+MIGRATION_STAGE_LABELS = {
+    "preflight": "快照预检",
+    "migrate": "UE 迁移",
+    "checkout-scan": "目标扫描",
+    "checkout": "等待提交",
+    "verify": "增量复核",
+}
 
 
 def _preferred_ui_font_family(root: Tk) -> str:
@@ -299,6 +307,9 @@ class MigrationGuardApp:
         self._remote_asset_cache = RemoteAssetProgressCache()
         self._remote_asset_cancel_event: threading.Event | None = None
         self._remote_refresh_after_id: str | None = None
+        self._workflow_timing_stage = ""
+        self._workflow_timing_message = ""
+        self._workflow_timing_started_at: float | None = None
         self.active_table_kind = TABLE_TRUNK
         self.table_mode = "audit"
         self.settings_window: Toplevel | None = None
@@ -410,6 +421,12 @@ class MigrationGuardApp:
         style.configure(
             "DialogTitle.TLabel",
             background="#E7EAED",
+            foreground="#191919",
+            font=self.type_fonts["dialog_title"],
+        )
+        style.configure(
+            "PanelTitle.TLabel",
+            background="#F2F2F0",
             foreground="#191919",
             font=self.type_fonts["dialog_title"],
         )
@@ -1964,13 +1981,18 @@ class MigrationGuardApp:
         ).pack(anchor="w", pady=(0, 2))
         lookback_control = ttk.Frame(lookback, style="App.TFrame")
         lookback_control.pack(anchor="w")
-        ttk.Spinbox(
+        lookback_input = ttk.Spinbox(
             lookback_control,
             from_=1,
             to=3650,
             width=7,
             textvariable=lookback_value,
-        ).pack(side=LEFT)
+        )
+        lookback_input.pack(side=LEFT)
+        self._attach_tooltip(
+            lookback_input,
+            "扫描不会早于该范围；新 Jira 会从创建日前 3 天开始",
+        )
         ttk.Label(
             lookback_control,
             text="天",
@@ -3308,6 +3330,7 @@ class MigrationGuardApp:
                 else "国内 trunk → 海外 trunk"
             )
             osob_target_dir = Path(self.overseas_ob_root.get())
+            preflight = self.current_result
             self._save_config()
         except (ValueError, OSError) as exc:
             messagebox.showwarning("无法开始", str(exc))
@@ -3328,12 +3351,12 @@ class MigrationGuardApp:
         self.active_task = "migration"
         self._set_action_buttons("disabled")
         self._reset_workflow_progress("批量迁移")
-        self.status_text.set("批量迁移：重新确认源清单")
+        self.status_text.set("批量迁移：复用核验快照并检查目标状态")
         self._set_detail(
             f"批量流水线已启动：{len(stage_mappings)} 条任务。"
         )
         self._show_progress_row(
-            f"统一预检 {len(stage_mappings)} 条任务",
+            f"快速预检 {len(stage_mappings)} 条任务",
             stage="preflight",
         )
         threading.Thread(
@@ -3344,6 +3367,7 @@ class MigrationGuardApp:
                 lookback_days,
                 include_externals,
                 target_branch_dir,
+                preflight,
                 selected_packages,
                 osob_modules,
                 osob_mappings,
@@ -3361,6 +3385,7 @@ class MigrationGuardApp:
         lookback_days: int,
         include_externals: bool,
         target_branch_dir: Path,
+        preflight: BatchMigrationAuditResult,
         selected_packages: tuple[str, ...],
         osob_modules: tuple[WorkspaceModule, ...],
         osob_mappings: tuple[TicketMapping, ...],
@@ -3388,6 +3413,7 @@ class MigrationGuardApp:
                 lookback_days=lookback_days,
                 include_externals=include_externals,
                 stage_label=first_stage_label,
+                preflight=preflight,
             )
             self.events.put(("audit-result", final_result))
             summaries = [first_summary]
@@ -3482,36 +3508,78 @@ class MigrationGuardApp:
         progress = lambda stage, message: self.events.put(
             ("progress", (stage, f"{stage_label}：{message}"))
         )
+        stage_timings: dict[str, float] = {}
+        pipeline_started = time.monotonic()
+
+        def timed(
+            stage: str,
+            completion_label: str,
+            operation: Callable[[], object],
+        ) -> object:
+            started = time.monotonic()
+            result = operation()
+            elapsed = max(0.0, time.monotonic() - started)
+            stage_timings[stage] = elapsed
+            progress(
+                stage,
+                f"{completion_label}完成，用时 {_format_duration(elapsed)}",
+            )
+            return result
+
         audit = MigrationAuditService(
             svn=SvnClient(log=self._queue_log),
             progress=progress,
             include_externals=include_externals,
         )
-        progress("preflight", "统一确认源提交和目标状态")
         if preflight is None:
-            preflight = audit.audit_batch(
-                modules,
-                cases,
-                lookback_days=lookback_days,
+            progress("preflight", "执行完整迁移前核验")
+            preflight = timed(
+                "preflight",
+                "完整预检",
+                lambda: audit.audit_batch(
+                    modules,
+                    cases,
+                    lookback_days=lookback_days,
+                ),
             )
+        else:
+            progress("preflight", "复用核验快照，快速检查目标状态")
+            preflight = timed(
+                "preflight",
+                "快照预检",
+                lambda: audit.refresh_batch_status(
+                    preflight,
+                    modules,
+                    verify_source=True,
+                ),
+            )
+        assert isinstance(preflight, BatchMigrationAuditResult)
         executor = BatchMigrationExecutor(progress=progress)
         migration_plan = executor.build_asset_plan(preflight, modules)
         migration_plan = executor.select_assets(
             migration_plan,
             selected_packages,
         )
-        executor.migrate(
-            migration_plan,
-            modules,
-            target_branch_dir=target_branch_dir,
+        timed(
+            "migrate",
+            "UE 迁移",
+            lambda: executor.migrate(
+                migration_plan,
+                modules,
+                target_branch_dir=target_branch_dir,
+            ),
         )
 
         progress("checkout-scan", "检查迁移后的目标改动")
-        after_migration = audit.audit_batch(
-            modules,
-            cases,
-            lookback_days=lookback_days,
+        after_migration = timed(
+            "checkout-scan",
+            "目标扫描",
+            lambda: audit.refresh_batch_status(
+                preflight,
+                modules,
+            ),
         )
+        assert isinstance(after_migration, BatchMigrationAuditResult)
         checkout_plan = executor.build_checkout_plan(
             after_migration,
             {
@@ -3525,18 +3593,29 @@ class MigrationGuardApp:
                 "检测到跨 Jira 共享文件，跳过自动提交分组",
             )
             launch_result = None
+            stage_timings["checkout"] = 0.0
         else:
-            launch_result = executor.open_checkout_windows(
-                checkout_plan,
-                wait=True,
+            launch_result = timed(
+                "checkout",
+                "提交窗口",
+                lambda: executor.open_checkout_windows(
+                    checkout_plan,
+                    wait=True,
+                ),
             )
 
-        progress("verify", "比对源清单、目标状态和提交记录")
-        final_result = audit.audit_batch(
-            modules,
-            cases,
-            lookback_days=lookback_days,
+        progress("verify", "增量读取提交记录并复核目标状态")
+        final_result = timed(
+            "verify",
+            "增量复核",
+            lambda: audit.refresh_batch_commits(
+                after_migration,
+                modules,
+                lookback_days=lookback_days,
+            ),
         )
+        assert isinstance(final_result, BatchMigrationAuditResult)
+        total_seconds = max(0.0, time.monotonic() - pipeline_started)
         return final_result, {
             "label": stage_label,
             "assets": len(migration_plan.assets),
@@ -3550,6 +3629,15 @@ class MigrationGuardApp:
                 else 0
             ),
             "complete": final_result.complete,
+            "timings": tuple(
+                (
+                    key,
+                    MIGRATION_STAGE_LABELS[key],
+                    stage_timings.get(key, 0.0),
+                )
+                for key in MIGRATION_STAGE_LABELS
+            ),
+            "total_seconds": total_seconds,
         }
 
     def _request_asset_selection(
@@ -3574,8 +3662,12 @@ class MigrationGuardApp:
         window = Toplevel(self.root)
         window.withdraw()
         window.title(title)
-        window.geometry("900x540")
-        window.minsize(720, 420)
+        width, height = (900, 540) if plan.assets else (760, 360)
+        window.geometry(f"{width}x{height}")
+        window.minsize(
+            720 if plan.assets else 680,
+            420 if plan.assets else 320,
+        )
         window.transient(self.root)
         if APP_ICON_PATH.is_file():
             try:
@@ -3691,9 +3783,32 @@ class MigrationGuardApp:
             yscrollcommand=y_scroll.set,
             xscrollcommand=x_scroll.set,
         )
-        table.grid(row=0, column=0, sticky="nsew")
-        y_scroll.grid(row=0, column=1, sticky="ns")
-        x_scroll.grid(row=1, column=0, sticky="ew")
+        if plan.assets:
+            table.grid(row=0, column=0, sticky="nsew")
+            y_scroll.grid(row=0, column=1, sticky="ns")
+            x_scroll.grid(row=1, column=0, sticky="ew")
+        else:
+            empty_state = ttk.Frame(
+                table_frame,
+                style="Panel.TFrame",
+                padding=(24, 24),
+            )
+            empty_state.grid(row=0, column=0, sticky="nsew")
+            ttk.Label(
+                empty_state,
+                text="迁移清单为空",
+                style="PanelTitle.TLabel",
+            ).pack(anchor="w")
+            ttk.Label(
+                empty_state,
+                text=_migration_plan_empty_detail(
+                    plan,
+                    self.current_result,
+                ),
+                style="Panel.TLabel",
+                justify=LEFT,
+                wraplength=760,
+            ).pack(anchor="w", pady=(10, 0))
         table_frame.rowconfigure(0, weight=1)
         table_frame.columnconfigure(0, weight=1)
 
@@ -3711,7 +3826,7 @@ class MigrationGuardApp:
             value=(
                 "选择目录或资源查看完整项目路径"
                 if plan.assets
-                else "没有需要自动迁移的 UE 资源"
+                else "待处理任务不等于可由 UE 自动迁移的资源"
             )
         )
         ttk.Label(
@@ -3806,41 +3921,62 @@ class MigrationGuardApp:
         def cancel() -> None:
             window.destroy()
 
-        ttk.Button(
-            footer,
-            text="取消",
-            style="Tool.TButton",
-            command=cancel,
-        ).pack(side=RIGHT)
+        pending_commit_count = sum(
+            item.state == VerificationState.PENDING_COMMIT
+            for item in (
+                self.current_result.files
+                if self.current_result is not None
+                else ()
+            )
+        )
+        if plan.assets or pending_commit_count:
+            ttk.Button(
+                footer,
+                text="取消",
+                style="Tool.TButton",
+                command=cancel,
+            ).pack(side=RIGHT)
         confirm_button = ttk.Button(
             footer,
-            text="迁移选中",
-            style="Primary.TButton",
-            command=confirm,
+            text=(
+                "迁移选中"
+                if plan.assets
+                else "继续准备提交"
+                if pending_commit_count
+                else "关闭"
+            ),
+            style=(
+                "Primary.TButton"
+                if plan.assets or pending_commit_count
+                else "Tool.TButton"
+            ),
+            command=confirm if plan.assets or pending_commit_count else cancel,
         )
         confirm_button.pack(side=RIGHT, padx=(0, 6))
-        ttk.Button(
-            footer,
-            text="清空",
-            style="Tool.TButton",
-            command=clear_selection,
-        ).pack(side=LEFT)
-        ttk.Button(
-            footer,
-            text="全选",
-            style="Tool.TButton",
-            command=select_all,
-        ).pack(side=LEFT, padx=(0, 6))
+        if plan.assets:
+            ttk.Button(
+                footer,
+                text="清空",
+                style="Tool.TButton",
+                command=clear_selection,
+            ).pack(side=LEFT)
+            ttk.Button(
+                footer,
+                text="全选",
+                style="Tool.TButton",
+                command=select_all,
+            ).pack(side=LEFT, padx=(0, 6))
 
         table.bind("<Button-1>", toggle_pointer)
         table.bind("<space>", toggle_focused)
         table.bind("<<TreeviewSelect>>", refresh_detail)
         window.bind("<Escape>", lambda _event: cancel())
         window.protocol("WM_DELETE_WINDOW", cancel)
-        select_all()
+        if plan.assets:
+            select_all()
+        else:
+            selection_text.set("可迁移 0")
         self.root.update_idletasks()
-        width = 900
-        height = 540
         x = max(
             0,
             self.root.winfo_rootx()
@@ -4197,6 +4333,9 @@ class MigrationGuardApp:
     def _reset_workflow_progress(self, label: str) -> None:
         self.workflow_progress.set(0)
         self.workflow_stage_text.set(label)
+        self._workflow_timing_stage = ""
+        self._workflow_timing_message = ""
+        self._workflow_timing_started_at = None
         self.workflow_progress_bar.configure(
             style="Workflow.Horizontal.TProgressbar"
         )
@@ -4224,8 +4363,32 @@ class MigrationGuardApp:
         }
         value = progress_by_stage.get(stage)
         if value is not None:
-            self.workflow_progress.set(value)
-        self.workflow_stage_text.set(message[:42])
+            self.workflow_progress.set(
+                value
+                if stage == "osob-preflight"
+                else max(self.workflow_progress.get(), value)
+            )
+        now = time.monotonic()
+        if self._workflow_timing_stage != stage:
+            self._workflow_timing_stage = stage
+            self._workflow_timing_started_at = now
+        self._workflow_timing_message = message
+        self._refresh_workflow_elapsed(now)
+
+    def _refresh_workflow_elapsed(
+        self,
+        now: float | None = None,
+    ) -> None:
+        if (
+            not self._workflow_timing_stage
+            or self._workflow_timing_started_at is None
+        ):
+            return
+        current = time.monotonic() if now is None else now
+        elapsed = max(0.0, current - self._workflow_timing_started_at)
+        message = self._workflow_timing_message
+        suffix = f" · {_format_duration(elapsed)}"
+        self.workflow_stage_text.set(message[:36] + suffix)
 
     def _finish_workflow_progress(
         self,
@@ -4243,6 +4406,9 @@ class MigrationGuardApp:
         else:
             style = "WorkflowWarning.Horizontal.TProgressbar"
             label = "仍有待处理项"
+        self._workflow_timing_stage = ""
+        self._workflow_timing_message = ""
+        self._workflow_timing_started_at = None
         self.workflow_progress_bar.configure(style=style)
         self.workflow_stage_text.set(label)
 
@@ -4313,6 +4479,16 @@ class MigrationGuardApp:
                                 f"已打开窗口：{stage['opened']} 个",
                                 f"归属冲突：{stage['ambiguous']} 个",
                                 f"复核：{'通过' if stage['complete'] else '待处理'}",
+                                "耗时："
+                                + " | ".join(
+                                    f"{label} {_format_duration(seconds)}"
+                                    for _key, label, seconds
+                                    in stage["timings"]
+                                ),
+                                "总耗时："
+                                + _format_duration(
+                                    float(stage["total_seconds"])
+                                ),
                                 "",
                             )
                         )
@@ -4443,6 +4619,8 @@ class MigrationGuardApp:
                             self.workflow_stage_text.set(pending)
         except queue.Empty:
             pass
+        if self.active_task:
+            self._refresh_workflow_elapsed()
         self.root.after(UI_POLL_MS, self._poll_events)
 
     def _render_result(
@@ -5291,6 +5469,75 @@ def _jira_query_start(
         return default_start
     jira_start = min(created_dates) - timedelta(days=grace_days)
     return max(default_start, min(jira_start, date.today()))
+
+
+def _migration_plan_empty_detail(
+    plan: AssetMigrationPlan,
+    result: MigrationAuditResult | BatchMigrationAuditResult | None,
+) -> str:
+    cases = _audit_cases(result) if result is not None else ()
+    unresolved = tuple(
+        case.source_issue
+        for case in cases
+        if not case.files
+    )
+    pending_commit = sum(
+        item.state == VerificationState.PENDING_COMMIT
+        for case in cases
+        for item in case.files
+    )
+
+    def issue_list(values: tuple[str, ...]) -> str:
+        visible = values[:6]
+        suffix = " 等" if len(values) > len(visible) else ""
+        return "、".join(visible) + suffix
+
+    lines = ["没有可由 UE 自动迁移的 .uasset 或 .umap。"]
+    if unresolved:
+        lines.append(
+            f"未找到源 SVN 变更：{len(unresolved)} 单"
+            f"（{issue_list(unresolved)}）"
+        )
+    if plan.manual_files:
+        manual_issues = tuple(
+            dict.fromkeys(
+                item.expected.source_issue
+                for item in plan.manual_files
+            )
+        )
+        lines.append(
+            f"脚本、表格、删除项或源文件缺失："
+            f"{len(plan.manual_files)} 个文件"
+            + (
+                f"（{issue_list(manual_issues)}）"
+                if manual_issues
+                else ""
+            )
+        )
+    if pending_commit:
+        lines.append(f"已有本地改动等待提交：{pending_commit} 个文件")
+    elif plan.already_handled_count:
+        lines.append(
+            f"已在处理或已有提交证据："
+            f"{plan.already_handled_count} 个文件"
+        )
+    lines.append(
+        "请返回主窗口的“单号”视图查看原因，并核对提交说明中的 "
+        "Jira 单号、扫描模块和查询范围。"
+    )
+    return "\n".join(lines)
+
+
+def _format_duration(seconds: float) -> str:
+    value = max(0.0, seconds)
+    if value < 60:
+        return f"{value:.1f} 秒"
+    minutes = int(value // 60)
+    remaining = int(round(value - minutes * 60))
+    if remaining == 60:
+        minutes += 1
+        remaining = 0
+    return f"{minutes} 分 {remaining:02d} 秒"
 
 
 def _audit_notices(

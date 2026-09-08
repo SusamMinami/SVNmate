@@ -118,13 +118,17 @@ class SvnClient:
         issue_keys: Iterable[str],
         *,
         start: date | str,
+        start_revision: int | None = None,
     ) -> tuple[SvnCommit, ...]:
         normalized_issues = tuple(
             dict.fromkeys(normalize_issue_key(key) for key in issue_keys)
         )
         if not normalized_issues:
             return ()
-        start_text = start.isoformat() if isinstance(start, date) else str(start)
+        revision_range = _revision_range(
+            start,
+            start_revision=start_revision,
+        )
         search_arguments = [
             value
             for issue in normalized_issues
@@ -137,7 +141,7 @@ class SvnClient:
                 "-v",
                 *search_arguments,
                 "-r",
-                f"{{{start_text}}}:HEAD",
+                revision_range,
                 str(target),
             ]
         )
@@ -156,11 +160,11 @@ class SvnClient:
         search_pattern: str,
         *,
         start: date | str,
+        start_revision: int | None = None,
     ) -> tuple[SvnCommit, ...]:
         pattern = search_pattern.strip()
         if not pattern:
             return ()
-        start_text = start.isoformat() if isinstance(start, date) else str(start)
         output = self._run(
             [
                 "log",
@@ -169,7 +173,10 @@ class SvnClient:
                 "--search",
                 pattern,
                 "-r",
-                f"{{{start_text}}}:HEAD",
+                _revision_range(
+                    start,
+                    start_revision=start_revision,
+                ),
                 str(target),
             ]
         )
@@ -351,6 +358,11 @@ class SvnClient:
                 stderr=subprocess.PIPE,
                 timeout=timeout,
                 shell=False,
+                creationflags=(
+                    getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                    if os.name == "nt"
+                    else 0
+                ),
             )
         except FileNotFoundError as exc:
             return SvnCommandOutput(
@@ -412,6 +424,17 @@ def _optional_int(value: str | None) -> int | None:
         return int(value)
     except ValueError:
         return None
+
+
+def _revision_range(
+    start: date | str,
+    *,
+    start_revision: int | None,
+) -> str:
+    if start_revision is not None:
+        return f"{max(0, start_revision)}:HEAD"
+    start_text = start.isoformat() if isinstance(start, date) else str(start)
+    return f"{{{start_text}}}:HEAD"
 
 
 def _path_key(path: Path | str) -> str:

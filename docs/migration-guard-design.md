@@ -2,7 +2,7 @@
 
 > 文档状态：现行技术设计
 >
-> 当前实现：MigrationGuard `1.0.3`，最近核对：2026-09-05。
+> 当前实现：MigrationGuard `1.0.4`，最近核对：2026-09-07。
 >
 > 产品事实与视觉规范分别以
 > [`../migration_guard/PRODUCT.md`](../migration_guard/PRODUCT.md) 和
@@ -26,7 +26,7 @@ Unreal Editor。
 迁移核验助手不会驱动 SVNmate GUI，而是调用 SVNmate 提供的结构化 IPC。GUI、
 IPC 和无进程回退都使用同一套 core，因此不会复制 Update/Cleanup 规则。
 
-### 1.1 当前实现状态（1.0.3）
+### 1.1 当前实现状态（1.0.4）
 
 已完成第一批基础设施：
 
@@ -35,8 +35,10 @@ IPC 和无进程回退都使用同一套 core，因此不会复制 Update/Cleanu
 - `svn_auto_tool.py`：常驻 IPC 服务、忙碌保护和结构化结果返回。
 - `migration_guard/svn_update_client.py`：IPC 优先、core 回退的统一入口。
 - `migration_guard/svn_client.py`：SVN info/log/status/externals 的 XML 读取。
-- `migration_guard/audit.py`：源文件、目标本地状态和海外提交证据核验。
-- `migration_guard/app.py`：Windows 桌面界面、筛选、详情和批量迁移编排。
+- `migration_guard/audit.py`：源文件、目标本地状态和海外提交证据核验；迁移阶段
+  复用不可变快照，并按 revision 增量检查后续源、目标提交。
+- `migration_guard/app.py`：Windows 桌面界面、筛选、详情、批量迁移编排和阶段
+  实时时间/最终耗时汇总。
 - `migration_guard/ticket_mapping.py`：飞书合并表读取、SERIA/OSCOA 双向映射、路线
   分段和离线缓存；国内 OB 路线直接把粘贴的 SERIA 转为 SERIA → SERIA 任务。
 - `migration_guard/jira_client.py`：批量读取 Jira 状态、创建时间和版本登记，并
@@ -50,7 +52,12 @@ IPC 和无进程回退都使用同一套 core，因此不会复制 Update/Cleanu
   窗口等待。
 
 当前尚未实现本地任务历史、`commit_info.json` 导入、Markdown 报告、源文件后续
-提交漂移提示、表格语义差异和 UE 依赖资源的精确 Jira 归属。
+提交漂移的逐文件展示、表格语义差异和 UE 依赖资源的精确 Jira 归属。
+
+批量迁移不再为预检、迁移后扫描和提交后复核各执行一次完整审计。主界面核验结果
+作为源清单快照：迁移前增量检查源提交并快速刷新目标状态，迁移后只刷新目标文件
+状态，提交窗口关闭后仅查询快照 revision 之后的源、目标提交。目标工作区和
+externals 上下文在单个迁移阶段内复用。
 
 ### 1.2 无工程 Jira 模式
 

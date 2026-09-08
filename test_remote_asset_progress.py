@@ -337,6 +337,19 @@ class RemoteAssetProgressTests(unittest.TestCase):
 
         self.assertEqual(start, created - timedelta(days=3))
 
+    def test_old_jira_creation_date_respects_lookback_limit(self) -> None:
+        created = date.today() - timedelta(days=500)
+        issues = (
+            JiraIssueSnapshot(
+                issue_key="SERIA-10",
+                create_date=f"{created.isoformat()}T10:00:00+08:00",
+            ),
+        )
+
+        start = _jira_query_start(issues, 90)
+
+        self.assertEqual(start, date.today() - timedelta(days=90))
+
 
 if __name__ == "__main__":
     unittest.main()

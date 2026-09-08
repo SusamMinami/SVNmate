@@ -4,7 +4,7 @@ import os
 from collections import defaultdict
 from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -64,6 +64,23 @@ class MigrationAuditService:
         self.svn = svn or SvnClient()
         self.progress = progress
         self.include_externals = include_externals
+        self._refresh_module_key: tuple[tuple[str, str, str], ...] = ()
+        self._refresh_source_contexts: dict[
+            str,
+            tuple[_WorkingCopyContext, ...],
+        ] = {}
+        self._refresh_target_contexts: dict[
+            str,
+            tuple[_WorkingCopyContext, ...],
+        ] = {}
+        self._refresh_source_baseline_revisions: dict[
+            tuple[str, str],
+            int,
+        ] = {}
+        self._refresh_target_baseline_revisions: dict[
+            tuple[str, str],
+            int,
+        ] = {}
 
     def audit(
         self,
@@ -489,6 +506,633 @@ class MigrationAuditService:
             started_at=started_at,
             finished_at=_utc_now(),
             cases=tuple(results),
+        )
+
+    def refresh_batch_status(
+        self,
+        snapshot: BatchMigrationAuditResult,
+        modules: Iterable[WorkspaceModule],
+        *,
+        verify_source: bool = False,
+    ) -> BatchMigrationAuditResult:
+        """Refresh only target working-copy state from an audited snapshot."""
+        started_at = _utc_now()
+        module_list = tuple(modules)
+        target_contexts = self._target_contexts_for_refresh(
+            snapshot,
+            module_list,
+        )
+        if verify_source:
+            self._ensure_source_snapshot_current(snapshot)
+        unique_target_paths = _snapshot_target_paths(snapshot)
+        self._progress(
+            "target-status",
+            f"快速检查 {len(unique_target_paths)} 个目标文件",
+        )
+        statuses = self.svn.status_paths(
+            unique_target_paths,
+            show_updates=True,
+        )
+        refreshed_cases = tuple(
+            replace(
+                case,
+                started_at=started_at,
+                finished_at=_utc_now(),
+                files=tuple(
+                    self._refresh_file_from_status(
+                        item,
+                        statuses,
+                        target_contexts,
+                    )
+                    for item in case.files
+                ),
+                modules=self._refresh_module_audits(
+                    case.modules,
+                    target_contexts,
+                ),
+            )
+            for case in snapshot.cases
+        )
+        return BatchMigrationAuditResult(
+            started_at=started_at,
+            finished_at=_utc_now(),
+            cases=refreshed_cases,
+            warnings=snapshot.warnings,
+        )
+
+    def refresh_batch_commits(
+        self,
+        snapshot: BatchMigrationAuditResult,
+        modules: Iterable[WorkspaceModule],
+        *,
+        lookback_days: int = 90,
+    ) -> BatchMigrationAuditResult:
+        """Refresh target status and only target commits newer than the snapshot."""
+        if lookback_days < 1 or lookback_days > 3650:
+            raise ValueError("查询天数必须在 1 到 3650 之间")
+        started_at = _utc_now()
+        module_list = tuple(modules)
+        target_contexts = self._target_contexts_for_refresh(
+            snapshot,
+            module_list,
+        )
+        self._ensure_source_snapshot_current(snapshot)
+        unique_target_paths = _snapshot_target_paths(snapshot)
+        self._progress(
+            "target-status",
+            f"复核 {len(unique_target_paths)} 个目标文件",
+        )
+        statuses = self.svn.status_paths(
+            unique_target_paths,
+            show_updates=True,
+        )
+        target_keys = tuple(
+            dict.fromkeys(case.target_issue for case in snapshot.cases)
+        )
+        start_date = date.today() - timedelta(days=lookback_days)
+        target_logs = self._incremental_target_logs(
+            self._target_contexts_for_expected(
+                tuple(
+                    item.expected
+                    for case in snapshot.cases
+                    for item in case.files
+                ),
+                target_contexts,
+            ),
+            target_keys,
+            start=start_date,
+        )
+
+        target_prefixes = {
+            key.partition("-")[0] + "-"
+            for key in target_keys
+            if "-" in key
+        }
+        batch_commits_by_path: dict[
+            tuple[str, str],
+            list[SvnCommit],
+        ] = defaultdict(list)
+        batch_issues_by_path: dict[
+            tuple[str, str],
+            set[str],
+        ] = defaultdict(set)
+        for context, commits in target_logs.items():
+            for commit in commits:
+                matched_issues = tuple(
+                    issue
+                    for issue in issue_keys_in_message(commit.message)
+                    if any(
+                        issue.startswith(prefix)
+                        for prefix in target_prefixes
+                    )
+                )
+                if not matched_issues:
+                    continue
+                for change in commit.changes:
+                    key = _repository_path_key(
+                        context.info.repository_uuid,
+                        change.path,
+                    )
+                    batch_commits_by_path[key].append(commit)
+                    batch_issues_by_path[key].update(matched_issues)
+
+        refreshed_cases = []
+        for case in snapshot.cases:
+            own_commits_by_path: dict[
+                tuple[str, str],
+                list[SvnCommit],
+            ] = defaultdict(list)
+            target_revisions_by_module: dict[str, set[int]] = defaultdict(set)
+            for context, commits in target_logs.items():
+                for commit in commits:
+                    if not message_has_issue(
+                        commit.message,
+                        case.target_issue,
+                    ):
+                        continue
+                    target_revisions_by_module[context.module].add(
+                        commit.revision
+                    )
+                    for change in commit.changes:
+                        own_commits_by_path[
+                            _repository_path_key(
+                                context.info.repository_uuid,
+                                change.path,
+                            )
+                        ].append(commit)
+
+            refreshed_files = tuple(
+                self._refresh_file_with_commits(
+                    item,
+                    statuses,
+                    own_commits_by_path,
+                    target_contexts,
+                    batch_commits_by_path,
+                    batch_issues_by_path,
+                )
+                for item in case.files
+            )
+            modules_with_revisions = tuple(
+                replace(
+                    module,
+                    target_commit_count=(
+                        module.target_commit_count
+                        + len(target_revisions_by_module[module.module])
+                    ),
+                )
+                for module in self._refresh_module_audits(
+                    case.modules,
+                    target_contexts,
+                )
+            )
+            refreshed_cases.append(
+                replace(
+                    case,
+                    started_at=started_at,
+                    finished_at=_utc_now(),
+                    files=refreshed_files,
+                    modules=modules_with_revisions,
+                )
+            )
+        return BatchMigrationAuditResult(
+            started_at=started_at,
+            finished_at=_utc_now(),
+            cases=tuple(refreshed_cases),
+            warnings=snapshot.warnings,
+        )
+
+    def _target_contexts_for_refresh(
+        self,
+        snapshot: BatchMigrationAuditResult,
+        modules: tuple[WorkspaceModule, ...],
+    ) -> dict[str, tuple[_WorkingCopyContext, ...]]:
+        if not modules:
+            raise ValueError("至少需要一个工作区模块")
+        module_key = tuple(
+            (
+                module.name.casefold(),
+                _path_key(module.source_path),
+                _path_key(module.target_path),
+            )
+            for module in modules
+        )
+        if self._refresh_module_key == module_key:
+            return self._refresh_target_contexts
+
+        snapshot_modules = {
+            module.module.casefold(): module
+            for module in snapshot.modules
+        }
+        source_contexts: dict[
+            str,
+            tuple[_WorkingCopyContext, ...],
+        ] = {}
+        target_contexts: dict[
+            str,
+            tuple[_WorkingCopyContext, ...],
+        ] = {}
+        source_baseline_revisions: dict[tuple[str, str], int] = {}
+        baseline_revisions: dict[tuple[str, str], int] = {}
+        for module in modules:
+            previous = snapshot_modules.get(module.name.casefold())
+            if previous is None:
+                raise ValueError(
+                    f"核验快照缺少 {module.name} 工作区信息，请重新核验"
+                )
+            if (
+                _path_key(previous.source_path)
+                != _path_key(module.source_path)
+                or _path_key(previous.target_path)
+                != _path_key(module.target_path)
+            ):
+                raise ValueError("工作区路径已变化，请重新完整核验")
+            self._progress(
+                "workspace",
+                f"校验 {module.name} 工作副本映射",
+            )
+            source = self._contexts_for_module(
+                module.name,
+                module.source_path,
+            )
+            target = self._contexts_for_module(
+                module.name,
+                module.target_path,
+            )
+            if source[0].info.repository_uuid != target[0].info.repository_uuid:
+                raise ValueError(
+                    f"{module.name} 的源和目标不属于同一 SVN 仓库"
+                )
+            _validate_workspace_roles(
+                module.name,
+                source[0].info,
+                target[0].info,
+            )
+            source_contexts[module.name] = source
+            target_contexts[module.name] = target
+            for context in source:
+                source_baseline_revisions[_context_key(context)] = (
+                    previous.source_revision
+                    if not context.is_external
+                    else context.info.revision
+                )
+            for context in target:
+                baseline_revisions[_context_key(context)] = (
+                    previous.target_revision
+                    if not context.is_external
+                    else context.info.revision
+                )
+
+        for item in snapshot.files:
+            source_context = _context_for_repository_path(
+                item.expected.source_path,
+                source_contexts.get(item.expected.module, ()),
+            )
+            if source_context is not None and item.expected.source_revisions:
+                key = _context_key(source_context)
+                source_baseline_revisions[key] = max(
+                    source_baseline_revisions.get(key, 0),
+                    *item.expected.source_revisions,
+                )
+            target_context = _context_for_repository_path(
+                item.expected.target_path,
+                target_contexts.get(item.expected.module, ()),
+            )
+            if target_context is not None and item.target_revisions:
+                key = _context_key(target_context)
+                baseline_revisions[key] = max(
+                    baseline_revisions.get(key, 0),
+                    *item.target_revisions,
+                )
+
+        self._refresh_module_key = module_key
+        self._refresh_source_contexts = source_contexts
+        self._refresh_target_contexts = target_contexts
+        self._refresh_source_baseline_revisions = (
+            source_baseline_revisions
+        )
+        self._refresh_target_baseline_revisions = baseline_revisions
+        return target_contexts
+
+    def _ensure_source_snapshot_current(
+        self,
+        snapshot: BatchMigrationAuditResult,
+    ) -> None:
+        source_keys = tuple(
+            dict.fromkeys(case.source_issue for case in snapshot.cases)
+        )
+        source_logs = self._incremental_logs(
+            _base_contexts_first(self._refresh_source_contexts),
+            source_keys,
+            self._refresh_source_baseline_revisions,
+            start=date.today(),
+            stage="source-log",
+            description="确认源快照",
+        )
+        changed_issues = tuple(
+            sorted(
+                {
+                    issue
+                    for commits in source_logs.values()
+                    for commit in commits
+                    for issue in source_keys
+                    if message_has_issue(commit.message, issue)
+                }
+            )
+        )
+        if changed_issues:
+            raise ValueError(
+                "核验后检测到新的源 SVN 提交，请重新完整核验："
+                + "、".join(changed_issues)
+            )
+
+    def _refresh_module_audits(
+        self,
+        modules: tuple[ModuleAudit, ...],
+        target_contexts: dict[str, tuple[_WorkingCopyContext, ...]],
+    ) -> tuple[ModuleAudit, ...]:
+        return tuple(
+            replace(
+                module,
+                target_revision=(
+                    target_contexts[module.module][0].info.revision
+                    if module.module in target_contexts
+                    else module.target_revision
+                ),
+            )
+            for module in modules
+        )
+
+    def _incremental_target_logs(
+        self,
+        contexts: tuple[_WorkingCopyContext, ...],
+        issue_keys: tuple[str, ...],
+        *,
+        start: date,
+    ) -> dict[_WorkingCopyContext, tuple[SvnCommit, ...]]:
+        return self._incremental_logs(
+            contexts,
+            issue_keys,
+            self._refresh_target_baseline_revisions,
+            start=start,
+            stage="target-log",
+            description="检查目标提交",
+        )
+
+    def _incremental_logs(
+        self,
+        contexts: tuple[_WorkingCopyContext, ...],
+        issue_keys: tuple[str, ...],
+        baseline_revisions: dict[tuple[str, str], int],
+        *,
+        start: date,
+        stage: str,
+        description: str,
+    ) -> dict[_WorkingCopyContext, tuple[SvnCommit, ...]]:
+        if not contexts:
+            return {}
+        prefixes = {
+            key.partition("-")[0] + "-"
+            for key in issue_keys
+            if "-" in key
+        }
+        message_pattern = (
+            f"*{next(iter(prefixes))}*"
+            if len(prefixes) == 1
+            else ""
+        )
+
+        def scan(
+            context: _WorkingCopyContext,
+        ) -> tuple[_WorkingCopyContext, tuple[SvnCommit, ...]]:
+            baseline = baseline_revisions.get(
+                _context_key(context)
+            )
+            self._progress(
+                stage,
+                f"增量{description} {context.module}："
+                f"{context.relative_local_root}"
+                + (
+                    f"（r{baseline + 1}:HEAD）"
+                    if baseline is not None
+                    else ""
+                ),
+            )
+            kwargs: dict[str, object] = {"start": start}
+            if baseline is not None:
+                kwargs["start_revision"] = baseline
+            commits = (
+                self.svn.log_by_message_pattern(
+                    context.local_root,
+                    message_pattern,
+                    **kwargs,
+                )
+                if message_pattern
+                else self.svn.log_by_issues(
+                    context.local_root,
+                    issue_keys,
+                    **kwargs,
+                )
+            )
+            if baseline is not None:
+                commits = tuple(
+                    commit
+                    for commit in commits
+                    if commit.revision > baseline
+                )
+            return context, commits
+
+        results: dict[
+            _WorkingCopyContext,
+            tuple[SvnCommit, ...],
+        ] = {}
+        worker_count = min(4, len(contexts))
+        with ThreadPoolExecutor(
+            max_workers=worker_count,
+            thread_name_prefix="migration-target-refresh",
+        ) as executor:
+            futures = {
+                executor.submit(scan, context): context
+                for context in contexts
+            }
+            for future in as_completed(futures):
+                context, commits = future.result()
+                results[context] = commits
+        return results
+
+    def _refresh_file_with_commits(
+        self,
+        previous: FileVerification,
+        statuses: dict[str, WorkingCopyStatus],
+        own_commits_by_path: dict[tuple[str, str], list[SvnCommit]],
+        target_contexts: dict[str, tuple[_WorkingCopyContext, ...]],
+        batch_commits_by_path: dict[tuple[str, str], list[SvnCommit]],
+        batch_issues_by_path: dict[tuple[str, str], set[str]],
+    ) -> FileVerification:
+        expected = previous.expected
+        context = _context_for_repository_path(
+            expected.target_path,
+            target_contexts.get(expected.module, ()),
+        )
+        if context is None:
+            return self._refresh_file_from_status(
+                previous,
+                statuses,
+                target_contexts,
+            )
+        key = _repository_path_key(
+            context.info.repository_uuid,
+            expected.target_path,
+        )
+        own_commits = own_commits_by_path.get(key, [])
+        alternate_commits = batch_commits_by_path.get(key, [])
+        use_alternate = (
+            not own_commits
+            and bool(alternate_commits)
+            and previous.state != VerificationState.COMPLETE
+        )
+        if not own_commits and not use_alternate:
+            return self._refresh_file_from_status(
+                previous,
+                statuses,
+                target_contexts,
+            )
+        refreshed = self._verify_file(
+            expected,
+            statuses,
+            own_commits_by_path,
+            target_contexts,
+            alternate_target_commits_by_path=(
+                batch_commits_by_path if use_alternate else None
+            ),
+            alternate_target_issues_by_path=(
+                batch_issues_by_path if use_alternate else None
+            ),
+        )
+        return replace(
+            refreshed,
+            target_revisions=tuple(
+                sorted(
+                    set(previous.target_revisions)
+                    | set(refreshed.target_revisions)
+                )
+            ),
+        )
+
+    def _refresh_file_from_status(
+        self,
+        previous: FileVerification,
+        statuses: dict[str, WorkingCopyStatus],
+        target_contexts: dict[str, tuple[_WorkingCopyContext, ...]],
+    ) -> FileVerification:
+        expected = previous.expected
+        if expected.mapping_error:
+            return replace(
+                previous,
+                state=VerificationState.BLOCKED,
+                local_status="unknown",
+                repository_status="unknown",
+                reason=expected.mapping_error,
+            )
+        if _context_for_repository_path(
+            expected.target_path,
+            target_contexts.get(expected.module, ()),
+        ) is None:
+            return replace(
+                previous,
+                state=VerificationState.BLOCKED,
+                local_status="unknown",
+                repository_status="unknown",
+                reason="无法定位目标 SVN 工作副本",
+            )
+
+        status = _status_for_path(statuses, expected.target_local_path)
+        local_status = status.item if status is not None else "normal"
+        repository_status = (
+            status.repository_item if status is not None else ""
+        )
+        target_exists = Path(expected.target_local_path).exists()
+        if status is not None and status.is_blocking:
+            if status.item == "error" and not target_exists:
+                status = None
+                local_status = "absent"
+            else:
+                return replace(
+                    previous,
+                    state=VerificationState.BLOCKED,
+                    local_status=local_status,
+                    repository_status=repository_status,
+                    reason=status.error or "目标工作副本存在阻断状态",
+                )
+        if status is not None and status.is_out_of_date:
+            return replace(
+                previous,
+                state=VerificationState.NEEDS_UPDATE,
+                local_status=local_status,
+                repository_status=repository_status,
+                reason="目标工作副本不是仓库最新状态",
+            )
+        if status is not None and status.is_changed:
+            return replace(
+                previous,
+                state=VerificationState.PENDING_COMMIT,
+                local_status=local_status,
+                repository_status=repository_status,
+                reason="目标文件存在尚未提交的本地改动",
+            )
+
+        if previous.target_revisions:
+            if expected.action == "D" and target_exists:
+                return replace(
+                    previous,
+                    state=VerificationState.NEEDS_REVIEW,
+                    local_status=local_status,
+                    repository_status=repository_status,
+                    reason="目标已提交删除，但当前工作副本中仍存在该文件",
+                )
+            if expected.action != "D" and not target_exists:
+                return replace(
+                    previous,
+                    state=VerificationState.NEEDS_REVIEW,
+                    local_status="absent",
+                    repository_status=repository_status,
+                    reason="目标提交曾覆盖该路径，但当前文件不存在",
+                )
+            if previous.state in {
+                VerificationState.COMPLETE,
+                VerificationState.SUBMITTED,
+                VerificationState.NEEDS_REVIEW,
+            }:
+                return replace(
+                    previous,
+                    local_status=local_status,
+                    repository_status=repository_status,
+                )
+            return replace(
+                previous,
+                state=VerificationState.NEEDS_REVIEW,
+                local_status=local_status,
+                repository_status=repository_status,
+                reason="本地改动已消失，需通过增量提交记录确认归属",
+            )
+
+        if expected.action == "D" and not target_exists:
+            return replace(
+                previous,
+                state=VerificationState.NEEDS_REVIEW,
+                local_status="absent",
+                repository_status=repository_status,
+                reason="目标文件不存在，但没有目标单号删除证据",
+            )
+        return replace(
+            previous,
+            state=VerificationState.NOT_MIGRATED,
+            local_status=local_status if target_exists else "absent",
+            repository_status=repository_status,
+            reason=(
+                "目标文件存在但没有本地改动或目标提交证据"
+                if target_exists
+                else "目标文件不存在且没有目标提交证据"
+            ),
         )
 
     def _batch_logs(
@@ -963,6 +1607,26 @@ def _base_contexts_first(
                 item.relative_local_root.casefold(),
             ),
         )
+    )
+
+
+def _snapshot_target_paths(
+    snapshot: BatchMigrationAuditResult,
+) -> tuple[str, ...]:
+    return tuple(
+        dict.fromkeys(
+            item.expected.target_local_path
+            for item in snapshot.files
+            if item.expected.target_local_path
+            and not item.expected.mapping_error
+        )
+    )
+
+
+def _context_key(context: _WorkingCopyContext) -> tuple[str, str]:
+    return _repository_path_key(
+        context.info.repository_uuid,
+        context.info.repository_path,
     )
 
 

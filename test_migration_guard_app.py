@@ -1,7 +1,9 @@
 import os
+import queue
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from migration_guard.config import (
@@ -94,6 +96,140 @@ class MigrationGuardConfigTests(unittest.TestCase):
             "https://example.invalid/wiki/legacy",
         )
         self.assertEqual(config.osob_sheet_url, config.trunk_sheet_url)
+
+    def test_empty_migration_plan_explains_unresolved_tickets(self) -> None:
+        from migration_guard.app import _migration_plan_empty_detail
+        from migration_guard.batch_workflow import AssetMigrationPlan
+        from migration_guard.models import (
+            BatchMigrationAuditResult,
+            MigrationAuditResult,
+        )
+
+        case = MigrationAuditResult(
+            source_issue="SERIA-10",
+            target_issue="OSCOA-20",
+            started_at="start",
+            finished_at="finish",
+            files=(),
+            modules=(),
+            warnings=("查询范围内未找到 SERIA-10 的文件提交",),
+        )
+        result = BatchMigrationAuditResult(
+            started_at="start",
+            finished_at="finish",
+            cases=(case,),
+        )
+        plan = AssetMigrationPlan(
+            assets=(),
+            manual_files=(),
+            already_handled_count=0,
+        )
+
+        detail = _migration_plan_empty_detail(plan, result)
+
+        self.assertIn("没有可由 UE 自动迁移", detail)
+        self.assertIn("未找到源 SVN 变更：1 单（SERIA-10）", detail)
+        self.assertIn("核对提交说明", detail)
+
+
+class MigrationWorkflowTests(unittest.TestCase):
+    def test_migration_stage_reuses_snapshot_and_records_timings(self) -> None:
+        from migration_guard.app import MigrationGuardApp
+        from migration_guard.batch_workflow import AssetMigrationPlan
+        from migration_guard.models import (
+            BatchMigrationAuditResult,
+            MigrationCase,
+            WorkspaceModule,
+        )
+        from migration_guard.ticket_mapping import (
+            TicketMapping,
+            TicketRoute,
+        )
+
+        app = object.__new__(MigrationGuardApp)
+        app.events = queue.Queue()
+        app._queue_log = Mock()
+        module = WorkspaceModule(
+            "res",
+            Path(r"C:\source\res"),
+            Path(r"D:\target\res"),
+        )
+        mapping = TicketMapping(
+            "SERIA-10",
+            "OSCOA-20",
+            TicketRoute.DOMESTIC_TO_OVERSEAS,
+            1,
+            "source",
+            "target",
+            "raw",
+        )
+        snapshot = BatchMigrationAuditResult(
+            started_at="start",
+            finished_at="finish",
+            cases=(),
+        )
+        audit = Mock()
+        audit.refresh_batch_status.side_effect = (snapshot, snapshot)
+        audit.refresh_batch_commits.return_value = snapshot
+        executor = Mock()
+        executor.build_asset_plan.return_value = AssetMigrationPlan(
+            assets=(),
+            manual_files=(),
+            already_handled_count=0,
+        )
+        executor.select_assets.return_value = (
+            executor.build_asset_plan.return_value
+        )
+        executor.build_checkout_plan.return_value = SimpleNamespace(
+            groups=(),
+            path_count=0,
+            ambiguous_paths=(),
+        )
+        executor.open_checkout_windows.return_value = SimpleNamespace(
+            opened_groups=(),
+        )
+
+        with (
+            patch(
+                "migration_guard.app.MigrationAuditService",
+                return_value=audit,
+            ),
+            patch(
+                "migration_guard.app.BatchMigrationExecutor",
+                return_value=executor,
+            ),
+            patch(
+                "migration_guard.app.time.monotonic",
+                side_effect=(0, 0, 1, 1, 3, 3, 4, 4, 9, 9, 10, 10),
+            ),
+        ):
+            result, summary = app._execute_migration_stage(
+                (module,),
+                (MigrationCase("SERIA-10", "OSCOA-20"),),
+                (mapping,),
+                (),
+                Path(r"D:\target"),
+                lookback_days=90,
+                include_externals=False,
+                stage_label="国内 trunk → 海外 trunk",
+                preflight=snapshot,
+            )
+
+        self.assertIs(result, snapshot)
+        audit.audit_batch.assert_not_called()
+        self.assertEqual(audit.refresh_batch_status.call_count, 2)
+        audit.refresh_batch_commits.assert_called_once()
+        self.assertEqual(
+            tuple(item[2] for item in summary["timings"]),
+            (1, 2, 1, 5, 1),
+        )
+        self.assertEqual(summary["total_seconds"], 10)
+
+    def test_duration_format_is_compact(self) -> None:
+        from migration_guard.app import _format_duration
+
+        self.assertEqual(_format_duration(3.25), "3.2 秒")
+        self.assertEqual(_format_duration(80), "1 分 20 秒")
 
 
 @unittest.skipUnless(os.name == "nt", "Windows desktop UI only")
@@ -1280,6 +1416,13 @@ class MigrationGuardUiSmokeTests(unittest.TestCase):
             app._reset_workflow_progress("核验")
             app._update_workflow_progress("verify", "最终复核")
             self.assertEqual(app.workflow_progress.get(), 90)
+            app._update_workflow_progress("source-log", "增量检查源提交")
+            self.assertEqual(app.workflow_progress.get(), 90)
+            app._update_workflow_progress(
+                "osob-preflight",
+                "开始第二阶段",
+            )
+            self.assertEqual(app.workflow_progress.get(), 8)
             app._finish_workflow_progress(complete=True)
 
             self.assertEqual(app.workflow_progress.get(), 100)
@@ -1743,6 +1886,73 @@ class MigrationGuardUiSmokeTests(unittest.TestCase):
             selected = app._choose_migration_assets(plan)
 
             self.assertEqual(selected, ("/Game/A", "/Game/B"))
+        finally:
+            _destroy_root(root)
+
+    def test_migration_picker_explains_empty_asset_plan(self) -> None:
+        from tkinter import Tk, Toplevel
+
+        from migration_guard.app import MigrationGuardApp
+        from migration_guard.batch_workflow import AssetMigrationPlan
+        from migration_guard.models import (
+            BatchMigrationAuditResult,
+            MigrationAuditResult,
+        )
+
+        root = Tk()
+        root.withdraw()
+        try:
+            with patch(
+                "migration_guard.app.load_config",
+                return_value=MigrationGuardConfig(),
+            ):
+                app = MigrationGuardApp(root)
+            app.current_result = BatchMigrationAuditResult(
+                started_at="start",
+                finished_at="finish",
+                cases=(
+                    MigrationAuditResult(
+                        source_issue="SERIA-10",
+                        target_issue="OSCOA-20",
+                        started_at="start",
+                        finished_at="finish",
+                        files=(),
+                        modules=(),
+                    ),
+                ),
+            )
+            plan = AssetMigrationPlan(
+                assets=(),
+                manual_files=(),
+                already_handled_count=0,
+            )
+            visible_text = []
+
+            def inspect_and_close() -> None:
+                for child in root.winfo_children():
+                    if not isinstance(child, Toplevel):
+                        continue
+                    for widget in _walk_widgets(child):
+                        try:
+                            text = str(widget.cget("text"))
+                        except Exception:
+                            continue
+                        visible_text.append(text)
+                        if text == "关闭":
+                            widget.invoke()
+                            return
+                root.after(20, inspect_and_close)
+
+            root.after(50, inspect_and_close)
+            selected = app._choose_migration_assets(plan)
+
+            self.assertIsNone(selected)
+            self.assertTrue(
+                any(
+                    "未找到源 SVN 变更：1 单（SERIA-10）" in text
+                    for text in visible_text
+                )
+            )
         finally:
             _destroy_root(root)
 
