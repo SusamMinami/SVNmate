@@ -13,6 +13,9 @@ import type {
   DialogueCharacterActionItem,
   DialogueCharacterActionSnapshot,
   DialogueCharacterActionTrack,
+  DialogueCameraQuickActionPreview,
+  DialogueCameraQuickActionRequest,
+  DialogueCameraQuickActionResult,
   DialogueContentBatchUpdateRequest,
   DialogueContentBatchUpdateResult,
   DialogueContentUpdateRequest,
@@ -22,6 +25,8 @@ import type {
   DialogueModelRegistrationResult,
   DialogueModelRegistrationSlot,
   DialoguePositionTimelineRow,
+  ExistingDialogueCameraNode,
+  ExistingDialogueStoryboardResult,
   MissionTargetBlueprintSyncState,
   MissionTargetBlueprintToTargetsResult,
   MissionTargetBlueprintAppendResult,
@@ -66,6 +71,10 @@ import {
 import { updateMissionTargetTransforms } from "./excelRegistration";
 import { readCharacterBodies } from "./ue/characterBody";
 import {
+  parseSelectedDialogueNodes,
+  SELECTED_GRAPH_NODES_ACTION,
+} from "./ue/dialogueSelection";
+import {
   getUnrealMcpEndpoint,
   UnrealMcpConnection,
   type UnrealInvoker,
@@ -90,6 +99,10 @@ const DIALOGUE_SEARCH_PATH = "/Game/Seria/Task/dialoggraph";
 const SOUND_EFFECT_SEARCH_PATH = "/Game/Seria/WwiseSoundData/Events";
 const DIALOG_NPC_TABLE_PATH =
   "/Game/Seria/Task/Mod/DialogNPCTable.DialogNPCTable";
+const DEFAULT_DIALOGUE_BLEND_CURVE_DIRECTORY =
+  "/Game/Seria/Task/Mod/MainQuest/DialogCurve";
+const DEFAULT_DIALOGUE_BLEND_CURVE_NAME = "trans_6015";
+const SCHOOL_CAMERA_KEYS = ["ERing", "ENino", "EJodie"] as const;
 
 function withMissionTargetOverrides(
   plan: MissionTargetPreviewPlan,
@@ -461,6 +474,41 @@ const DialogueContentUpdateRequestSchema = z.object({
 
 const DialogueContentBatchUpdateRequestSchema = z.object({
   items: z.array(DialogueContentUpdateRequestSchema).min(1).max(200),
+});
+
+const DialogueCameraQuickActionRequestSchema = z.object({
+  dialogueId: z.string().regex(/^\d{4}$/),
+  startId: z.string().regex(/^\d{4,}$/),
+  dialogueNodeId: z.string().regex(/^\d+$/),
+  previousDialogueNodeId: z.string().regex(/^\d+$/).optional(),
+  blendCurveAssetName: z
+    .string()
+    .trim()
+    .regex(/^[A-Za-z0-9_]+$/)
+    .max(128)
+    .optional(),
+  mode: z.enum([
+    "copy_previous",
+    "default",
+    "blend_curve",
+    "school_cameras",
+  ]),
+});
+
+const DialogueCameraQuickActionApplyRequestSchema =
+  DialogueCameraQuickActionRequestSchema.extend({
+    reviewToken: z.string().regex(/^[a-f0-9]{64}$/),
+  });
+
+const ExistingDialogueStoryboardRequestSchema = z.object({
+  dialogueId: z.string().regex(/^\d{4}$/),
+  startId: z.string().regex(/^\d{4,}$/),
+  dialogueIds: z.array(z.string().regex(/^\d+$/)).min(1).max(200),
+  formationClassPath: z.string().max(1024).optional(),
+  participantModelIndexes: z
+    .array(z.number().int().nonnegative())
+    .max(64)
+    .default([]),
 });
 
 const ConfigTableOpenSchema = z.object({
@@ -1363,6 +1411,20 @@ interface PreparedStoryboardExport {
   changes: StoryboardExportNodeChange[];
 }
 
+interface PreparedDialogueCameraQuickAction {
+  preview: DialogueCameraQuickActionPreview;
+  dialogueAsset: string;
+  nodeDataPath: string;
+  originalCommonProperties: ReflectedProperty[];
+  desiredCommonProperties: ReflectedProperty[];
+  originalMoveCameras: unknown[];
+  desiredMoveCameras: unknown[];
+  originalBlendCameraData: Record<string, unknown>;
+  desiredBlendCameraData: Record<string, unknown>;
+  originalSchoolMoveCamerasMap: Record<string, unknown>;
+  desiredSchoolMoveCamerasMap: Record<string, unknown>;
+}
+
 interface FormationExportLayout {
   assetPath: string;
   cameraName: string;
@@ -1684,6 +1746,55 @@ export function buildStoryboardCameraMove(
   };
 }
 
+export function buildDefaultDialogueCameraMove(): Record<string, unknown> {
+  const zeroVector = { X: 0, Y: 0, Z: 0 };
+  const zeroRotation = { Pitch: 0, Yaw: 0, Roll: 0 };
+  return {
+    CameraMoveType: "EPush",
+    RotateCameraArg: {
+      bRelative: true,
+      CenterName: "None",
+      CenterPosition: { ...zeroVector },
+      bClockWise: true,
+      Angle: 0,
+      AngularVelocity: 0,
+      StartPoint: { ...zeroVector },
+      StartPitch: 0,
+      BlendOutTime: 0,
+    },
+    PushCameraArg: {
+      bRelative: true,
+      Velocity: 1,
+      StartRotation: { ...zeroRotation },
+      EndRotation: { ...zeroRotation },
+      StartPoint: { ...zeroVector },
+      EndPoint: { ...zeroVector },
+      BlendOutTime: 1,
+      bWaitOptionShow: false,
+    },
+    LookAtArg: {
+      LookAtActor: 0,
+      DialogLookAtType: "EActor",
+      CenterOffset: { ...zeroVector },
+      bOverrideRoll: false,
+      Roll: 0,
+    },
+    LookAtPushArg: {
+      bRelative: true,
+      Velocity: 0,
+      StartPoint: { ...zeroVector },
+      EndPoint: { ...zeroVector },
+      BlendOutTime: 0,
+      LookAtActor: 0,
+      DialogLookAtType: "EActor",
+      CenterOffset: { ...zeroVector },
+      bOverrideRoll: false,
+      Roll: 0,
+    },
+    FOV: 62,
+  };
+}
+
 function validateStoryboardCoverage(request: StoryboardExportRequest): void {
   const characterActions = request.characterActions ?? [];
   const soundEffects = request.soundEffects ?? [];
@@ -1943,6 +2054,228 @@ async function readStoryboardDialogueNodes(
       };
     }),
   );
+}
+
+function unrealCameraPointToStage(
+  value: unknown,
+  layout: Pick<FormationExportLayout, "centerX" | "centerY">,
+): [number, number, number] {
+  const point = vector(value);
+  return [
+    rounded((point.y - layout.centerY) / 100),
+    rounded(point.z / 100),
+    rounded((layout.centerX - point.x) / 100),
+  ];
+}
+
+function cameraTargetFromRotation(
+  pointValue: unknown,
+  rotationValue: unknown,
+  layout: Pick<FormationExportLayout, "centerX" | "centerY">,
+): [number, number, number] {
+  const point = vector(pointValue);
+  const rotation = rotator(rotationValue);
+  const pitch = (rotation.pitch * Math.PI) / 180;
+  const yaw = (rotation.yaw * Math.PI) / 180;
+  const distance = 300;
+  return unrealCameraPointToStage(
+    {
+      X: point.x + Math.cos(pitch) * Math.cos(yaw) * distance,
+      Y: point.y + Math.cos(pitch) * Math.sin(yaw) * distance,
+      Z: point.z + Math.sin(pitch) * distance,
+    },
+    layout,
+  );
+}
+
+function focalLengthFromFov(fov: number): number {
+  if (!Number.isFinite(fov) || fov <= 0 || fov >= 179) {
+    return 50;
+  }
+  return rounded(35 / (2 * Math.tan((fov * Math.PI) / 360)));
+}
+
+function existingCameraNode(
+  node: StoryboardDialogueNodeContext,
+  layout: Pick<FormationExportLayout, "centerX" | "centerY">,
+): ExistingDialogueCameraNode | null {
+  const moveValue = node.existingMoveCameras[0];
+  if (
+    !moveValue ||
+    typeof moveValue !== "object" ||
+    Array.isArray(moveValue)
+  ) {
+    return null;
+  }
+  const move = moveValue as Record<string, unknown>;
+  if (String(move.CameraMoveType ?? "") !== "EPush") {
+    return null;
+  }
+  const push = reflectedRecord(
+    move.PushCameraArg,
+    "MoveCameras[0].PushCameraArg",
+  );
+  const startPosition = unrealCameraPointToStage(
+    push.StartPoint,
+    layout,
+  );
+  const endPosition = unrealCameraPointToStage(push.EndPoint, layout);
+  const startTarget = cameraTargetFromRotation(
+    push.StartPoint,
+    push.StartRotation,
+    layout,
+  );
+  const endTarget = cameraTargetFromRotation(
+    push.EndPoint,
+    push.EndRotation,
+    layout,
+  );
+  const distance = Math.hypot(
+    endPosition[0] - startPosition[0],
+    endPosition[1] - startPosition[1],
+    endPosition[2] - startPosition[2],
+  );
+  const velocity = Number(push.Velocity ?? 0);
+  const fov = Number(move.FOV ?? 0);
+  return {
+    dialogueId: node.dialogueId,
+    cameraName: node.existingCameraPosition,
+    moveType: "EPush",
+    cameraPosition: startPosition,
+    cameraTarget: startTarget,
+    cameraEndPosition: endPosition,
+    cameraEndTarget: endTarget,
+    focalLength: focalLengthFromFov(fov),
+    cameraRollDegrees: rotator(push.StartRotation).roll,
+    cameraMovement: distance > 0.01 ? "tracking" : "static",
+    movementIntensity:
+      distance <= 0.01 || velocity <= 0
+        ? "none"
+        : velocity >= 8
+          ? "strong"
+          : velocity >= 5
+            ? "moderate"
+            : "subtle",
+  };
+}
+
+export async function readExistingDialogueStoryboard(
+  rawRequest: unknown,
+  connectionFactory: () => UnrealInvoker = () => new UnrealMcpConnection(),
+): Promise<ExistingDialogueStoryboardResult> {
+  const request = ExistingDialogueStoryboardRequestSchema.parse(
+    rawRequest,
+  );
+  const unavailable = (message: string): ExistingDialogueStoryboardResult => ({
+    status: "unavailable",
+    dialogueAssetPath: "",
+    nodes: [],
+    warnings: [],
+    message,
+  });
+  const connection = connectionFactory();
+  try {
+    await connection.connect();
+  } catch {
+    return unavailable("未连接 UE4 编辑器，仅显示对白文字");
+  }
+  try {
+    const dialogueAssets = await findDialogueAssetPath(
+      connection,
+      request.startId,
+    );
+    if (dialogueAssets.length !== 1) {
+      return unavailable(
+        dialogueAssets.length === 0
+          ? `UE 中未找到对话资产 ${request.startId}`
+          : `UE 中存在多个对话资产 ${request.startId}`,
+      );
+    }
+    const dialogueAssetPath = dialogueAssets[0];
+    const exportedText = await exportAssetText(
+      connection,
+      dialogueAssetPath,
+    );
+    const nodes = await readStoryboardDialogueNodes(
+      connection,
+      dialogueAssetPath,
+      request.dialogueIds,
+      exportedText,
+      { readCamera: true, readCharacterActions: false },
+    );
+    const cameraNodes = nodes.filter(
+      (node) =>
+        node.existingCameraPosition.trim() ||
+        node.existingMoveCameras.length > 0,
+    );
+    if (cameraNodes.length === 0) {
+      return {
+        status: "empty",
+        dialogueAssetPath,
+        nodes: [],
+        warnings: [],
+        message: "对话已加载，UE 中没有已有镜头数据",
+      };
+    }
+    const warnings: string[] = [];
+    let layout: Pick<FormationExportLayout, "centerX" | "centerY"> = {
+      centerX: 0,
+      centerY: 0,
+    };
+    try {
+      layout = await readFormationExportLayout(
+        connection,
+        request.startId,
+        request.formationClassPath ?? "",
+        request.participantModelIndexes,
+        true,
+        true,
+      );
+    } catch (error) {
+      warnings.push(
+        `Formation BP 无法提供预览坐标基准，镜头暂按 UE 原点显示：${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+    const importedNodes = cameraNodes.flatMap((node) => {
+      try {
+        const imported = existingCameraNode(node, layout);
+        if (!imported) {
+          warnings.push(
+            `节点 ${node.dialogueId} 的镜头类型暂不支持预览`,
+          );
+          return [];
+        }
+        return [imported];
+      } catch (error) {
+        warnings.push(
+          `节点 ${node.dialogueId} 镜头读取失败：${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+        return [];
+      }
+    });
+    return {
+      status: importedNodes.length > 0 ? "found" : "empty",
+      dialogueAssetPath,
+      nodes: importedNodes,
+      warnings,
+      message:
+        importedNodes.length > 0
+          ? `已从 UE 读取 ${importedNodes.length} 个已有镜头`
+          : "检测到镜头配置，但当前类型暂不支持沙盘预览",
+    };
+  } catch (error) {
+    return unavailable(
+      error instanceof Error
+        ? `已有镜头读取失败：${error.message}`
+        : "已有镜头读取失败",
+    );
+  } finally {
+    connection.close();
+  }
 }
 
 export async function readDialogueCharacterActions(
@@ -3101,6 +3434,592 @@ export async function exportDialogueStoryboard(
       changedSoundEffectCount:
         prepared.preview.changedSoundEffectCount,
       changedMusicCount: prepared.preview.changedMusicCount ?? 0,
+      saved: true,
+    };
+  } finally {
+    connection.close();
+  }
+}
+
+function cameraMovePreview(
+  moves: unknown[],
+): Pick<
+  DialogueCameraQuickActionPreview,
+  "cameraMoveType" | "velocity" | "blendOutTime" | "fov"
+> {
+  const move =
+    moves[0] && typeof moves[0] === "object"
+      ? moves[0] as Record<string, unknown>
+      : null;
+  const push =
+    move?.PushCameraArg && typeof move.PushCameraArg === "object"
+      ? move.PushCameraArg as Record<string, unknown>
+      : null;
+  const finiteNumber = (value: unknown): number | null => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+  return {
+    cameraMoveType: String(move?.CameraMoveType ?? ""),
+    velocity: finiteNumber(push?.Velocity),
+    blendOutTime: finiteNumber(push?.BlendOutTime),
+    fov: finiteNumber(move?.FOV),
+  };
+}
+
+function reflectedRecord(
+  value: unknown,
+  propertyName: string,
+): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`UE 节点属性 ${propertyName} 不是对象`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function reflectedSchoolCameraValues(
+  value: Record<string, unknown>,
+): unknown[] {
+  return reflectedArray(value.Values ?? [], "SchoolMoveCamerasMap.Values");
+}
+
+function schoolCameraMapMismatch(
+  actual: unknown,
+  expected: Record<string, unknown>,
+): string | null {
+  const actualRecord = reflectedRecord(actual, "SchoolMoveCamerasMap");
+  const actualValues = reflectedSchoolCameraValues(actualRecord);
+  const expectedValues = reflectedSchoolCameraValues(expected);
+  const valuesMismatch = unrealValueMismatch(
+    actualValues,
+    expectedValues,
+    "SchoolMoveCamerasMap.Values",
+  );
+  if (valuesMismatch) {
+    return valuesMismatch;
+  }
+  const actualKeys = reflectedArray(
+    actualRecord.Keys ?? [],
+    "SchoolMoveCamerasMap.Keys",
+  );
+  const expectedKeys = reflectedArray(
+    expected.Keys ?? [],
+    "SchoolMoveCamerasMap.Keys",
+  );
+  if (actualKeys.length !== expectedKeys.length) {
+    return `SchoolMoveCamerasMap.Keys 期望 ${expectedKeys.length} 项，回读 ${actualKeys.length} 项`;
+  }
+  // OmniMcpCore 4.27 currently serializes ESchoolType map keys as empty
+  // strings. Compare keys when available, while always validating value order.
+  return actualKeys.every((key) => String(key).length > 0)
+    ? unrealValueMismatch(
+        actualKeys,
+        expectedKeys,
+        "SchoolMoveCamerasMap.Keys",
+      )
+    : null;
+}
+
+async function resolveDialogueBlendCurve(
+  connection: UnrealInvoker,
+  assetName: string,
+): Promise<string> {
+  const assetPath =
+    `${DEFAULT_DIALOGUE_BLEND_CURVE_DIRECTORY}/${assetName}.${assetName}`;
+  const asset = await connection.invoke("asset.get_asset_by_path", {
+    AssetPath: assetPath,
+  });
+  if (!hasUnrealObjectReference(asset)) {
+    throw new Error(`未找到镜头混合曲线 ${assetName}`);
+  }
+  return assetPath;
+}
+
+async function prepareDialogueCameraQuickAction(
+  connection: UnrealInvoker,
+  request: DialogueCameraQuickActionRequest,
+): Promise<PreparedDialogueCameraQuickAction> {
+  if (
+    !request.startId.startsWith(request.dialogueId) ||
+    !request.dialogueNodeId.startsWith(request.dialogueId) ||
+    (request.previousDialogueNodeId &&
+      !request.previousDialogueNodeId.startsWith(request.dialogueId))
+  ) {
+    throw new Error("镜头快捷操作中的节点不属于当前四位数对话 ID");
+  }
+  if (
+    request.mode === "copy_previous" &&
+    !request.previousDialogueNodeId
+  ) {
+    throw new Error("当前节点没有可用的上一对话节点");
+  }
+  const dialogueAssets = await findDialogueAssetPath(
+    connection,
+    request.startId,
+  );
+  if (dialogueAssets.length === 0) {
+    throw new Error(`未找到对话资产 ${request.startId}`);
+  }
+  if (dialogueAssets.length > 1) {
+    throw new Error(
+      `找到多个名为 ${request.startId} 的对话资产，无法自动确认`,
+    );
+  }
+  const dialogueAssetPath = dialogueAssets[0];
+  const dialogueAsset = await connection.invoke(
+    "asset.get_asset_by_path",
+    { AssetPath: dialogueAssetPath },
+  );
+  if (!hasUnrealObjectReference(dialogueAsset)) {
+    throw new Error(`无法加载对话资产：${dialogueAssetPath}`);
+  }
+  const exportedText = await exportAssetText(
+    connection,
+    dialogueAssetPath,
+  );
+  const requestedNodeIds = [
+    request.dialogueNodeId,
+    ...(request.mode === "copy_previous" &&
+    request.previousDialogueNodeId
+      ? [request.previousDialogueNodeId]
+      : []),
+  ];
+  const nodes = await readStoryboardDialogueNodes(
+    connection,
+    dialogueAssetPath,
+    requestedNodeIds,
+    exportedText,
+    { readCamera: true, readCharacterActions: false },
+  );
+  const currentNode = nodes[0];
+  const sourceNode =
+    request.mode === "copy_previous" ? nodes[1] : null;
+  if (
+    sourceNode &&
+    !sourceNode.existingCameraPosition.trim() &&
+    sourceNode.existingMoveCameras.length === 0
+  ) {
+    throw new Error(
+      `上一节点 ${sourceNode.dialogueId} 没有相机数据，请改用“添加默认镜头”`,
+    );
+  }
+
+  const [blendCameraValue, schoolCameraValue] = await Promise.all([
+    readProperty(
+      connection,
+      currentNode.nodeDataPath,
+      "DialogBlendCameraData",
+    ),
+    readProperty(
+      connection,
+      currentNode.nodeDataPath,
+      "SchoolMoveCamerasMap",
+    ),
+  ]);
+  const originalBlendCameraData = reflectedRecord(
+    blendCameraValue,
+    "DialogBlendCameraData",
+  );
+  const originalSchoolMoveCamerasMap = reflectedRecord(
+    schoolCameraValue,
+    "SchoolMoveCamerasMap",
+  );
+  let desiredCameraPosition = currentNode.existingCameraPosition;
+  let desiredMoveCameras = clonedValue(
+    currentNode.existingMoveCameras,
+  );
+  let desiredBlendCameraData = clonedValue(
+    originalBlendCameraData,
+  );
+  let desiredSchoolMoveCamerasMap = clonedValue(
+    originalSchoolMoveCamerasMap,
+  );
+
+  if (request.mode === "copy_previous" && sourceNode) {
+    desiredCameraPosition = sourceNode.existingCameraPosition;
+    desiredMoveCameras = clonedValue(sourceNode.existingMoveCameras);
+  } else if (request.mode === "default") {
+    const exportedDialogue = parseDialogueExport(exportedText);
+    const layout = await readFormationExportLayout(
+      connection,
+      request.startId,
+      exportedDialogue.formationClassPath ?? "",
+      [],
+      true,
+      false,
+    );
+    desiredCameraPosition = layout.cameraName;
+    desiredMoveCameras = [buildDefaultDialogueCameraMove()];
+  } else if (request.mode === "blend_curve") {
+    const curveName =
+      request.blendCurveAssetName ?? DEFAULT_DIALOGUE_BLEND_CURVE_NAME;
+    desiredBlendCameraData = {
+      ...desiredBlendCameraData,
+      DialogBlendCameraType: "EBlend",
+      BlendCurve: await resolveDialogueBlendCurve(
+        connection,
+        curveName,
+      ),
+    };
+  } else if (request.mode === "school_cameras") {
+    if (currentNode.existingMoveCameras.length === 0) {
+      throw new Error(
+        "当前节点没有主 MoveCameras，请先添加或沿用一个镜头",
+      );
+    }
+    if (
+      reflectedSchoolCameraValues(originalSchoolMoveCamerasMap).length >
+      0
+    ) {
+      throw new Error(
+        "当前节点已有角色相机配置，为避免覆盖现有职业映射已停止写入",
+      );
+    }
+    desiredSchoolMoveCamerasMap = {
+      Keys: [...SCHOOL_CAMERA_KEYS],
+      Values: SCHOOL_CAMERA_KEYS.map(() => ({
+        MoveCameras: clonedValue(currentNode.existingMoveCameras),
+      })),
+    };
+  }
+
+  const desiredCommonProperties = clonedValue(
+    currentNode.commonProperties,
+  );
+  desiredCommonProperties[
+    currentNode.cameraPropertyIndex
+  ].CurrentString = desiredCameraPosition;
+  const changed =
+    unrealValueMismatch(
+      currentNode.commonProperties,
+      desiredCommonProperties,
+      "CommonDialogGraphProperties",
+    ) !== null ||
+    unrealValueMismatch(
+      currentNode.existingMoveCameras,
+      desiredMoveCameras,
+      "MoveCameras",
+    ) !== null ||
+    unrealValueMismatch(
+      originalBlendCameraData,
+      desiredBlendCameraData,
+      "DialogBlendCameraData",
+    ) !== null ||
+    schoolCameraMapMismatch(
+      originalSchoolMoveCamerasMap,
+      desiredSchoolMoveCamerasMap,
+    ) !== null;
+  const dialoguePackagePath = dialogueAssetPath.split(".")[0];
+  const dirtyPackages = new Set(
+    (await dirtyContentPackages(connection)).map((path) =>
+      path.toLowerCase(),
+    ),
+  );
+  const blockedReasons = dirtyPackages.has(
+    dialoguePackagePath.toLowerCase(),
+  )
+    ? [
+        `对话资产 ${dialoguePackagePath} 存在未保存修改，请先在 UE 中保存或撤销`,
+      ]
+    : [];
+  const reviewToken = createHash("sha256")
+    .update(
+      JSON.stringify({
+        dialogueAssetPath,
+        request,
+        originalCommonProperties: currentNode.commonProperties,
+        originalMoveCameras: currentNode.existingMoveCameras,
+        originalBlendCameraData,
+        originalSchoolMoveCamerasMap,
+        desiredCommonProperties,
+        desiredMoveCameras,
+        desiredBlendCameraData,
+        desiredSchoolMoveCamerasMap,
+      }),
+    )
+    .digest("hex");
+
+  return {
+    preview: {
+      reviewToken,
+      dialogueId: request.dialogueId,
+      startId: request.startId,
+      dialogueNodeId: request.dialogueNodeId,
+      dialogueAssetPath,
+      mode: request.mode,
+      sourceDialogueNodeId: sourceNode?.dialogueId ?? null,
+      existingCameraPosition: currentNode.existingCameraPosition,
+      desiredCameraPosition,
+      existingMoveCount: currentNode.existingMoveCameras.length,
+      desiredMoveCount: desiredMoveCameras.length,
+      ...cameraMovePreview(desiredMoveCameras),
+      existingBlendCameraType: String(
+        originalBlendCameraData.DialogBlendCameraType ?? "",
+      ),
+      desiredBlendCameraType: String(
+        desiredBlendCameraData.DialogBlendCameraType ?? "",
+      ),
+      existingBlendCurve: String(
+        originalBlendCameraData.BlendCurve ?? "",
+      ),
+      desiredBlendCurve: String(
+        desiredBlendCameraData.BlendCurve ?? "",
+      ),
+      blendDuration:
+        Number(desiredBlendCameraData.Duration) || 0,
+      desiredSchoolCameraKeys:
+        request.mode === "school_cameras"
+          ? [...SCHOOL_CAMERA_KEYS]
+          : [],
+      existingSchoolCameraCount: reflectedSchoolCameraValues(
+        originalSchoolMoveCamerasMap,
+      ).length,
+      desiredSchoolCameraCount: reflectedSchoolCameraValues(
+        desiredSchoolMoveCamerasMap,
+      ).length,
+      changed,
+      blockedReasons,
+    },
+    dialogueAsset: String(dialogueAsset),
+    nodeDataPath: currentNode.nodeDataPath,
+    originalCommonProperties: currentNode.commonProperties,
+    desiredCommonProperties,
+    originalMoveCameras: currentNode.existingMoveCameras,
+    desiredMoveCameras,
+    originalBlendCameraData,
+    desiredBlendCameraData,
+    originalSchoolMoveCamerasMap,
+    desiredSchoolMoveCamerasMap,
+  };
+}
+
+export async function inspectDialogueCameraQuickAction(
+  rawRequest: unknown,
+  connectionFactory: () => UnrealInvoker = () => new UnrealMcpConnection(),
+): Promise<DialogueCameraQuickActionPreview> {
+  const request = DialogueCameraQuickActionRequestSchema.parse(
+    rawRequest,
+  ) as DialogueCameraQuickActionRequest;
+  const connection = connectionFactory();
+  await connectUnreal(connection);
+  try {
+    return (
+      await prepareDialogueCameraQuickAction(connection, request)
+    ).preview;
+  } finally {
+    connection.close();
+  }
+}
+
+export async function applyDialogueCameraQuickAction(
+  rawRequest: unknown,
+  connectionFactory: () => UnrealInvoker = () => new UnrealMcpConnection(),
+): Promise<DialogueCameraQuickActionResult> {
+  const parsed = DialogueCameraQuickActionApplyRequestSchema.parse(
+    rawRequest,
+  );
+  const { reviewToken, ...requestValue } = parsed;
+  const request = requestValue as DialogueCameraQuickActionRequest;
+  const connection = connectionFactory();
+  await connectUnreal(connection);
+  try {
+    const selectedNodes = parseSelectedDialogueNodes(
+      await connection.invoke(SELECTED_GRAPH_NODES_ACTION, {}),
+    );
+    if (
+      selectedNodes.length !== 1 ||
+      selectedNodes[0].dialogueNodeId !== request.dialogueNodeId
+    ) {
+      throw new Error(
+        "UE 当前选中节点已变化，请重新选择目标节点并再次检查",
+      );
+    }
+    const prepared = await prepareDialogueCameraQuickAction(
+      connection,
+      request,
+    );
+    if (prepared.preview.reviewToken !== reviewToken) {
+      throw new Error("UE 中的节点相机数据已变化，请重新检查后再写入");
+    }
+    if (prepared.preview.blockedReasons.length > 0) {
+      throw new Error(prepared.preview.blockedReasons.join("；"));
+    }
+    if (!prepared.preview.changed) {
+      return {
+        status: "unchanged",
+        dialogueId: request.dialogueId,
+        startId: request.startId,
+        dialogueNodeId: request.dialogueNodeId,
+        dialogueAssetPath: prepared.preview.dialogueAssetPath,
+        mode: request.mode,
+        saved: false,
+      };
+    }
+
+    const writeCommonProperties =
+      unrealValueMismatch(
+        prepared.originalCommonProperties,
+        prepared.desiredCommonProperties,
+        "CommonDialogGraphProperties",
+      ) !== null;
+    const writeMoveCameras =
+      unrealValueMismatch(
+        prepared.originalMoveCameras,
+        prepared.desiredMoveCameras,
+        "MoveCameras",
+      ) !== null;
+    const writeBlendCameraData =
+      unrealValueMismatch(
+        prepared.originalBlendCameraData,
+        prepared.desiredBlendCameraData,
+        "DialogBlendCameraData",
+      ) !== null;
+    const writeSchoolMoveCamerasMap =
+      schoolCameraMapMismatch(
+        prepared.originalSchoolMoveCamerasMap,
+        prepared.desiredSchoolMoveCamerasMap,
+      ) !== null;
+    const writtenProperties: string[] = [];
+    try {
+      if (writeCommonProperties) {
+        writtenProperties.push("CommonDialogGraphProperties");
+        await connection.invoke("reflect.write_object_property", {
+          ThisPtr: prepared.nodeDataPath,
+          PropertyName: "CommonDialogGraphProperties",
+          Value: prepared.desiredCommonProperties,
+        });
+      }
+      if (writeMoveCameras) {
+        writtenProperties.push("MoveCameras");
+        await connection.invoke("reflect.write_object_property", {
+          ThisPtr: prepared.nodeDataPath,
+          PropertyName: "MoveCameras",
+          Value: prepared.desiredMoveCameras,
+        });
+      }
+      if (writeBlendCameraData) {
+        writtenProperties.push("DialogBlendCameraData");
+        await connection.invoke("reflect.write_object_property", {
+          ThisPtr: prepared.nodeDataPath,
+          PropertyName: "DialogBlendCameraData",
+          Value: prepared.desiredBlendCameraData,
+        });
+      }
+      if (writeSchoolMoveCamerasMap) {
+        writtenProperties.push("SchoolMoveCamerasMap");
+        await connection.invoke("reflect.write_object_property", {
+          ThisPtr: prepared.nodeDataPath,
+          PropertyName: "SchoolMoveCamerasMap",
+          Value: prepared.desiredSchoolMoveCamerasMap,
+        });
+      }
+      const [
+        commonProperties,
+        moveCameras,
+        blendCameraData,
+        schoolMoveCamerasMap,
+      ] = await Promise.all([
+        readProperty(
+          connection,
+          prepared.nodeDataPath,
+          "CommonDialogGraphProperties",
+        ),
+        readProperty(connection, prepared.nodeDataPath, "MoveCameras"),
+        readProperty(
+          connection,
+          prepared.nodeDataPath,
+          "DialogBlendCameraData",
+        ),
+        readProperty(
+          connection,
+          prepared.nodeDataPath,
+          "SchoolMoveCamerasMap",
+        ),
+      ]);
+      const mismatch =
+        (writeCommonProperties
+          ? unrealValueMismatch(
+              commonProperties,
+              prepared.desiredCommonProperties,
+              "CommonDialogGraphProperties",
+            )
+          : null) ??
+        (writeMoveCameras
+          ? unrealValueMismatch(
+              moveCameras,
+              prepared.desiredMoveCameras,
+              "MoveCameras",
+            )
+          : null) ??
+        (writeBlendCameraData
+          ? unrealValueMismatch(
+              blendCameraData,
+              prepared.desiredBlendCameraData,
+              "DialogBlendCameraData",
+            )
+          : null) ??
+        (writeSchoolMoveCamerasMap
+          ? schoolCameraMapMismatch(
+              schoolMoveCamerasMap,
+              prepared.desiredSchoolMoveCamerasMap,
+            )
+          : null);
+      if (mismatch) {
+        throw new Error(
+          `台词节点 ${request.dialogueNodeId} 写入后的回读结果不一致：${mismatch}`,
+        );
+      }
+      const saveResult = await connection.invoke("asset.save_asset", {
+        Asset:
+          prepared.dialogueAsset ||
+          prepared.preview.dialogueAssetPath,
+      });
+      if (saveResult === false) {
+        throw new Error(
+          `对话资产保存失败：${prepared.preview.dialogueAssetPath}`,
+        );
+      }
+    } catch (error) {
+      if (writtenProperties.length > 0) {
+        const recoveryFailures: string[] = [];
+        const originals: Record<string, unknown> = {
+          CommonDialogGraphProperties:
+            prepared.originalCommonProperties,
+          MoveCameras: prepared.originalMoveCameras,
+          DialogBlendCameraData: prepared.originalBlendCameraData,
+          SchoolMoveCamerasMap:
+            prepared.originalSchoolMoveCamerasMap,
+        };
+        for (const propertyName of writtenProperties.reverse()) {
+          await connection
+            .invoke("reflect.write_object_property", {
+              ThisPtr: prepared.nodeDataPath,
+              PropertyName: propertyName,
+              Value: originals[propertyName],
+            })
+            .catch((recoveryError) =>
+              recoveryFailures.push(
+                `${propertyName} 恢复失败：${String(recoveryError)}`,
+              ),
+            );
+        }
+        throw new Error(
+          `${error instanceof Error ? error.message : "节点镜头写入失败"}${
+            recoveryFailures.length > 0
+              ? `；恢复失败，请立即在 UE 中检查：${recoveryFailures.join("；")}`
+              : "；已恢复本轮未保存修改"
+          }`,
+        );
+      }
+      throw error;
+    }
+    return {
+      status: "updated",
+      dialogueId: request.dialogueId,
+      startId: request.startId,
+      dialogueNodeId: request.dialogueNodeId,
+      dialogueAssetPath: prepared.preview.dialogueAssetPath,
+      mode: request.mode,
       saved: true,
     };
   } finally {

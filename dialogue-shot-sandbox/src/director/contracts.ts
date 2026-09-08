@@ -101,6 +101,20 @@ export const RULE_BEAT_COVERAGE_STRATEGIES = [
   "reestablish",
 ] as const;
 
+export const RULE_DIALOGUE_ISSUE_CATEGORIES = [
+  "clarity",
+  "continuity",
+  "character_voice",
+  "redundancy",
+  "pacing",
+  "logic",
+] as const;
+
+export const RULE_DIALOGUE_ISSUE_SEVERITIES = [
+  "note",
+  "warning",
+] as const;
+
 export const COMPOSITION_TRANSITIONS = [
   "recenter",
   "match_eye_trace",
@@ -603,6 +617,15 @@ export interface RuleBeatAdvice {
     focus_slot?: ParticipantSlot;
     reason: string;
   }>;
+  dialogue_issues?: RuleDialogueIssue[];
+}
+
+export interface RuleDialogueIssue {
+  dialogue_id: string;
+  category: (typeof RULE_DIALOGUE_ISSUE_CATEGORIES)[number];
+  severity: (typeof RULE_DIALOGUE_ISSUE_SEVERITIES)[number];
+  reason: string;
+  suggestion?: string;
 }
 
 export function directorDialogueParticipants(

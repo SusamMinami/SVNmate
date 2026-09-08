@@ -27,7 +27,6 @@ import { routeLarkRequest } from "../server/larkBridge";
 import { routeRuleAdvisorRequest } from "../server/ruleAdvisorBridge";
 import {
   downloadRuleAdvisorModel,
-  ensureRuleAdvisorRuntime,
   inspectRuleAdvisorModel,
   stopManagedRuleAdvisorRuntime,
   type RuleAdvisorModelSnapshot,
@@ -157,6 +156,14 @@ function configureRuntimeEnvironment(): void {
   process.env.STORYBOARD_MCP_URL = `http://127.0.0.1:${DESKTOP_PORT}/mcp`;
   process.env.STORYBOARD_MCP_COMMAND = executable;
   process.env.STORYBOARD_MCP_ARGS_JSON = JSON.stringify(mcpArguments);
+  if (app.isPackaged && !process.env.RULE_ADVISOR_RUNTIME_PATH) {
+    process.env.RULE_ADVISOR_RUNTIME_PATH = join(
+      process.resourcesPath,
+      "tools",
+      "ollama",
+      "ollama.exe",
+    );
+  }
 }
 
 async function pathExists(path: string): Promise<boolean> {
@@ -950,11 +957,6 @@ async function runDesktop(): Promise<void> {
   }
   await app.whenReady();
   configureRuntimeEnvironment();
-  await ensureRuleAdvisorRuntime({
-    bundledExecutable: app.isPackaged
-      ? join(process.resourcesPath, "tools", "ollama", "ollama.exe")
-      : undefined,
-  });
   const desktopState = await readDesktopState();
   configureUnrealMcpPort(desktopState.ueMcpPort);
   if (desktopState.liveResDirectory) {

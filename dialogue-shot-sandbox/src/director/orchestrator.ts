@@ -15,18 +15,22 @@ import {
   type ReadyDirectorResponse,
   type DirectorSceneAnalysis,
   type DirectorSoundEffectRecommendation,
+  type RuleBeatAdvice,
+  type RuleDialogueIssue,
   type SharedStoryboardConflict,
   type ShotDirectorProvider,
 } from "./contracts";
 import { MiraDirectorProvider } from "./miraDirector";
 import {
-  applyRuleAdvice,
+  applyRuleCandidateRanking,
   requestRuleAdvice,
   requestRuleBeatAdvice,
 } from "./ruleAdvisor";
+import { generateRuleCameraCandidates } from "./shotCandidateGenerator";
+import type { RuleAdvisorProgress } from "./ruleAdvisorContracts";
 import { RuleDirectorProvider } from "./ruleDirector";
 import { resolveShotDecisions } from "./shotResolver";
-import { resolveRuleShotsWithAdvice } from "./shotPlanner";
+import { resolveRulePlanWithRetry } from "./shotPlanner";
 import { resolveSoundEffectRecommendations } from "./soundEffectRecommender";
 import { TraeDirectorProvider } from "./traeDirector";
 
@@ -58,6 +62,17 @@ export interface DirectorRunResult {
   rawPlan?: ReadyDirectorResponse;
   sharedSource?: "generated" | "local-cache" | "shared-library";
   sharedConflict?: SharedStoryboardConflict;
+  ruleAdvisor?: RuleAdvisorRunSummary;
+  dialogueIssues: RuleDialogueIssue[];
+}
+
+export interface RuleAdvisorRunSummary {
+  state: "applied" | "reviewed" | "partial" | "unavailable" | "disabled";
+  model: string | null;
+  reviewedShotCount: number;
+  candidateCount: number;
+  selectedAlternativeCount: number;
+  message: string;
 }
 
 interface DirectorRunOptions {
@@ -69,6 +84,8 @@ interface DirectorRunOptions {
   forceRegenerate?: boolean;
   signal?: AbortSignal;
   useRuleAdvisor?: boolean;
+  onRuleAdvisorProgress?: (progress: RuleAdvisorProgress) => void;
+  onRuleBeatAdvice?: (advice: RuleBeatAdvice) => void;
   onRequestCreated?: (input: DirectorInput) => void;
 }
 
@@ -90,10 +107,24 @@ async function runProvider(
     soundEffectCatalog: options.soundEffectCatalog,
   });
   options.onRequestCreated?.(input);
+  if (mode === "rule" && options.useRuleAdvisor !== false) {
+    options.onRuleAdvisorProgress?.({
+      request_id: input.request_id,
+      stage: "beats",
+      completed: 0,
+      total: 1,
+      current_shot_index: null,
+      current_candidate_label: null,
+      message: "端侧模型正在分析连续叙事节拍",
+    });
+  }
   const beatAdvice =
     mode === "rule" && options.useRuleAdvisor !== false
       ? await requestRuleBeatAdvice(input, options.signal)
       : null;
+  if (beatAdvice) {
+    options.onRuleBeatAdvice?.(beatAdvice);
+  }
   const providerResult = await providers[mode].design(input, {
     forceRegenerate: options.forceRegenerate,
     signal: options.signal,
@@ -109,16 +140,35 @@ async function runProvider(
   const stagedSequence = { ...sequence, participants };
   let analysis = providerResult.analysis;
   let shots: ShotPlan[];
+  let ruleAdvisor: RuleAdvisorRunSummary | undefined;
   if (mode === "rule") {
-    const baselineDecisions = providerResult.decisions;
-    const baselineShots = resolveRuleShotsWithAdvice(
+    const baseline = resolveRulePlanWithRetry(
       stagedSequence,
-      baselineDecisions,
+      providerResult.decisions,
     );
-    const candidateVisuals =
+    const baselineDecisions = baseline.decisions;
+    const baselineShots = baseline.shots;
+    options.onRuleAdvisorProgress?.({
+      request_id: input.request_id,
+      stage: "generating_candidates",
+      completed: 0,
+      total: baselineShots.length,
+      current_shot_index: null,
+      current_candidate_label: null,
+      message: `几何系统正在为 ${baselineShots.length} 个镜头生成合法机位`,
+    });
+    const candidateSets =
       options.useRuleAdvisor === false
+        ? []
+        : generateRuleCameraCandidates(
+            stagedSequence,
+            baselineDecisions,
+            baselineShots,
+          );
+    const candidateVisuals =
+      candidateSets.length === 0
         ? null
-        : renderRuleCandidateFrames(participants, baselineShots);
+        : renderRuleCandidateFrames(participants, candidateSets);
     const stagedInput: DirectorInput = {
       ...input,
       participants: input.participants.map((participant) => {
@@ -141,22 +191,77 @@ async function runProvider(
             { decisions: baselineDecisions, analysis },
             candidateVisuals,
             options.signal,
+            options.onRuleAdvisorProgress,
           )
         : null;
     if (advice && analysis) {
-      const advised = applyRuleAdvice(
-        stagedInput,
-        { decisions: baselineDecisions, analysis },
+      const ranked = applyRuleCandidateRanking(
+        stagedSequence,
+        {
+          decisions: baselineDecisions,
+          shots: baselineShots,
+          analysis,
+        },
+        candidateSets,
         advice,
       );
-      shots = resolveRuleShotsWithAdvice(
-        stagedSequence,
-        advised.decisions,
-        baselineDecisions,
-      );
-      analysis = advised.analysis;
+      shots = ranked.shots;
+      analysis = ranked.analysis;
+      ruleAdvisor = {
+        state:
+          ranked.selectedAlternativeCount > 0 ? "applied" : "reviewed",
+        model: ranked.model,
+        reviewedShotCount: ranked.reviewedShotCount,
+        candidateCount: ranked.candidateCount,
+        selectedAlternativeCount: ranked.selectedAlternativeCount,
+        message:
+          ranked.selectedAlternativeCount > 0
+            ? `已逐镜评分，${ranked.selectedAlternativeCount} 镜采用 VLM 首选机位`
+            : "已逐镜评分，规则基线在全部镜头中胜出",
+      };
+      options.onRuleAdvisorProgress?.({
+        request_id: input.request_id,
+        stage: "complete",
+        completed: ranked.candidateCount,
+        total: ranked.candidateCount,
+        current_shot_index: null,
+        current_candidate_label: null,
+        message: ruleAdvisor.message,
+      });
     } else {
       shots = baselineShots;
+      ruleAdvisor =
+        options.useRuleAdvisor === false
+          ? {
+              state: "disabled",
+              model: null,
+              reviewedShotCount: 0,
+              candidateCount: 0,
+              selectedAlternativeCount: 0,
+              message: "本次规则重算未调用端侧模型",
+            }
+          : {
+              state: beatAdvice ? "partial" : "unavailable",
+              model: null,
+              reviewedShotCount: 0,
+              candidateCount: candidateSets.reduce(
+                (sum, set) => sum + set.candidates.length,
+                0,
+              ),
+              selectedAlternativeCount: 0,
+              message: beatAdvice
+                ? "端侧节拍已参与，视觉候选评分未完成"
+                : "端侧模型未返回有效结果，已保留规则基线",
+            };
+      options.onRuleAdvisorProgress?.({
+        request_id: input.request_id,
+        stage: "unavailable",
+        completed: 0,
+        total: ruleAdvisor.candidateCount,
+        current_shot_index: null,
+        current_candidate_label: null,
+        message: ruleAdvisor.message,
+      });
     }
   } else {
     shots = resolveShotDecisions(stagedSequence, providerResult.decisions);
@@ -175,6 +280,8 @@ async function runProvider(
     rawPlan: providerResult.rawPlan,
     sharedSource: providerResult.sharedSource,
     sharedConflict: providerResult.sharedConflict,
+    ruleAdvisor,
+    dialogueIssues: beatAdvice?.dialogue_issues ?? [],
   };
 }
 
@@ -355,6 +462,7 @@ export function createSharedPlanPreview(
       input,
       rawPlan: plan,
       sharedSource: "shared-library",
+      dialogueIssues: [],
     },
   };
 }

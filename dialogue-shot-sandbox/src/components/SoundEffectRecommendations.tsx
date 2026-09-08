@@ -19,7 +19,7 @@ interface SoundEffectRecommendationsProps {
   currentDialogueIds: string[];
   busy: boolean;
   playbackActive: boolean;
-  onPlaybackStart: () => void;
+  onPlaybackStart: (label: string) => void;
   onPlaybackStop: () => void;
   onWrite: () => void;
   onChange: (
@@ -88,11 +88,6 @@ export function SoundEffectRecommendations({
     .join("|")}`;
 
   useEffect(() => {
-    prepareRequestRef.current += 1;
-    audioRef.current?.pause();
-    audioRef.current = null;
-    setPlaying(null);
-    setPreparing(null);
     setPlaybackError("");
     const assetNames = Array.from(
       new Set(
@@ -180,7 +175,7 @@ export function SoundEffectRecommendations({
     setPlaying(null);
     setPreparing(key);
     setPlaybackError("");
-    onPlaybackStart();
+    onPlaybackStart(recommendation.assetName);
     const requestId = ++prepareRequestRef.current;
     try {
       const preview = await prepareSoundEffectPreview(

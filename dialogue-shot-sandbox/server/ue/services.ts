@@ -29,12 +29,14 @@ import {
 } from "../npcSupplement";
 import { readSceneReference } from "./sceneReference";
 import {
+  applyDialogueCameraQuickAction,
   appendMissionTargetBlueprint,
   applyBackgroundPropImport,
   clearMissionTargetPreview,
   exportDialogueStoryboard,
   inspectBackgroundPropImport,
   inspectDialogueStoryboardExport,
+  inspectDialogueCameraQuickAction,
   inspectMissionTargetBlueprint,
   inspectMissionTargetBlueprintCompatibility,
   inspectMissionTargetMap,
@@ -43,6 +45,7 @@ import {
   populateMissionTargetBlueprint,
   readBlueprintFormation,
   readDialogueCharacterActions,
+  readExistingDialogueStoryboard,
   readSelectedLevelActors,
   registerBlueprintDialogueModels,
   scanSelectedNpcRegistration,
@@ -51,9 +54,13 @@ import {
   updateDialogueContents,
   updateMissionTargetBlueprintPositions,
 } from "../ueBridge";
+import { readSelectedDialogueNode } from "./dialogueSelection";
 
 export const ueServices = {
   readSceneReference,
+  readSelectedDialogueNode,
+  readExistingDialogueStoryboard,
+  applyDialogueCameraQuickAction,
   appendMissionTargetBlueprint,
   applyDialogNpcTableRegistration,
   applyNpcAssetMigration,
@@ -64,6 +71,7 @@ export const ueServices = {
   exportDialogueStoryboard,
   inspectBackgroundPropImport,
   inspectDialogNpcTableRegistration,
+  inspectDialogueCameraQuickAction,
   inspectDialogueStoryboardExport,
   inspectMissionTargetBlueprint,
   inspectMissionTargetBlueprintCompatibility,

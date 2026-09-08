@@ -651,6 +651,103 @@ export interface DialogueContentBatchUpdateResult {
   items: DialogueContentUpdateResult[];
 }
 
+export type DialogueCameraQuickActionMode =
+  | "copy_previous"
+  | "default"
+  | "blend_curve"
+  | "school_cameras";
+
+export interface DialogueCameraQuickActionRequest {
+  dialogueId: string;
+  startId: string;
+  dialogueNodeId: string;
+  previousDialogueNodeId?: string;
+  blendCurveAssetName?: string;
+  mode: DialogueCameraQuickActionMode;
+}
+
+export interface DialogueCameraQuickActionPreview {
+  reviewToken: string;
+  dialogueId: string;
+  startId: string;
+  dialogueNodeId: string;
+  dialogueAssetPath: string;
+  mode: DialogueCameraQuickActionMode;
+  sourceDialogueNodeId: string | null;
+  existingCameraPosition: string;
+  desiredCameraPosition: string;
+  existingMoveCount: number;
+  desiredMoveCount: number;
+  cameraMoveType: string;
+  velocity: number | null;
+  blendOutTime: number | null;
+  fov: number | null;
+  existingBlendCameraType: string;
+  desiredBlendCameraType: string;
+  existingBlendCurve: string;
+  desiredBlendCurve: string;
+  blendDuration: number;
+  desiredSchoolCameraKeys: string[];
+  existingSchoolCameraCount: number;
+  desiredSchoolCameraCount: number;
+  changed: boolean;
+  blockedReasons: string[];
+}
+
+export interface DialogueCameraQuickActionResult {
+  status: "updated" | "unchanged";
+  dialogueId: string;
+  startId: string;
+  dialogueNodeId: string;
+  dialogueAssetPath: string;
+  mode: DialogueCameraQuickActionMode;
+  saved: boolean;
+}
+
+export interface ExistingDialogueCameraNode {
+  dialogueId: string;
+  cameraName: string;
+  moveType: string;
+  cameraPosition: Vec3;
+  cameraTarget: Vec3;
+  cameraEndPosition: Vec3;
+  cameraEndTarget: Vec3;
+  focalLength: number;
+  cameraRollDegrees: number;
+  cameraMovement: CameraMovement;
+  movementIntensity: MovementIntensity;
+}
+
+export interface ExistingDialogueStoryboardResult {
+  status: "found" | "empty" | "unavailable";
+  dialogueAssetPath: string;
+  nodes: ExistingDialogueCameraNode[];
+  warnings: string[];
+  message: string;
+}
+
+export type DialogueNodeSelectionStatus =
+  | "selected"
+  | "empty"
+  | "multiple"
+  | "unrecognized"
+  | "offline";
+
+export interface SelectedDialogueNodeInfo {
+  nodeClass: string;
+  nodeTitle: string;
+  nodeComment: string;
+  dialogueNodeId: string | null;
+}
+
+export interface SelectedDialogueNodeResult {
+  status: DialogueNodeSelectionStatus;
+  dialogueNodeId: string | null;
+  selectedNodeCount: number;
+  nodes: SelectedDialogueNodeInfo[];
+  message: string;
+}
+
 export interface SelectedLevelActor {
   actorRef: string;
   label: string;
@@ -1203,6 +1300,27 @@ export interface ActorTurnAction {
 
 export type ActorAction = ActorTurnAction;
 
+export interface ShotAdvisorCandidateReview {
+  candidateId: string;
+  label: string;
+  score: number;
+  selected: boolean;
+  baseline: boolean;
+  composition: number;
+  subjectReadability: number;
+  occlusion: number;
+  continuity: number;
+  issues: string[];
+  assessment: string;
+}
+
+export interface ShotAdvisorReview {
+  model: string;
+  selectedAlternative: boolean;
+  reason: string;
+  candidates: ShotAdvisorCandidateReview[];
+}
+
 export interface ShotPlan {
   id: string;
   index: number;
@@ -1237,4 +1355,5 @@ export interface ShotPlan {
   facingOverrides: Partial<Record<ParticipantSlot, Vec3>>;
   axis: ShotAxis;
   projection: ShotProjectionValidation;
+  advisorReview?: ShotAdvisorReview;
 }

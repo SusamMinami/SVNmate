@@ -14,8 +14,10 @@ import {
   LocateFixed,
   MapPinned,
   Maximize2,
+  MousePointer2,
   PackageOpen,
   PanelRightClose,
+  Pause,
   Pencil,
   RefreshCw,
   RotateCw,
@@ -32,7 +34,6 @@ import {
 import {
   FormEvent,
   lazy,
-  memo,
   Suspense,
   useCallback,
   useEffect,
@@ -47,6 +48,7 @@ import {
 } from "./app/useCharacterActionEditor";
 import { useCollaborationConnections } from "./app/useCollaborationConnections";
 import { useStoryboardExport } from "./app/useStoryboardExport";
+import { useUeDialogueSelection } from "./app/useUeDialogueSelection";
 import { useWorkspaceNavigation } from "./app/useWorkspaceNavigation";
 import type {
   FormationOptionId,
@@ -59,9 +61,7 @@ import { DataSourceStatus } from "./components/DataSourceStatus";
 import { DirectorControl } from "./components/DirectorControl";
 import { LaunchScreen } from "./components/LaunchScreen";
 import { MissingNpcModelModal } from "./components/MissingNpcModelModal";
-import { MissionTargetModal } from "./components/MissionTargetModal";
-import { NpcMigrationWorkspace } from "./components/NpcMigrationWorkspace";
-import { NpcRegistrationModal } from "./components/NpcRegistrationModal";
+import { NodeCameraQuickActions } from "./components/NodeCameraQuickActions";
 import { MusicRecommendations } from "./components/MusicRecommendations";
 import { SoundEffectRecommendations } from "./components/SoundEffectRecommendations";
 import { StageView } from "./components/StageView";
@@ -107,6 +107,7 @@ import type {
   DirectorMode,
   DirectorSceneAnalysis,
   DirectorSoundEffectRecommendation,
+  RuleDialogueIssue,
 } from "./director/contracts";
 import { createDirectorInput } from "./director/contracts";
 import { recordDirectorPreference } from "./director/preferenceClient";
@@ -114,8 +115,12 @@ import {
   createSharedPlanPreview,
   designShots,
   type DirectorRunResult,
+  type RuleAdvisorRunSummary,
 } from "./director/orchestrator";
+import { releaseIdleRuleAdvisorResources } from "./director/ruleAdvisor";
+import type { RuleAdvisorProgress } from "./director/ruleAdvisorContracts";
 import { participantFacingYawDegrees } from "./director/actorActionPlanner";
+import { createExistingStoryboardPreview } from "./director/existingStoryboard";
 import { createShotPreview } from "./director/shotPlanner";
 import { estimateShotDuration } from "./director/shotTiming";
 import {
@@ -129,6 +134,7 @@ import {
 } from "./trae/client";
 import {
   getBlueprintFormation,
+  readExistingDialogueStoryboard,
   updateDialogueContent,
   updateDialogueContents,
 } from "./ue/client";
@@ -188,9 +194,30 @@ const LazyTraeCollaborationModal = lazy(() =>
     default: module.TraeCollaborationModal,
   })),
 );
-const MemoizedMissionTargetModal = memo(MissionTargetModal);
-const MemoizedNpcMigrationWorkspace = memo(NpcMigrationWorkspace);
-const MemoizedNpcRegistrationModal = memo(NpcRegistrationModal);
+const LazyMissionTargetModal = lazy(() =>
+  import("./components/MissionTargetModal").then((module) => ({
+    default: module.MissionTargetModal,
+  })),
+);
+const LazyNpcMigrationWorkspace = lazy(() =>
+  import("./components/NpcMigrationWorkspace").then((module) => ({
+    default: module.NpcMigrationWorkspace,
+  })),
+);
+const LazyNpcRegistrationModal = lazy(() =>
+  import("./components/NpcRegistrationModal").then((module) => ({
+    default: module.NpcRegistrationModal,
+  })),
+);
+
+function ToolWorkspaceLoading() {
+  return (
+    <div className="tool-workspace__loading" role="status">
+      <LoaderCircle className="spin" size={18} />
+      <span>正在载入工作区</span>
+    </div>
+  );
+}
 
 function buildSequence(
   database: DialogueDatabase,
@@ -327,20 +354,47 @@ type InspectorTab = "direction" | "shot" | "audio" | "ue";
 type AudioPreviewOwner =
   | "sound-effect-recommendations"
   | "music-recommendations"
-  | "audio-library"
-  | null;
+  | "audio-library";
+
+interface AudioPreviewSession {
+  owner: AudioPreviewOwner;
+  label: string;
+}
 
 interface CachedStoryboard {
   sequence: DialogueSequence;
   shots: ShotPlan[];
   appliedDirector: DirectorMode;
   directorAnalysis: DirectorSceneAnalysis | undefined;
+  dialogueIssues: RuleDialogueIssue[];
   soundEffects: DirectorSoundEffectRecommendation[];
   directorBlocking: DirectorBlocking;
   activeFormationSource: "blueprint" | "generated";
   activeFormationVariant: FormationOptionId;
   formationStatus: string;
   formationChoice: FormationChoicePresentation | null;
+  loadedFormationSnapshot: BlueprintFormationSnapshot | null;
+  awaitingDirectorDesign: boolean;
+}
+
+const MAX_CACHED_STORYBOARDS = 6;
+
+function cacheStoryboard(
+  current: Map<string, CachedStoryboard>,
+  prefix: string,
+  storyboard: CachedStoryboard,
+): Map<string, CachedStoryboard> {
+  const next = new Map(current);
+  next.delete(prefix);
+  next.set(prefix, storyboard);
+  while (next.size > MAX_CACHED_STORYBOARDS) {
+    const oldestPrefix = next.keys().next().value;
+    if (!oldestPrefix) {
+      break;
+    }
+    next.delete(oldestPrefix);
+  }
+  return next;
 }
 
 function refreshShotDialogueText(
@@ -639,10 +693,24 @@ function blockingPositionLabel(
   return labels[position];
 }
 
+function dialogueIssueCategoryLabel(
+  category: RuleDialogueIssue["category"],
+): string {
+  return {
+    clarity: "表达清晰度",
+    continuity: "上下文连续",
+    character_voice: "角色口吻",
+    redundancy: "信息重复",
+    pacing: "叙事节奏",
+    logic: "因果逻辑",
+  }[category];
+}
+
 interface ShotInspectorProps {
   shot: ShotPlan;
   sequence: DialogueSequence;
   activeDialogueId: string;
+  dialogueIssues: RuleDialogueIssue[];
   directorAnalysis: DirectorSceneAnalysis | undefined;
   soundEffects: DirectorSoundEffectRecommendation[];
   soundEffectCatalog: SoundEffectCatalogSnapshot;
@@ -653,6 +721,7 @@ interface ShotInspectorProps {
   activeIndex: number;
   shotCount: number;
   tab: InspectorTab;
+  workspaceActive: boolean;
   canExport: boolean;
   exportBusy: boolean;
   exportError: string;
@@ -661,6 +730,10 @@ interface ShotInspectorProps {
   backgroundGenerationActive: boolean;
   configurationMode: boolean;
   configurationModeBusy: boolean;
+  configurationDialogueNodeId: string | null;
+  configurationSelectionMessage: string;
+  configurationSelectionReady: boolean;
+  configurationSelectionRefreshing: boolean;
   characterActionEditor: CharacterActionEditorController;
   onMove: (offset: number) => void;
   preference: "accept" | "reject" | null;
@@ -672,6 +745,7 @@ interface ShotInspectorProps {
   ) => void;
   onTabChange: (tab: InspectorTab) => void;
   onConfigurationModeChange: (enabled: boolean) => void;
+  onReloadExistingStoryboard: () => void;
   onExport: () => void;
   onExportSoundEffects: () => void;
   onChangeSoundEffect: (
@@ -688,10 +762,30 @@ interface ShotInspectorProps {
   onApplyMusic: (entry: MusicCatalogEntry, dialogueId: string) => void;
 }
 
+function ConfigurationSelectionState({
+  message,
+  refreshing,
+}: {
+  message: string;
+  refreshing: boolean;
+}) {
+  return (
+    <section className="configuration-selection-state" role="status">
+      {refreshing ? (
+        <LoaderCircle className="spin" size={20} />
+      ) : (
+        <MousePointer2 size={20} />
+      )}
+      <strong>{message}</strong>
+    </section>
+  );
+}
+
 function ShotInspector({
   shot,
   sequence,
   activeDialogueId,
+  dialogueIssues,
   directorAnalysis,
   soundEffects,
   soundEffectCatalog,
@@ -702,6 +796,7 @@ function ShotInspector({
   activeIndex,
   shotCount,
   tab,
+  workspaceActive,
   canExport,
   exportBusy,
   exportError,
@@ -710,6 +805,10 @@ function ShotInspector({
   backgroundGenerationActive,
   configurationMode,
   configurationModeBusy,
+  configurationDialogueNodeId,
+  configurationSelectionMessage,
+  configurationSelectionReady,
+  configurationSelectionRefreshing,
   characterActionEditor,
   onMove,
   preference,
@@ -718,6 +817,7 @@ function ShotInspector({
   onPreference,
   onTabChange,
   onConfigurationModeChange,
+  onReloadExistingStoryboard,
   onExport,
   onExportSoundEffects,
   onChangeSoundEffect,
@@ -727,13 +827,39 @@ function ShotInspector({
   const [expandedOutlinePrefix, setExpandedOutlinePrefix] = useState<
     string | null
   >(null);
-  const [audioPreviewOwner, setAudioPreviewOwner] =
-    useState<AudioPreviewOwner>(null);
+  const [audioPreview, setAudioPreview] =
+    useState<AudioPreviewSession | null>(null);
   const storyOutlineExpanded = expandedOutlinePrefix === sequence.prefix;
+  const currentDialogueIssues = dialogueIssues.filter((issue) =>
+    shot.dialogueIds.includes(issue.dialogue_id),
+  );
+  const configurationDialogueRow = configurationDialogueNodeId
+    ? sequence.rows.find((row) => row.id === configurationDialogueNodeId)
+    : undefined;
+  const configurationDialogueRowIndex = configurationDialogueNodeId
+    ? sequence.rows.findIndex(
+        (row) => row.id === configurationDialogueNodeId,
+      )
+    : -1;
+  const previousConfigurationDialogueNodeId =
+    configurationDialogueRowIndex > 0
+      ? sequence.rows[configurationDialogueRowIndex - 1].id
+      : undefined;
+  const editableDialogueIds = configurationMode
+    ? configurationSelectionReady && configurationDialogueNodeId
+      ? [configurationDialogueNodeId]
+      : []
+    : shot.dialogueIds;
   const slotLabelsBySlot = new Map(
     sequence.participants.map((participant) => [
       participant.slot,
       participantSlotLabel(participant),
+    ]),
+  );
+  const participantNamesBySlot = new Map(
+    sequence.participants.map((participant) => [
+      participant.slot,
+      participant.name,
     ]),
   );
 
@@ -748,26 +874,67 @@ function ShotInspector({
     { id: "ue", label: "UE", icon: Boxes },
   ];
   const visibleTabs = configurationMode
-    ? tabs.filter(({ id }) => id === "audio" || id === "ue")
+    ? tabs.filter(
+        ({ id }) => id === "shot" || id === "audio" || id === "ue",
+      )
     : tabs;
 
-  useEffect(() => {
-    setAudioPreviewOwner(null);
-  }, [activeIndex, tab]);
-
   function releaseAudioPreview(owner: AudioPreviewOwner) {
-    setAudioPreviewOwner((current) => (current === owner ? null : current));
+    setAudioPreview((current) =>
+      current?.owner === owner ? null : current,
+    );
   }
+
+  useEffect(() => {
+    if (!workspaceActive) {
+      setAudioPreview(null);
+    }
+  }, [workspaceActive]);
 
   return (
     <>
       <section className="inspector-header">
         <div>
           <small>
-            SHOT {String(activeIndex + 1).padStart(2, "0")} /{" "}
-            {String(shotCount).padStart(2, "0")}
+            {configurationMode ? (
+              <>
+                {configurationSelectionRefreshing &&
+                !configurationSelectionReady ? (
+                  <LoaderCircle className="spin" size={11} />
+                ) : (
+                  <MousePointer2 size={11} />
+                )}
+                {configurationSelectionReady && configurationDialogueNodeId
+                  ? `UE NODE ${configurationDialogueNodeId} · 已同步`
+                  : "UE NODE"}
+              </>
+            ) : (
+              <>
+                SHOT {String(activeIndex + 1).padStart(2, "0")} /{" "}
+                {String(shotCount).padStart(2, "0")}
+              </>
+            )}
           </small>
-          <h2>{shot.label}</h2>
+          <h2
+            title={
+              configurationMode
+                ? configurationDialogueRow?.content ??
+                  configurationSelectionMessage
+                : shot.label
+            }
+          >
+            {configurationMode
+              ? configurationDialogueRow
+                ? `${
+                    configurationDialogueRow.speakerSlot
+                      ? participantNamesBySlot.get(
+                          configurationDialogueRow.speakerSlot,
+                        ) ?? "未知角色"
+                      : "未知角色"
+                  } · ${configurationDialogueRow.content}`
+                : configurationSelectionMessage
+              : shot.label}
+          </h2>
         </div>
         <div className="shot-nav">
           <div
@@ -822,54 +989,98 @@ function ShotInspector({
               <PanelRightClose size={17} />
             )}
           </button>
-          <button
-            className="icon-button"
-            type="button"
-            title="上一个镜头"
-            aria-label="上一个镜头"
-            disabled={activeIndex === 0}
-            onClick={() => onMove(-1)}
-          >
-            <ChevronLeft size={18} />
-          </button>
-          <button
-            className="icon-button"
-            type="button"
-            title="下一个镜头"
-            aria-label="下一个镜头"
-            disabled={activeIndex === shotCount - 1}
-            onClick={() => onMove(1)}
-          >
-            <ChevronRight size={18} />
-          </button>
+          {!configurationMode && (
+            <>
+              <button
+                className="icon-button"
+                type="button"
+                title="上一个镜头"
+                aria-label="上一个镜头"
+                disabled={activeIndex === 0}
+                onClick={() => onMove(-1)}
+              >
+                <ChevronLeft size={18} />
+              </button>
+              <button
+                className="icon-button"
+                type="button"
+                title="下一个镜头"
+                aria-label="下一个镜头"
+                disabled={activeIndex === shotCount - 1}
+                onClick={() => onMove(1)}
+              >
+                <ChevronRight size={18} />
+              </button>
+            </>
+          )}
         </div>
       </section>
 
       <nav className="inspector-tabs" aria-label="镜头检查器" role="tablist">
         {visibleTabs.map(({ id, label, icon: Icon }) => (
-          <button
-            type="button"
-            role="tab"
-            aria-selected={tab === id}
-            aria-controls="shot-inspector-panel"
-            className={tab === id ? "is-active" : ""}
-            key={id}
-            onClick={() => onTabChange(id)}
-          >
-            <Icon size={14} />
-            <span>{label}</span>
-          </button>
+          <div className="inspector-tab-slot" role="presentation" key={id}>
+            <button
+              className={`${tab === id ? "is-active" : ""} ${
+                id === "audio" && audioPreview ? "has-playback" : ""
+              }`}
+              type="button"
+              role="tab"
+              aria-selected={tab === id}
+              aria-controls={
+                id === "audio"
+                  ? "shot-inspector-panel-audio"
+                  : "shot-inspector-panel"
+              }
+              onClick={() => onTabChange(id)}
+            >
+              <Icon size={14} />
+              <span>{label}</span>
+            </button>
+            {id === "audio" && audioPreview && (
+              <button
+                className="inspector-tabs__pause"
+                type="button"
+                title={`暂停 ${audioPreview.label}`}
+                aria-label={`暂停 ${audioPreview.label}`}
+                onClick={() => setAudioPreview(null)}
+              >
+                <Pause size={13} />
+              </button>
+            )}
+          </div>
         ))}
       </nav>
 
-      <div
-        className="inspector-tab-panel"
-        id="shot-inspector-panel"
-        role="tabpanel"
-        key={`${shot.id}-${tab}`}
-      >
+      {tab !== "audio" && (
+        <div
+          className="inspector-tab-panel"
+          id="shot-inspector-panel"
+          role="tabpanel"
+          key={`${shot.id}-${tab}`}
+        >
+        {configurationMode &&
+          (tab === "shot" || tab === "ue") &&
+          !configurationSelectionReady && (
+          <ConfigurationSelectionState
+            message={configurationSelectionMessage}
+            refreshing={configurationSelectionRefreshing}
+          />
+        )}
         {tab === "shot" && (
-          <>
+          configurationMode ? (
+            configurationDialogueNodeId && (
+              <NodeCameraQuickActions
+                dialogueId={sequence.prefix}
+                startId={sequence.startId}
+                dialogueNodeId={configurationDialogueNodeId}
+                previousDialogueNodeId={
+                  previousConfigurationDialogueNodeId
+                }
+                onApplied={onReloadExistingStoryboard}
+              />
+            )
+          ) : (
+            <>
             <section className="inspector-section">
               <div className="section-label">
                 <span>摄影参数</span>
@@ -1035,7 +1246,8 @@ function ShotInspector({
                 ))}
               </section>
             )}
-          </>
+            </>
+          )
         )}
 
         {tab === "direction" && (
@@ -1066,6 +1278,43 @@ function ShotInspector({
                 </p>
               )}
             </section>
+            {currentDialogueIssues.length > 0 && (
+              <section className="inspector-section dialogue-advisor-review">
+                <div className="section-label">
+                  <span>台词复核</span>
+                  <small>端侧标注 · {currentDialogueIssues.length} 项</small>
+                </div>
+                <div className="dialogue-advisor-review__list">
+                  {currentDialogueIssues.map((issue) => {
+                    const row = sequence.rows.find(
+                      (candidate) => candidate.id === issue.dialogue_id,
+                    );
+                    return (
+                      <div
+                        data-severity={issue.severity}
+                        key={`${issue.dialogue_id}:${issue.category}`}
+                      >
+                        <header>
+                          <AlertTriangle size={13} aria-hidden="true" />
+                          <strong>
+                            节点 {issue.dialogue_id} ·{" "}
+                            {dialogueIssueCategoryLabel(issue.category)}
+                          </strong>
+                          <small>
+                            {issue.severity === "warning"
+                              ? "建议修改"
+                              : "建议复核"}
+                          </small>
+                        </header>
+                        {row && <blockquote>{row.content}</blockquote>}
+                        <p>{issue.reason}</p>
+                        {issue.suggestion && <small>{issue.suggestion}</small>}
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            )}
             <section className="inspector-section actor-actions">
               <div className="section-label">
                 <span>演员动作</span>
@@ -1104,6 +1353,50 @@ function ShotInspector({
               </div>
               <p>{shot.rationale}</p>
             </section>
+            {shot.advisorReview && (
+              <section className="inspector-section advisor-review">
+                <div className="section-label">
+                  <span>端侧机位选优</span>
+                  <small>
+                    {shot.advisorReview.model} ·{" "}
+                    {shot.advisorReview.candidates.length} 选 1
+                  </small>
+                </div>
+                <p>{shot.advisorReview.reason}</p>
+                <div className="advisor-candidate-list">
+                  {shot.advisorReview.candidates.map((candidate) => (
+                    <div
+                      className={
+                        candidate.selected
+                          ? "advisor-candidate is-selected"
+                          : "advisor-candidate"
+                      }
+                      key={candidate.candidateId}
+                      title={
+                        candidate.issues.length > 0
+                          ? candidate.issues.join("；")
+                          : candidate.assessment
+                      }
+                    >
+                      <span>
+                        {candidate.selected && (
+                          <Check size={12} aria-hidden="true" />
+                        )}
+                        <strong>{candidate.label}</strong>
+                        {candidate.baseline && <small>基线</small>}
+                      </span>
+                      <b>{candidate.score}</b>
+                      <small>
+                        构图 {candidate.composition} · 主体{" "}
+                        {candidate.subjectReadability} · 遮挡{" "}
+                        {candidate.occlusion} · 连续{" "}
+                        {candidate.continuity}
+                      </small>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
             {directorAnalysis && (
               <section className="inspector-section director-analysis">
                 <div className="section-label">
@@ -1159,18 +1452,107 @@ function ShotInspector({
           </>
         )}
 
-        {tab === "audio" && (
+        {tab === "ue" &&
+          (!configurationMode || configurationSelectionReady) && (
+          <>
+            <CharacterActionEditor
+              controller={characterActionEditor}
+              sequence={sequence}
+              dialogueIds={editableDialogueIds}
+              busy={exportBusy}
+            />
+            {!configurationMode && (
+              <>
+                <section className="inspector-section">
+                  <div className="section-label">
+                    <span>UE4 参考</span>
+                  </div>
+                  <div className="ue-reference">
+                    <div>
+                      <span>Camera</span>
+                      <code>
+                        {shot.cameraPosition
+                          .map((value) => value.toFixed(2))
+                          .join(", ")}
+                      </code>
+                    </div>
+                    <div>
+                      <span>Target</span>
+                      <code>
+                        {shot.cameraTarget
+                          .map((value) => value.toFixed(2))
+                          .join(", ")}
+                      </code>
+                    </div>
+                    {shot.cameraMovement !== "static" && (
+                      <>
+                        <div>
+                          <span>End Camera</span>
+                          <code>
+                            {shot.cameraEndPosition
+                              .map((value) => value.toFixed(2))
+                              .join(", ")}
+                          </code>
+                        </div>
+                        <div>
+                          <span>End Target</span>
+                          <code>
+                            {shot.cameraEndTarget
+                              .map((value) => value.toFixed(2))
+                              .join(", ")}
+                          </code>
+                        </div>
+                      </>
+                    )}
+                    <small>
+                      原型坐标为相对站位，用于构图参考，不直接等同于 UE4
+                      世界坐标。
+                    </small>
+                  </div>
+                </section>
+                {sequence.warnings.length > 0 && (
+                  <section className="inspector-section warning-section">
+                    <div className="section-label">
+                      <span>数据提示</span>
+                    </div>
+                    {sequence.warnings.map((warning) => (
+                      <p key={warning}>{warning}</p>
+                    ))}
+                  </section>
+                )}
+              </>
+            )}
+          </>
+        )}
+        </div>
+      )}
+      {(tab === "audio" || audioPreview !== null) && (
+        <div
+          className="inspector-tab-panel audio-inspector-content"
+          id="shot-inspector-panel-audio"
+          role="tabpanel"
+          hidden={tab !== "audio"}
+        >
+        {configurationMode && !configurationSelectionReady ? (
+          <ConfigurationSelectionState
+            message={configurationSelectionMessage}
+            refreshing={configurationSelectionRefreshing}
+          />
+        ) : (
           <>
             <SoundEffectRecommendations
               recommendations={soundEffects}
               dialogueRows={sequence.rows}
-              currentDialogueIds={shot.dialogueIds}
+              currentDialogueIds={editableDialogueIds}
               busy={exportBusy}
               playbackActive={
-                audioPreviewOwner === "sound-effect-recommendations"
+                audioPreview?.owner === "sound-effect-recommendations"
               }
-              onPlaybackStart={() =>
-                setAudioPreviewOwner("sound-effect-recommendations")
+              onPlaybackStart={(label) =>
+                setAudioPreview({
+                  owner: "sound-effect-recommendations",
+                  label,
+                })
               }
               onPlaybackStop={() =>
                 releaseAudioPreview("sound-effect-recommendations")
@@ -1181,12 +1563,15 @@ function ShotInspector({
             <MusicRecommendations
               recommendations={musicRecommendations}
               dialogueOrder={sequence.rows.map((row) => row.id)}
-              currentDialogueIds={shot.dialogueIds}
+              currentDialogueIds={editableDialogueIds}
               playbackActive={
-                audioPreviewOwner === "music-recommendations"
+                audioPreview?.owner === "music-recommendations"
               }
-              onPlaybackStart={() =>
-                setAudioPreviewOwner("music-recommendations")
+              onPlaybackStart={(label) =>
+                setAudioPreview({
+                  owner: "music-recommendations",
+                  label,
+                })
               }
               onPlaybackStop={() =>
                 releaseAudioPreview("music-recommendations")
@@ -1196,91 +1581,22 @@ function ShotInspector({
               soundEffectCatalog={soundEffectCatalog}
               musicCatalog={musicCatalog}
               dialogueRows={sequence.rows}
-              currentDialogueIds={shot.dialogueIds}
+              currentDialogueIds={editableDialogueIds}
               activeDialogueId={activeDialogueId}
               appliedSoundEffects={soundEffects}
               appliedMusic={musicRecommendations}
-              playbackActive={audioPreviewOwner === "audio-library"}
-              onPlaybackStart={() =>
-                setAudioPreviewOwner("audio-library")
+              playbackActive={audioPreview?.owner === "audio-library"}
+              onPlaybackStart={(label) =>
+                setAudioPreview({ owner: "audio-library", label })
               }
-              onPlaybackStop={() =>
-                releaseAudioPreview("audio-library")
-              }
+              onPlaybackStop={() => releaseAudioPreview("audio-library")}
               onApplySoundEffect={onApplySoundEffect}
               onApplyMusic={onApplyMusic}
             />
           </>
         )}
-
-        {tab === "ue" && (
-          <>
-            <CharacterActionEditor
-              controller={characterActionEditor}
-              sequence={sequence}
-              dialogueIds={shot.dialogueIds}
-              busy={exportBusy}
-            />
-            <section className="inspector-section">
-              <div className="section-label">
-                <span>UE4 参考</span>
-              </div>
-              <div className="ue-reference">
-                <div>
-                  <span>Camera</span>
-                  <code>
-                    {shot.cameraPosition
-                      .map((value) => value.toFixed(2))
-                      .join(", ")}
-                  </code>
-                </div>
-                <div>
-                  <span>Target</span>
-                  <code>
-                    {shot.cameraTarget
-                      .map((value) => value.toFixed(2))
-                      .join(", ")}
-                  </code>
-                </div>
-                {shot.cameraMovement !== "static" && (
-                  <>
-                    <div>
-                      <span>End Camera</span>
-                      <code>
-                        {shot.cameraEndPosition
-                          .map((value) => value.toFixed(2))
-                          .join(", ")}
-                      </code>
-                    </div>
-                    <div>
-                      <span>End Target</span>
-                      <code>
-                        {shot.cameraEndTarget
-                          .map((value) => value.toFixed(2))
-                          .join(", ")}
-                      </code>
-                    </div>
-                  </>
-                )}
-                <small>
-                  原型坐标为相对站位，用于构图参考，不直接等同于 UE4
-                  世界坐标。
-                </small>
-              </div>
-            </section>
-            {sequence.warnings.length > 0 && (
-              <section className="inspector-section warning-section">
-                <div className="section-label">
-                  <span>数据提示</span>
-                </div>
-                {sequence.warnings.map((warning) => (
-                  <p key={warning}>{warning}</p>
-                ))}
-              </section>
-            )}
-          </>
-        )}
-      </div>
+        </div>
+      )}
 
       <footer className="inspector-footer inspector-footer--export">
         <div>
@@ -1352,6 +1668,11 @@ export default function App() {
   const [fallbackReason, setFallbackReason] = useState<string | null>(null);
   const [directorAnalysis, setDirectorAnalysis] =
     useState<DirectorSceneAnalysis | undefined>(initial.analysis);
+  const [ruleAdvisorProgress, setRuleAdvisorProgress] =
+    useState<RuleAdvisorProgress | null>(null);
+  const [ruleAdvisorSummary, setRuleAdvisorSummary] =
+    useState<RuleAdvisorRunSummary | null>(null);
+  const [dialogueIssues, setDialogueIssues] = useState<RuleDialogueIssue[]>([]);
   const [soundEffectCatalog, setSoundEffectCatalog] =
     useState<SoundEffectCatalogSnapshot>(initialSoundEffectCatalog);
   const [soundEffects, setSoundEffects] = useState<
@@ -1366,7 +1687,7 @@ export default function App() {
     analyzedCount: 0,
   });
   const [musicOverridesByDialogueId, setMusicOverridesByDialogueId] =
-    useState<Map<string, MusicRecommendation>>(() => new Map());
+    useState<Map<string, MusicRecommendation | null>>(() => new Map());
   const [directorBlocking, setDirectorBlocking] =
     useState<DirectorBlocking>(initial.blocking);
   const [pendingDirectorResult, setPendingDirectorResult] =
@@ -1377,6 +1698,10 @@ export default function App() {
   const [sharedComparisonError, setSharedComparisonError] = useState("");
   const [formationChoice, setFormationChoice] =
     useState<FormationChoicePresentation | null>(null);
+  const [loadedFormationSnapshot, setLoadedFormationSnapshot] =
+    useState<BlueprintFormationSnapshot | null>(null);
+  const [awaitingDirectorDesign, setAwaitingDirectorDesign] =
+    useState(false);
   const sceneReference = useSceneReference(sequence, formationChoice?.snapshot, database.sourceName);
   const [formationChoiceMode, setFormationChoiceMode] = useState<
     "initial" | "switch" | "director-request" | null
@@ -1401,6 +1726,22 @@ export default function App() {
     switchWorkspace,
     closeToolWorkspace,
   } = useWorkspaceNavigation();
+  const [loadedToolWorkspaces, setLoadedToolWorkspaces] = useState<
+    Set<"npc" | "migration" | "targets">
+  >(() => new Set());
+  useEffect(() => {
+    if (activeWorkspace === "storyboard") {
+      return;
+    }
+    setLoadedToolWorkspaces((current) => {
+      if (current.has(activeWorkspace)) {
+        return current;
+      }
+      const next = new Set(current);
+      next.add(activeWorkspace);
+      return next;
+    });
+  }, [activeWorkspace]);
   const {
     traeStatus,
     traeLoading,
@@ -1442,12 +1783,15 @@ export default function App() {
             shots: initial.shots,
             appliedDirector: "rule",
             directorAnalysis: initial.analysis,
+            dialogueIssues: [],
             soundEffects: initial.soundEffects,
             directorBlocking: initial.blocking,
             activeFormationSource: "generated",
             activeFormationVariant: "generated",
             formationStatus: "",
             formationChoice: null,
+            loadedFormationSnapshot: null,
+            awaitingDirectorDesign: false,
           },
         ],
       ]),
@@ -1485,6 +1829,7 @@ export default function App() {
   const soundEffectCatalogRef = useRef(soundEffectCatalog);
   const soundEffectCatalogLoadRef =
     useRef<Promise<SoundEffectCatalogSnapshot> | null>(null);
+  const configurationAutoLoadNodeRef = useRef("");
   activeIndexRef.current = activeIndex;
   directorModeRef.current = directorMode;
   sequenceRef.current = sequence;
@@ -1494,13 +1839,113 @@ export default function App() {
     formationChoice?.playerPositionLocked ?? true;
   soundEffectCatalogRef.current = soundEffectCatalog;
 
+  const {
+    selection: ueDialogueSelection,
+    refreshing: ueDialogueSelectionRefreshing,
+  } = useUeDialogueSelection(
+    configurationMode && activeWorkspace === "storyboard",
+  );
+  const selectedUeDialogueNodeId =
+    ueDialogueSelection?.status === "selected"
+      ? ueDialogueSelection.dialogueNodeId
+      : null;
+  const selectedUeShotIndex = selectedUeDialogueNodeId
+    ? shots.findIndex((shot) =>
+        shot.dialogueIds.includes(selectedUeDialogueNodeId),
+      )
+    : -1;
+  const selectedUeDialogueRow = selectedUeDialogueNodeId
+    ? sequence.rows.find((row) => row.id === selectedUeDialogueNodeId)
+    : undefined;
+  const selectedUeDialogueRowIndex = selectedUeDialogueNodeId
+    ? sequence.rows.findIndex(
+        (row) => row.id === selectedUeDialogueNodeId,
+      )
+    : -1;
+  const previousSelectedUeDialogueNodeId =
+    selectedUeDialogueRowIndex > 0
+      ? sequence.rows[selectedUeDialogueRowIndex - 1].id
+      : undefined;
+  const configurationSelectionReady =
+    Boolean(selectedUeDialogueRow) && selectedUeShotIndex >= 0;
+  const configurationSelectionMessage = !ueDialogueSelection
+    ? "正在读取 UE 当前节点"
+    : ueDialogueSelection.status !== "selected"
+      ? ueDialogueSelection.message
+      : !selectedUeDialogueRow
+        ? formationChecking
+          ? `正在加载节点 ${selectedUeDialogueNodeId} 的对话`
+          : `节点 ${selectedUeDialogueNodeId} 不属于当前对话 ${sequence.prefix || "未加载"}`
+        : selectedUeShotIndex < 0
+          ? `已同步 UE 节点 ${selectedUeDialogueNodeId}，当前没有已有镜头`
+          : ueDialogueSelection.message;
+
+  useEffect(() => {
+    if (!configurationMode) {
+      configurationAutoLoadNodeRef.current = "";
+      return;
+    }
+    if (
+      !selectedUeDialogueNodeId ||
+      selectedUeDialogueRow ||
+      formationChecking ||
+      loading ||
+      configurationAutoLoadNodeRef.current === selectedUeDialogueNodeId
+    ) {
+      return;
+    }
+    const prefix = selectedUeDialogueNodeId.slice(0, 4);
+    configurationAutoLoadNodeRef.current = selectedUeDialogueNodeId;
+    setQuery(prefix);
+    void applySearch(database, prefix).catch((searchError) => {
+      setError(
+        searchError instanceof Error
+          ? searchError.message
+          : "无法加载 UE 当前节点所属对话",
+      );
+    });
+  }, [
+    configurationMode,
+    database,
+    formationChecking,
+    loading,
+    selectedUeDialogueNodeId,
+    selectedUeDialogueRow,
+  ]);
+
+  useEffect(() => {
+    if (
+      !configurationMode ||
+      !configurationSelectionReady ||
+      !selectedUeDialogueNodeId
+    ) {
+      return;
+    }
+    setActiveIndex((current) =>
+      current === selectedUeShotIndex ? current : selectedUeShotIndex,
+    );
+    setSelectedDialogueId((current) =>
+      current === selectedUeDialogueNodeId
+        ? current
+        : selectedUeDialogueNodeId,
+    );
+  }, [
+    configurationMode,
+    configurationSelectionReady,
+    selectedUeDialogueNodeId,
+    selectedUeShotIndex,
+  ]);
+
   const activeShot: ShotPlan | undefined = shots[activeIndex] ?? shots[0];
   const characterActionEditor = useCharacterActionEditor({
     sequence,
     enabled:
       activeWorkspace === "storyboard" &&
       inspectorTab === "ue" &&
-      Boolean(activeShot),
+      Boolean(activeShot) &&
+      (!configurationMode || configurationSelectionReady),
+    releaseWhenDisabled:
+      configurationMode || activeWorkspace !== "storyboard",
   });
   const characterActionStage = useMemo(() => {
     if (!activeShot) {
@@ -1562,7 +2007,9 @@ export default function App() {
       generatedMusicRecommendations.map((item) => [item.dialogueId, item]),
     );
     for (const [dialogueId, item] of musicOverridesByDialogueId) {
-      if (dialogueOrder.has(dialogueId)) {
+      if (item === null) {
+        byDialogueId.delete(dialogueId);
+      } else if (dialogueOrder.has(dialogueId)) {
         byDialogueId.set(dialogueId, item);
       }
     }
@@ -1604,13 +2051,20 @@ export default function App() {
     onCharacterActionsExported: characterActionEditor.commitExported,
   });
   const activeDialogueId =
-    activeShot
+    configurationMode &&
+    configurationSelectionReady &&
+    selectedUeDialogueNodeId
+      ? selectedUeDialogueNodeId
+      : activeShot
       ? activeShot.dialogueIds.includes(selectedDialogueId)
         ? selectedDialogueId
         : activeShot.dialogueId
       : selectedDialogueId;
   const activeDialogueRow = sequence.rows.find(
     (row) => row.id === activeDialogueId,
+  );
+  const activeDialogueIssues = dialogueIssues.filter(
+    (issue) => issue.dialogue_id === activeDialogueId,
   );
   const hasLoadedDialogue = sequence.rows.length > 0;
   const queryIsDialogueId = /^\d{4}$/.test(query.trim());
@@ -1746,7 +2200,11 @@ export default function App() {
           ? "请选择 TRAE 占位策略"
         : directorLoading
           ? `${directorLabel(directorLoadingMode ?? directorMode)}正在生成镜头`
-          : "镜头方案尚未生成";
+          : awaitingDirectorDesign
+            ? shots.length > 0
+              ? "已读取 UE 已有镜头，点击导演模式可重新设计"
+              : "对白已加载，点击导演模式开始设计"
+            : "镜头方案尚未生成";
   const traeWaitHeading =
     (traeStatus?.stats.processing ?? 0) > 0
       ? "TRAE 正在生成分镜"
@@ -1824,6 +2282,9 @@ export default function App() {
       const existing = current.find(
         (item) => item.dialogueId === dialogueId,
       );
+      if (existing?.assetName === entry.assetName) {
+        return current.filter((item) => item !== existing);
+      }
       const next = current
         .filter((item) => item.dialogueId !== dialogueId)
         .concat({
@@ -1854,8 +2315,17 @@ export default function App() {
     if (!dialogueId) {
       return;
     }
+    const applied = musicRecommendations.some(
+      (recommendation) =>
+        recommendation.dialogueId === dialogueId &&
+        recommendation.recordId === entry.recordId,
+    );
     setMusicOverridesByDialogueId((current) => {
       const next = new Map(current);
+      if (applied) {
+        next.set(dialogueId, null);
+        return next;
+      }
       next.set(dialogueId, {
         dialogueId,
         stateId: entry.stateId,
@@ -1883,7 +2353,7 @@ export default function App() {
         if (!active || !enabled) {
           return;
         }
-        setInspectorTab("audio");
+        setInspectorTab("shot");
         setConfigurationMode(true);
       })
       .catch(() => undefined);
@@ -1942,14 +2412,34 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!directorLoading || directorLoadingMode !== "trae") {
+    if (
+      !directorLoading ||
+      directorLoadingMode !== "trae" ||
+      configurationMode ||
+      activeWorkspace !== "storyboard"
+    ) {
       return;
     }
     const interval = window.setInterval(() => {
       void refreshTraeConnection(false);
     }, 2_000);
     return () => window.clearInterval(interval);
-  }, [directorLoading, directorLoadingMode]);
+  }, [
+    activeWorkspace,
+    configurationMode,
+    directorLoading,
+    directorLoadingMode,
+  ]);
+
+  useEffect(() => {
+    if (
+      !configurationMode &&
+      activeWorkspace === "storyboard"
+    ) {
+      return;
+    }
+    void releaseIdleRuleAdvisorResources();
+  }, [activeWorkspace, configurationMode]);
 
   useEffect(() => {
     if (shots.length === 0) {
@@ -1962,38 +2452,45 @@ export default function App() {
         cached.shots === shots &&
         cached.appliedDirector === appliedDirector &&
         cached.directorAnalysis === directorAnalysis &&
+        cached.dialogueIssues === dialogueIssues &&
         cached.soundEffects === soundEffects &&
         cached.directorBlocking === directorBlocking &&
         cached.activeFormationSource === activeFormationSource &&
         cached.activeFormationVariant === activeFormationVariant &&
         cached.formationChoice === formationChoice &&
+        cached.loadedFormationSnapshot === loadedFormationSnapshot &&
+        cached.awaitingDirectorDesign === awaitingDirectorDesign &&
         cached.formationStatus === formationStatus
       ) {
         return current;
       }
-      const next = new Map(current);
-      next.set(sequence.prefix, {
+      return cacheStoryboard(current, sequence.prefix, {
         sequence,
         shots,
         appliedDirector,
         directorAnalysis,
+        dialogueIssues,
         soundEffects,
         directorBlocking,
         activeFormationSource,
         activeFormationVariant,
         formationStatus,
         formationChoice,
+        loadedFormationSnapshot,
+        awaitingDirectorDesign,
       });
-      return next;
     });
   }, [
     activeFormationSource,
     activeFormationVariant,
     appliedDirector,
+    dialogueIssues,
     directorAnalysis,
     directorBlocking,
     formationStatus,
     formationChoice,
+    loadedFormationSnapshot,
+    awaitingDirectorDesign,
     sequence,
     shots,
     soundEffects,
@@ -2071,6 +2568,11 @@ export default function App() {
       soundEffectCatalog: activeSoundEffectCatalog.entries,
     });
     setFallbackReason(null);
+    if (requestedMode === "rule" && options.useRuleAdvisor !== false) {
+      setRuleAdvisorSummary(null);
+    } else if (requestedMode !== "rule") {
+      setRuleAdvisorProgress(null);
+    }
     if (!keepsBackgroundRequest) {
       setPendingDirectorResult(null);
       setSharedComparison(null);
@@ -2082,6 +2584,7 @@ export default function App() {
       setShots(preview.shots);
       setAppliedDirector("rule");
       setDirectorAnalysis(preview.analysis);
+      setDialogueIssues([]);
       replaceSoundEffectRecommendations(preview.soundEffects);
       setDirectorBlocking(preview.blocking);
       focusPlanShot(
@@ -2113,6 +2616,22 @@ export default function App() {
         soundEffectCatalog: activeSoundEffectCatalog.entries,
         forceRegenerate: options.forceRegenerate,
         signal: traeAbortController?.signal,
+        onRuleAdvisorProgress:
+          requestedMode === "rule"
+            ? (progress) => {
+                if (runId === directorRunRef.current) {
+                  setRuleAdvisorProgress(progress);
+                }
+              }
+            : undefined,
+        onRuleBeatAdvice:
+          requestedMode === "rule"
+            ? (advice) => {
+                if (runId === directorRunRef.current) {
+                  setDialogueIssues(advice.dialogue_issues ?? []);
+                }
+              }
+            : undefined,
         onRequestCreated:
           requestedMode === "trae"
             ? (input) => {
@@ -2309,6 +2828,7 @@ export default function App() {
     sourceSequence: DialogueSequence,
     result: DirectorRunResult,
   ) {
+    setAwaitingDirectorDesign(false);
     const preservesInputFormation =
       result.input.constraints.preserve_input_formation === true;
     const usesBlueprintFormation =
@@ -2326,6 +2846,9 @@ export default function App() {
     setAppliedDirector(result.appliedMode);
     setFallbackReason(result.fallbackReason);
     setDirectorAnalysis(result.analysis);
+    setDialogueIssues(result.dialogueIssues);
+    setRuleAdvisorProgress(null);
+    setRuleAdvisorSummary(result.ruleAdvisor ?? null);
     replaceSoundEffectRecommendations(result.soundEffects);
     setDirectorBlocking(result.blocking);
     setActiveFormationSource(
@@ -2403,7 +2926,6 @@ export default function App() {
   async function applySearch(
     nextDatabase: DialogueDatabase,
     prefix: string,
-    requestedMode = directorMode,
   ) {
     const nextSequence = findDialogueSequence(nextDatabase, prefix);
     setContentSearch(null);
@@ -2417,6 +2939,7 @@ export default function App() {
     setActiveIndex(0);
     setSelectedDialogueId(nextSequence.rows[0]?.id ?? "");
     setFormationChoice(null);
+    setLoadedFormationSnapshot(null);
     setFormationChoiceMode(null);
     setMissingNpcModelReview(null);
     setPendingDirectorResult(null);
@@ -2424,18 +2947,20 @@ export default function App() {
     setDirectorLoading(false);
     setDirectorLoadingMode(null);
     setDirectorAnalysis(undefined);
+    setDialogueIssues([]);
+    setRuleAdvisorProgress(null);
+    setRuleAdvisorSummary(null);
     replaceSoundEffectRecommendations([]);
     setMusicOverridesByDialogueId(new Map());
     setFallbackReason(null);
     setError("");
+    setAppliedDirector("rule");
     setActiveFormationSource("generated");
     setActiveFormationVariant("generated");
+    setAwaitingDirectorDesign(true);
     setFormationStatus("正在检查 UE Blueprint 站位...");
     if (nextDatabase.sourceName === "内置演示数据") {
-      setFormationStatus("使用规则导演自动安排的角色位置");
-      await applySequence(nextSequence, requestedMode, {
-        applyResultImmediately: requestedMode === "trae",
-      });
+      setFormationStatus("对话文字已加载，等待选择导演生成分镜");
       return;
     }
 
@@ -2447,89 +2972,186 @@ export default function App() {
         );
       }
     }, 8_000);
-    let lookup: Awaited<ReturnType<typeof getBlueprintFormation>>;
     try {
-      lookup = await getBlueprintFormation({
+      let previewSequence = nextSequence;
+      let formationClassPath = nextSequence.formation?.classPath;
+      let formationNote = "";
+      let missingModels: MissingBlueprintNpcModel[] = [];
+      try {
+        const lookup = await getBlueprintFormation({
+          dialogueId: prefix,
+          startId: nextSequence.startId,
+          formationClassPath,
+        });
+        if (formationRunId !== formationRunRef.current) {
+          return;
+        }
+        if (lookup.status === "found" && lookup.snapshot) {
+          setLoadedFormationSnapshot(lookup.snapshot);
+          formationClassPath = lookup.snapshot.blueprintClassPath;
+          missingModels = findMissingBlueprintNpcModels(
+            nextDatabase,
+            nextSequence,
+            lookup.snapshot,
+          );
+          const ignoredNpcIds = new Set(
+            missingModels.map((issue) => issue.npcId),
+          );
+          try {
+            previewSequence = applyBlueprintFormation(
+              nextDatabase,
+              nextSequence,
+              lookup.snapshot,
+              { ignoredNpcIds },
+            ).sequence;
+            setSequence(previewSequence);
+            setActiveFormationSource("blueprint");
+            setActiveFormationVariant("blueprint");
+          } catch (mappingError) {
+            formationNote = `BP 站位暂不可用于预览：${
+              mappingError instanceof Error
+                ? mappingError.message
+                : "角色映射失败"
+            }`;
+          }
+        } else {
+          formationNote = skippedBlueprintMessage(lookup.message);
+        }
+      } catch (formationError) {
+        if (formationRunId !== formationRunRef.current) {
+          return;
+        }
+        formationNote = skippedBlueprintMessage(
+          formationError instanceof Error
+            ? formationError.message
+            : "UE Blueprint 读取失败",
+        );
+      }
+      setFormationStatus("正在读取 UE 已有镜头配置...");
+      const existing = await readExistingDialogueStoryboard({
         dialogueId: prefix,
-        startId: nextSequence.startId,
-        formationClassPath: nextSequence.formation?.classPath,
+        startId: previewSequence.startId,
+        dialogueIds: previewSequence.rows.map((row) => row.id),
+        formationClassPath,
+        participantModelIndexes: previewSequence.participants.flatMap(
+          (participant) =>
+            participant.modelIndex === null
+              ? []
+              : [participant.modelIndex],
+        ),
       });
-    } catch (formationError) {
+      if (formationRunId !== formationRunRef.current) {
+        return;
+      }
+      const imported = createExistingStoryboardPreview(
+        previewSequence,
+        existing,
+      );
+      if (imported) {
+        setSequence(imported.sequence);
+        setShots(imported.shots);
+        setDirectorAnalysis(imported.analysis);
+        setDirectorBlocking(imported.blocking);
+        replaceSoundEffectRecommendations([]);
+        setActiveIndex(0);
+        setSelectedDialogueId(
+          imported.shots[0]?.dialogueId ??
+            previewSequence.rows[0]?.id ??
+            "",
+        );
+      }
+      setFormationStatus(
+        [
+          existing.message,
+          formationNote,
+          missingModels.length > 0
+            ? `${missingModels.length} 个缺失 BP 模型暂用文字/规则占位`
+            : "",
+          ...existing.warnings,
+        ]
+          .filter(Boolean)
+          .join("；"),
+      );
+    } catch (existingStoryboardError) {
       if (formationRunId !== formationRunRef.current) {
         return;
       }
       setFormationStatus(
-        skippedBlueprintMessage(
-          formationError instanceof Error
-            ? formationError.message
-            : "BP 站位读取失败",
-        ),
+        `已有镜头读取失败：${
+          existingStoryboardError instanceof Error
+            ? existingStoryboardError.message
+            : "UE 配置读取失败"
+        }；已加载对白文字，等待选择导演`,
       );
-      await applySequence(nextSequence, requestedMode, {
-        applyResultImmediately: requestedMode === "trae",
-      });
-      return;
     } finally {
       window.clearTimeout(slowFormationNotice);
       if (formationRunId === formationRunRef.current) {
         setFormationChecking(false);
       }
     }
-    if (formationRunId !== formationRunRef.current) {
+  }
+
+  async function reloadExistingStoryboard() {
+    const targetSequence = sequence;
+    if (!targetSequence.prefix || targetSequence.rows.length === 0) {
       return;
     }
-    if (lookup.status === "found" && lookup.snapshot) {
-      const missingModels = findMissingBlueprintNpcModels(
-        nextDatabase,
-        nextSequence,
-        lookup.snapshot,
-      );
-      if (missingModels.length > 0) {
-        setMissingNpcModelReview({
-          database: nextDatabase,
-          sourceSequence: nextSequence,
-          snapshot: lookup.snapshot,
-          requestedMode,
-          issues: missingModels,
-          ignoredNpcIds: new Set(),
-          error: "",
-        });
-        setFormationStatus(
-          `检测到 ${missingModels.length} 个对话 NPC 缺少可用 BP 模型，等待确认`,
-        );
+    try {
+      const existing = await readExistingDialogueStoryboard({
+        dialogueId: targetSequence.prefix,
+        startId: targetSequence.startId,
+        dialogueIds: targetSequence.rows.map((row) => row.id),
+        formationClassPath:
+          loadedFormationSnapshot?.blueprintClassPath ??
+          targetSequence.formation?.classPath,
+        participantModelIndexes: targetSequence.participants.flatMap(
+          (participant) =>
+            participant.modelIndex === null
+              ? []
+              : [participant.modelIndex],
+        ),
+      });
+      if (sequenceRef.current.prefix !== targetSequence.prefix) {
         return;
       }
-      try {
-        const choice = createFormationChoice(
-          nextDatabase,
-          nextSequence,
-          lookup.snapshot,
-          requestedMode,
-          soundEffectCatalog.entries,
+      const imported = createExistingStoryboardPreview(
+        targetSequence,
+        existing,
+      );
+      if (imported) {
+        const activeDialogueNodeId =
+          selectedUeDialogueNodeId ||
+          targetSequence.rows[0]?.id ||
+          "";
+        const nextActiveIndex = imported.shots.findIndex((shot) =>
+          shot.dialogueIds.includes(activeDialogueNodeId),
         );
-        setFormationStatus(lookup.message);
-        setFormationChoice(choice);
-        setFormationChoiceMode(
-          requestedMode === "trae" ? "director-request" : "initial",
-        );
-      } catch (mappingError) {
-        setFormationStatus(
-          skippedBlueprintMessage(
-            mappingError instanceof Error
-              ? mappingError.message
-              : "BP 角色与对话 NPC 不匹配",
-          ),
-        );
-        await applySequence(nextSequence, requestedMode, {
-          applyResultImmediately: requestedMode === "trae",
-        });
+        setSequence(imported.sequence);
+        setShots(imported.shots);
+        setDirectorAnalysis(imported.analysis);
+        setDirectorBlocking(imported.blocking);
+        setDialogueIssues([]);
+        setRuleAdvisorProgress(null);
+        setRuleAdvisorSummary(null);
+        replaceSoundEffectRecommendations([]);
+        setMusicOverridesByDialogueId(new Map());
+        setFallbackReason(null);
+        setActiveIndex(Math.max(0, nextActiveIndex));
+        setSelectedDialogueId(activeDialogueNodeId);
+        setAwaitingDirectorDesign(true);
       }
-      return;
+      setFormationStatus(
+        [existing.message, ...existing.warnings]
+          .filter(Boolean)
+          .join("；"),
+      );
+    } catch (reloadError) {
+      setFormationStatus(
+        reloadError instanceof Error
+          ? `已有镜头回读失败：${reloadError.message}`
+          : "已有镜头回读失败",
+      );
     }
-    setFormationStatus(skippedBlueprintMessage(lookup.message));
-    await applySequence(nextSequence, requestedMode, {
-      applyResultImmediately: requestedMode === "trae",
-    });
   }
 
   function toggleIgnoredMissingNpc(npcId: number) {
@@ -2900,6 +3522,9 @@ export default function App() {
       setShots(selectedPreview.shots);
       setAppliedDirector("rule");
       setDirectorAnalysis(selectedPreview.analysis);
+      setDialogueIssues([]);
+      setRuleAdvisorProgress(null);
+      setRuleAdvisorSummary(null);
       replaceSoundEffectRecommendations(selectedPreview.soundEffects);
       setDirectorBlocking(selectedPreview.blocking);
       setActiveFormationSource(
@@ -2987,6 +3612,12 @@ export default function App() {
     setActiveIndex(Math.max(0, shotIndex));
     setSelectedDialogueId(dialogueNodeId);
     setFormationChoice(cached?.formationChoice ?? null);
+    setLoadedFormationSnapshot(
+      cached?.loadedFormationSnapshot ?? null,
+    );
+    setAwaitingDirectorDesign(
+      cached?.awaitingDirectorDesign ?? !cached,
+    );
     setFormationChoiceMode(null);
     setMissingNpcModelReview(null);
     setPendingDirectorResult(null);
@@ -2997,6 +3628,7 @@ export default function App() {
     setFallbackReason(null);
     setAppliedDirector(cached?.appliedDirector ?? "rule");
     setDirectorAnalysis(cached?.directorAnalysis);
+    setDialogueIssues(cached?.dialogueIssues ?? []);
     replaceSoundEffectRecommendations(cached?.soundEffects ?? []);
     if (cached) {
       setDirectorBlocking(cached.directorBlocking);
@@ -3057,6 +3689,8 @@ export default function App() {
     setActiveIndex(0);
     setSelectedDialogueId("");
     setFormationChoice(null);
+    setLoadedFormationSnapshot(null);
+    setAwaitingDirectorDesign(false);
     setFormationChoiceMode(null);
     setMissingNpcModelReview(null);
     setFormationChecking(false);
@@ -3067,6 +3701,9 @@ export default function App() {
     setDirectorLoadingMode(null);
     setFallbackReason(null);
     setDirectorAnalysis(undefined);
+    setDialogueIssues([]);
+    setRuleAdvisorProgress(null);
+    setRuleAdvisorSummary(null);
     replaceSoundEffectRecommendations([]);
     setActiveFormationSource("generated");
     setActiveFormationVariant("generated");
@@ -3077,7 +3714,11 @@ export default function App() {
   function changeDirectorMode(mode: DirectorMode) {
     const forceRegenerate =
       mode === "trae" && directorMode === "trae";
-    if (mode === directorMode && mode !== "trae") {
+    if (
+      mode === directorMode &&
+      mode !== "trae" &&
+      !awaitingDirectorDesign
+    ) {
       return;
     }
     setDirectorMode(mode);
@@ -3104,6 +3745,60 @@ export default function App() {
       return;
     }
     if (
+      awaitingDirectorDesign &&
+      loadedFormationSnapshot &&
+      sequence.prefix &&
+      !formationChecking &&
+      !formationChoiceMode &&
+      !directorLoading
+    ) {
+      const sourceSequence = findDialogueSequence(
+        database,
+        sequence.prefix,
+      );
+      const missingModels = findMissingBlueprintNpcModels(
+        database,
+        sourceSequence,
+        loadedFormationSnapshot,
+      );
+      if (missingModels.length > 0) {
+        setMissingNpcModelReview({
+          database,
+          sourceSequence,
+          snapshot: loadedFormationSnapshot,
+          requestedMode: mode,
+          issues: missingModels,
+          ignoredNpcIds: new Set(),
+          error: "",
+        });
+        setFormationStatus(
+          `检测到 ${missingModels.length} 个对话 NPC 缺少可用 BP 模型，等待确认后再设计`,
+        );
+        return;
+      }
+      try {
+        const choice = createFormationChoice(
+          database,
+          sourceSequence,
+          loadedFormationSnapshot,
+          mode,
+          soundEffectCatalog.entries,
+        );
+        setFormationChoice(choice);
+        setFormationChoiceMode(
+          mode === "trae" ? "director-request" : "initial",
+        );
+        setFormationStatus("已有配置保持不变，请确认本次导演占位策略");
+        return;
+      } catch (mappingError) {
+        setError(
+          mappingError instanceof Error
+            ? mappingError.message
+            : "无法准备导演占位",
+        );
+      }
+    }
+    if (
       mode !== "rule" &&
       pendingDirectorResult?.reviewFormation === false &&
       pendingDirectorResult.result.appliedMode === mode
@@ -3117,6 +3812,21 @@ export default function App() {
     }
     if (mode === "mira") {
       void refreshLarkConnection(true);
+      if (
+        query === sequence.prefix &&
+        !formationChecking &&
+        !formationChoiceMode &&
+        !directorLoading
+      ) {
+        void applySequence(sequence, "mira", {
+          keepCurrentPreview: true,
+          preserveInputPositions:
+            activeFormationSource === "blueprint",
+          fallbackPreserveInputPositions: true,
+          preserveActiveShot: true,
+          applyResultImmediately: true,
+        });
+      }
     } else if (mode === "trae") {
       void refreshTraeConnection();
       if (
@@ -3198,8 +3908,13 @@ export default function App() {
         enabled,
         contentSize,
       );
-      if (enabled && inspectorTab !== "audio" && inspectorTab !== "ue") {
-        setInspectorTab("audio");
+      if (
+        enabled &&
+        inspectorTab !== "shot" &&
+        inspectorTab !== "audio" &&
+        inspectorTab !== "ue"
+      ) {
+        setInspectorTab("shot");
       }
       setConfigurationMode(enabled);
       await new Promise<void>((resolve) =>
@@ -3222,11 +3937,13 @@ export default function App() {
     }
   }
 
-  async function openStoryboardExport() {
+  async function openStoryboardExport(
+    dialogueScope?: readonly string[],
+  ) {
     if (configurationMode) {
       await changeConfigurationMode(false);
     }
-    await previewStoryboardExport();
+    await previewStoryboardExport(dialogueScope);
   }
 
   async function chooseDirectory(
@@ -3535,6 +4252,11 @@ export default function App() {
       setDatabase(nextDatabase);
       setSequence(nextSequence);
       setShots(nextShots);
+      setDialogueIssues((current) =>
+        current.filter(
+          (issue) => issue.dialogue_id !== activeDialogueRow.id,
+        ),
+      );
       setDesignedStoryboards((current) => {
         const next = new Map(current);
         for (const [prefix, cached] of next) {
@@ -3554,6 +4276,9 @@ export default function App() {
             ...cached,
             sequence: cachedSequence,
             shots: refreshShotDialogueText(cachedSequence, cached.shots),
+            dialogueIssues: cached.dialogueIssues.filter(
+              (issue) => issue.dialogue_id !== activeDialogueRow.id,
+            ),
           });
         }
         return next;
@@ -3617,6 +4342,9 @@ export default function App() {
       setShots((current) =>
         refreshShotDialogueText(nextSequence, current),
       );
+      setDialogueIssues((current) =>
+        current.filter((issue) => !updates.has(issue.dialogue_id)),
+      );
       setContentSearch((current) => {
         if (!current) {
           return current;
@@ -3646,6 +4374,9 @@ export default function App() {
               cachedSequence,
               cached.shots,
             ),
+            dialogueIssues: cached.dialogueIssues.filter(
+              (issue) => !updates.has(issue.dialogue_id),
+            ),
           });
         }
         return next;
@@ -3670,6 +4401,7 @@ export default function App() {
       className="app-shell"
       data-ark-theme="endfield"
       data-ark-depth="moderate"
+      data-active-workspace={activeWorkspace}
       data-workspace-direction={workspaceDirection}
       data-configuration-mode={configurationMode}
       data-configuration-transition={configurationModeTransition}
@@ -3878,7 +4610,8 @@ export default function App() {
         aria-hidden={activeWorkspace !== "storyboard" || undefined}
         inert={activeWorkspace !== "storyboard" || undefined}
       >
-        <aside className="left-panel">
+        {!configurationMode && (
+          <aside className="left-panel">
           <section className="panel-section query-section">
             <div className="section-label">
               <span>对话定位</span>
@@ -3903,12 +4636,12 @@ export default function App() {
                   type="submit"
                   title={
                     queryIsDialogueId
-                      ? "分析对话与站位"
+                      ? "加载对话与已有配置"
                       : "搜索对白内容"
                   }
                   aria-label={
                     queryIsDialogueId
-                      ? "分析对话与站位"
+                      ? "加载对话与已有配置"
                       : "搜索对白内容"
                   }
                   disabled={
@@ -3923,7 +4656,7 @@ export default function App() {
                   ) : (
                     <Search size={18} />
                   )}
-                  <span>{queryIsDialogueId ? "分析" : "搜索"}</span>
+                  <span>{queryIsDialogueId ? "加载" : "搜索"}</span>
                 </button>
               </div>
             </form>
@@ -4002,7 +4735,16 @@ export default function App() {
             <DirectorControl
               mode={directorMode}
               appliedMode={appliedDirector}
+              designState={
+                awaitingDirectorDesign
+                  ? shots.length > 0
+                    ? "existing"
+                    : "idle"
+                  : "designed"
+              }
               loading={directorLoading || formationChecking}
+              advisorProgress={ruleAdvisorProgress}
+              advisorSummary={ruleAdvisorSummary}
               onModeChange={changeDirectorMode}
             />
             {error && (
@@ -4279,10 +5021,13 @@ export default function App() {
                 <Pencil size={17} />
               </button>
             )}
-        </aside>
+          </aside>
+        )}
 
-        <section className="viewport-panel">
-          {activeShot ? (
+        {!configurationMode && (
+          <section className="viewport-panel">
+          {activeShot &&
+          (!configurationMode || configurationSelectionReady) ? (
             <>
               <div className="viewport-toolbar">
               <div>
@@ -4409,6 +5154,29 @@ export default function App() {
                   ) : (
                     <p>{activeDialogueRow?.content ?? activeShot.content}</p>
                   )}
+                  {activeDialogueIssues.length > 0 &&
+                    editingDialogueId !== activeDialogueRow?.id && (
+                      <div
+                        className="dialogue-strip__advisor-note"
+                        data-severity={
+                          activeDialogueIssues.some(
+                            (issue) => issue.severity === "warning",
+                          )
+                            ? "warning"
+                            : "note"
+                        }
+                      >
+                        <AlertTriangle size={12} aria-hidden="true" />
+                        <span>
+                          {activeDialogueIssues
+                            .map(
+                              (issue) =>
+                                `${dialogueIssueCategoryLabel(issue.category)}：${issue.reason}`,
+                            )
+                            .join("；")}
+                        </span>
+                      </div>
+                    )}
                   {dialogueSaveError && (
                     <small className="dialogue-strip__message is-error">
                       {dialogueSaveError}
@@ -4543,7 +5311,8 @@ export default function App() {
               </div>
             </>
           )}
-        </section>
+          </section>
+        )}
 
         <aside className="right-panel">
           {activeShot ? (
@@ -4552,6 +5321,7 @@ export default function App() {
                 shot={activeShot}
                 sequence={sequence}
                 activeDialogueId={activeDialogueId}
+                dialogueIssues={dialogueIssues}
                 directorAnalysis={directorAnalysis}
                 soundEffects={soundEffects}
                 soundEffectCatalog={soundEffectCatalog}
@@ -4562,7 +5332,11 @@ export default function App() {
                 activeIndex={activeIndex}
                 shotCount={shots.length}
                 tab={inspectorTab}
-                canExport={canExportStoryboard}
+                workspaceActive={activeWorkspace === "storyboard"}
+                canExport={
+                  canExportStoryboard &&
+                  (!configurationMode || configurationSelectionReady)
+                }
                 exportBusy={
                   storyboardExportBusy ||
                   formationChecking ||
@@ -4570,10 +5344,22 @@ export default function App() {
                 }
                 exportError={storyboardExportError}
                 exportButtonLabel={storyboardExportButtonLabel}
-                exportUnavailableReason={storyboardExportUnavailableReason}
+                exportUnavailableReason={
+                  configurationMode && !configurationSelectionReady
+                    ? configurationSelectionMessage
+                    : storyboardExportUnavailableReason
+                }
                 backgroundGenerationActive={directorLoading}
                 configurationMode={configurationMode}
                 configurationModeBusy={configurationModeBusy}
+                configurationDialogueNodeId={selectedUeDialogueNodeId}
+                configurationSelectionMessage={
+                  configurationSelectionMessage
+                }
+                configurationSelectionReady={configurationSelectionReady}
+                configurationSelectionRefreshing={
+                  ueDialogueSelectionRefreshing
+                }
                 characterActionEditor={characterActionEditor}
                 onMove={moveShot}
                 preference={
@@ -4592,9 +5378,22 @@ export default function App() {
                 onConfigurationModeChange={(enabled) =>
                   void changeConfigurationMode(enabled)
                 }
-                onExport={() => void openStoryboardExport()}
+                onReloadExistingStoryboard={() =>
+                  void reloadExistingStoryboard()
+                }
+                onExport={() =>
+                  void openStoryboardExport(
+                    configurationMode && selectedUeDialogueNodeId
+                      ? [selectedUeDialogueNodeId]
+                      : undefined,
+                  )
+                }
                 onExportSoundEffects={() =>
-                  void previewCurrentSoundEffectExport()
+                  void previewCurrentSoundEffectExport(
+                    configurationMode && selectedUeDialogueNodeId
+                      ? [selectedUeDialogueNodeId]
+                      : undefined,
+                  )
                 }
                 onChangeSoundEffect={updateSoundEffectRecommendation}
                 onApplySoundEffect={applySoundEffectFromLibrary}
@@ -4605,45 +5404,120 @@ export default function App() {
             <>
               <section className="inspector-header">
                 <div>
-                  <small>当前进度</small>
-                  <h2>{hasLoadedDialogue ? "对话已加载" : "等待对话"}</h2>
+                  <small>
+                    {configurationMode ? (
+                      <>
+                        {ueDialogueSelectionRefreshing ? (
+                          <LoaderCircle className="spin" size={11} />
+                        ) : (
+                          <MousePointer2 size={11} />
+                        )}
+                        {selectedUeDialogueNodeId
+                          ? `UE NODE ${selectedUeDialogueNodeId}`
+                          : "UE NODE"}
+                      </>
+                    ) : (
+                      "当前进度"
+                    )}
+                  </small>
+                  <h2>
+                    {configurationMode
+                      ? selectedUeDialogueRow
+                        ? selectedUeDialogueRow.content
+                        : configurationSelectionMessage
+                      : hasLoadedDialogue
+                        ? "对话已加载"
+                        : "等待对话"}
+                  </h2>
                 </div>
+                <button
+                  className="icon-button configuration-mode-toggle"
+                  type="button"
+                  title={
+                    configurationMode ? "返回完整窗口" : "进入配置小窗"
+                  }
+                  aria-label={
+                    configurationMode ? "返回完整窗口" : "进入配置小窗"
+                  }
+                  aria-pressed={configurationMode}
+                  disabled={configurationModeBusy}
+                  onClick={() =>
+                    void changeConfigurationMode(!configurationMode)
+                  }
+                >
+                  {configurationModeBusy ? (
+                    <LoaderCircle className="spin" size={17} />
+                  ) : configurationMode ? (
+                    <Maximize2 size={17} />
+                  ) : (
+                    <PanelRightClose size={17} />
+                  )}
+                </button>
               </section>
-              <section className="inspector-section">
-                <div className="section-label">
-                  <span>镜头准备</span>
-                  <small>{hasLoadedDialogue ? dialogueSummary : "尚未选择"}</small>
-                </div>
-                <p>{shotPreparationMessage}</p>
-              </section>
-              {sequence.warnings.length > 0 && (
-                <section className="inspector-section warning-section">
-                  <div className="section-label">
-                    <span>数据提示</span>
-                  </div>
-                  {sequence.warnings.map((warning) => (
-                    <p key={warning}>{warning}</p>
-                  ))}
-                </section>
+              {configurationMode ? (
+                selectedUeDialogueRow && !formationChecking ? (
+                  <NodeCameraQuickActions
+                    dialogueId={sequence.prefix}
+                    startId={sequence.startId}
+                    dialogueNodeId={selectedUeDialogueRow.id}
+                    previousDialogueNodeId={
+                      previousSelectedUeDialogueNodeId
+                    }
+                    onApplied={() => void reloadExistingStoryboard()}
+                  />
+                ) : (
+                  <ConfigurationSelectionState
+                    message={configurationSelectionMessage}
+                    refreshing={
+                      ueDialogueSelectionRefreshing || formationChecking
+                    }
+                  />
+                )
+              ) : (
+                <>
+                  <section className="inspector-section">
+                    <div className="section-label">
+                      <span>镜头准备</span>
+                      <small>
+                        {hasLoadedDialogue ? dialogueSummary : "尚未选择"}
+                      </small>
+                    </div>
+                    <p>{shotPreparationMessage}</p>
+                  </section>
+                  {sequence.warnings.length > 0 && (
+                    <section className="inspector-section warning-section">
+                      <div className="section-label">
+                        <span>数据提示</span>
+                      </div>
+                      {sequence.warnings.map((warning) => (
+                        <p key={warning}>{warning}</p>
+                      ))}
+                    </section>
+                  )}
+                  <footer className="inspector-footer">
+                    <Users size={15} />
+                    <span>
+                      {hasLoadedDialogue
+                        ? `${participantRoles.dialogue.length} 位对白角色${
+                            participantRoles.background.length > 0
+                              ? ` · ${participantRoles.background.length} 位背景 NPC`
+                              : ""
+                          }`
+                        : "等待加载角色"}
+                    </span>
+                  </footer>
+                </>
               )}
-              <footer className="inspector-footer">
-                <Users size={15} />
-                <span>
-                  {hasLoadedDialogue
-                    ? `${participantRoles.dialogue.length} 位对白角色${
-                        participantRoles.background.length > 0
-                          ? ` · ${participantRoles.background.length} 位背景 NPC`
-                          : ""
-                      }`
-                    : "等待加载角色"}
-                </span>
-              </footer>
             </>
           )}
         </aside>
       </div>
 
-      <section
+      {!configurationMode &&
+        (loadedToolWorkspaces.has("npc") ||
+          activeWorkspace === "npc" ||
+          outgoingWorkspace === "npc") && (
+        <section
         className="tool-workspace"
         data-workspace-state={
           activeWorkspace === "npc"
@@ -4659,13 +5533,20 @@ export default function App() {
         inert={activeWorkspace !== "npc" || undefined}
         aria-label="NPC 注册工作区"
       >
-        <MemoizedNpcRegistrationModal
-          embedded
-          onClose={closeToolWorkspace}
-        />
-      </section>
+          <Suspense fallback={<ToolWorkspaceLoading />}>
+            <LazyNpcRegistrationModal
+              embedded
+              onClose={closeToolWorkspace}
+            />
+          </Suspense>
+        </section>
+      )}
 
-      <section
+      {!configurationMode &&
+        (loadedToolWorkspaces.has("migration") ||
+          activeWorkspace === "migration" ||
+          outgoingWorkspace === "migration") && (
+        <section
         className="tool-workspace"
         data-workspace-state={
           activeWorkspace === "migration"
@@ -4684,10 +5565,17 @@ export default function App() {
         inert={activeWorkspace !== "migration" || undefined}
         aria-label="NPC 迁移工作区"
       >
-        <MemoizedNpcMigrationWorkspace onClose={closeToolWorkspace} />
-      </section>
+          <Suspense fallback={<ToolWorkspaceLoading />}>
+            <LazyNpcMigrationWorkspace onClose={closeToolWorkspace} />
+          </Suspense>
+        </section>
+      )}
 
-      <section
+      {!configurationMode &&
+        (loadedToolWorkspaces.has("targets") ||
+          activeWorkspace === "targets" ||
+          outgoingWorkspace === "targets") && (
+        <section
         className="tool-workspace"
         data-workspace-state={
           activeWorkspace === "targets"
@@ -4706,12 +5594,15 @@ export default function App() {
         inert={activeWorkspace !== "targets" || undefined}
         aria-label="任务目标物工作区"
       >
-        <MemoizedMissionTargetModal
-          embedded
-          database={database}
-          onClose={closeToolWorkspace}
-        />
-      </section>
+          <Suspense fallback={<ToolWorkspaceLoading />}>
+            <LazyMissionTargetModal
+              embedded
+              database={database}
+              onClose={closeToolWorkspace}
+            />
+          </Suspense>
+        </section>
+      )}
 
       <Suspense fallback={null}>
         {showDialogueTextEditor && dialogueTextEditorItems.length > 0 && (

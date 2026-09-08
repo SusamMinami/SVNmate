@@ -41,7 +41,7 @@ interface AudioLibraryBrowserProps {
   appliedSoundEffects: DirectorSoundEffectRecommendation[];
   appliedMusic: MusicRecommendation[];
   playbackActive: boolean;
-  onPlaybackStart: () => void;
+  onPlaybackStart: (label: string) => void;
   onPlaybackStop: () => void;
   onApplySoundEffect: (
     entry: SoundEffectCatalogEntry,
@@ -196,7 +196,7 @@ export function AudioLibraryBrowser({
     stopPlayback();
     setPlaybackError("");
     setPreparingKey(key);
-    onPlaybackStart();
+    onPlaybackStart(label);
     const runId = ++playbackRunRef.current;
     try {
       const url = await prepare();
@@ -392,12 +392,18 @@ export function AudioLibraryBrowser({
                     <button
                       className="icon-button audio-library-browser__apply"
                       type="button"
-                      aria-label={`应用资料库音效 ${entry.assetName} 到节点 ${targetDialogueId}`}
+                      aria-label={
+                        applied
+                          ? `取消资料库音效 ${entry.assetName} 在节点 ${targetDialogueId} 的应用`
+                          : `应用资料库音效 ${entry.assetName} 到节点 ${targetDialogueId}`
+                      }
                       aria-pressed={applied}
                       disabled={!targetDialogueId}
                       title={
                         targetDialogueId
-                          ? `应用到节点 ${targetDialogueId}`
+                          ? applied
+                            ? `从节点 ${targetDialogueId} 移除`
+                            : `应用到节点 ${targetDialogueId}`
                           : "当前分镜没有可用对话节点"
                       }
                       onClick={() =>
@@ -469,12 +475,18 @@ export function AudioLibraryBrowser({
                     <button
                       className="icon-button audio-library-browser__apply"
                       type="button"
-                      aria-label={`应用资料库音乐 ${entry.name} 到节点 ${targetDialogueId}`}
+                      aria-label={
+                        applied
+                          ? `取消资料库音乐 ${entry.name} 在节点 ${targetDialogueId} 的应用`
+                          : `应用资料库音乐 ${entry.name} 到节点 ${targetDialogueId}`
+                      }
                       aria-pressed={applied}
                       disabled={!targetDialogueId}
                       title={
                         targetDialogueId
-                          ? `应用到节点 ${targetDialogueId}`
+                          ? applied
+                            ? `从节点 ${targetDialogueId} 移除`
+                            : `应用到节点 ${targetDialogueId}`
                           : "当前分镜没有可用对话节点"
                       }
                       onClick={() => onApplyMusic(entry, targetDialogueId)}

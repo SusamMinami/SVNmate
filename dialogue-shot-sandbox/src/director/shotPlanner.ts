@@ -51,21 +51,33 @@ export function resolveRuleShotsWithRetry(
   sequence: DialogueSequence,
   decisions: ReturnType<typeof createRuleDecisions>,
 ): ShotPlan[] {
+  return resolveRulePlanWithRetry(sequence, decisions).shots;
+}
+
+export function resolveRulePlanWithRetry(
+  sequence: DialogueSequence,
+  decisions: ReturnType<typeof createRuleDecisions>,
+): {
+  decisions: ReturnType<typeof createRuleDecisions>;
+  shots: ShotPlan[];
+} {
   const initialShots = resolveShotDecisions(sequence, decisions);
   if (initialShots.every((shot) => shot.projection.valid)) {
-    return initialShots;
+    return { decisions, shots: initialShots };
   }
 
   try {
-    const revisedShots = resolveShotDecisions(
+    const revisedDecisions = reviseRuleDecisionsForProjection(
+      decisions,
+      initialShots,
       sequence,
-      reviseRuleDecisionsForProjection(decisions, initialShots, sequence),
     );
+    const revisedShots = resolveShotDecisions(sequence, revisedDecisions);
     return projectionIssueScore(revisedShots) < projectionIssueScore(initialShots)
-      ? revisedShots
-      : initialShots;
+      ? { decisions: revisedDecisions, shots: revisedShots }
+      : { decisions, shots: initialShots };
   } catch {
-    return initialShots;
+    return { decisions, shots: initialShots };
   }
 }
 

@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Plugin, PreviewServer, ViteDevServer } from "vite";
 import { z } from "zod";
 import {
-  RuleAdvisorPlanSchema,
+  RuleCandidateVisualAssessmentSchema,
   RuleAdvisorRequestSchema,
   RuleAdvisorResponseSchema,
   RuleBeatAdviceSchema,
@@ -25,6 +25,41 @@ import {
   findRelevantStoryboardCases,
   type StoryboardRevisionReference,
 } from "./storyboardCaseLibrary";
+import {
+  ensureRuleAdvisorRuntime,
+  releaseIdleRuleAdvisorResourcesNow,
+  releaseRuleAdvisorResources,
+  retainRuleAdvisorResources,
+  ruleAdvisorKeepAlive,
+} from "./ruleAdvisorRuntime";
+
+interface AdvisorProgress {
+  request_id: string;
+  stage:
+    | "beats"
+    | "generating_candidates"
+    | "scoring_candidates"
+    | "complete"
+    | "unavailable";
+  completed: number;
+  total: number;
+  current_shot_index: number | null;
+  current_candidate_label: string | null;
+  message: string;
+}
+
+const advisorProgress = new Map<string, AdvisorProgress>();
+
+function updateAdvisorProgress(progress: AdvisorProgress): void {
+  advisorProgress.set(progress.request_id, progress);
+  if (progress.stage === "complete" || progress.stage === "unavailable") {
+    setTimeout(() => {
+      if (advisorProgress.get(progress.request_id) === progress) {
+        advisorProgress.delete(progress.request_id);
+      }
+    }, 60_000).unref();
+  }
+}
 
 const CompletionSchema = z.object({
   choices: z
@@ -98,6 +133,24 @@ function advisorConfig() {
   };
 }
 
+async function withRuleAdvisorResources<T>(
+  work: () => Promise<T>,
+): Promise<T> {
+  const config = advisorConfig();
+  if (config.apiStyle !== "ollama") {
+    return work();
+  }
+  retainRuleAdvisorResources();
+  try {
+    if (!(await ensureRuleAdvisorRuntime())) {
+      throw new Error("未检测到可用的 Ollama 运行时");
+    }
+    return await work();
+  } finally {
+    releaseRuleAdvisorResources();
+  }
+}
+
 function sendJson(
   response: ServerResponse,
   status: number,
@@ -115,8 +168,8 @@ async function readJson(request: IncomingMessage): Promise<unknown> {
   for await (const chunk of request) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     size += buffer.length;
-    if (size > 8_000_000) {
-      throw new Error("请求体超过 8MB 限制");
+    if (size > 64_000_000) {
+      throw new Error("请求体超过 64MB 限制");
     }
     chunks.push(buffer);
   }
@@ -153,119 +206,31 @@ function completionText(payload: z.infer<typeof CompletionSchema>): string {
     : content.map((part) => part.text || "").join("");
 }
 
-export function buildRuleAdvisorPrompt(
-  request: RuleAdvisorRequest,
-  visualScores: z.infer<typeof RuleVisualScoreSchema>[] = [],
-  referenceCases: StoryboardRevisionReference[] = [],
-  preferences: DirectorPreferenceReference[] = [],
-): string {
-  const { input, baseline } = request;
-  return [
-    "你是规则导演内部的轻量镜头顾问，不是独立导演。",
-    "规则系统已经生成一组合法镜头。只在有明确叙事收益时提出少量字段调整，不要重写完整方案。",
-    "不得修改 dialogue_ids、角色站位、角色进出场或输出摄影机 XYZ 坐标。",
-    "shot_index 从 0 开始，对应 baseline.shots 数组。最多输出 8 项调整；没有必要调整时返回空数组。",
-    "每张候选画面已经由视觉评分器单独检查。根据 visual_scores 的低分项和问题提出必要调整，不要重复评分。",
-    "confidence 低于 0.65 的建议不会应用。changes 只填写确实需要修改的字段。",
-    "只能调整 visual_scores 中出现的 shot_index；未评分镜头保持规则基线。",
-    "若改变 camera_movement，必须同步给出合法的 movement_intensity 和 end_lens_mm；焦段必须与 lens_intent 一致。",
-    "优先判断叙事节拍、关系镜头延续、重要反应、景别变化、主体与构图意图。不要仅因问号、说话人切换或连续发言触发特写。",
-    "体型来自 participants.body_profile；landmarkSource=proportional 表示眼睛和肩膀仍是比例估算。",
-    "只输出 rule-advice.v1 JSON，不要 Markdown 或解释文字。",
-    `request_id 字段填写：${input.request_id}`,
-    "输出格式示例：",
-    JSON.stringify({
-      schema_version: "rule-advice.v1",
-      request_id: input.request_id,
-      summary: "对规则方案的简短判断",
-      scene_analysis: {
-        dramatic_goal: "本场目标",
-        emotional_progression: "情绪推进",
-        visual_strategy: "整体镜头策略",
-      },
-      adjustments: [
-        {
-          shot_index: 1,
-          confidence: 0.82,
-          reason: "该节点出现明确反应，适合收紧主体",
-          changes: {
-            template: "reaction_closeup",
-            lens_mm: 85,
-            end_lens_mm: 85,
-            lens_intent: "subject_isolation",
-            depth_of_field: "shallow",
-          },
-        },
-      ],
-    }),
-    "场景输入：",
-    JSON.stringify({
-      outline: input.outline,
-      participants: input.participants.map((participant) => ({
-        slot: participant.slot,
-        name: participant.name,
-        role: participant.role,
-        background: participant.background,
-        position: participant.initial_position,
-        facing_target: participant.initial_facing_target,
-        height: participant.body_profile?.height ?? null,
-      })),
-      dialogue: input.dialogue.map((line) => ({
-        id: line.dialogue_id,
-        speaker_slot: line.speaker,
-        text: line.content,
-      })),
-      adjacent_context: input.adjacent_context,
-      constraints: {
-        primary_aspect_ratio: input.constraints.primary_aspect_ratio,
-        overlay_aspect_ratio: input.constraints.overlay_aspect_ratio,
-        avoid_character_overlap: input.constraints.avoid_character_overlap,
-      },
-    }),
-    "规则导演基线：",
-    JSON.stringify({
-      analysis: baseline.analysis,
-      shots: baseline.shots.map((shot) => ({
-        dialogue_ids: shot.dialogue_ids,
-        template: shot.template,
-        subject: shot.subject,
-        look_target: shot.look_target,
-        lens_mm: shot.lens_mm,
-        end_lens_mm: shot.end_lens_mm,
-        lens_intent: shot.lens_intent,
-        depth_of_field: shot.depth_of_field,
-        camera_movement: shot.camera_movement,
-        movement_intensity: shot.movement_intensity,
-        composition_mode: shot.composition_mode,
-        visual_anchor: shot.visual_anchor,
-        negative_space: shot.negative_space,
-        coverage_intent: shot.coverage_intent,
-        camera_height: shot.camera_height,
-      })),
-    }),
-    "逐镜视觉评分：",
-    JSON.stringify(visualScores),
-    "已审核返修经验（仅在问题和条件相符时参考）：",
-    JSON.stringify(referenceCases),
-    "已确认用户偏好（accept/manual_edit 表示偏好，reject 表示应避免；条件不同不可照搬）：",
-    JSON.stringify(preferences),
-  ].join("\n");
-}
-
-function buildVisualScorePrompt(
+export function buildVisualScorePrompt(
   request: RuleAdvisorRequest,
   frame: RuleAdvisorRequest["candidate_frames"][number],
+  referenceCases: StoryboardRevisionReference[] = [],
+  preferences: DirectorPreferenceReference[] = [],
 ): string {
   const shot = request.baseline.shots[frame.shot_index];
   const previousShot = request.baseline.shots[frame.shot_index - 1];
   return [
-    `只评估图中的 SHOT ${String(frame.shot_index + 1).padStart(2, "0")}。`,
+    `只评估图中的 SHOT ${String(frame.shot_index + 1).padStart(2, "0")} · ${frame.candidate_label}。`,
     "这是镜头沙盘的真实体型代理渲染，不是最终 UE 材质画面。彩色人形及其标签代表角色，白线代表 21:9 安全画幅。",
+    "系统会把同一镜头的候选逐张发送给你；当前回复只评价这一张，不假设你同时看到了其他候选。",
     "所有分项必须使用 0-100 百分制，不是 0-10：优秀为 85-100，合格为 70-84，明显有问题为 40-69，不可用为 0-39。",
     "composition 评估构图稳定性；subject_readability 评估主体辨识；occlusion 越无遮挡分越高；continuity 结合上一镜语义评估连续性。overall 会由软件重算。",
     "忽略代理模型的材质简化、球形头部、身体接缝、标签样式、网格地面和缺少动画；这些不是摄影问题。只评价景别、主体位置、可见性、遮挡、留白和镜头连续性。",
-    "不要提出镜头修改，只输出评分 JSON。issues 只写可由摄影机或构图调整解决的问题，最多 4 项。",
-    `shot_index 必须填写 ${frame.shot_index}。`,
+    "不要提出新坐标或镜头修改，只输出评分 JSON。issues 只写可由摄影机或构图调整解决的问题，最多 4 项；assessment 用一句话说明该机位的主要取舍。",
+    "输出字段只有 composition、subject_readability、occlusion、continuity、issues、assessment。",
+    "几何候选信息：",
+    JSON.stringify({
+      candidate_id: frame.candidate_id,
+      candidate_label: frame.candidate_label,
+      is_baseline: frame.is_baseline,
+      legal: frame.legal,
+      camera: frame.camera,
+    }),
     "当前镜头语义：",
     JSON.stringify(shot),
     "上一镜语义：",
@@ -276,6 +241,10 @@ function buildVisualScorePrompt(
         frame.dialogue_ids.includes(line.dialogue_id),
       ),
     ),
+    "已审核返修经验（条件相符时才参考）：",
+    JSON.stringify(referenceCases),
+    "已确认用户偏好（accept/manual_edit 表示偏好，reject 表示应避免）：",
+    JSON.stringify(preferences),
   ].join("\n");
 }
 
@@ -291,6 +260,8 @@ export function buildRuleBeatPrompt(
     "intensity 使用 0-100：平静铺垫 15-35，普通发展 35-55，明确转折 55-75，高潮或强烈反应 75-100。",
     "relationship_hold 表示维持双人或群像；speaker_focus 表示普通主体镜头；reaction_focus 只用于明确反应；emphasis_focus 只用于关键揭示或压力峰值；reestablish 用于角色进出场或空间关系改变。",
     "通常输出 2-6 个节拍。focus_slot 仅在需要强调明确角色时填写。",
+    "同时审阅当前对白是否存在明确的表达问题。只标注明显影响理解、上下文连续、角色口吻、信息重复、叙事节奏或因果逻辑的问题；不要把个人文风偏好当成问题。",
+    "dialogue_issues 只能引用当前 dialogue 中的 id。severity=warning 表示会明显损害理解或人物逻辑，severity=note 表示值得人工复核。reason 说明问题，suggestion 只给修改方向，不直接替换或改写原台词。没有可靠问题时返回空数组。",
     "只输出 rule-beat.v1 JSON。",
     `request_id 字段填写：${input.request_id}`,
     "场景：",
@@ -341,6 +312,7 @@ async function requestStructured<T>(
         config.apiStyle === "ollama"
           ? {
               model: config.model,
+              keep_alive: ruleAdvisorKeepAlive(),
               messages: [
                 {
                   role: "user",
@@ -418,40 +390,22 @@ async function requestStructured<T>(
 }
 
 async function analyzeWithRuleAdvisor(request: RuleAdvisorRequest) {
-  const visualScores: z.infer<typeof RuleVisualScoreSchema>[] = [];
-  for (const frame of request.candidate_frames) {
-    const score = await requestStructured(
-      buildVisualScorePrompt(request, frame),
-      RuleVisualScoreSchema,
-      frame.image_data_url,
-      256,
-    );
-    visualScores.push({
-      ...score,
-      shot_index: frame.shot_index,
-      overall: Math.round(
-        score.composition * 0.3 +
-          score.subject_readability * 0.3 +
-          score.occlusion * 0.2 +
-          score.continuity * 0.2,
-      ),
-    });
-  }
-  const technicalFailures = visualScores
-    .filter((score) => score.issues.length > 0 || score.overall < 75)
-    .flatMap((score) => {
-      const decision = request.baseline.shots[score.shot_index];
-      return decision
-        ? [
-            {
-              shotIndex: score.shot_index + 1,
-              dialogueIds: decision.dialogue_ids,
-              warnings: score.issues,
-              decision,
-            },
-          ]
-        : [];
-    });
+  const baselineFrames = request.candidate_frames.filter(
+    (frame) => frame.is_baseline,
+  );
+  const technicalFailures = baselineFrames.flatMap((frame) => {
+    const decision = request.baseline.shots[frame.shot_index];
+    return decision && frame.camera.projection_issues.length > 0
+      ? [
+          {
+            shotIndex: frame.shot_index + 1,
+            dialogueIds: decision.dialogue_ids,
+            warnings: frame.camera.projection_issues,
+            decision,
+          },
+        ]
+      : [];
+  });
   const [referenceCases, preferences] = await Promise.all([
     findRelevantStoryboardCases(
       completeAdvisorInput(request.input),
@@ -466,20 +420,106 @@ async function analyzeWithRuleAdvisor(request: RuleAdvisorRequest) {
       return [];
     }),
   ]);
-  const plan = await requestStructured(
-    buildRuleAdvisorPrompt(
-      request,
-      visualScores,
-      referenceCases,
-      preferences,
-    ),
-    RuleAdvisorPlanSchema,
-  );
-  return RuleAdvisorResponseSchema.parse({
-    ...plan,
+  const visualScores: z.infer<typeof RuleVisualScoreSchema>[] = [];
+  const total = request.candidate_frames.length;
+  updateAdvisorProgress({
     request_id: request.input.request_id,
-    visual_scores: visualScores,
+    stage: "scoring_candidates",
+    completed: 0,
+    total,
+    current_shot_index: request.candidate_frames[0]?.shot_index ?? null,
+    current_candidate_label:
+      request.candidate_frames[0]?.candidate_label ?? null,
+    message: `端侧模型将逐张评估 ${total} 个合法机位`,
   });
+
+  for (const [index, frame] of request.candidate_frames.entries()) {
+    updateAdvisorProgress({
+      request_id: request.input.request_id,
+      stage: "scoring_candidates",
+      completed: index,
+      total,
+      current_shot_index: frame.shot_index,
+      current_candidate_label: frame.candidate_label,
+      message: `正在评估镜头 ${frame.shot_index + 1} · ${frame.candidate_label}`,
+    });
+    const assessment = await requestStructured(
+      buildVisualScorePrompt(
+        request,
+        frame,
+        referenceCases,
+        preferences,
+      ),
+      RuleCandidateVisualAssessmentSchema,
+      frame.image_data_url,
+      256,
+    );
+    visualScores.push({
+      ...assessment,
+      shot_index: frame.shot_index,
+      candidate_id: frame.candidate_id,
+      candidate_label: frame.candidate_label,
+      is_baseline: frame.is_baseline,
+      overall: Math.round(
+        assessment.composition * 0.3 +
+          assessment.subject_readability * 0.3 +
+          assessment.occlusion * 0.2 +
+          assessment.continuity * 0.2,
+      ),
+    });
+  }
+
+  const framesById = new Map(
+    request.candidate_frames.map((frame) => [frame.candidate_id, frame]),
+  );
+  const shotIndexes = [
+    ...new Set(request.candidate_frames.map((frame) => frame.shot_index)),
+  ].sort((left, right) => left - right);
+  const rankings = shotIndexes.map((shotIndex) => {
+    const ranked = visualScores
+      .filter((score) => score.shot_index === shotIndex)
+      .sort(
+        (left, right) =>
+          right.overall - left.overall ||
+          Number(right.is_baseline) - Number(left.is_baseline) ||
+          left.candidate_id.localeCompare(right.candidate_id),
+      );
+    const legalRanked = ranked.filter(
+      (score) => framesById.get(score.candidate_id)?.legal,
+    );
+    const selected = legalRanked[0] ?? ranked[0];
+    if (!selected) {
+      throw new Error(`镜头 ${shotIndex + 1} 没有可排序的机位候选`);
+    }
+    return {
+      shot_index: shotIndex,
+      selected_candidate_id: selected.candidate_id,
+      ranked_candidate_ids: ranked.map((score) => score.candidate_id),
+      reason: selected.assessment,
+    };
+  });
+  const alternativeCount = rankings.filter((ranking) => {
+    const selected = framesById.get(ranking.selected_candidate_id);
+    return selected && !selected.is_baseline;
+  }).length;
+  const result = RuleAdvisorResponseSchema.parse({
+    schema_version: "rule-camera-ranking.v1",
+    request_id: request.input.request_id,
+    model: advisorConfig().model,
+    summary: `端侧模型逐张评估 ${shotIndexes.length} 个镜头、${visualScores.length} 个机位，并为 ${alternativeCount} 个镜头选择非基线候选`,
+    visual_scores: visualScores,
+    rankings,
+  });
+  updateAdvisorProgress({
+    request_id: request.input.request_id,
+    stage: "complete",
+    completed: total,
+    total,
+    current_shot_index: null,
+    current_candidate_label: null,
+    message: result.summary,
+  });
+  return result;
 }
 
 async function analyzeRuleBeats(request: RuleBeatRequest) {
@@ -520,9 +560,22 @@ async function analyzeRuleBeats(request: RuleBeatRequest) {
   if (expectedStartIndex !== dialogueIds.length) {
     throw new Error("端侧顾问返回的叙事节拍未覆盖全部对白");
   }
+  const seenDialogueIssues = new Set<string>();
+  const dialogueIssues = advice.dialogue_issues.filter((issue) => {
+    if (!indexById.has(issue.dialogue_id)) {
+      throw new Error("端侧顾问返回的台词标注不在当前对白中");
+    }
+    const key = `${issue.dialogue_id}:${issue.category}`;
+    if (seenDialogueIssues.has(key)) {
+      return false;
+    }
+    seenDialogueIssues.add(key);
+    return true;
+  });
   return {
     ...advice,
     request_id: request.input.request_id,
+    dialogue_issues: dialogueIssues,
   };
 }
 
@@ -596,9 +649,33 @@ export async function routeRuleAdvisorRequest(
   if (!url.pathname.startsWith("/api/rule-advisor")) {
     return false;
   }
+  let activeRequestId: string | null = null;
   try {
     if (request.method === "GET" && url.pathname === "/api/rule-advisor/status") {
       sendJson(response, 200, { ok: true, data: await advisorStatus() });
+      return true;
+    }
+    if (
+      request.method === "GET" &&
+      url.pathname === "/api/rule-advisor/progress"
+    ) {
+      const requestId = url.searchParams.get("request_id") || "";
+      sendJson(response, 200, {
+        ok: true,
+        data: advisorProgress.get(requestId) ?? null,
+      });
+      return true;
+    }
+    if (
+      request.method === "POST" &&
+      url.pathname === "/api/rule-advisor/release"
+    ) {
+      sendJson(response, 200, {
+        ok: true,
+        data: {
+          released: await releaseIdleRuleAdvisorResourcesNow(),
+        },
+      });
       return true;
     }
     if (
@@ -611,9 +688,12 @@ export async function routeRuleAdvisorRequest(
         return true;
       }
       const body = RuleBeatRequestSchema.parse(await readJson(request));
+      activeRequestId = body.input.request_id;
       sendJson(response, 200, {
         ok: true,
-        data: await analyzeRuleBeats(body),
+        data: await withRuleAdvisorResources(() =>
+          analyzeRuleBeats(body),
+        ),
       });
       return true;
     }
@@ -640,9 +720,12 @@ export async function routeRuleAdvisorRequest(
         return true;
       }
       const body = RuleAdvisorRequestSchema.parse(await readJson(request));
+      activeRequestId = body.input.request_id;
       sendJson(response, 200, {
         ok: true,
-        data: await analyzeWithRuleAdvisor(body),
+        data: await withRuleAdvisorResources(() =>
+          analyzeWithRuleAdvisor(body),
+        ),
       });
       return true;
     }
@@ -652,6 +735,18 @@ export async function routeRuleAdvisorRequest(
     });
     return true;
   } catch (error) {
+    if (activeRequestId) {
+      updateAdvisorProgress({
+        request_id: activeRequestId,
+        stage: "unavailable",
+        completed: 0,
+        total: 0,
+        current_shot_index: null,
+        current_candidate_label: null,
+        message:
+          error instanceof Error ? error.message : "端侧顾问调用失败",
+      });
+    }
     console.warn(
       "[rule-advisor]",
       error instanceof Error ? error.message : String(error),

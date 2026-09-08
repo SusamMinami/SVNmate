@@ -19,7 +19,11 @@ import { participantSlotLabel } from "../data/dialogueRoles";
 import { participantFacingYawDegrees } from "../director/actorActionPlanner";
 import type { SceneReference } from "../scene/sceneReference";
 import { SceneReferenceGeometry } from "./SceneReferenceGeometry";
-import { characterBody, characterBodySummary } from "../director/characterGeometry";
+import {
+  characterBody,
+  characterBodySummary,
+  characterProxyScales,
+} from "../director/characterGeometry";
 import type {
   DialogueParticipant,
   ParticipantSlot,
@@ -110,6 +114,7 @@ function Character({
   const opacity = pending ? 0.28 : 1;
   const slotLabel = participantSlotLabel(participant);
   const body = characterBody(participant);
+  const { bodyScale, headCorrection } = characterProxyScales(body);
   const facingCenter = Math.atan2(
     participant.facingTarget[0] - participant.position[0],
     participant.facingTarget[2] - participant.position[2],
@@ -117,7 +122,7 @@ function Character({
   return (
     <group position={participant.position}>
       <group rotation={[0, facingCenter, 0]}>
-        <group position={body.footOffset} scale={[body.width / 0.68, body.height / 2.01, body.depth / 0.48]}>
+        <group position={body.footOffset} scale={bodyScale}>
         <mesh position={[0, 0.92, 0]} castShadow={!pending}>
           <capsuleGeometry args={[0.3, 0.86, 5, 12]} />
           <meshStandardMaterial
@@ -128,25 +133,27 @@ function Character({
             depthWrite={!pending}
           />
         </mesh>
-        <mesh position={[0, 1.72, 0]} castShadow={!pending}>
-          <sphereGeometry args={[0.29, 20, 16]} />
-          <meshStandardMaterial
-            color="#f1c9b4"
-            roughness={0.8}
-            transparent={pending}
-            opacity={opacity}
-            depthWrite={!pending}
-          />
-        </mesh>
-        <mesh position={[0, 1.7, 0.27]} rotation={[Math.PI / 2, 0, 0]}>
-          <coneGeometry args={[0.055, 0.16, 12]} />
-          <meshStandardMaterial
-            color="#20262e"
-            transparent={pending}
-            opacity={opacity}
-            depthWrite={!pending}
-          />
-        </mesh>
+        <group position={[0, 1.72, 0]} scale={headCorrection}>
+          <mesh castShadow={!pending}>
+            <sphereGeometry args={[0.29, 20, 16]} />
+            <meshStandardMaterial
+              color="#f1c9b4"
+              roughness={0.8}
+              transparent={pending}
+              opacity={opacity}
+              depthWrite={!pending}
+            />
+          </mesh>
+          <mesh position={[0, -0.02, 0.27]} rotation={[Math.PI / 2, 0, 0]}>
+            <coneGeometry args={[0.055, 0.16, 12]} />
+            <meshStandardMaterial
+              color="#20262e"
+              transparent={pending}
+              opacity={opacity}
+              depthWrite={!pending}
+            />
+          </mesh>
+        </group>
         <mesh position={[-0.14, 0.25, 0]} castShadow={!pending}>
           <cylinderGeometry args={[0.1, 0.12, 0.5, 12]} />
           <meshStandardMaterial

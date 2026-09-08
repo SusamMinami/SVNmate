@@ -2,11 +2,15 @@ import { describe, expect, it } from "vitest";
 import { resolve } from "node:path";
 import type { StoryboardExportRequest } from "../src/types";
 import {
+  applyDialogueCameraQuickAction,
   appendCharacterActions,
+  buildDefaultDialogueCameraMove,
   buildStoryboardCameraMove,
   exportDialogueStoryboard,
+  inspectDialogueCameraQuickAction,
   inspectDialogueStoryboardExport,
   readDialogueCharacterActions,
+  readExistingDialogueStoryboard,
   updateDialogueContent,
   updateDialogueContents,
 } from "./ueBridge";
@@ -88,6 +92,40 @@ class FakeStoryboardExportConnection implements UnrealInvoker {
     ["ActionData2", [{ CameraMoveType: "EPush", FOV: 90 }]],
     ["ActionData3", [{ CameraMoveType: "EPush", FOV: 70 }]],
   ]);
+  readonly blendByData = new Map<string, Record<string, unknown>>([
+    [
+      "ActionData1",
+      {
+        DialogBlendCameraType: "ECutShot",
+        BlendCurve: "None",
+        Duration: 0,
+      },
+    ],
+    [
+      "ActionData2",
+      {
+        DialogBlendCameraType: "ECutShot",
+        BlendCurve: "None",
+        Duration: 0,
+      },
+    ],
+    [
+      "ActionData3",
+      {
+        DialogBlendCameraType: "ECutShot",
+        BlendCurve: "None",
+        Duration: 0,
+      },
+    ],
+  ]);
+  readonly schoolCamerasByData = new Map<
+    string,
+    Record<string, unknown>
+  >([
+    ["ActionData1", { Keys: [], Values: [] }],
+    ["ActionData2", { Keys: [], Values: [] }],
+    ["ActionData3", { Keys: [], Values: [] }],
+  ]);
   readonly behavioursByData = new Map<string, unknown[]>([
     ["ActionData1", []],
     ["ActionData2", []],
@@ -99,6 +137,7 @@ class FakeStoryboardExportConnection implements UnrealInvoker {
   forcePushBlendOutTime: number | null = null;
   forceDelayTimeAfterWrite: number | null = null;
   failRollbackWrites = false;
+  selectedDialogueNodeId = "735201";
   commonWriteCount = 0;
   saveAttempted = false;
   connected = false;
@@ -113,6 +152,14 @@ class FakeStoryboardExportConnection implements UnrealInvoker {
     args: Record<string, unknown>,
   ): Promise<unknown> {
     this.calls.push({ action, args });
+    if (action === "bp.get_selected_ed_graph_node_infos") {
+      return [
+        {
+          NodeClass: "SeriaEdDialogGraphNode",
+          NodeTitle: `节点 ${this.selectedDialogueNodeId}`,
+        },
+      ];
+    }
     if (action === "asset.asset_search") {
       if (String(args.Query).startsWith("A_SFX_")) {
         const assetName = String(args.Query);
@@ -170,6 +217,18 @@ class FakeStoryboardExportConnection implements UnrealInvoker {
         this.behavioursByData.set(
           dataName,
           structuredClone(args.Value as unknown[]),
+        );
+      }
+      if (args.PropertyName === "DialogBlendCameraData") {
+        this.blendByData.set(
+          dataName,
+          structuredClone(args.Value as Record<string, unknown>),
+        );
+      }
+      if (args.PropertyName === "SchoolMoveCamerasMap") {
+        this.schoolCamerasByData.set(
+          dataName,
+          structuredClone(args.Value as Record<string, unknown>),
         );
       }
       return true;
@@ -240,6 +299,12 @@ class FakeStoryboardExportConnection implements UnrealInvoker {
       }
       if (property === "CharacterBehaviours") {
         return structuredClone(this.behavioursByData.get(dataName));
+      }
+      if (property === "DialogBlendCameraData") {
+        return structuredClone(this.blendByData.get(dataName));
+      }
+      if (property === "SchoolMoveCamerasMap") {
+        return structuredClone(this.schoolCamerasByData.get(dataName));
       }
     }
     if (
@@ -1129,6 +1194,329 @@ describe("storyboard sound and music export", () => {
     await expect(
       inspectDialogueStoryboardExport(request, () => connection),
     ).rejects.toThrow("音乐节点 999901 不属于对话 7352");
+  });
+});
+
+describe("dialogue camera quick actions", () => {
+  it("builds the requested c1 EPush default", () => {
+    expect(buildDefaultDialogueCameraMove()).toMatchObject({
+      CameraMoveType: "EPush",
+      PushCameraArg: {
+        Velocity: 1,
+        BlendOutTime: 1,
+      },
+      FOV: 62,
+    });
+  });
+
+  it("previews and writes a new default camera to one node", async () => {
+    const connection = new FakeStoryboardExportConnection();
+    const request = {
+      dialogueId: "7352",
+      startId: "735200",
+      dialogueNodeId: "735201",
+      mode: "default" as const,
+    };
+    const preview = await inspectDialogueCameraQuickAction(
+      request,
+      () => connection,
+    );
+
+    expect(preview).toMatchObject({
+      dialogueNodeId: "735201",
+      sourceDialogueNodeId: null,
+      existingCameraPosition: "",
+      desiredCameraPosition: "c1",
+      existingMoveCount: 0,
+      desiredMoveCount: 1,
+      cameraMoveType: "EPush",
+      velocity: 1,
+      blendOutTime: 1,
+      fov: 62,
+      changed: true,
+      blockedReasons: [],
+    });
+
+    await expect(
+      applyDialogueCameraQuickAction(
+        { ...request, reviewToken: preview.reviewToken },
+        () => connection,
+      ),
+    ).resolves.toMatchObject({
+      status: "updated",
+      dialogueNodeId: "735201",
+      saved: true,
+    });
+    expect(connection.commonByData.get("ActionData1")?.[1].CurrentString).toBe(
+      "c1",
+    );
+    expect(connection.movesByData.get("ActionData1")).toEqual([
+      buildDefaultDialogueCameraMove(),
+    ]);
+  });
+
+  it("copies the previous node camera without changing its values", async () => {
+    const connection = new FakeStoryboardExportConnection();
+    const request = {
+      dialogueId: "7352",
+      startId: "735200",
+      dialogueNodeId: "735201",
+      previousDialogueNodeId: "735202",
+      mode: "copy_previous" as const,
+    };
+    const preview = await inspectDialogueCameraQuickAction(
+      request,
+      () => connection,
+    );
+
+    expect(preview).toMatchObject({
+      sourceDialogueNodeId: "735202",
+      desiredCameraPosition: "c2",
+      cameraMoveType: "EPush",
+      fov: 90,
+    });
+    await applyDialogueCameraQuickAction(
+      { ...request, reviewToken: preview.reviewToken },
+      () => connection,
+    );
+    expect(connection.commonByData.get("ActionData1")?.[1].CurrentString).toBe(
+      "c2",
+    );
+    expect(connection.movesByData.get("ActionData1")).toEqual([
+      { CameraMoveType: "EPush", FOV: 90 },
+    ]);
+  });
+
+  it("adds the default blend curve while preserving duration", async () => {
+    const connection = new FakeStoryboardExportConnection();
+    const request = {
+      dialogueId: "7352",
+      startId: "735200",
+      dialogueNodeId: "735201",
+      blendCurveAssetName: "trans_6015",
+      mode: "blend_curve" as const,
+    };
+    const preview = await inspectDialogueCameraQuickAction(
+      request,
+      () => connection,
+    );
+
+    expect(preview).toMatchObject({
+      existingBlendCameraType: "ECutShot",
+      desiredBlendCameraType: "EBlend",
+      existingBlendCurve: "None",
+      desiredBlendCurve:
+        "/Game/Seria/Task/Mod/MainQuest/DialogCurve/trans_6015.trans_6015",
+      blendDuration: 0,
+      changed: true,
+    });
+    await applyDialogueCameraQuickAction(
+      { ...request, reviewToken: preview.reviewToken },
+      () => connection,
+    );
+    expect(connection.blendByData.get("ActionData1")).toEqual({
+      DialogBlendCameraType: "EBlend",
+      BlendCurve:
+        "/Game/Seria/Task/Mod/MainQuest/DialogCurve/trans_6015.trans_6015",
+      Duration: 0,
+    });
+  });
+
+  it("copies the main camera config to Ring, Nino and Jodie", async () => {
+    const connection = new FakeStoryboardExportConnection();
+    connection.selectedDialogueNodeId = "735202";
+    const request = {
+      dialogueId: "7352",
+      startId: "735200",
+      dialogueNodeId: "735202",
+      mode: "school_cameras" as const,
+    };
+    const preview = await inspectDialogueCameraQuickAction(
+      request,
+      () => connection,
+    );
+
+    expect(preview).toMatchObject({
+      desiredSchoolCameraKeys: ["ERing", "ENino", "EJodie"],
+      existingSchoolCameraCount: 0,
+      desiredSchoolCameraCount: 3,
+      changed: true,
+    });
+    await applyDialogueCameraQuickAction(
+      { ...request, reviewToken: preview.reviewToken },
+      () => connection,
+    );
+    expect(connection.schoolCamerasByData.get("ActionData2")).toEqual({
+      Keys: ["ERing", "ENino", "EJodie"],
+      Values: [
+        { MoveCameras: [{ CameraMoveType: "EPush", FOV: 90 }] },
+        { MoveCameras: [{ CameraMoveType: "EPush", FOV: 90 }] },
+        { MoveCameras: [{ CameraMoveType: "EPush", FOV: 90 }] },
+      ],
+    });
+  });
+
+  it("invalidates the write when UE selection changes after preview", async () => {
+    const connection = new FakeStoryboardExportConnection();
+    const request = {
+      dialogueId: "7352",
+      startId: "735200",
+      dialogueNodeId: "735201",
+      mode: "default" as const,
+    };
+    const preview = await inspectDialogueCameraQuickAction(
+      request,
+      () => connection,
+    );
+    connection.selectedDialogueNodeId = "735202";
+
+    await expect(
+      applyDialogueCameraQuickAction(
+        { ...request, reviewToken: preview.reviewToken },
+        () => connection,
+      ),
+    ).rejects.toThrow("UE 当前选中节点已变化");
+    expect(connection.commonWriteCount).toBe(0);
+  });
+
+  it("rejects an empty previous camera and restores a failed default write", async () => {
+    const emptyPrevious = new FakeStoryboardExportConnection();
+    await expect(
+      inspectDialogueCameraQuickAction(
+        {
+          dialogueId: "7352",
+          startId: "735200",
+          dialogueNodeId: "735202",
+          previousDialogueNodeId: "735201",
+          mode: "copy_previous",
+        },
+        () => emptyPrevious,
+      ),
+    ).rejects.toThrow("没有相机数据");
+
+    const failedSave = new FakeStoryboardExportConnection();
+    const request = {
+      dialogueId: "7352",
+      startId: "735200",
+      dialogueNodeId: "735201",
+      mode: "default" as const,
+    };
+    const preview = await inspectDialogueCameraQuickAction(
+      request,
+      () => failedSave,
+    );
+    failedSave.saveResult = false;
+    await expect(
+      applyDialogueCameraQuickAction(
+        { ...request, reviewToken: preview.reviewToken },
+        () => failedSave,
+      ),
+    ).rejects.toThrow("已恢复本轮未保存修改");
+    expect(
+      failedSave.commonByData.get("ActionData1")?.[1].CurrentString,
+    ).toBe("");
+    expect(failedSave.movesByData.get("ActionData1")).toEqual([]);
+  });
+});
+
+describe("existing dialogue storyboard", () => {
+  it("reads and converts existing EPush camera data without writing", async () => {
+    const connection = new FakeStoryboardExportConnection();
+    connection.movesByData.set("ActionData2", [
+      {
+        CameraMoveType: "EPush",
+        PushCameraArg: {
+          Velocity: 6,
+          StartPoint: { X: -300, Y: 100, Z: 160 },
+          EndPoint: { X: -250, Y: 120, Z: 170 },
+          StartRotation: { Pitch: -5, Yaw: 90, Roll: 2 },
+          EndRotation: { Pitch: -4, Yaw: 88, Roll: 0 },
+        },
+        FOV: 60,
+      },
+    ]);
+
+    const result = await readExistingDialogueStoryboard(
+      {
+        dialogueId: "7352",
+        startId: "735200",
+        dialogueIds: ["735201", "735202"],
+        formationClassPath:
+          "/Game/Seria/Task/Mod/Test/BP_735200.BP_735200_C",
+        participantModelIndexes: [0, 1],
+      },
+      () => connection,
+    );
+
+    expect(result).toMatchObject({
+      status: "found",
+      dialogueAssetPath: connection.dialogueAssetPath,
+      nodes: [
+        {
+          dialogueId: "735202",
+          cameraName: "c2",
+          moveType: "EPush",
+          cameraPosition: [1, 1.6, 3],
+          cameraEndPosition: [1.2, 1.7, 2.5],
+          cameraRollDegrees: 2,
+          cameraMovement: "tracking",
+          movementIntensity: "moderate",
+        },
+      ],
+    });
+    expect(
+      connection.calls.some(
+        (call) => call.action === "reflect.write_object_property",
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps existing cameras readable when the Formation BP is unavailable", async () => {
+    class MissingFormationConnection extends FakeStoryboardExportConnection {
+      override async invoke(
+        action: string,
+        args: Record<string, unknown>,
+      ): Promise<unknown> {
+        if (action === "bp.get_blueprint_by_path") {
+          this.calls.push({ action, args });
+          return null;
+        }
+        return super.invoke(action, args);
+      }
+    }
+
+    const connection = new MissingFormationConnection();
+    connection.movesByData.set("ActionData2", [
+      {
+        CameraMoveType: "EPush",
+        PushCameraArg: {
+          Velocity: 1,
+          StartPoint: { X: -300, Y: 100, Z: 160 },
+          EndPoint: { X: -300, Y: 100, Z: 160 },
+          StartRotation: { Pitch: 0, Yaw: 90, Roll: 0 },
+          EndRotation: { Pitch: 0, Yaw: 90, Roll: 0 },
+        },
+        FOV: 62,
+      },
+    ]);
+
+    const result = await readExistingDialogueStoryboard(
+      {
+        dialogueId: "7352",
+        startId: "735200",
+        dialogueIds: ["735201", "735202"],
+        formationClassPath:
+          "/Game/Seria/Task/Mod/Test/BP_Missing.BP_Missing_C",
+        participantModelIndexes: [0, 1],
+      },
+      () => connection,
+    );
+
+    expect(result.status).toBe("found");
+    expect(result.nodes).toHaveLength(1);
+    expect(result.warnings).toEqual([
+      expect.stringContaining("镜头暂按 UE 原点显示"),
+    ]);
   });
 });
 

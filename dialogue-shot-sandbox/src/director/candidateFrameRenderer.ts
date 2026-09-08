@@ -1,14 +1,33 @@
 import * as THREE from "three";
-import { characterBody } from "./characterGeometry";
+import {
+  characterBody,
+  characterProxyScales,
+} from "./characterGeometry";
 import type {
   DialogueParticipant,
   ParticipantSlot,
   ShotPlan,
 } from "../types";
+import type { RuleCameraCandidateSet } from "./shotCandidateGenerator";
 
 export interface RuleCandidateFrame {
+  candidate_id: string;
+  candidate_label: string;
   shot_index: number;
   dialogue_ids: string[];
+  is_baseline: boolean;
+  legal: boolean;
+  camera: {
+    position: [number, number, number];
+    target: [number, number, number];
+    focal_length: number;
+    shot_size: ShotPlan["projection"]["measuredShotSize"];
+    coverage: ShotPlan["projection"]["coverage"];
+    visual_anchor: readonly [number, number];
+    headroom: number | null;
+    look_room: number | null;
+    projection_issues: string[];
+  };
   image_data_url: string;
 }
 
@@ -18,20 +37,6 @@ export interface RuleCandidateVisualSet {
 
 const FRAME_WIDTH = 512;
 const FRAME_HEIGHT = 288;
-const MAX_VISUAL_FRAMES = 4;
-
-function selectedShotIndexes(shotCount: number): number[] {
-  if (shotCount <= MAX_VISUAL_FRAMES) {
-    return Array.from({ length: shotCount }, (_, index) => index);
-  }
-  return Array.from(
-    new Set(
-      Array.from({ length: MAX_VISUAL_FRAMES }, (_, index) =>
-        Math.round((index * (shotCount - 1)) / (MAX_VISUAL_FRAMES - 1)),
-      ),
-    ),
-  );
-}
 
 function addCharacter(
   scene: THREE.Scene,
@@ -39,6 +44,7 @@ function addCharacter(
   facingTarget: readonly [number, number, number] | undefined,
 ): THREE.Group {
   const body = characterBody(participant);
+  const { bodyScale, headCorrection } = characterProxyScales(body);
   const effectiveFacingTarget = facingTarget ?? participant.facingTarget;
   const root = new THREE.Group();
   root.position.set(...participant.position);
@@ -49,11 +55,7 @@ function addCharacter(
 
   const scaled = new THREE.Group();
   scaled.position.set(...body.footOffset);
-  scaled.scale.set(
-    body.width / 0.68,
-    body.height / 2.01,
-    body.depth / 0.48,
-  );
+  scaled.scale.set(...bodyScale);
   root.add(scaled);
 
   const bodyMaterial = new THREE.MeshStandardMaterial({
@@ -74,19 +76,22 @@ function addCharacter(
   );
   torso.position.y = 0.92;
   scaled.add(torso);
+  const headGroup = new THREE.Group();
+  headGroup.position.y = 1.72;
+  headGroup.scale.set(...headCorrection);
   const head = new THREE.Mesh(
     new THREE.SphereGeometry(0.29, 20, 16),
     skinMaterial,
   );
-  head.position.y = 1.72;
-  scaled.add(head);
+  headGroup.add(head);
   const nose = new THREE.Mesh(
     new THREE.ConeGeometry(0.055, 0.16, 12),
     darkMaterial,
   );
-  nose.position.set(0, 1.7, 0.27);
+  nose.position.set(0, -0.02, 0.27);
   nose.rotation.x = Math.PI / 2;
-  scaled.add(nose);
+  headGroup.add(nose);
+  scaled.add(headGroup);
   for (const x of [-0.14, 0.14]) {
     const leg = new THREE.Mesh(
       new THREE.CylinderGeometry(0.1, 0.12, 0.5, 12),
@@ -238,29 +243,60 @@ function renderFrame(
 
 export function renderRuleCandidateFrames(
   participants: DialogueParticipant[],
-  shots: ShotPlan[],
+  candidateSets: RuleCameraCandidateSet[],
 ): RuleCandidateVisualSet | null {
   if (typeof document === "undefined") {
     return null;
   }
-  const frames = selectedShotIndexes(shots.length).flatMap((shotIndex) => {
-    try {
-      const shot = shots[shotIndex];
-      return [{
-        shot_index: shotIndex,
-        dialogue_ids: [...shot.dialogueIds],
-        image_data_url: renderFrame(
-          participants,
-          shot,
-          shotIndex,
-        ).toDataURL("image/jpeg", 0.78),
-      }];
-    } catch {
-      return [];
+  const frames: RuleCandidateFrame[] = [];
+  for (const candidateSet of candidateSets) {
+    const shotFrames = candidateSet.candidates.flatMap((candidate) => {
+      try {
+        const { shot } = candidate;
+        return [
+          {
+            candidate_id: candidate.candidateId,
+            candidate_label: candidate.label,
+            shot_index: candidate.shotIndex,
+            dialogue_ids: [...candidateSet.dialogueIds],
+            is_baseline: candidate.isBaseline,
+            legal: candidate.legal,
+            camera: {
+              position: [...shot.cameraPosition] as [
+                number,
+                number,
+                number,
+              ],
+              target: [...shot.cameraTarget] as [
+                number,
+                number,
+                number,
+              ],
+              focal_length: shot.focalLength,
+              shot_size: shot.projection.measuredShotSize,
+              coverage: shot.projection.coverage,
+              visual_anchor: shot.projection.visualAnchor,
+              headroom: shot.projection.headroom,
+              look_room: shot.projection.lookRoom,
+              projection_issues: shot.projection.issues
+                ?.filter((issue) => issue.severity !== "info")
+                .map((issue) => issue.message) ?? [],
+            },
+            image_data_url: renderFrame(
+              participants,
+              shot,
+              candidate.shotIndex,
+            ).toDataURL("image/jpeg", 0.78),
+          },
+        ];
+      } catch {
+        return [];
+      }
+    });
+    if (shotFrames.length === 0) {
+      return null;
     }
-  });
-  if (frames.length === 0) {
-    return null;
+    frames.push(...shotFrames);
   }
   return {
     candidate_frames: frames,

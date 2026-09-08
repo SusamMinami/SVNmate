@@ -1,108 +1,135 @@
 import { describe, expect, it } from "vitest";
 import { demoDatabase } from "../data/demo";
 import { findDialogueSequence } from "../data/dialogueRepository";
-import { createDefaultBlocking } from "./blockingResolver";
-import { createDirectorInput } from "./contracts";
-import { applyRuleAdvice } from "./ruleAdvisor";
 import {
-  createRuleAnalysis,
-  createRuleDecisions,
-} from "./ruleDirector";
+  createDefaultBlocking,
+  resolveBlocking,
+} from "./blockingResolver";
+import { createDirectorInput } from "./contracts";
+import { applyRuleCandidateRanking } from "./ruleAdvisor";
+import type { RuleAdvisorResponse } from "./ruleAdvisorContracts";
+import { generateRuleCameraCandidates } from "./shotCandidateGenerator";
+import { createRuleAnalysis, createRuleDecisions } from "./ruleDirector";
+import { resolveRulePlanWithRetry } from "./shotPlanner";
 
-describe("rule advisor", () => {
-  it("applies valid high-confidence patches without changing dialogue coverage", () => {
-    const input = createDirectorInput(
-      findDialogueSequence(demoDatabase, "2048"),
-      "rule-advisor-test",
-    );
-    const blocking = createDefaultBlocking(input);
-    const decisions = createRuleDecisions(input, blocking);
-    const analysis = createRuleAnalysis(input);
-    const result = applyRuleAdvice(input, { decisions, analysis }, {
-      schema_version: "rule-advice.v1",
-      request_id: input.request_id,
-      summary: "收紧关键反应",
-      visual_scores: [
-        {
-          shot_index: 1,
-          composition: 84,
-          subject_readability: 90,
-          occlusion: 86,
-          continuity: 80,
-          overall: 85,
-          issues: [],
-        },
-      ],
-      adjustments: [
-        {
-          shot_index: 1,
-          confidence: 0.9,
-          reason: "此处是明确的情绪反应",
-          changes: {
-            lens_mm: 85,
-            depth_of_field: "shallow",
-            movement_intensity: "subtle",
-          },
-        },
-      ],
-    });
+function fixture() {
+  const sequence = findDialogueSequence(demoDatabase, "2048");
+  const input = createDirectorInput(sequence, "rule-advisor-test");
+  const blocking = createDefaultBlocking(input);
+  const participants = resolveBlocking(
+    sequence.participants,
+    blocking,
+    sequence.rows.map((row) => row.id),
+  );
+  const stagedSequence = { ...sequence, participants };
+  const decisions = createRuleDecisions(input, blocking);
+  const baseline = resolveRulePlanWithRetry(stagedSequence, decisions);
+  const candidateSets = generateRuleCameraCandidates(
+    stagedSequence,
+    baseline.decisions,
+    baseline.shots,
+  );
+  return {
+    input,
+    sequence: stagedSequence,
+    analysis: createRuleAnalysis(input),
+    baseline,
+    candidateSets,
+  };
+}
 
-    expect(result.appliedAdjustmentCount).toBe(1);
-    expect(result.decisions[1].dialogue_ids).toEqual(
-      decisions[1].dialogue_ids,
-    );
-    expect(result.decisions[1].lens_mm).toBe(85);
-    expect(result.decisions[1].end_lens_mm).toBe(85);
-    expect(result.decisions[1].lens_intent).toBe("subject_isolation");
-    expect(result.decisions[1].movement_intensity).toBe(
-      decisions[1].movement_intensity,
-    );
-    expect(result.analysis.visualStrategy).toContain("SHOT 02 85，均分 85");
+function adviceFor(
+  data: ReturnType<typeof fixture>,
+  selectAlternative: boolean,
+): RuleAdvisorResponse {
+  const visualScores = data.candidateSets.flatMap((set) =>
+    set.candidates.map((candidate, index) => ({
+      shot_index: set.shotIndex,
+      candidate_id: candidate.candidateId,
+      candidate_label: candidate.label,
+      is_baseline: candidate.isBaseline,
+      composition: 82 + index,
+      subject_readability: 84 + index,
+      occlusion: 86 + index,
+      continuity: 80 + index,
+      overall: 83 + index,
+      issues: [],
+      assessment: `${candidate.label} 通过视觉检查`,
+    })),
+  );
+  return {
+    schema_version: "rule-camera-ranking.v1",
+    request_id: data.input.request_id,
+    model: "qwen3-vl:4b",
+    summary: "逐镜候选评分完成",
+    visual_scores: visualScores,
+    rankings: data.candidateSets.map((set) => {
+      const selected =
+        selectAlternative
+          ? (set.candidates.find((candidate) => !candidate.isBaseline) ??
+            set.candidates[0])
+          : (set.candidates.find((candidate) => candidate.isBaseline) ??
+            set.candidates[0]);
+      return {
+        shot_index: set.shotIndex,
+        selected_candidate_id: selected.candidateId,
+        ranked_candidate_ids: [
+          selected.candidateId,
+          ...set.candidates
+            .filter(
+              (candidate) => candidate.candidateId !== selected.candidateId,
+            )
+            .map((candidate) => candidate.candidateId),
+        ],
+        reason: `${selected.label} 综合视觉评分最高`,
+      };
+    }),
+  };
+}
+
+describe("rule advisor camera ranking", () => {
+  it("generates at least one inspected camera for every shot", () => {
+    const data = fixture();
+
+    expect(data.candidateSets).toHaveLength(data.baseline.shots.length);
+    expect(
+      data.candidateSets.every((set) => set.candidates.length >= 1),
+    ).toBe(true);
+    expect(
+      data.candidateSets
+        .flatMap((set) => set.candidates)
+        .filter((candidate) => candidate.legal)
+        .every((candidate) => candidate.shot.projection.valid),
+    ).toBe(true);
   });
 
-  it("rejects low-confidence and internally invalid patches", () => {
-    const input = createDirectorInput(
-      findDialogueSequence(demoDatabase, "2048"),
-      "rule-advisor-reject-test",
+  it("applies VLM-ranked legal geometries and records per-shot evidence", () => {
+    const data = fixture();
+    const result = applyRuleCandidateRanking(
+      data.sequence,
+      {
+        decisions: data.baseline.decisions,
+        shots: data.baseline.shots,
+        analysis: data.analysis,
+      },
+      data.candidateSets,
+      adviceFor(data, true),
     );
-    const blocking = createDefaultBlocking(input);
-    const decisions = createRuleDecisions(input, blocking);
-    const analysis = createRuleAnalysis(input);
-    const result = applyRuleAdvice(input, { decisions, analysis }, {
-      schema_version: "rule-advice.v1",
-      request_id: input.request_id,
-      summary: "无可用调整",
-      visual_scores: [
-        {
-          shot_index: 0,
-          composition: 80,
-          subject_readability: 80,
-          occlusion: 80,
-          continuity: 80,
-          overall: 80,
-          issues: [],
-        },
-      ],
-      adjustments: [
-        {
-          shot_index: 0,
-          confidence: 0.4,
-          reason: "置信度不足",
-          changes: { camera_height: "high" },
-        },
-        {
-          shot_index: 1,
-          confidence: 0.9,
-          reason: "运动参数不完整",
-          changes: {
-            camera_movement: "static",
-            movement_intensity: "strong",
-          },
-        },
-      ],
-    });
 
-    expect(result.appliedAdjustmentCount).toBe(0);
-    expect(result.decisions).toEqual(decisions);
+    expect(result.reviewedShotCount).toBe(data.baseline.shots.length);
+    expect(result.candidateCount).toBeGreaterThanOrEqual(
+      data.baseline.shots.length,
+    );
+    expect(result.shots.every((shot) => shot.advisorReview)).toBe(true);
+    expect(
+      result.shots.every(
+        (shot) =>
+          shot.advisorReview?.candidates.filter(
+            (candidate) => candidate.selected,
+          ).length === 1,
+      ),
+    ).toBe(true);
+    expect(result.shots.every((shot) => shot.projection.valid)).toBe(true);
+    expect(result.analysis.visualStrategy).toContain("逐张检查");
   });
 });

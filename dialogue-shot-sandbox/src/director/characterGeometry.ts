@@ -37,6 +37,36 @@ export function characterBody(
   return body;
 }
 
+export function characterProxyScales(
+  body: CharacterBodyProfile,
+): {
+  bodyScale: Vec3;
+  headCorrection: Vec3;
+  headWorldScale: number;
+} {
+  const bodyScale = [
+    body.width / DEFAULT_CHARACTER_BODY.width,
+    body.height / DEFAULT_CHARACTER_BODY.height,
+    body.depth / DEFAULT_CHARACTER_BODY.depth,
+  ] as const;
+  const headWorldScale = Math.max(
+    0.72,
+    Math.min(
+      1.35,
+      Math.cbrt(bodyScale[0] * bodyScale[1] * bodyScale[2]),
+    ),
+  );
+  return {
+    bodyScale,
+    headCorrection: [
+      headWorldScale / bodyScale[0],
+      headWorldScale / bodyScale[1],
+      headWorldScale / bodyScale[2],
+    ],
+    headWorldScale,
+  };
+}
+
 export function characterPoint(
   participant: DialogueParticipant,
   referenceHeight: number,

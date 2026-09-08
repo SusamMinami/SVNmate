@@ -2,7 +2,7 @@
 
 > 文档状态：现行专题规范
 >
-> 最近核对：2026-09-05，对应镜头沙盘 `0.23.2`。当前实现同时支持镜头、
+> 最近核对：2026-09-08，对应镜头沙盘 `0.24.0`。当前实现同时支持镜头、
 > 角色动作、音效和音乐的独立勾选、预检、回读与保存。
 
 ## 目标
@@ -123,6 +123,42 @@ FOV = 2 * atan(35 / (2 * focalLength))
    审核令牌失效并要求重新检查。
 13. 写入后逐节点回读；结构、枚举和布尔值严格匹配，浮点数按 UE4 float32
     精度容差校验，全部一致后保存对话资产。
+
+### 已有镜头只读加载
+
+输入四位对话 ID 时，工作台在任何导演运行前读取 Dialog Graph 节点的
+`CameraPosition` 与 `MoveCameras`。当前版本将 `EPush.PushCameraArg` 的起止
+位置、旋转、FOV 和速度反解为沙盘镜头，并以有相机数据的节点作为镜头边界；
+该过程只执行本地几何转换和投影验收，不调用规则顾问、VLM、TRAE 或 Mira。
+
+Formation BP 只提供坐标中心和角色站位，不是读取镜头的前置条件。BP 缺失或
+不可读时，已有镜头暂按 UE 原点显示并返回警告；不支持的镜头类型不伪造预览，
+继续保留对白文字和节点快捷编辑能力。
+
+### 配置小窗节点快捷镜头
+
+配置小窗的镜头页只处理 UE 当前唯一选中的对话节点，提供四种独立操作：
+
+1. “使用上一相机参数”完整复制上一对话节点的 `CameraPosition` 和
+   `MoveCameras`；上一节点没有任何相机数据时阻止执行。
+2. “添加默认镜头”写入 `CameraPosition=c1`，并创建一个
+   `CameraMoveType=EPush` 的 `MoveCameras[0]`，其中
+   `PushCameraArg.Velocity=1`、`PushCameraArg.BlendOutTime=1`、
+   `FOV=62`。
+3. “添加镜头曲线”将 `DialogBlendCameraData.DialogBlendCameraType`
+   设为 `EBlend`，默认曲线为
+   `/Game/Seria/Task/Mod/MainQuest/DialogCurve/trans_6015.trans_6015`；
+   界面只要求输入资产名，`Duration` 保留节点当前值。
+4. “添加角色相机”要求当前主 `MoveCameras` 非空，并分别复制到
+   `SchoolMoveCamerasMap` 的 `ERing`、`ENino`、`EJodie` 三项。节点已有
+   角色相机时阻止覆盖。
+
+快捷操作先读取并展示当前值与目标值。用户确认后，服务端重新预检审核令牌与
+脏资产状态，并复核 UE 当前仍选中同一节点；按需写入
+`CommonDialogGraphProperties`、`MoveCameras`、`DialogBlendCameraData`
+或 `SchoolMoveCamerasMap`，逐项回读一致后只保存一次对话资产；任一步骤失败
+都恢复本轮涉及的原值。写入成功后前端保留成功反馈，只在后台重新读取已有镜头，
+不重复读取 Formation，也不启动导演。
 
 ## 音乐资料库与试听
 

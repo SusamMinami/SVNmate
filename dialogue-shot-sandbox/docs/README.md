@@ -1,6 +1,6 @@
 # 镜头沙盘文档索引
 
-最近核对：2026-09-05，对应应用版本 `0.23.2`。
+最近核对：2026-09-08，对应应用版本 `0.24.0`。
 
 ## 现行入口
 
@@ -13,8 +13,10 @@
 
 ## 现行专题规范
 
-- `ue-formation-integration.md`：Formation BP 站位、身份模型、动作与通信。
-- `dialogue-camera-export-design.md`：镜头、动作、音效和音乐的 UE 导出。
+- `ue-formation-integration.md`：只读对话加载、Formation BP 站位、已有镜头、
+  身份模型、动作与通信。
+- `dialogue-camera-export-design.md`：已有镜头回读，以及镜头、动作、音效和音乐
+  的 UE 导出。
 - `mission-target-preview.md`：任务目标物、BP 创建/注册、站位同步和背景资产。
 - `npc-registration.md`：UE Actor 到模型/NPC/目标物 Excel 草稿。
 - `npc-migration.md`：全新 NPC、动作增补和面部补充。

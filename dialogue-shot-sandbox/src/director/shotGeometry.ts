@@ -103,6 +103,7 @@ interface SingleCameraRequest {
   previousGeometry?: CameraGeometry;
   requiredRelationshipSide?: -1 | 1;
   cameraRollDegrees?: number;
+  candidateIndex?: number;
 }
 
 interface GroupCameraRequest {
@@ -112,6 +113,39 @@ interface GroupCameraRequest {
   cameraHeight: number;
   shotSize: Extract<ShotSize, "full" | "medium-full">;
   composition: ShotComposition;
+  candidateIndex?: number;
+}
+
+interface RankedCameraCandidate {
+  geometry: CameraGeometry;
+  score: number;
+}
+
+function distinctCameraCandidates<T extends RankedCameraCandidate>(
+  candidates: T[],
+): T[] {
+  const result: T[] = [];
+  for (const candidate of [...candidates].sort(
+    (left, right) => left.score - right.score,
+  )) {
+    const isDistinct = result.every((existing) => {
+      const positionDelta = Math.hypot(
+        candidate.geometry.position[0] - existing.geometry.position[0],
+        candidate.geometry.position[1] - existing.geometry.position[1],
+        candidate.geometry.position[2] - existing.geometry.position[2],
+      );
+      const targetDelta = Math.hypot(
+        candidate.geometry.target[0] - existing.geometry.target[0],
+        candidate.geometry.target[1] - existing.geometry.target[1],
+        candidate.geometry.target[2] - existing.geometry.target[2],
+      );
+      return positionDelta >= 0.2 || targetDelta >= 0.1;
+    });
+    if (isDistinct) {
+      result.push(candidate);
+    }
+  }
+  return result;
 }
 
 function add(left: Vec2, right: Vec2): Vec2 {
@@ -830,15 +864,14 @@ export function solveSingleCamera(
   ).filter((position, index, values) => values.indexOf(position) === index);
   const frame = SHOT_FRAMES[request.shotSize];
   const baseDistance = distanceForShotSize(request.lensMm, request.shotSize, characterBody(request.subject).height);
-  let best:
-    | {
-        geometry: CameraGeometry;
-        assessment: ProjectionAssessment;
-        composition: ShotComposition;
-        score: number;
-      }
-    | undefined;
-  let unconstrainedBest: typeof best;
+  type SingleCandidate = {
+    geometry: CameraGeometry;
+    assessment: ProjectionAssessment;
+    composition: ShotComposition;
+    score: number;
+  };
+  const constrainedCandidates: SingleCandidate[] = [];
+  const unconstrainedCandidates: SingleCandidate[] = [];
 
   for (const faceAngle of angleCandidates) {
     const cameraDirection = cameraDirectionForSubject(
@@ -948,9 +981,7 @@ export function solveSingleCamera(
           composition: resolvedComposition,
           score,
         };
-        if (!unconstrainedBest || score < unconstrainedBest.score) {
-          unconstrainedBest = candidate;
-        }
+        unconstrainedCandidates.push(candidate);
         if (
           request.requiredRelationshipSide !== undefined &&
           request.lookTarget &&
@@ -962,16 +993,22 @@ export function solveSingleCamera(
         ) {
           continue;
         }
-        if (!best || score < best.score) {
-          best = candidate;
-        }
+        constrainedCandidates.push(candidate);
       }
     }
   }
 
-  const resolved = best ?? unconstrainedBest;
+  const pool =
+    constrainedCandidates.length > 0
+      ? constrainedCandidates
+      : unconstrainedCandidates;
+  const resolved = distinctCameraCandidates(pool)[
+    request.candidateIndex ?? 0
+  ];
   if (!resolved) {
-    throw new Error(`无法为角色 ${request.subject.slot} 求解摄影机`);
+    throw new Error(
+      `无法为角色 ${request.subject.slot} 求解第 ${(request.candidateIndex ?? 0) + 1} 个摄影机候选`,
+    );
   }
   return resolved;
 }
@@ -1011,7 +1048,7 @@ export function solveGroupCamera(
   );
   const horizontalDistance = halfWidth / (0.78 * Math.tan(halfHorizontalFov));
   const distance = Math.max(verticalDistance, horizontalDistance) * 1.08;
-  let best: { geometry: CameraGeometry; score: number } | undefined;
+  const candidates: RankedCameraCandidate[] = [];
   for (const degrees of [0, 15, -15, 30, -30]) {
     const radians = THREE.MathUtils.degToRad(degrees);
     const direction = {
@@ -1035,8 +1072,16 @@ export function solveGroupCamera(
       const score = assessment.issues.filter((issue) => issue.severity === "error").length * 100_000 +
         sceneGeometryPenalty(request.sceneReference, geometry.position, geometry.target) +
         assessment.issues.length * 10 + Math.abs(degrees) + (distanceScale - 1) * 20;
-      if (!best || score < best.score) best = { geometry, score };
+      candidates.push({ geometry, score });
     }
   }
-  return best!.geometry;
+  const selected = distinctCameraCandidates(candidates)[
+    request.candidateIndex ?? 0
+  ];
+  if (!selected) {
+    throw new Error(
+      `无法求解第 ${(request.candidateIndex ?? 0) + 1} 个群像摄影机候选`,
+    );
+  }
+  return selected.geometry;
 }

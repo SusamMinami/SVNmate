@@ -11,7 +11,7 @@ interface MusicRecommendationsProps {
   dialogueOrder: string[];
   currentDialogueIds: string[];
   playbackActive: boolean;
-  onPlaybackStart: () => void;
+  onPlaybackStart: (label: string) => void;
   onPlaybackStop: () => void;
 }
 
@@ -42,9 +42,6 @@ export function MusicRecommendations({
   const dialogueScope = currentDialogueIds.join("|");
 
   useEffect(() => {
-    audioRef.current?.pause();
-    audioRef.current = null;
-    setPlaying(null);
     setPlaybackError("");
   }, [dialogueScope]);
 
@@ -81,7 +78,7 @@ export function MusicRecommendations({
       setPlaybackError(`${item.musicName} 未提供试听文件`);
       return;
     }
-    onPlaybackStart();
+    onPlaybackStart(item.musicName);
     const audio = new Audio(musicPreviewUrl(item));
     audio.preload = "metadata";
     audioRef.current = audio;

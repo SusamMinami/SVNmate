@@ -79,6 +79,13 @@ export async function routeUeRequest(
       });
       return true;
     }
+    if (url.pathname === "/api/ue/dialogue/selection") {
+      sendJson(response, 200, {
+        ok: true,
+        data: await services.readSelectedDialogueNode(),
+      });
+      return true;
+    }
     if (url.pathname === "/api/ue/selection/registration") {
       sendJson(response, 200, {
         ok: true,
@@ -170,6 +177,27 @@ export async function routeUeRequest(
           mediaCount: preview.mediaCount,
           url: preview.url,
         },
+      });
+      return true;
+    }
+    if (url.pathname === "/api/ue/dialogue/camera/inspect") {
+      sendJson(response, 200, {
+        ok: true,
+        data: await services.inspectDialogueCameraQuickAction(body),
+      });
+      return true;
+    }
+    if (url.pathname === "/api/ue/dialogue/camera/apply") {
+      sendJson(response, 200, {
+        ok: true,
+        data: await services.applyDialogueCameraQuickAction(body),
+      });
+      return true;
+    }
+    if (url.pathname === "/api/ue/dialogue/storyboard/read") {
+      sendJson(response, 200, {
+        ok: true,
+        data: await services.readExistingDialogueStoryboard(body),
       });
       return true;
     }

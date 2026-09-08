@@ -3,12 +3,16 @@ import type {
   BackgroundPropImportResult,
   BlueprintFormationSnapshot,
   DialogueCharacterActionSnapshot,
+  DialogueCameraQuickActionPreview,
+  DialogueCameraQuickActionRequest,
+  DialogueCameraQuickActionResult,
   DialogueContentBatchUpdateRequest,
   DialogueContentBatchUpdateResult,
   DialogueContentUpdateRequest,
   DialogueContentUpdateResult,
   DialogueStoryboardExportPreview,
   DialogueStoryboardExportResult,
+  ExistingDialogueStoryboardResult,
   DialogueModelRegistrationResult,
   DialogueModelRegistrationSlot,
   DialogNpcTableRegistrationDraft,
@@ -41,6 +45,7 @@ import type {
   NpcRegistrationWriteItem,
   NpcRegistrationWriteResult,
   NpcRegistrationWriteScope,
+  SelectedDialogueNodeResult,
   SelectedLevelActorsResult,
   SoundEffectPreviewInfo,
   SoundEffectPreviewPrepared,
@@ -430,6 +435,37 @@ export function exportDialogueStoryboard(
   );
 }
 
+export function inspectDialogueCameraQuickAction(
+  request: DialogueCameraQuickActionRequest,
+): Promise<DialogueCameraQuickActionPreview> {
+  return postUe("/api/ue/dialogue/camera/inspect", request, false);
+}
+
+export function applyDialogueCameraQuickAction(
+  request: DialogueCameraQuickActionRequest,
+  reviewToken: string,
+): Promise<DialogueCameraQuickActionResult> {
+  return postUe(
+    "/api/ue/dialogue/camera/apply",
+    { ...request, reviewToken },
+    false,
+  );
+}
+
+export function readExistingDialogueStoryboard(request: {
+  dialogueId: string;
+  startId: string;
+  dialogueIds: string[];
+  formationClassPath?: string;
+  participantModelIndexes: number[];
+}): Promise<ExistingDialogueStoryboardResult> {
+  return postUe(
+    "/api/ue/dialogue/storyboard/read",
+    request,
+    false,
+  );
+}
+
 export function updateDialogueContent(
   request: DialogueContentUpdateRequest,
 ): Promise<DialogueContentUpdateResult> {
@@ -458,6 +494,10 @@ export function checkMissionTargetBlueprint(
 
 export function readSelectedLevelActors(): Promise<SelectedLevelActorsResult> {
   return postUe("/api/ue/selection/read");
+}
+
+export function readSelectedDialogueNode(): Promise<SelectedDialogueNodeResult> {
+  return postUe("/api/ue/dialogue/selection", undefined, false);
 }
 
 export function scanSelectedNpcRegistration(): Promise<NpcRegistrationScanResult> {

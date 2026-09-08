@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { demoDatabase } from "../data/demo";
 import { findDialogueSequence } from "../data/dialogueRepository";
-import { characterBody, characterHeight, characterPoint, DEFAULT_CHARACTER_BODY } from "./characterGeometry";
+import {
+  characterBody,
+  characterHeight,
+  characterPoint,
+  characterProxyScales,
+  DEFAULT_CHARACTER_BODY,
+} from "./characterGeometry";
 
 describe("character geometry", () => {
   const actor = findDialogueSequence(demoDatabase, "2048").participants[0];
@@ -32,6 +38,22 @@ describe("character geometry", () => {
     expect(point[0]).toBeCloseTo(10.2);
     expect(point[1]).toBeCloseTo(1.1);
     expect(point[2]).toBeCloseTo(4.9);
+  });
+
+  it("keeps the rendered head isotropic under non-uniform body scaling", () => {
+    const scales = characterProxyScales({
+      ...DEFAULT_CHARACTER_BODY,
+      source: "mesh_bounds",
+      height: 1.3,
+      width: 0.9,
+      depth: 0.36,
+    });
+    const worldHeadScale = scales.bodyScale.map(
+      (scale, index) => scale * scales.headCorrection[index],
+    );
+    expect(worldHeadScale[0]).toBeCloseTo(worldHeadScale[1]);
+    expect(worldHeadScale[1]).toBeCloseTo(worldHeadScale[2]);
+    expect(scales.bodyScale[0]).not.toBeCloseTo(scales.bodyScale[1]);
   });
 
   it("rejects invalid dimensions rather than producing NaN camera coordinates", () => {

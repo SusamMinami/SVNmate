@@ -73,9 +73,11 @@ function trackKey(dialogueId: string, modelIndex: number): string {
 export function useCharacterActionEditor({
   sequence,
   enabled,
+  releaseWhenDisabled = false,
 }: {
   sequence: DialogueSequence;
   enabled: boolean;
+  releaseWhenDisabled?: boolean;
 }): CharacterActionEditorController {
   const actionIdRef = useRef(0);
   const requestRunRef = useRef(0);
@@ -243,6 +245,20 @@ export function useCharacterActionEditor({
     }
     void load(false);
   }, [enabled, load, signature]);
+
+  useEffect(() => {
+    if (enabled || !releaseWhenDisabled) {
+      return;
+    }
+    requestRunRef.current += 1;
+    loadedSignatureRef.current = "";
+    setLoading(false);
+    setError("");
+    setStatus("");
+    setDialogueAssetPath("");
+    setCatalogs([]);
+    setUeTracks([]);
+  }, [enabled, releaseWhenDisabled]);
 
   const refresh = useCallback(() => load(true), [load]);
 

@@ -26,6 +26,17 @@ import { estimateShotDuration } from "./shotTiming";
 import { characterHeight } from "./characterGeometry";
 import { scenePathIssues, type SceneReference } from "../scene/sceneReference";
 
+export interface ShotCameraOverride {
+  position: Vec3;
+  target: Vec3;
+  composition: ShotComposition;
+}
+
+export interface ShotResolutionOptions {
+  cameraCandidateIndexes?: ReadonlyMap<number, number>;
+  cameraOverrides?: ReadonlyMap<number, ShotCameraOverride>;
+}
+
 function cameraHeight(
   value: DirectorDecision["camera_height"],
   fallback: number,
@@ -292,6 +303,8 @@ function geometryFor(
   previousGeometry?: CameraGeometry,
   previousAxis?: ShotAxis | null,
   sceneReference?: SceneReference,
+  cameraCandidateIndex = 0,
+  cameraOverride?: ShotCameraOverride,
 ): Geometry {
   const groupSubject =
     decision.subject === "both" || decision.subject === "group";
@@ -327,16 +340,25 @@ function geometryFor(
   ): {
     geometry: CameraGeometry;
     assessment: ProjectionAssessment;
+    composition: ShotComposition;
   } => {
-    const geometry = solveGroupCamera({
-      sceneReference,
-      participants: primaryParticipants,
-      lensMm: decision.lens_mm,
-      cameraHeight: primaryParticipants.reduce((sum, actor) =>
-        sum + characterHeight(actor, cameraHeight(decision.camera_height, 1.72)), 0) / primaryParticipants.length,
-      shotSize,
-      composition: compositionPlan,
-    });
+    const resolvedComposition =
+      cameraOverride?.composition ?? compositionPlan;
+    const geometry = cameraOverride
+      ? {
+          position: cameraOverride.position,
+          target: cameraOverride.target,
+        }
+      : solveGroupCamera({
+          sceneReference,
+          participants: primaryParticipants,
+          lensMm: decision.lens_mm,
+          cameraHeight: primaryParticipants.reduce((sum, actor) =>
+            sum + characterHeight(actor, cameraHeight(decision.camera_height, 1.72)), 0) / primaryParticipants.length,
+          shotSize,
+          composition: resolvedComposition,
+          candidateIndex: cameraCandidateIndex,
+        });
     return {
       geometry,
       assessment: assessProjection(
@@ -346,11 +368,12 @@ function geometryFor(
         decision.lens_mm,
         shotSize,
         coverage,
-        compositionPlan,
+        resolvedComposition,
         undefined,
         decision.camera_roll_degrees,
         primaryParticipants.map((candidate) => candidate.slot),
       ),
+      composition: resolvedComposition,
     };
   };
   const singleGeometry = (
@@ -358,6 +381,28 @@ function geometryFor(
     coverage: Extract<ShotCoverage, "single" | "group-medium">,
     fallbackHeight: number,
   ) => {
+    if (cameraOverride) {
+      const geometry = {
+        position: cameraOverride.position,
+        target: cameraOverride.target,
+      };
+      return {
+        geometry,
+        assessment: assessProjection(
+          geometry,
+          participant,
+          participants,
+          decision.lens_mm,
+          shotSize,
+          coverage,
+          cameraOverride.composition,
+          lookTarget ?? undefined,
+          decision.camera_roll_degrees,
+          primaryParticipants.map((candidate) => candidate.slot),
+        ),
+        composition: cameraOverride.composition,
+      };
+    }
     return solveSingleCamera({
       sceneReference,
       subject: participant,
@@ -380,6 +425,7 @@ function geometryFor(
           ? previousAxis.cameraSide
           : undefined,
       cameraRollDegrees: decision.camera_roll_degrees,
+      candidateIndex: cameraCandidateIndex,
     });
   };
 
@@ -398,7 +444,7 @@ function geometryFor(
         position: result.geometry.position,
         target: result.geometry.target,
         composition: `两人同框，${framing}，先建立空间和人物距离`,
-        compositionPlan,
+        compositionPlan: result.composition,
         shotSize: "full",
         coverage: "two-shot",
         assessment: result.assessment,
@@ -412,7 +458,7 @@ function geometryFor(
         position: result.geometry.position,
         target: result.geometry.target,
         composition: `两人侧面对峙，${framing}，强化关系张力`,
-        compositionPlan,
+        compositionPlan: result.composition,
         shotSize: "medium-full",
         coverage: "two-shot",
         assessment: result.assessment,
@@ -432,7 +478,7 @@ function geometryFor(
         position: result.geometry.position,
         target: result.geometry.target,
         composition: `${groupLabel}完整同框，${framing}，建立站位层次与多人视线关系`,
-        compositionPlan,
+        compositionPlan: result.composition,
         shotSize: "full",
         coverage: "group",
         assessment: result.assessment,
@@ -528,6 +574,7 @@ function geometryFor(
 export function resolveShotDecisions(
   sequence: DialogueSequence,
   decisions: DirectorDecision[],
+  options: ShotResolutionOptions = {},
 ): ShotPlan[] {
   const rowsById = new Map(sequence.rows.map((row) => [row.id, row]));
   const rowIndexById = new Map(
@@ -786,6 +833,8 @@ export function resolveShotDecisions(
       previousVisualSubjectSlot === subject.slot ? previousGeometry : undefined,
       previousAxis,
       sequence.sceneReference,
+      options.cameraCandidateIndexes?.get(index) ?? 0,
+      options.cameraOverrides?.get(index),
     );
     const motionGeometry = resolveMotionGeometry(
       decision,

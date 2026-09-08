@@ -5,6 +5,12 @@ import { join } from "node:path";
 const DEFAULT_OLLAMA_HOST = "127.0.0.1:11434";
 const DEFAULT_MODEL = "qwen3-vl:4b";
 let managedProcess: ChildProcess | null = null;
+let managedStart: Promise<boolean> | null = null;
+let activeResourceUsers = 0;
+let releaseGeneration = 0;
+let modelReleaseTimer: NodeJS.Timeout | null = null;
+let runtimeReleaseTimer: NodeJS.Timeout | null = null;
+let modelUnloadController: AbortController | null = null;
 
 export interface RuleAdvisorModelSnapshot {
   state:
@@ -83,6 +89,132 @@ function configuredModel(): string {
   return process.env.RULE_ADVISOR_MODEL || DEFAULT_MODEL;
 }
 
+function configuredIdleMs(name: string, fallback: number): number {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value >= 0 ? value : fallback;
+}
+
+function clearResourceReleaseTimers(): void {
+  if (modelReleaseTimer) {
+    clearTimeout(modelReleaseTimer);
+    modelReleaseTimer = null;
+  }
+  if (runtimeReleaseTimer) {
+    clearTimeout(runtimeReleaseTimer);
+    runtimeReleaseTimer = null;
+  }
+  modelUnloadController?.abort();
+  modelUnloadController = null;
+}
+
+export function ruleAdvisorKeepAlive(): string {
+  const idleMs = configuredIdleMs(
+    "RULE_ADVISOR_MODEL_IDLE_MS",
+    60_000,
+  );
+  return `${Math.max(1, Math.ceil(idleMs / 1_000))}s`;
+}
+
+async function unloadRuleAdvisorModel(generation: number): Promise<void> {
+  if (
+    generation !== releaseGeneration ||
+    activeResourceUsers > 0 ||
+    process.env.RULE_ADVISOR_API_STYLE === "openai"
+  ) {
+    return;
+  }
+  const controller = new AbortController();
+  modelUnloadController = controller;
+  const host = process.env.RULE_ADVISOR_OLLAMA_HOST || DEFAULT_OLLAMA_HOST;
+  try {
+    const response = await fetch(`http://${host}/api/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: configuredModel(),
+        keep_alive: 0,
+        stream: false,
+      }),
+      signal: controller.signal,
+    });
+    await response.text();
+  } catch {
+    // A stopped or externally managed runtime needs no further cleanup.
+  } finally {
+    if (modelUnloadController === controller) {
+      modelUnloadController = null;
+    }
+  }
+}
+
+export function retainRuleAdvisorResources(): void {
+  activeResourceUsers += 1;
+  releaseGeneration += 1;
+  clearResourceReleaseTimers();
+}
+
+export function releaseRuleAdvisorResources(): void {
+  activeResourceUsers = Math.max(0, activeResourceUsers - 1);
+  if (activeResourceUsers > 0) {
+    return;
+  }
+  clearResourceReleaseTimers();
+  const generation = ++releaseGeneration;
+  const modelIdleMs = configuredIdleMs(
+    "RULE_ADVISOR_MODEL_IDLE_MS",
+    60_000,
+  );
+  const runtimeIdleMs = configuredIdleMs(
+    "RULE_ADVISOR_RUNTIME_IDLE_MS",
+    600_000,
+  );
+  modelReleaseTimer = setTimeout(() => {
+    modelReleaseTimer = null;
+    void unloadRuleAdvisorModel(generation);
+  }, modelIdleMs);
+  modelReleaseTimer.unref();
+  runtimeReleaseTimer = setTimeout(() => {
+    runtimeReleaseTimer = null;
+    if (
+      generation === releaseGeneration &&
+      activeResourceUsers === 0 &&
+      managedProcess &&
+      !managedProcess.killed
+    ) {
+      managedProcess.kill();
+      managedProcess = null;
+    }
+  }, Math.max(modelIdleMs, runtimeIdleMs));
+  runtimeReleaseTimer.unref();
+}
+
+export async function releaseIdleRuleAdvisorResourcesNow(): Promise<boolean> {
+  if (activeResourceUsers > 0) {
+    return false;
+  }
+  clearResourceReleaseTimers();
+  const generation = ++releaseGeneration;
+  await unloadRuleAdvisorModel(generation);
+  const runtimeIdleMs = configuredIdleMs(
+    "RULE_ADVISOR_RUNTIME_IDLE_MS",
+    600_000,
+  );
+  runtimeReleaseTimer = setTimeout(() => {
+    runtimeReleaseTimer = null;
+    if (
+      generation === releaseGeneration &&
+      activeResourceUsers === 0 &&
+      managedProcess &&
+      !managedProcess.killed
+    ) {
+      managedProcess.kill();
+      managedProcess = null;
+    }
+  }, runtimeIdleMs);
+  runtimeReleaseTimer.unref();
+  return true;
+}
+
 export async function inspectRuleAdvisorModel(options: {
   bundledExecutable?: string;
 } = {}): Promise<RuleAdvisorModelSnapshot> {
@@ -124,7 +256,7 @@ export async function inspectRuleAdvisorModel(options: {
   };
 }
 
-export async function downloadRuleAdvisorModel(
+async function downloadRuleAdvisorModelImpl(
   options: {
     bundledExecutable?: string;
     onProgress?: (snapshot: RuleAdvisorModelSnapshot) => void;
@@ -212,6 +344,20 @@ export async function downloadRuleAdvisorModel(
   };
 }
 
+export async function downloadRuleAdvisorModel(
+  options: {
+    bundledExecutable?: string;
+    onProgress?: (snapshot: RuleAdvisorModelSnapshot) => void;
+  } = {},
+): Promise<RuleAdvisorModelSnapshot> {
+  retainRuleAdvisorResources();
+  try {
+    return await downloadRuleAdvisorModelImpl(options);
+  } finally {
+    releaseRuleAdvisorResources();
+  }
+}
+
 export async function ensureRuleAdvisorRuntime(options: {
   bundledExecutable?: string;
 } = {}): Promise<boolean> {
@@ -225,35 +371,51 @@ export async function ensureRuleAdvisorRuntime(options: {
   if (await serviceAvailable(host)) {
     return true;
   }
+  if (managedStart) {
+    return managedStart;
+  }
   const executable = (await executableCandidates(options.bundledExecutable))[0];
   if (!executable) {
     return false;
   }
 
-  managedProcess = spawn(executable, ["serve"], {
-    env: {
-      ...process.env,
-      OLLAMA_HOST: host,
-    },
-    stdio: "ignore",
-    windowsHide: true,
-  });
-  managedProcess.once("exit", () => {
-    managedProcess = null;
-  });
+  managedStart = (async () => {
+    managedProcess = spawn(executable, ["serve"], {
+      env: {
+        ...process.env,
+        OLLAMA_HOST: host,
+      },
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    managedProcess.once("exit", () => {
+      managedProcess = null;
+    });
 
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 250));
-    if (await serviceAvailable(host)) {
-      return true;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await new Promise((resolvePromise) =>
+        setTimeout(resolvePromise, 250),
+      );
+      if (await serviceAvailable(host)) {
+        return true;
+      }
     }
+    return false;
+  })();
+  try {
+    return await managedStart;
+  } finally {
+    managedStart = null;
   }
-  return false;
 }
 
 export function stopManagedRuleAdvisorRuntime(): void {
+  activeResourceUsers = 0;
+  releaseGeneration += 1;
+  clearResourceReleaseTimers();
   if (managedProcess && !managedProcess.killed) {
     managedProcess.kill();
   }
   managedProcess = null;
+  managedStart = null;
 }

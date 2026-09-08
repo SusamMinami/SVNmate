@@ -284,14 +284,18 @@ export function useStoryboardExport({
     ],
   );
 
-  const previewCurrent = useCallback(async () => {
+  const previewCurrent = useCallback(async (
+    dialogueScope?: readonly string[],
+  ) => {
     setError("");
     setResult("");
     try {
       if (!activeShot) {
         throw new Error("当前没有可导出的镜头");
       }
-      const activeDialogueIds = new Set(activeShot.dialogueIds);
+      const activeDialogueIds = new Set(
+        dialogueScope ?? activeShot.dialogueIds,
+      );
       const nextRequest = buildRequest(
         [activeShot],
         characterActions.filter((track) =>
@@ -325,14 +329,18 @@ export function useStoryboardExport({
     musicRecommendations,
   ]);
 
-  const previewCurrentSoundEffects = useCallback(async () => {
+  const previewCurrentSoundEffects = useCallback(async (
+    dialogueScope?: readonly string[],
+  ) => {
     setError("");
     setResult("");
     try {
       if (!activeShot) {
         throw new Error("当前没有可导出的分镜");
       }
-      const activeDialogueIds = new Set(activeShot.dialogueIds);
+      const activeDialogueIds = new Set(
+        dialogueScope ?? activeShot.dialogueIds,
+      );
       const currentSoundEffects = soundEffects.filter((recommendation) =>
         activeDialogueIds.has(recommendation.dialogueId),
       );
