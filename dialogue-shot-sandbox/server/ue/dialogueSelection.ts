@@ -12,6 +12,8 @@ export const SELECTED_GRAPH_NODES_ACTION =
 const SERIA_DIALOG_SELECTION_ACTION = "script.eval_python_expression";
 const SERIA_DIALOG_SELECTION_EXPRESSION =
   "__import__('json').dumps(list(unreal.get_editor_subsystem(unreal.SeriaDialogEditorSubsystem).get_current_selected_dialog_node_info()))";
+const SERIA_DIALOG_SUBSYSTEM_CLASS =
+  "/Script/SeriaDialogEditor.SeriaDialogEditorSubsystem";
 
 function recordValue(
   record: Record<string, unknown>,
@@ -106,8 +108,79 @@ function seriaDialogueNodeId(
   return `${assetId.slice(0, 4)}${localNodeId.padStart(2, "0")}`;
 }
 
+function objectReference(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function dialogueIdFromCommonProperties(value: unknown): string | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const idProperty = value.find(
+    (entry) =>
+      entry &&
+      typeof entry === "object" &&
+      String(recordValue(entry as Record<string, unknown>, ["Alias"]))
+        .trim()
+        .toLocaleLowerCase() === "id",
+  ) as Record<string, unknown> | undefined;
+  const dialogueId = String(
+    idProperty
+      ? recordValue(idProperty, ["CurrentUint32", "Value"])
+      : "",
+  ).trim();
+  return /^\d{6}$/.test(dialogueId) ? dialogueId : null;
+}
+
+async function selectedDialogueIdFromNodeData(
+  connection: UnrealInvoker,
+): Promise<string | null> {
+  const subsystem = objectReference(
+    await connection.invoke("editor.get_editor_subsystem", {
+      SubsystemClass: SERIA_DIALOG_SUBSYSTEM_CLASS,
+    }),
+  );
+  if (!subsystem) {
+    return null;
+  }
+  const selectionCount = Number(
+    await connection.invoke("reflect.read_object_property", {
+      ThisPtr: subsystem,
+      PropertyName: "CurrentDialogGraphSelectionCount",
+    }),
+  );
+  if (selectionCount !== 1) {
+    return null;
+  }
+  const selectedNode = objectReference(
+    await connection.invoke("reflect.read_object_property", {
+      ThisPtr: subsystem,
+      PropertyName: "CurrentSelectedDialogNode",
+    }),
+  );
+  if (!selectedNode) {
+    return null;
+  }
+  const nodeData = objectReference(
+    await connection.invoke("reflect.read_object_property", {
+      ThisPtr: selectedNode,
+      PropertyName: "DialogGraphNodeData",
+    }),
+  );
+  if (!nodeData) {
+    return null;
+  }
+  return dialogueIdFromCommonProperties(
+    await connection.invoke("reflect.read_object_property", {
+      ThisPtr: nodeData,
+      PropertyName: "CommonDialogGraphProperties",
+    }),
+  );
+}
+
 export function parseSeriaSelectedDialogueNode(
   value: unknown,
+  selectedDialogueId?: string | null,
 ): SelectedDialogueNodeInfo | null {
   const selected = pythonJsonResult(value);
   if (!Array.isArray(selected) || selected.length < 2) {
@@ -118,7 +191,8 @@ export function parseSeriaSelectedDialogueNode(
   if (!assetPath || !localNodeId) {
     return null;
   }
-  const dialogueNodeId = seriaDialogueNodeId(assetPath, localNodeId);
+  const dialogueNodeId =
+    selectedDialogueId ?? seriaDialogueNodeId(assetPath, localNodeId);
   if (!dialogueNodeId) {
     return null;
   }
@@ -165,10 +239,17 @@ export async function readSelectedDialogueNodesFromConnection(
 }> {
   let seriaSelectionAvailable = false;
   try {
-    const selectedNode = parseSeriaSelectedDialogueNode(
-      await connection.invoke(SERIA_DIALOG_SELECTION_ACTION, {
+    const rawSelection = await connection.invoke(
+      SERIA_DIALOG_SELECTION_ACTION,
+      {
         Expression: SERIA_DIALOG_SELECTION_EXPRESSION,
-      }),
+      },
+    );
+    const reflectedDialogueId =
+      await selectedDialogueIdFromNodeData(connection).catch(() => null);
+    const selectedNode = parseSeriaSelectedDialogueNode(
+      rawSelection,
+      reflectedDialogueId,
     );
     seriaSelectionAvailable = true;
     if (selectedNode) {
@@ -178,10 +259,13 @@ export async function readSelectedDialogueNodesFromConnection(
     // Older projects may not expose the Seria dialogue editor subsystem.
   }
 
+  const rawFallbackSelection = await connection.invoke(
+    SELECTED_GRAPH_NODES_ACTION,
+    {},
+  );
+  const fallbackNodes = parseSelectedDialogueNodes(rawFallbackSelection);
   return {
-    nodes: parseSelectedDialogueNodes(
-      await connection.invoke(SELECTED_GRAPH_NODES_ACTION, {}),
-    ),
+    nodes: fallbackNodes,
     seriaSelectionAvailable,
   };
 }

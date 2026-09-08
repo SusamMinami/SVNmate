@@ -14,6 +14,7 @@ import type {
   DialogueCameraQuickActionMode,
   DialogueCameraQuickActionPreview,
   DialogueCameraQuickActionRequest,
+  ExistingDialogueNodeConfiguration,
 } from "../types";
 import {
   applyDialogueCameraQuickAction,
@@ -25,6 +26,7 @@ interface NodeCameraQuickActionsProps {
   startId: string;
   dialogueNodeId: string;
   previousDialogueNodeId?: string;
+  existingConfiguration?: ExistingDialogueNodeConfiguration;
   onApplied?: () => void;
 }
 
@@ -42,6 +44,7 @@ export function NodeCameraQuickActions({
   startId,
   dialogueNodeId,
   previousDialogueNodeId,
+  existingConfiguration,
   onApplied,
 }: NodeCameraQuickActionsProps) {
   const operationRunRef = useRef(0);
@@ -148,6 +151,64 @@ export function NodeCameraQuickActions({
 
   return (
     <section className="inspector-section node-camera-quick-actions">
+      <div className="node-camera-existing">
+        <div className="section-label">
+          <span>UE 当前镜头配置</span>
+          <small>
+            {existingConfiguration?.cameraPosition ||
+            existingConfiguration?.moveCameraCount
+              ? "已配置"
+              : "未配置"}
+          </small>
+        </div>
+        <dl>
+          <div>
+            <dt>Camera Position</dt>
+            <dd>
+              <code>
+                {existingConfiguration?.cameraPosition || "空"}
+              </code>
+            </dd>
+          </div>
+          <div>
+            <dt>Move Cameras</dt>
+            <dd>
+              {existingConfiguration?.moveCameraCount ?? 0} 项
+              {existingConfiguration?.cameraMoveTypes.length
+                ? ` · ${existingConfiguration.cameraMoveTypes.join(" / ")}`
+                : ""}
+              {existingConfiguration?.fov !== null &&
+              existingConfiguration?.fov !== undefined
+                ? ` · FOV ${existingConfiguration.fov}`
+                : ""}
+            </dd>
+          </div>
+          <div>
+            <dt>Blend</dt>
+            <dd>
+              {existingConfiguration?.blendCameraType || "未配置"}
+              {existingConfiguration?.blendCurve
+                ? ` · ${existingConfiguration.blendCurve
+                    .split("/")
+                    .at(-1)}`
+                : ""}
+            </dd>
+          </div>
+          <div>
+            <dt>角色相机</dt>
+            <dd>
+              {existingConfiguration?.schoolCameraKeys.length
+                ? existingConfiguration.schoolCameraKeys
+                    .map((key) => key.replace(/^E/, ""))
+                    .join(" · ")
+                : existingConfiguration?.schoolCameraCount
+                  ? `${existingConfiguration.schoolCameraCount} 组`
+                  : "未配置"}
+            </dd>
+          </div>
+        </dl>
+      </div>
+
       <div className="section-label">
         <span>镜头快捷操作</span>
         <small>节点 {dialogueNodeId}</small>
@@ -230,13 +291,13 @@ export function NodeCameraQuickActions({
         <button
           type="button"
           disabled={busy !== null}
-          title="将主 MoveCameras 复制给 Ring、Nino 与 Jodie"
+          title="保留已有角色相机，只用主 MoveCameras 补齐缺失项"
           onClick={() => void inspect("school_cameras")}
         >
           <Users size={16} />
           <span>
             <strong>添加角色相机</strong>
-            <small>Ring · Nino · Jodie 共用主镜头参数</small>
+            <small>保留已有项，补齐 Ring · Nino · Jodie</small>
           </span>
           {busy === "inspect" &&
           request?.mode === "school_cameras" ? (
@@ -328,11 +389,19 @@ export function NodeCameraQuickActions({
                   <dd>{preview.existingMoveCount} 项 MoveCameras</dd>
                 </div>
                 <div>
-                  <dt>角色组</dt>
+                  <dt>已有角色</dt>
                   <dd>
-                    {preview.desiredSchoolCameraKeys
+                    {(preview.existingSchoolCameraKeys ?? [])
                       .map((key) => key.replace(/^E/, ""))
-                      .join(" · ")}
+                      .join(" · ") || "无"}
+                  </dd>
+                </div>
+                <div>
+                  <dt>本次补齐</dt>
+                  <dd>
+                    {(preview.addedSchoolCameraKeys ?? [])
+                      .map((key) => key.replace(/^E/, ""))
+                      .join(" · ") || "无需补齐"}
                   </dd>
                 </div>
                 <div>

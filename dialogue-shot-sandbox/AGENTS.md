@@ -93,9 +93,11 @@
 - 配置小窗保留专用镜头页，但不得重复完整窗口的只读镜头检查器。节点快捷镜头
   支持完整复制上一节点的 `CameraPosition + MoveCameras`，或写入
   `c1 / EPush / Velocity=1 / BlendOutTime=1 / FOV=62` 的全新默认参数。
+  镜头页必须先显示当前节点已有的相机、混合和角色相机配置；音频页必须区分
+  UE 已有音效与待写入建议，不能把未生成建议展示成“UE 未配置”。
   镜头曲线写入 `DialogBlendCameraData=EBlend` 与指定 CurveFloat，角色相机
-  将主 `MoveCameras` 复制到 `SchoolMoveCamerasMap` 的
-  `ERing / ENino / EJodie`。所有写入都必须执行差异预检、脏资产阻断、当前
+  保留 `SchoolMoveCamerasMap` 已有键值，只将主 `MoveCameras` 复制到
+  `ERing / ENino / EJodie` 中的缺失项。所有写入都必须执行差异预检、脏资产阻断、当前
   UE 选中节点复核、审核令牌、回读、单次保存和失败恢复。
 - 节点快捷镜头写入成功后保留当前小窗与成功反馈，只在后台回读已有镜头；不得
   重新执行完整对话加载、Formation 查询或导演分析。

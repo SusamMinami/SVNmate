@@ -100,6 +100,44 @@ test.beforeEach(async ({ page }) => {
           status: "empty",
           dialogueAssetPath: "/Game/Test/204800.204800",
           nodes: [],
+          configurations: [
+            {
+              dialogueId: "204801",
+              cameraPosition: "c1",
+              moveCameraCount: 1,
+              cameraMoveTypes: ["EPush"],
+              fov: 62,
+              blendCameraType: "ECutShot",
+              blendCurve: "",
+              blendDuration: 0,
+              schoolCameraKeys: ["ERing"],
+              schoolCameraCount: 1,
+              soundEffectAssetPath:
+                "/Game/Test/A_SFX_Dialog_204801.A_SFX_Dialog_204801",
+              soundEffectAssetName: "A_SFX_Dialog_204801",
+              soundEffectDelaySeconds: 0.4,
+              backgroundMusicStateId: 13,
+              backgroundMusicDelaySeconds: 1.5,
+            },
+            {
+              dialogueId: "204803",
+              cameraPosition: "c2",
+              moveCameraCount: 1,
+              cameraMoveTypes: ["EPush"],
+              fov: 55,
+              blendCameraType: "EBlend",
+              blendCurve: "/Game/Test/trans_6015.trans_6015",
+              blendDuration: 1,
+              schoolCameraKeys: ["ERing", "EJodie"],
+              schoolCameraCount: 2,
+              soundEffectAssetPath:
+                "/Game/Test/A_SFX_Dialog_204803.A_SFX_Dialog_204803",
+              soundEffectAssetName: "A_SFX_Dialog_204803",
+              soundEffectDelaySeconds: 0.4,
+              backgroundMusicStateId: 13,
+              backgroundMusicDelaySeconds: 1.5,
+            },
+          ],
           warnings: [],
           message: "对话已加载，UE 中没有已有镜头数据",
         },
@@ -1262,10 +1300,14 @@ test("keeps configuration mode aligned with the selected UE node", async ({
             ? "/Game/Seria/Task/Mod/MainQuest/DialogCurve/trans_6015.trans_6015"
             : "None",
           blendDuration: 0,
+          existingSchoolCameraKeys: addsSchoolCameras ? ["ERing"] : [],
+          addedSchoolCameraKeys: addsSchoolCameras
+            ? ["ENino", "EJodie"]
+            : [],
           desiredSchoolCameraKeys: addsSchoolCameras
             ? ["ERing", "ENino", "EJodie"]
             : [],
-          existingSchoolCameraCount: 0,
+          existingSchoolCameraCount: addsSchoolCameras ? 1 : 0,
           desiredSchoolCameraCount: addsSchoolCameras ? 3 : 0,
           changed: true,
           blockedReasons: [],
@@ -1420,6 +1462,10 @@ test("keeps configuration mode aligned with the selected UE node", async ({
   await expect(
     page.getByText("节点 204801 的镜头配置已写入并保存"),
   ).toBeVisible();
+  await expect(page.getByText("UE 当前镜头配置")).toBeVisible();
+  await expect(page.locator(".node-camera-existing")).toContainText(
+    "c1",
+  );
   expect(cameraApplyRequests[0]).toMatchObject({
     dialogueNodeId: "204801",
     mode: "default",
@@ -1435,7 +1481,8 @@ test("keeps configuration mode aligned with the selected UE node", async ({
   });
   await page.getByRole("button", { name: "取消" }).click();
   await page.getByRole("button", { name: "添加角色相机" }).click();
-  await expect(cameraReview).toContainText("Ring · Nino · Jodie");
+  await expect(cameraReview).toContainText("已有角色");
+  await expect(cameraReview).toContainText("Nino · Jodie");
   expect(cameraInspectRequests[2]).toMatchObject({
     dialogueNodeId: "204801",
     mode: "school_cameras",
@@ -1482,6 +1529,11 @@ test("keeps configuration mode aligned with the selected UE node", async ({
     "aria-selected",
     "true",
   );
+  await expect(page.getByText("UE 当前音效配置")).toBeVisible();
+  await expect(page.locator(".ue-existing-audio")).toContainText(
+    "A_SFX_Dialog_204803",
+  );
+  await expect(page.locator(".ue-existing-audio")).toContainText("0.4s");
   await expect(page.locator(".inspector-tab-panel:visible")).toHaveCSS(
     "animation-name",
     "none",
@@ -2158,7 +2210,7 @@ test("shows local content while TRAE works and applies the completed plan direct
   await page.locator(".shot-row").nth(1).click();
   await expect(page.locator(".sound-effect-list")).toHaveCount(0);
   await expect(
-    page.getByText("当前分镜内容没有与现有目录充分匹配的音效。"),
+    page.getByText("当前节点没有待写入的音效建议。"),
   ).toBeVisible();
 });
 

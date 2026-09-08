@@ -7,7 +7,10 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { DirectorSoundEffectRecommendation } from "../director/contracts";
-import type { DialogueRow } from "../types";
+import type {
+  DialogueRow,
+  ExistingDialogueNodeConfiguration,
+} from "../types";
 import {
   inspectSoundEffectPreview,
   prepareSoundEffectPreview,
@@ -15,6 +18,7 @@ import {
 
 interface SoundEffectRecommendationsProps {
   recommendations: DirectorSoundEffectRecommendation[];
+  existingConfiguration?: ExistingDialogueNodeConfiguration;
   dialogueRows: DialogueRow[];
   currentDialogueIds: string[];
   busy: boolean;
@@ -60,6 +64,7 @@ interface PreviewState {
 
 export function SoundEffectRecommendations({
   recommendations,
+  existingConfiguration,
   dialogueRows,
   currentDialogueIds,
   busy,
@@ -225,8 +230,45 @@ export function SoundEffectRecommendations({
 
   return (
     <section className="inspector-section sound-effect-analysis">
+      {existingConfiguration && (
+        <div className="ue-existing-audio">
+          <div className="section-label">
+            <span>UE 当前音效配置</span>
+            <small>
+              {existingConfiguration.soundEffectAssetName
+                ? "已配置"
+                : "未配置"}
+            </small>
+          </div>
+          <dl>
+            <div>
+              <dt>Sound Effect</dt>
+              <dd
+                title={
+                  existingConfiguration.soundEffectAssetPath || undefined
+                }
+              >
+                {existingConfiguration.soundEffectAssetName || "空"}
+              </dd>
+            </div>
+            <div>
+              <dt>Delay Time</dt>
+              <dd>{existingConfiguration.soundEffectDelaySeconds}s</dd>
+            </div>
+            <div>
+              <dt>Music State</dt>
+              <dd>
+                {existingConfiguration.backgroundMusicStateId ?? "未配置"}
+                {existingConfiguration.backgroundMusicStateId
+                  ? ` · 延迟 ${existingConfiguration.backgroundMusicDelaySeconds}s`
+                  : ""}
+              </dd>
+            </div>
+          </dl>
+        </div>
+      )}
       <div className="section-label sound-effect-analysis__header">
-        <span>已有音效建议</span>
+        <span>待写入音效建议</span>
         <small>{currentRecommendations.length} 项</small>
         {currentRecommendations.length > 0 && (
           <button
@@ -362,7 +404,7 @@ export function SoundEffectRecommendations({
           })}
         </div>
       ) : (
-        <p>当前分镜内容没有与现有目录充分匹配的音效。</p>
+        <p>当前节点没有待写入的音效建议。</p>
       )}
       {playbackError && (
         <p className="sound-effect-playback-error" role="alert">

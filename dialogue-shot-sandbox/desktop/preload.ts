@@ -50,6 +50,8 @@ contextBridge.exposeInMainWorld("shotSandboxDesktop", {
     ipcRenderer.invoke("desktop:advisor-model-status"),
   downloadAdvisorModel: () =>
     ipcRenderer.invoke("desktop:download-advisor-model"),
+  chooseAdvisorModelDirectory: () =>
+    ipcRenderer.invoke("desktop:choose-advisor-model-directory"),
   openOllamaDownload: () =>
     ipcRenderer.invoke("desktop:open-ollama-download"),
   onAdvisorModelState: (
@@ -59,6 +61,7 @@ contextBridge.exposeInMainWorld("shotSandboxDesktop", {
       runtimeAvailable: boolean;
       serviceAvailable: boolean;
       modelInstalled: boolean;
+      modelDirectory?: string;
       percent?: number;
       message: string;
     }) => void,
@@ -71,6 +74,7 @@ contextBridge.exposeInMainWorld("shotSandboxDesktop", {
         runtimeAvailable: boolean;
         serviceAvailable: boolean;
         modelInstalled: boolean;
+        modelDirectory?: string;
         percent?: number;
         message: string;
       },

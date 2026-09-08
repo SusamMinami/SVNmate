@@ -130,6 +130,49 @@ describe("UE dialogue graph selection", () => {
     );
   });
 
+  it("uses the selected node data id instead of the non-unique local node id", async () => {
+    const connection = invoker([]);
+    connection.invoke.mockImplementation(async (action, args) => {
+      if (action === "script.eval_python_expression") {
+        return {
+          bSuccess: true,
+          Result:
+            "'[\"/Game/Seria/Task/dialoggraph/1009-Cha08/734200.734200\", \"1\"]'",
+        };
+      }
+      if (action === "editor.get_editor_subsystem") {
+        return "SeriaDialogEditorSubsystem_0";
+      }
+      if (action === "reflect.read_object_property") {
+        if (args.PropertyName === "CurrentDialogGraphSelectionCount") {
+          return 1;
+        }
+        if (args.PropertyName === "CurrentSelectedDialogNode") {
+          return "SeriaEdDialogGraphNode_15_2";
+        }
+        if (args.PropertyName === "DialogGraphNodeData") {
+          return "SeriaDialogGraphNodeData_0_66";
+        }
+        if (args.PropertyName === "CommonDialogGraphProperties") {
+          return [
+            {
+              Alias: "id",
+              CurrentUint32: 734219,
+            },
+          ];
+        }
+      }
+      return [];
+    });
+
+    await expect(
+      readSelectedDialogueNode(() => connection),
+    ).resolves.toMatchObject({
+      status: "selected",
+      dialogueNodeId: "734219",
+    });
+  });
+
   it("asks for one dialogue node when the Seria editor has no exact selection", async () => {
     const connection = invoker([]);
     connection.invoke.mockImplementation(async (action) =>

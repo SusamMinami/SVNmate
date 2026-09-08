@@ -146,6 +146,7 @@ import type {
   DialogueContentSearchContext,
   DialogueContentSearchResult,
   DialogueDatabase,
+  ExistingDialogueNodeConfiguration,
   DialogueRow,
   DialogueSequence,
   CompositionMode,
@@ -731,6 +732,9 @@ interface ShotInspectorProps {
   configurationMode: boolean;
   configurationModeBusy: boolean;
   configurationDialogueNodeId: string | null;
+  configurationNodeConfiguration:
+    | ExistingDialogueNodeConfiguration
+    | undefined;
   configurationSelectionMessage: string;
   configurationSelectionReady: boolean;
   configurationSelectionRefreshing: boolean;
@@ -806,6 +810,7 @@ function ShotInspector({
   configurationMode,
   configurationModeBusy,
   configurationDialogueNodeId,
+  configurationNodeConfiguration,
   configurationSelectionMessage,
   configurationSelectionReady,
   configurationSelectionRefreshing,
@@ -1073,6 +1078,7 @@ function ShotInspector({
                 dialogueId={sequence.prefix}
                 startId={sequence.startId}
                 dialogueNodeId={configurationDialogueNodeId}
+                existingConfiguration={configurationNodeConfiguration}
                 previousDialogueNodeId={
                   previousConfigurationDialogueNodeId
                 }
@@ -1542,6 +1548,11 @@ function ShotInspector({
           <>
             <SoundEffectRecommendations
               recommendations={soundEffects}
+              existingConfiguration={
+                configurationMode
+                  ? configurationNodeConfiguration
+                  : undefined
+              }
               dialogueRows={sequence.rows}
               currentDialogueIds={editableDialogueIds}
               busy={exportBusy}
@@ -1678,6 +1689,10 @@ export default function App() {
   const [soundEffects, setSoundEffects] = useState<
     DirectorSoundEffectRecommendation[]
   >(initial.soundEffects);
+  const [
+    existingNodeConfigurations,
+    setExistingNodeConfigurations,
+  ] = useState<ExistingDialogueNodeConfiguration[]>([]);
   const [musicCatalog, setMusicCatalog] = useState<MusicCatalogSnapshot>({
     entries: [],
     revision: 0,
@@ -1866,8 +1881,14 @@ export default function App() {
     selectedUeDialogueRowIndex > 0
       ? sequence.rows[selectedUeDialogueRowIndex - 1].id
       : undefined;
+  const selectedUeNodeConfiguration = selectedUeDialogueNodeId
+    ? existingNodeConfigurations.find(
+        (configuration) =>
+          configuration.dialogueId === selectedUeDialogueNodeId,
+      )
+    : undefined;
   const configurationSelectionReady =
-    Boolean(selectedUeDialogueRow) && selectedUeShotIndex >= 0;
+    Boolean(selectedUeDialogueRow);
   const configurationSelectionMessage = !ueDialogueSelection
     ? "正在读取 UE 当前节点"
     : ueDialogueSelection.status !== "selected"
@@ -1921,9 +1942,11 @@ export default function App() {
     ) {
       return;
     }
-    setActiveIndex((current) =>
-      current === selectedUeShotIndex ? current : selectedUeShotIndex,
-    );
+    if (selectedUeShotIndex >= 0) {
+      setActiveIndex((current) =>
+        current === selectedUeShotIndex ? current : selectedUeShotIndex,
+      );
+    }
     setSelectedDialogueId((current) =>
       current === selectedUeDialogueNodeId
         ? current
@@ -1937,6 +1960,27 @@ export default function App() {
   ]);
 
   const activeShot: ShotPlan | undefined = shots[activeIndex] ?? shots[0];
+  const configurationFallbackShot = useMemo(() => {
+    if (
+      !configurationMode ||
+      activeShot ||
+      !selectedUeDialogueNodeId ||
+      !selectedUeDialogueRow
+    ) {
+      return undefined;
+    }
+    const preview = createShotPreview(sequence, { soundEffectCatalog: [] });
+    return preview.shots.find((shot) =>
+      shot.dialogueIds.includes(selectedUeDialogueNodeId),
+    ) ?? preview.shots[0];
+  }, [
+    activeShot,
+    configurationMode,
+    selectedUeDialogueNodeId,
+    selectedUeDialogueRow,
+    sequence,
+  ]);
+  const inspectorShot = activeShot ?? configurationFallbackShot;
   const characterActionEditor = useCharacterActionEditor({
     sequence,
     enabled:
@@ -2936,6 +2980,7 @@ export default function App() {
     traeForceRegenerateRef.current = false;
     setSequence(nextSequence);
     setShots([]);
+    setExistingNodeConfigurations([]);
     setActiveIndex(0);
     setSelectedDialogueId(nextSequence.rows[0]?.id ?? "");
     setFormationChoice(null);
@@ -3043,6 +3088,7 @@ export default function App() {
       if (formationRunId !== formationRunRef.current) {
         return;
       }
+      setExistingNodeConfigurations(existing.configurations ?? []);
       const imported = createExistingStoryboardPreview(
         previewSequence,
         existing,
@@ -3114,6 +3160,7 @@ export default function App() {
       if (sequenceRef.current.prefix !== targetSequence.prefix) {
         return;
       }
+      setExistingNodeConfigurations(existing.configurations ?? []);
       const imported = createExistingStoryboardPreview(
         targetSequence,
         existing,
@@ -5315,10 +5362,10 @@ export default function App() {
         )}
 
         <aside className="right-panel">
-          {activeShot ? (
+          {inspectorShot ? (
             <>
               <ShotInspector
-                shot={activeShot}
+                shot={inspectorShot}
                 sequence={sequence}
                 activeDialogueId={activeDialogueId}
                 dialogueIssues={dialogueIssues}
@@ -5330,7 +5377,7 @@ export default function App() {
                 directorBlocking={directorBlocking}
                 appliedDirector={appliedDirector}
                 activeIndex={activeIndex}
-                shotCount={shots.length}
+                shotCount={Math.max(1, shots.length)}
                 tab={inspectorTab}
                 workspaceActive={activeWorkspace === "storyboard"}
                 canExport={
@@ -5353,6 +5400,9 @@ export default function App() {
                 configurationMode={configurationMode}
                 configurationModeBusy={configurationModeBusy}
                 configurationDialogueNodeId={selectedUeDialogueNodeId}
+                configurationNodeConfiguration={
+                  selectedUeNodeConfiguration
+                }
                 configurationSelectionMessage={
                   configurationSelectionMessage
                 }
@@ -5363,12 +5413,14 @@ export default function App() {
                 characterActionEditor={characterActionEditor}
                 onMove={moveShot}
                 preference={
-                  shotPreferences.get(`${sequence.prefix}:${activeShot.id}`) ??
+                  shotPreferences.get(
+                    `${sequence.prefix}:${inspectorShot.id}`,
+                  ) ??
                   null
                 }
                 preferenceBusy={
                   preferenceBusyKey ===
-                  `${sequence.prefix}:${activeShot.id}`
+                  `${sequence.prefix}:${inspectorShot.id}`
                 }
                 preferenceError={preferenceError}
                 onPreference={(feedbackType, reason) =>

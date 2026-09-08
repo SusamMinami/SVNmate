@@ -56,6 +56,23 @@ describe("character geometry", () => {
     expect(scales.bodyScale[0]).not.toBeCloseTo(scales.bodyScale[1]);
   });
 
+  it("caps attachment-heavy mesh bounds to humanoid proxy proportions", () => {
+    const participant = {
+      ...actor,
+      bodyProfile: {
+        ...DEFAULT_CHARACTER_BODY,
+        source: "mesh_bounds" as const,
+        height: 1.8,
+        width: 2.4,
+        depth: 1.6,
+      },
+    };
+    const body = characterBody(participant);
+    expect(body.width).toBeCloseTo(1.8 * 0.42);
+    expect(body.depth).toBeCloseTo(1.8 * 0.32);
+    expect(characterProxyScales(body).bodyScale[0]).toBeLessThan(1.12);
+  });
+
   it("rejects invalid dimensions rather than producing NaN camera coordinates", () => {
     expect(characterBody({ bodyProfile: { ...DEFAULT_CHARACTER_BODY, height: NaN } })).toEqual(DEFAULT_CHARACTER_BODY);
     expect(characterBody({ bodyProfile: { ...DEFAULT_CHARACTER_BODY, width: 0 } })).toEqual(DEFAULT_CHARACTER_BODY);

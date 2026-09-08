@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   downloadRuleAdvisorModel,
   inspectRuleAdvisorModel,
@@ -9,17 +12,25 @@ import {
   stopManagedRuleAdvisorRuntime,
 } from "./ruleAdvisorRuntime";
 
-afterEach(() => {
+const temporaryDirectories: string[] = [];
+
+afterEach(async () => {
   stopManagedRuleAdvisorRuntime();
   vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
+  await Promise.all(
+    temporaryDirectories.splice(0).map((directory) =>
+      rm(directory, { recursive: true, force: true }),
+    ),
+  );
 });
 
 describe("rule advisor runtime", () => {
   it("reports a missing runtime when Ollama is unavailable", async () => {
     vi.stubEnv("LOCALAPPDATA", "Z:\\missing-ollama");
+    vi.stubEnv("OLLAMA_MODELS", "Z:\\missing-ollama-models");
     vi.stubEnv("RULE_ADVISOR_RUNTIME_PATH", "");
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
 
@@ -46,6 +57,34 @@ describe("rule advisor runtime", () => {
       runtimeAvailable: true,
       serviceAvailable: true,
       modelInstalled: false,
+    });
+  });
+
+  it("detects an installed model while the on-demand service is stopped", async () => {
+    const modelDirectory = await mkdtemp(
+      join(tmpdir(), "shot-sandbox-ollama-models-"),
+    );
+    temporaryDirectories.push(modelDirectory);
+    const manifestDirectory = join(
+      modelDirectory,
+      "manifests",
+      "registry.ollama.ai",
+      "library",
+      "qwen3-vl",
+    );
+    await mkdir(manifestDirectory, { recursive: true });
+    await writeFile(join(manifestDirectory, "4b"), "{}", "utf8");
+    vi.stubEnv("OLLAMA_MODELS", modelDirectory);
+    vi.stubEnv("RULE_ADVISOR_RUNTIME_PATH", import.meta.filename);
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
+
+    await expect(inspectRuleAdvisorModel()).resolves.toMatchObject({
+      state: "ready",
+      runtimeAvailable: true,
+      serviceAvailable: false,
+      modelInstalled: true,
+      modelDirectory,
+      message: "端侧导演模型已安装，推理时自动启动",
     });
   });
 

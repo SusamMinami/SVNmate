@@ -24,6 +24,7 @@ export interface RuleAdvisorModelSnapshot {
   runtimeAvailable: boolean;
   serviceAvailable: boolean;
   modelInstalled: boolean;
+  modelDirectory?: string;
   percent?: number;
   message: string;
 }
@@ -87,6 +88,43 @@ async function installedModels(host: string): Promise<string[]> {
 
 function configuredModel(): string {
   return process.env.RULE_ADVISOR_MODEL || DEFAULT_MODEL;
+}
+
+export function configuredModelDirectory(): string {
+  const configured = process.env.OLLAMA_MODELS?.trim();
+  if (configured) {
+    return configured;
+  }
+  const userProfile = process.env.USERPROFILE?.trim();
+  return userProfile ? join(userProfile, ".ollama", "models") : "";
+}
+
+function modelManifestSegments(model: string): string[] {
+  const separator = model.lastIndexOf(":");
+  const name = separator >= 0 ? model.slice(0, separator) : model;
+  const tag = separator >= 0 ? model.slice(separator + 1) : "latest";
+  const nameSegments = name.split("/").filter(Boolean);
+  if (nameSegments.length === 1) {
+    return ["registry.ollama.ai", "library", nameSegments[0], tag];
+  }
+  if (nameSegments.length === 2) {
+    return ["registry.ollama.ai", ...nameSegments, tag];
+  }
+  return [...nameSegments, tag];
+}
+
+async function locallyInstalledModel(model: string): Promise<boolean> {
+  const modelDirectory = configuredModelDirectory();
+  return Boolean(
+    modelDirectory &&
+      await pathExists(
+        join(
+          modelDirectory,
+          "manifests",
+          ...modelManifestSegments(model),
+        ),
+      ),
+  );
 }
 
 function configuredIdleMs(name: string, fallback: number): number {
@@ -220,27 +258,36 @@ export async function inspectRuleAdvisorModel(options: {
 } = {}): Promise<RuleAdvisorModelSnapshot> {
   const model = configuredModel();
   const host = process.env.RULE_ADVISOR_OLLAMA_HOST || DEFAULT_OLLAMA_HOST;
-  const executableAvailable =
-    (await executableCandidates(options.bundledExecutable)).length > 0;
+  const candidates = await executableCandidates(options.bundledExecutable);
+  const executableAvailable = candidates.length > 0;
   const serviceReady = await serviceAvailable(host);
+  const modelDirectory = configuredModelDirectory();
+  const localModelInstalled =
+    !serviceReady && await locallyInstalledModel(model);
   if (!serviceReady && !executableAvailable) {
     return {
       state: "missing_runtime",
       model,
       runtimeAvailable: false,
       serviceAvailable: false,
-      modelInstalled: false,
-      message: "需要先安装 Ollama 运行时",
+      modelInstalled: localModelInstalled,
+      modelDirectory,
+      message: localModelInstalled
+        ? "模型已存在，但需要先安装 Ollama 运行时"
+        : "需要先安装 Ollama 运行时",
     };
   }
   if (!serviceReady) {
     return {
-      state: "missing_model",
+      state: localModelInstalled ? "ready" : "missing_model",
       model,
       runtimeAvailable: true,
       serviceAvailable: false,
-      modelInstalled: false,
-      message: "运行时已安装，下载模型时会自动启动",
+      modelInstalled: localModelInstalled,
+      modelDirectory,
+      message: localModelInstalled
+        ? "端侧导演模型已安装，推理时自动启动"
+        : "运行时已安装，下载模型时会自动启动",
     };
   }
   const modelInstalled = (await installedModels(host)).includes(model);
@@ -250,6 +297,7 @@ export async function inspectRuleAdvisorModel(options: {
     runtimeAvailable: true,
     serviceAvailable: true,
     modelInstalled,
+    modelDirectory,
     message: modelInstalled
       ? "端侧导演模型已就绪"
       : "模型尚未下载，规则导演仍可独立使用",
@@ -277,6 +325,7 @@ async function downloadRuleAdvisorModelImpl(
       runtimeAvailable: true,
       serviceAvailable: true,
       modelInstalled: true,
+      modelDirectory: configuredModelDirectory(),
       percent: 100,
       message: "端侧导演模型已就绪",
     };
@@ -287,6 +336,7 @@ async function downloadRuleAdvisorModelImpl(
     runtimeAvailable: true,
     serviceAvailable: true,
     modelInstalled: false,
+    modelDirectory: configuredModelDirectory(),
     percent: 0,
     message: "正在准备模型下载",
   };
@@ -339,6 +389,7 @@ async function downloadRuleAdvisorModelImpl(
     runtimeAvailable: true,
     serviceAvailable: true,
     modelInstalled: true,
+    modelDirectory: configuredModelDirectory(),
     percent: 100,
     message: "端侧导演模型已就绪",
   };

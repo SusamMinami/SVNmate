@@ -22,6 +22,7 @@ interface DesktopSetupStatus {
   liveCsvDirectory: string;
   configCsvDirectory: string;
   missionTargetTablePath: string;
+  advisorModelDirectory: string;
   ueConnected: boolean;
   ueMcpHost: string;
   ueMcpPort: number;
@@ -57,6 +58,7 @@ interface RuleAdvisorModelSnapshot {
   runtimeAvailable: boolean;
   serviceAvailable: boolean;
   modelInstalled: boolean;
+  modelDirectory?: string;
   percent?: number;
   message: string;
 }
@@ -103,6 +105,8 @@ interface Window {
     openUpdatePage: () => Promise<void>;
     getAdvisorModelStatus: () => Promise<RuleAdvisorModelSnapshot>;
     downloadAdvisorModel: () => Promise<RuleAdvisorModelSnapshot>;
+    chooseAdvisorModelDirectory: () =>
+      Promise<RuleAdvisorModelSnapshot | null>;
     openOllamaDownload: () => Promise<void>;
     onAdvisorModelState: (
       listener: (snapshot: RuleAdvisorModelSnapshot) => void,

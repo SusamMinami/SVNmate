@@ -26,6 +26,7 @@ import type {
   DialogueModelRegistrationSlot,
   DialoguePositionTimelineRow,
   ExistingDialogueCameraNode,
+  ExistingDialogueNodeConfiguration,
   ExistingDialogueStoryboardResult,
   MissionTargetBlueprintSyncState,
   MissionTargetBlueprintToTargetsResult,
@@ -2158,6 +2159,153 @@ function existingCameraNode(
   };
 }
 
+function commonProperty(
+  node: StoryboardDialogueNodeContext,
+  alias: string,
+): ReflectedProperty | undefined {
+  return node.commonProperties.find(
+    (property) =>
+      String(property.Alias ?? "").toLocaleLowerCase() ===
+      alias.toLocaleLowerCase(),
+  );
+}
+
+function normalizedAssetPath(value: unknown): string {
+  const path = unrealReferenceText(value).trim();
+  return ["", "none", "null"].includes(path.toLocaleLowerCase())
+    ? ""
+    : objectReferencePath(path);
+}
+
+function exportedSchoolCameraKeysByDialogueId(
+  exportedText: string,
+): Map<string, string[]> {
+  const result = new Map<string, string[]>();
+  for (const match of exportedText.matchAll(
+    /^\s{6}Begin Object Name="SeriaEdDialogGraphNode_\d+"\r?\n([\s\S]*?)^\s{9}DialogGraphNodeData=/gm,
+  )) {
+    const block = match[1];
+    const dialogueId = block.match(
+      /CommonDialogGraphProperties\(\d+\)=\([^\r\n]*CurrentUint32=(\d{6})[^\r\n]*Alias="id"/,
+    )?.[1];
+    const schoolLine = block
+      .split(/\r?\n/)
+      .find((line) => line.includes("SchoolMoveCamerasMap="));
+    if (!dialogueId || !schoolLine) {
+      continue;
+    }
+    result.set(
+      dialogueId,
+      Array.from(
+        new Set(
+          Array.from(
+            schoolLine.matchAll(
+              /\b(E(?:None|Ring|Nino|Jodie))\s*,\s*\(/g,
+            ),
+            (keyMatch) => keyMatch[1],
+          ),
+        ),
+      ),
+    );
+  }
+  return result;
+}
+
+async function existingNodeConfiguration(
+  connection: UnrealInvoker,
+  node: StoryboardDialogueNodeContext,
+  exportedSchoolCameraKeys: string[] = [],
+): Promise<ExistingDialogueNodeConfiguration> {
+  const [blendValue, schoolCameraValue] = await Promise.all([
+    readProperty(
+      connection,
+      node.nodeDataPath,
+      "DialogBlendCameraData",
+    ).catch(() => ({})),
+    readProperty(
+      connection,
+      node.nodeDataPath,
+      "SchoolMoveCamerasMap",
+    ).catch(() => ({ Keys: [], Values: [] })),
+  ]);
+  const blend =
+    blendValue && typeof blendValue === "object" && !Array.isArray(blendValue)
+      ? blendValue as Record<string, unknown>
+      : {};
+  const schoolCameraMap =
+    schoolCameraValue &&
+    typeof schoolCameraValue === "object" &&
+    !Array.isArray(schoolCameraValue)
+      ? schoolCameraValue as Record<string, unknown>
+      : {};
+  const schoolCameraValues = reflectedArray(
+    schoolCameraMap.Values ?? [],
+    "SchoolMoveCamerasMap.Values",
+  );
+  const rawReflectedKeys = reflectedArray(
+    schoolCameraMap.Keys ?? [],
+    "SchoolMoveCamerasMap.Keys",
+  ).map((key) => String(key).trim());
+  const alignedKeys =
+    rawReflectedKeys.length === schoolCameraValues.length &&
+    rawReflectedKeys.every(Boolean)
+      ? rawReflectedKeys
+      : exportedSchoolCameraKeys.length === schoolCameraValues.length
+        ? exportedSchoolCameraKeys
+        : [];
+  const schoolCameraKeys = alignedKeys.flatMap((key) => {
+    const canonical = canonicalSchoolCameraKey(key);
+    return canonical ? [canonical] : [];
+  });
+  const schoolCameraCount = schoolCameraKeys.length;
+  const soundEffectAssetPath = normalizedAssetPath(
+    commonProperty(node, "SoundEffect")?.CurrentPath,
+  );
+  const moveRecords = node.existingMoveCameras.filter(
+    (move): move is Record<string, unknown> =>
+      Boolean(move) && typeof move === "object" && !Array.isArray(move),
+  );
+  const firstFov = Number(moveRecords[0]?.FOV);
+  const backgroundMusicStateId = Number(
+    commonProperty(node, "BackgroundMusic")?.CurrentUint32,
+  );
+  return {
+    dialogueId: node.dialogueId,
+    cameraPosition: node.existingCameraPosition,
+    moveCameraCount: node.existingMoveCameras.length,
+    cameraMoveTypes: Array.from(
+      new Set(
+        moveRecords
+          .map((move) => String(move.CameraMoveType ?? "").trim())
+          .filter(Boolean),
+      ),
+    ),
+    fov: Number.isFinite(firstFov) ? firstFov : null,
+    blendCameraType: String(
+      blend.DialogBlendCameraType ?? "",
+    ).trim(),
+    blendCurve: normalizedAssetPath(blend.BlendCurve),
+    blendDuration: Number(blend.Duration) || 0,
+    schoolCameraKeys,
+    schoolCameraCount,
+    soundEffectAssetPath,
+    soundEffectAssetName: soundEffectAssetPath
+      ? assetNameFromPath(soundEffectAssetPath)
+      : "",
+    soundEffectDelaySeconds:
+      Number(commonProperty(node, "DelayTime")?.CurrentFloat) || 0,
+    backgroundMusicStateId:
+      Number.isFinite(backgroundMusicStateId) &&
+      backgroundMusicStateId > 1
+        ? backgroundMusicStateId
+        : null,
+    backgroundMusicDelaySeconds:
+      Number(
+        commonProperty(node, "DelayBackgroundMusicTime")?.CurrentFloat,
+      ) || 0,
+  };
+}
+
 export async function readExistingDialogueStoryboard(
   rawRequest: unknown,
   connectionFactory: () => UnrealInvoker = () => new UnrealMcpConnection(),
@@ -2169,6 +2317,7 @@ export async function readExistingDialogueStoryboard(
     status: "unavailable",
     dialogueAssetPath: "",
     nodes: [],
+    configurations: [],
     warnings: [],
     message,
   });
@@ -2202,6 +2351,17 @@ export async function readExistingDialogueStoryboard(
       exportedText,
       { readCamera: true, readCharacterActions: false },
     );
+    const exportedSchoolCameraKeys =
+      exportedSchoolCameraKeysByDialogueId(exportedText);
+    const configurations = await Promise.all(
+      nodes.map((node) =>
+        existingNodeConfiguration(
+          connection,
+          node,
+          exportedSchoolCameraKeys.get(node.dialogueId),
+        ),
+      ),
+    );
     const cameraNodes = nodes.filter(
       (node) =>
         node.existingCameraPosition.trim() ||
@@ -2212,6 +2372,7 @@ export async function readExistingDialogueStoryboard(
         status: "empty",
         dialogueAssetPath,
         nodes: [],
+        configurations,
         warnings: [],
         message: "对话已加载，UE 中没有已有镜头数据",
       };
@@ -2260,6 +2421,7 @@ export async function readExistingDialogueStoryboard(
       status: importedNodes.length > 0 ? "found" : "empty",
       dialogueAssetPath,
       nodes: importedNodes,
+      configurations,
       warnings,
       message:
         importedNodes.length > 0
@@ -3482,6 +3644,30 @@ function reflectedSchoolCameraValues(
   return reflectedArray(value.Values ?? [], "SchoolMoveCamerasMap.Values");
 }
 
+function canonicalSchoolCameraKey(value: unknown): string | null {
+  const normalized = String(value ?? "")
+    .trim()
+    .replace(/^.*::/, "")
+    .toLocaleLowerCase();
+  return SCHOOL_CAMERA_KEYS.find(
+    (key) =>
+      normalized === key.toLocaleLowerCase() ||
+      normalized === key.slice(1).toLocaleLowerCase(),
+  ) ?? null;
+}
+
+function reflectedSchoolCameraKeys(
+  value: Record<string, unknown>,
+): string[] {
+  return reflectedArray(
+    value.Keys ?? [],
+    "SchoolMoveCamerasMap.Keys",
+  ).flatMap((key) => {
+    const canonical = canonicalSchoolCameraKey(key);
+    return canonical ? [canonical] : [];
+  });
+}
+
 function schoolCameraMapMismatch(
   actual: unknown,
   expected: Record<string, unknown>,
@@ -3633,6 +3819,10 @@ async function prepareDialogueCameraQuickAction(
   let desiredSchoolMoveCamerasMap = clonedValue(
     originalSchoolMoveCamerasMap,
   );
+  let existingSchoolCameraKeys = reflectedSchoolCameraKeys(
+    originalSchoolMoveCamerasMap,
+  );
+  let addedSchoolCameraKeys: string[] = [];
 
   if (request.mode === "copy_previous" && sourceNode) {
     desiredCameraPosition = sourceNode.existingCameraPosition;
@@ -3661,24 +3851,56 @@ async function prepareDialogueCameraQuickAction(
       ),
     };
   } else if (request.mode === "school_cameras") {
+    const existingSchoolCameraValues = reflectedSchoolCameraValues(
+      originalSchoolMoveCamerasMap,
+    );
+    const rawSchoolCameraKeys = reflectedArray(
+      originalSchoolMoveCamerasMap.Keys ?? [],
+      "SchoolMoveCamerasMap.Keys",
+    ).map((key) => String(key).trim());
+    const exportedRawSchoolCameraKeys =
+      exportedSchoolCameraKeysByDialogueId(exportedText).get(
+        request.dialogueNodeId,
+      ) ?? [];
+    const alignedSchoolCameraKeys =
+      rawSchoolCameraKeys.length === existingSchoolCameraValues.length &&
+      rawSchoolCameraKeys.every(Boolean)
+        ? rawSchoolCameraKeys
+        : exportedRawSchoolCameraKeys.length ===
+            existingSchoolCameraValues.length
+          ? exportedRawSchoolCameraKeys
+          : [];
+    existingSchoolCameraKeys = alignedSchoolCameraKeys.flatMap((key) => {
+      const canonical = canonicalSchoolCameraKey(key);
+      return canonical ? [canonical] : [];
+    });
     if (currentNode.existingMoveCameras.length === 0) {
       throw new Error(
         "当前节点没有主 MoveCameras，请先添加或沿用一个镜头",
       );
     }
-    if (
-      reflectedSchoolCameraValues(originalSchoolMoveCamerasMap).length >
-      0
-    ) {
-      throw new Error(
-        "当前节点已有角色相机配置，为避免覆盖现有职业映射已停止写入",
-      );
+    if (existingSchoolCameraValues.length > 0) {
+      if (alignedSchoolCameraKeys.length !== existingSchoolCameraValues.length) {
+        throw new Error(
+          "当前节点已有角色相机，但 UE 未返回可识别的角色键，无法安全补齐",
+        );
+      }
     }
+    const missingSchoolCameraKeys = SCHOOL_CAMERA_KEYS.filter(
+      (key) => !existingSchoolCameraKeys.includes(key),
+    );
+    addedSchoolCameraKeys = missingSchoolCameraKeys;
     desiredSchoolMoveCamerasMap = {
-      Keys: [...SCHOOL_CAMERA_KEYS],
-      Values: SCHOOL_CAMERA_KEYS.map(() => ({
-        MoveCameras: clonedValue(currentNode.existingMoveCameras),
-      })),
+      Keys: [
+        ...clonedValue(alignedSchoolCameraKeys),
+        ...missingSchoolCameraKeys,
+      ],
+      Values: [
+        ...clonedValue(existingSchoolCameraValues),
+        ...missingSchoolCameraKeys.map(() => ({
+          MoveCameras: clonedValue(currentNode.existingMoveCameras),
+        })),
+      ],
     };
   }
 
@@ -3766,16 +3988,15 @@ async function prepareDialogueCameraQuickAction(
       ),
       blendDuration:
         Number(desiredBlendCameraData.Duration) || 0,
+      existingSchoolCameraKeys,
+      addedSchoolCameraKeys,
       desiredSchoolCameraKeys:
         request.mode === "school_cameras"
-          ? [...SCHOOL_CAMERA_KEYS]
+          ? reflectedSchoolCameraKeys(desiredSchoolMoveCamerasMap)
           : [],
-      existingSchoolCameraCount: reflectedSchoolCameraValues(
-        originalSchoolMoveCamerasMap,
-      ).length,
-      desiredSchoolCameraCount: reflectedSchoolCameraValues(
-        desiredSchoolMoveCamerasMap,
-      ).length,
+      existingSchoolCameraCount: existingSchoolCameraKeys.length,
+      desiredSchoolCameraCount:
+        reflectedSchoolCameraKeys(desiredSchoolMoveCamerasMap).length,
       changed,
       blockedReasons,
     },

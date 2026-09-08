@@ -13,6 +13,7 @@ describe("existing storyboard preview", () => {
         status: "empty",
         dialogueAssetPath: "/Game/Test/204800.204800",
         nodes: [],
+        configurations: [],
         warnings: [],
         message: "empty",
       }),
@@ -25,6 +26,7 @@ describe("existing storyboard preview", () => {
       dialogueAssetPath: "/Game/Test/204800.204800",
       warnings: [],
       message: "loaded",
+      configurations: [],
       nodes: [
         {
           dialogueId: "204801",

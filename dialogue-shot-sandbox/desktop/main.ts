@@ -26,6 +26,7 @@ import {
 import { routeLarkRequest } from "../server/larkBridge";
 import { routeRuleAdvisorRequest } from "../server/ruleAdvisorBridge";
 import {
+  configuredModelDirectory,
   downloadRuleAdvisorModel,
   inspectRuleAdvisorModel,
   stopManagedRuleAdvisorRuntime,
@@ -87,6 +88,7 @@ interface DesktopState {
   ueMcpPort: number;
   liveResDirectory: string;
   configDocDirectory: string;
+  advisorModelDirectory: string;
 }
 
 interface UpdateSnapshot {
@@ -140,7 +142,7 @@ function statePath(): string {
   return join(dataRoot(), "desktop-state.json");
 }
 
-function configureRuntimeEnvironment(): void {
+function configureRuntimeEnvironment(advisorModelDirectory = ""): void {
   const executable =
     process.env.PORTABLE_EXECUTABLE_FILE || process.execPath;
   const mcpArguments = app.isPackaged
@@ -156,6 +158,9 @@ function configureRuntimeEnvironment(): void {
   process.env.STORYBOARD_MCP_URL = `http://127.0.0.1:${DESKTOP_PORT}/mcp`;
   process.env.STORYBOARD_MCP_COMMAND = executable;
   process.env.STORYBOARD_MCP_ARGS_JSON = JSON.stringify(mcpArguments);
+  if (advisorModelDirectory) {
+    process.env.OLLAMA_MODELS = advisorModelDirectory;
+  }
   if (app.isPackaged && !process.env.RULE_ADVISOR_RUNTIME_PATH) {
     process.env.RULE_ADVISOR_RUNTIME_PATH = join(
       process.resourcesPath,
@@ -196,6 +201,10 @@ async function readDesktopState(): Promise<DesktopState> {
         typeof parsed.configDocDirectory === "string"
           ? parsed.configDocDirectory.trim()
           : "",
+      advisorModelDirectory:
+        typeof parsed.advisorModelDirectory === "string"
+          ? parsed.advisorModelDirectory.trim()
+          : "",
     };
   } catch {
     return {
@@ -203,6 +212,7 @@ async function readDesktopState(): Promise<DesktopState> {
       ueMcpPort: getUnrealMcpEndpoint().port,
       liveResDirectory: "",
       configDocDirectory: "",
+      advisorModelDirectory: "",
     };
   }
 }
@@ -367,6 +377,7 @@ async function setupStatus() {
     liveCsvDirectory,
     configCsvDirectory,
     missionTargetTablePath,
+    advisorModelDirectory: configuredModelDirectory(),
     ueConnected: ueConnection.connected,
     ueMcpHost: ueConnection.host,
     ueMcpPort: ueConnection.port,
@@ -495,6 +506,24 @@ async function setConfigDocDirectory(directoryPath: unknown) {
     configDocDirectory: selectedDirectory,
   });
   return setupStatus();
+}
+
+async function setAdvisorModelDirectory(directoryPath: unknown) {
+  const state = await readDesktopState();
+  const selectedDirectory = String(directoryPath ?? "").trim();
+  if (!selectedDirectory) {
+    throw new Error("端侧模型目录不能为空");
+  }
+  await mkdir(selectedDirectory, { recursive: true });
+  stopManagedRuleAdvisorRuntime();
+  process.env.OLLAMA_MODELS = selectedDirectory;
+  await writeDesktopState({
+    ...state,
+    advisorModelDirectory: selectedDirectory,
+  });
+  return inspectRuleAdvisorModel({
+    bundledExecutable: bundledRuleAdvisorExecutable(),
+  });
 }
 
 function animateWindowBounds(
@@ -711,6 +740,17 @@ function registerDesktopIpc(): void {
   ipcMain.handle("desktop:open-ollama-download", () =>
     shell.openExternal("https://ollama.com/download/windows"),
   );
+  ipcMain.handle("desktop:choose-advisor-model-directory", async () => {
+    const result = await dialog.showOpenDialog(mainWindow!, {
+      title: "选择 Ollama 模型目录",
+      defaultPath: configuredModelDirectory(),
+      properties: ["openDirectory", "createDirectory"],
+    });
+    const selectedDirectory = result.filePaths[0];
+    return result.canceled || !selectedDirectory
+      ? null
+      : setAdvisorModelDirectory(selectedDirectory);
+  });
   ipcMain.handle("desktop:install-trae-integration", async () => {
     await installTraeIntegration();
     return setupStatus();
@@ -967,8 +1007,8 @@ async function runDesktop(): Promise<void> {
     return;
   }
   await app.whenReady();
-  configureRuntimeEnvironment();
   const desktopState = await readDesktopState();
+  configureRuntimeEnvironment(desktopState.advisorModelDirectory);
   configureUnrealMcpPort(desktopState.ueMcpPort);
   if (desktopState.liveResDirectory) {
     configureLiveResDirectory(desktopState.liveResDirectory);

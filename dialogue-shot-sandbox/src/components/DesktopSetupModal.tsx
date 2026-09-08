@@ -349,6 +349,28 @@ export function DesktopSetupModal({
     }
   }
 
+  async function chooseAdvisorModelDirectory() {
+    if (!desktop?.chooseAdvisorModelDirectory) {
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const snapshot = await desktop.chooseAdvisorModelDirectory();
+      if (snapshot) {
+        setAdvisorModel(snapshot);
+      }
+    } catch (modelDirectoryError) {
+      setError(
+        modelDirectoryError instanceof Error
+          ? modelDirectoryError.message
+          : "无法设置端侧模型目录",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div className="modal-backdrop desktop-setup-backdrop" role="presentation">
       <section
@@ -648,6 +670,11 @@ export function DesktopSetupModal({
                 <small>
                   {advisorModel.model} · 约 3.3 GB · 模型权重按需下载
                 </small>
+                {advisorModel.modelDirectory && (
+                  <small title={advisorModel.modelDirectory}>
+                    模型目录：{advisorModel.modelDirectory}
+                  </small>
+                )}
                 {advisorModel.state === "downloading" && (
                   <progress
                     className="setup-model__progress"
@@ -659,8 +686,19 @@ export function DesktopSetupModal({
                   </progress>
                 )}
               </span>
-              {advisorModel.state !== "ready" &&
-                advisorModel.state !== "checking" && (
+              <div className="setup-model__actions">
+                <button
+                  type="button"
+                  title="选择 Ollama 模型目录"
+                  aria-label="选择 Ollama 模型目录"
+                  disabled={busy || advisorModel.state === "downloading"}
+                  onClick={() => void chooseAdvisorModelDirectory()}
+                >
+                  <FolderOpen size={14} />
+                  模型目录
+                </button>
+                {advisorModel.state !== "ready" &&
+                  advisorModel.state !== "checking" && (
                   <button
                     type="button"
                     disabled={advisorModel.state === "downloading"}
@@ -695,7 +733,8 @@ export function DesktopSetupModal({
                           ? "重试"
                           : "下载模型"}
                   </button>
-                )}
+                  )}
+              </div>
             </div>
             <div
               className={`setup-status-item--wide ${

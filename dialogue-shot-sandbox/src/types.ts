@@ -687,6 +687,8 @@ export interface DialogueCameraQuickActionPreview {
   existingBlendCurve: string;
   desiredBlendCurve: string;
   blendDuration: number;
+  existingSchoolCameraKeys: string[];
+  addedSchoolCameraKeys: string[];
   desiredSchoolCameraKeys: string[];
   existingSchoolCameraCount: number;
   desiredSchoolCameraCount: number;
@@ -718,10 +720,29 @@ export interface ExistingDialogueCameraNode {
   movementIntensity: MovementIntensity;
 }
 
+export interface ExistingDialogueNodeConfiguration {
+  dialogueId: string;
+  cameraPosition: string;
+  moveCameraCount: number;
+  cameraMoveTypes: string[];
+  fov: number | null;
+  blendCameraType: string;
+  blendCurve: string;
+  blendDuration: number;
+  schoolCameraKeys: string[];
+  schoolCameraCount: number;
+  soundEffectAssetPath: string;
+  soundEffectAssetName: string;
+  soundEffectDelaySeconds: number;
+  backgroundMusicStateId: number | null;
+  backgroundMusicDelaySeconds: number;
+}
+
 export interface ExistingDialogueStoryboardResult {
   status: "found" | "empty" | "unavailable";
   dialogueAssetPath: string;
   nodes: ExistingDialogueCameraNode[];
+  configurations: ExistingDialogueNodeConfiguration[];
   warnings: string[];
   message: string;
 }

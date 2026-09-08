@@ -3065,6 +3065,48 @@ textarea:focus-visible {
   font-size: 9px;
 }
 
+.ue-existing-audio {
+  margin-bottom: 12px;
+}
+
+.ue-existing-audio dl,
+.node-camera-existing dl {
+  margin: 0 0 10px;
+  border: 1px solid var(--border);
+}
+
+.ue-existing-audio dl > div,
+.node-camera-existing dl > div {
+  display: grid;
+  grid-template-columns: 82px minmax(0, 1fr);
+  min-height: 30px;
+}
+
+.ue-existing-audio dl > div + div,
+.node-camera-existing dl > div + div {
+  border-top: 1px solid var(--border);
+}
+
+.ue-existing-audio dt,
+.ue-existing-audio dd,
+.node-camera-existing dt,
+.node-camera-existing dd {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  margin: 0;
+  padding: 6px 8px;
+  overflow-wrap: anywhere;
+  font-size: 9px;
+}
+
+.ue-existing-audio dt,
+.node-camera-existing dt {
+  color: var(--text-muted);
+  background: var(--paper);
+  border-right: 1px solid var(--border);
+}
+
 .sound-effect-list > div {
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr) 30px;
@@ -7042,6 +7084,13 @@ textarea:focus-visible {
 .setup-model__progress::-webkit-progress-value {
   background: var(--accent-strong);
   transition: width 180ms ease-out;
+}
+
+.setup-model__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
 }
 
 .setup-status-list .setup-port-control {

@@ -23,7 +23,22 @@ export const DEFAULT_CHARACTER_BODY: CharacterBodyProfile = {
   landmarkSource: "proportional",
 };
 
+const MAX_PROXY_WIDTH_TO_HEIGHT = 0.42;
+const MAX_PROXY_DEPTH_TO_HEIGHT = 0.32;
 const validatedBodies = new WeakMap<CharacterBodyProfile, CharacterBodyProfile>();
+
+function normalizedProxyBody(
+  body: CharacterBodyProfile,
+): CharacterBodyProfile {
+  if (body.source !== "mesh_bounds") {
+    return body;
+  }
+  return {
+    ...body,
+    width: Math.min(body.width, body.height * MAX_PROXY_WIDTH_TO_HEIGHT),
+    depth: Math.min(body.depth, body.height * MAX_PROXY_DEPTH_TO_HEIGHT),
+  };
+}
 
 export function characterBody(
   participant: Pick<DialogueParticipant, "bodyProfile">,
@@ -32,7 +47,9 @@ export function characterBody(
   const cached = validatedBodies.get(participant.bodyProfile);
   if (cached) return cached;
   const parsed = CharacterBodyProfileSchema.safeParse(participant.bodyProfile);
-  const body = parsed.success ? parsed.data : DEFAULT_CHARACTER_BODY;
+  const body = parsed.success
+    ? normalizedProxyBody(parsed.data)
+    : DEFAULT_CHARACTER_BODY;
   validatedBodies.set(participant.bodyProfile, body);
   return body;
 }
@@ -44,10 +61,11 @@ export function characterProxyScales(
   headCorrection: Vec3;
   headWorldScale: number;
 } {
+  const proxyBody = normalizedProxyBody(body);
   const bodyScale = [
-    body.width / DEFAULT_CHARACTER_BODY.width,
-    body.height / DEFAULT_CHARACTER_BODY.height,
-    body.depth / DEFAULT_CHARACTER_BODY.depth,
+    proxyBody.width / DEFAULT_CHARACTER_BODY.width,
+    proxyBody.height / DEFAULT_CHARACTER_BODY.height,
+    proxyBody.depth / DEFAULT_CHARACTER_BODY.depth,
   ] as const;
   const headWorldScale = Math.max(
     0.72,
@@ -97,5 +115,10 @@ export function characterHeight(
 
 export function characterBodySummary(participant: DialogueParticipant): string {
   const body = characterBody(participant);
-  return `${body.source === "mesh_bounds" ? "模型包围盒" : "默认估算"} ${Math.round(body.height * 100)} cm · 眼高按比例估算`;
+  const rawBody = participant.bodyProfile;
+  const proxyConstrained = Boolean(
+    rawBody?.source === "mesh_bounds" &&
+      (rawBody.width > body.width || rawBody.depth > body.depth),
+  );
+  return `${body.source === "mesh_bounds" ? "模型包围盒" : "默认估算"} ${Math.round(body.height * 100)} cm${proxyConstrained ? " · 横截面按人形代理约束" : ""} · 眼高按比例估算`;
 }

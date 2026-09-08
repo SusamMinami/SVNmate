@@ -1356,6 +1356,54 @@ describe("dialogue camera quick actions", () => {
     });
   });
 
+  it("preserves configured role cameras and only fills missing roles", async () => {
+    const connection = new FakeStoryboardExportConnection();
+    connection.selectedDialogueNodeId = "735202";
+    connection.schoolCamerasByData.set("ActionData2", {
+      Keys: ["ERing"],
+      Values: [
+        {
+          MoveCameras: [{ CameraMoveType: "EPush", FOV: 48 }],
+        },
+      ],
+    });
+    const request = {
+      dialogueId: "7352",
+      startId: "735200",
+      dialogueNodeId: "735202",
+      mode: "school_cameras" as const,
+    };
+
+    const preview = await inspectDialogueCameraQuickAction(
+      request,
+      () => connection,
+    );
+    expect(preview).toMatchObject({
+      existingSchoolCameraKeys: ["ERing"],
+      addedSchoolCameraKeys: ["ENino", "EJodie"],
+      desiredSchoolCameraKeys: ["ERing", "ENino", "EJodie"],
+      existingSchoolCameraCount: 1,
+      desiredSchoolCameraCount: 3,
+      changed: true,
+      blockedReasons: [],
+    });
+
+    await applyDialogueCameraQuickAction(
+      { ...request, reviewToken: preview.reviewToken },
+      () => connection,
+    );
+    expect(connection.schoolCamerasByData.get("ActionData2")).toEqual({
+      Keys: ["ERing", "ENino", "EJodie"],
+      Values: [
+        {
+          MoveCameras: [{ CameraMoveType: "EPush", FOV: 48 }],
+        },
+        { MoveCameras: [{ CameraMoveType: "EPush", FOV: 90 }] },
+        { MoveCameras: [{ CameraMoveType: "EPush", FOV: 90 }] },
+      ],
+    });
+  });
+
   it("invalidates the write when UE selection changes after preview", async () => {
     const connection = new FakeStoryboardExportConnection();
     const request = {
@@ -1422,6 +1470,15 @@ describe("dialogue camera quick actions", () => {
 describe("existing dialogue storyboard", () => {
   it("reads and converts existing EPush camera data without writing", async () => {
     const connection = new FakeStoryboardExportConnection();
+    const common = connection.commonByData.get("ActionData2")!;
+    common.find((property) => property.Alias === "SoundEffect")!.CurrentPath =
+      "/Game/Seria/WwiseSoundData/Events/A_SFX_Dialog_735202.A_SFX_Dialog_735202";
+    common.find((property) => property.Alias === "DelayTime")!.CurrentFloat =
+      0.6;
+    connection.schoolCamerasByData.set("ActionData2", {
+      Keys: ["ERing"],
+      Values: [{ MoveCameras: [{ CameraMoveType: "EPush", FOV: 48 }] }],
+    });
     connection.movesByData.set("ActionData2", [
       {
         CameraMoveType: "EPush",
@@ -1462,6 +1519,25 @@ describe("existing dialogue storyboard", () => {
           cameraMovement: "tracking",
           movementIntensity: "moderate",
         },
+      ],
+      configurations: [
+        expect.objectContaining({
+          dialogueId: "735201",
+          cameraPosition: "",
+          moveCameraCount: 0,
+          soundEffectAssetName: "",
+        }),
+        expect.objectContaining({
+          dialogueId: "735202",
+          cameraPosition: "c2",
+          moveCameraCount: 1,
+          cameraMoveTypes: ["EPush"],
+          fov: 60,
+          schoolCameraKeys: ["ERing"],
+          schoolCameraCount: 1,
+          soundEffectAssetName: "A_SFX_Dialog_735202",
+          soundEffectDelaySeconds: 0.6,
+        }),
       ],
     });
     expect(
