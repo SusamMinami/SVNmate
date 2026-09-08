@@ -9,6 +9,9 @@ import {
 
 export const SELECTED_GRAPH_NODES_ACTION =
   "bp.get_selected_ed_graph_node_infos";
+const SERIA_DIALOG_SELECTION_ACTION = "script.eval_python_expression";
+const SERIA_DIALOG_SELECTION_EXPRESSION =
+  "__import__('json').dumps(list(unreal.get_editor_subsystem(unreal.SeriaDialogEditorSubsystem).get_current_selected_dialog_node_info()))";
 
 function recordValue(
   record: Record<string, unknown>,
@@ -62,6 +65,71 @@ function uniqueDialogueId(text: string): string | null {
   return unique.length === 1 ? unique[0] : null;
 }
 
+function pythonJsonResult(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("UE 对话编辑器没有返回有效的节点选择");
+  }
+  const result = value as {
+    bSuccess?: unknown;
+    Result?: unknown;
+    Message?: unknown;
+  };
+  if (result.bSuccess === false) {
+    throw new Error(
+      typeof result.Message === "string" && result.Message.trim()
+        ? result.Message
+        : "UE 对话编辑器节点选择接口不可用",
+    );
+  }
+  if (typeof result.Result !== "string") {
+    throw new Error("UE 对话编辑器没有返回有效的节点选择");
+  }
+  const raw = result.Result.trim();
+  const serialized =
+    raw.startsWith("'") && raw.endsWith("'") ? raw.slice(1, -1) : raw;
+  return JSON.parse(serialized);
+}
+
+function seriaDialogueNodeId(
+  assetPath: string,
+  localNodeId: string,
+): string | null {
+  const directId = uniqueDialogueId(localNodeId);
+  if (directId) {
+    return directId;
+  }
+  const assetId = uniqueDialogueId(assetPath);
+  const localIdMatch = localNodeId.match(/^\d{1,2}$/);
+  if (!assetId || !localIdMatch) {
+    return null;
+  }
+  return `${assetId.slice(0, 4)}${localNodeId.padStart(2, "0")}`;
+}
+
+export function parseSeriaSelectedDialogueNode(
+  value: unknown,
+): SelectedDialogueNodeInfo | null {
+  const selected = pythonJsonResult(value);
+  if (!Array.isArray(selected) || selected.length < 2) {
+    return null;
+  }
+  const assetPath = String(selected[0] ?? "").trim();
+  const localNodeId = String(selected[1] ?? "").trim();
+  if (!assetPath || !localNodeId) {
+    return null;
+  }
+  const dialogueNodeId = seriaDialogueNodeId(assetPath, localNodeId);
+  if (!dialogueNodeId) {
+    return null;
+  }
+  return {
+    nodeClass: "/Script/SeriaDialogEditor.SeriaEdDialogGraphNode",
+    nodeTitle: localNodeId,
+    nodeComment: assetPath,
+    dialogueNodeId,
+  };
+}
+
 export function parseSelectedDialogueNodes(
   value: unknown,
 ): SelectedDialogueNodeInfo[] {
@@ -89,22 +157,52 @@ export function parseSelectedDialogueNodes(
   });
 }
 
+export async function readSelectedDialogueNodesFromConnection(
+  connection: UnrealInvoker,
+): Promise<{
+  nodes: SelectedDialogueNodeInfo[];
+  seriaSelectionAvailable: boolean;
+}> {
+  let seriaSelectionAvailable = false;
+  try {
+    const selectedNode = parseSeriaSelectedDialogueNode(
+      await connection.invoke(SERIA_DIALOG_SELECTION_ACTION, {
+        Expression: SERIA_DIALOG_SELECTION_EXPRESSION,
+      }),
+    );
+    seriaSelectionAvailable = true;
+    if (selectedNode) {
+      return { nodes: [selectedNode], seriaSelectionAvailable };
+    }
+  } catch {
+    // Older projects may not expose the Seria dialogue editor subsystem.
+  }
+
+  return {
+    nodes: parseSelectedDialogueNodes(
+      await connection.invoke(SELECTED_GRAPH_NODES_ACTION, {}),
+    ),
+    seriaSelectionAvailable,
+  };
+}
+
 export async function readSelectedDialogueNode(
   connectionFactory: () => UnrealInvoker = () => new UnrealMcpConnection(),
 ): Promise<SelectedDialogueNodeResult> {
   const connection = connectionFactory();
   try {
     await connection.connect();
-    const nodes = parseSelectedDialogueNodes(
-      await connection.invoke(SELECTED_GRAPH_NODES_ACTION, {}),
-    );
+    const { nodes, seriaSelectionAvailable } =
+      await readSelectedDialogueNodesFromConnection(connection);
     if (nodes.length === 0) {
       return {
         status: "empty",
         dialogueNodeId: null,
         selectedNodeCount: 0,
         nodes,
-        message: "UE 当前没有选中图节点",
+        message: seriaSelectionAvailable
+          ? "请在 UE 对话图中只选中一个节点"
+          : "UE 当前没有选中图节点",
       };
     }
     if (nodes.length > 1) {

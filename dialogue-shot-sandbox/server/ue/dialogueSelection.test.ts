@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   parseSelectedDialogueNodes,
+  parseSeriaSelectedDialogueNode,
   readSelectedDialogueNode,
   SELECTED_GRAPH_NODES_ACTION,
 } from "./dialogueSelection";
@@ -19,6 +20,22 @@ function invoker(result: unknown): UnrealInvoker & {
 }
 
 describe("UE dialogue graph selection", () => {
+  it("reads the selected node from the Seria dialogue editor subsystem", () => {
+    expect(
+      parseSeriaSelectedDialogueNode({
+        bSuccess: true,
+        Result:
+          "'[\"/Game/Seria/Task/dialoggraph/1009-Cha08/734000.734000\", \"1\"]'",
+      }),
+    ).toEqual({
+      nodeClass: "/Script/SeriaDialogEditor.SeriaEdDialogGraphNode",
+      nodeTitle: "1",
+      nodeComment:
+        "/Game/Seria/Task/dialoggraph/1009-Cha08/734000.734000",
+      dialogueNodeId: "734001",
+    });
+  });
+
   it("parses a dialogue id from the selected node title", () => {
     expect(
       parseSelectedDialogueNodes([
@@ -85,6 +102,51 @@ describe("UE dialogue graph selection", () => {
       {},
     );
     expect(connection.close).toHaveBeenCalledOnce();
+  });
+
+  it("prefers the Seria dialogue editor selection over Blueprint selection", async () => {
+    const connection = invoker([]);
+    connection.invoke.mockImplementation(async (action) => {
+      if (action === "script.eval_python_expression") {
+        return {
+          bSuccess: true,
+          Result:
+            "'[\"/Game/Seria/Task/dialoggraph/1009-Cha08/734000.734000\", \"1\"]'",
+        };
+      }
+      return [];
+    });
+
+    await expect(
+      readSelectedDialogueNode(() => connection),
+    ).resolves.toMatchObject({
+      status: "selected",
+      dialogueNodeId: "734001",
+      selectedNodeCount: 1,
+    });
+    expect(connection.invoke).not.toHaveBeenCalledWith(
+      SELECTED_GRAPH_NODES_ACTION,
+      {},
+    );
+  });
+
+  it("asks for one dialogue node when the Seria editor has no exact selection", async () => {
+    const connection = invoker([]);
+    connection.invoke.mockImplementation(async (action) =>
+      action === "script.eval_python_expression"
+        ? {
+            bSuccess: true,
+            Result: "'[\"\", \"\"]'",
+          }
+        : [],
+    );
+
+    await expect(
+      readSelectedDialogueNode(() => connection),
+    ).resolves.toMatchObject({
+      status: "empty",
+      message: "请在 UE 对话图中只选中一个节点",
+    });
   });
 
   it("rejects ambiguous multi-selection without choosing a node", async () => {

@@ -555,6 +555,11 @@ function numericWindowDimension(
     : fallback;
 }
 
+function keepConfigurationWindowOnTop(targetWindow: BrowserWindow): void {
+  targetWindow.setAlwaysOnTop(true, "screen-saver");
+  targetWindow.moveTop();
+}
+
 async function setConfigurationWindowMode(
   enabled: boolean,
   requestedContentSize?: ConfigurationWindowContentSize,
@@ -609,7 +614,7 @@ async function setConfigurationWindowMode(
       Math.min(CONFIGURATION_WINDOW_MIN_WIDTH, width),
       Math.min(CONFIGURATION_WINDOW_MIN_HEIGHT, height),
     );
-    mainWindow.setAlwaysOnTop(true, "floating");
+    keepConfigurationWindowOnTop(mainWindow);
     mainWindow.setOpacity(1);
     await animateWindowBounds(mainWindow, {
       x: Math.min(
@@ -626,6 +631,7 @@ async function setConfigurationWindowMode(
       width,
       height,
     });
+    keepConfigurationWindowOnTop(mainWindow);
     return true;
   }
 
@@ -942,6 +948,11 @@ async function createMainWindow(port: number): Promise<void> {
     }
   });
   mainWindow.once("ready-to-show", () => mainWindow?.show());
+  mainWindow.on("blur", () => {
+    if (mainWindow && configurationWindowRestoreState) {
+      keepConfigurationWindowOnTop(mainWindow);
+    }
+  });
   mainWindow.on("closed", () => {
     mainWindow = null;
     configurationWindowRestoreState = null;

@@ -71,8 +71,7 @@ import {
 import { updateMissionTargetTransforms } from "./excelRegistration";
 import { readCharacterBodies } from "./ue/characterBody";
 import {
-  parseSelectedDialogueNodes,
-  SELECTED_GRAPH_NODES_ACTION,
+  readSelectedDialogueNodesFromConnection,
 } from "./ue/dialogueSelection";
 import {
   getUnrealMcpEndpoint,
@@ -3823,9 +3822,8 @@ export async function applyDialogueCameraQuickAction(
   const connection = connectionFactory();
   await connectUnreal(connection);
   try {
-    const selectedNodes = parseSelectedDialogueNodes(
-      await connection.invoke(SELECTED_GRAPH_NODES_ACTION, {}),
-    );
+    const { nodes: selectedNodes } =
+      await readSelectedDialogueNodesFromConnection(connection);
     if (
       selectedNodes.length !== 1 ||
       selectedNodes[0].dialogueNodeId !== request.dialogueNodeId

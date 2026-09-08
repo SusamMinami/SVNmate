@@ -1176,6 +1176,7 @@ test("keeps configuration mode aligned with the selected UE node", async ({
     contentSize?: { width: number; height: number };
   }> = [];
   let selectionRequests = 0;
+  let selectionResponseDelayMs = 0;
   let selectedDialogueNodeId: string | null = "204801";
   let selectedNodeCount = 1;
   const cameraInspectRequests: Array<Record<string, unknown>> = [];
@@ -1183,6 +1184,11 @@ test("keeps configuration mode aligned with the selected UE node", async ({
   await page.unroute("**/api/ue/dialogue/selection");
   await page.route("**/api/ue/dialogue/selection", async (route) => {
     selectionRequests += 1;
+    if (selectionResponseDelayMs > 0) {
+      await new Promise((resolve) =>
+        globalThis.setTimeout(resolve, selectionResponseDelayMs),
+      );
+    }
     const status =
       selectedNodeCount > 1
         ? "multiple"
@@ -1533,6 +1539,12 @@ test("keeps configuration mode aligned with the selected UE node", async ({
   await expect(
     page.getByRole("heading", { name: "UE 当前选中了 2 个图节点" }),
   ).toBeVisible();
+  selectionResponseDelayMs = 500;
+  await page.waitForRequest("**/api/ue/dialogue/selection");
+  await expect(
+    page.locator(".configuration-selection-state .spin"),
+  ).toHaveCount(0);
+  selectionResponseDelayMs = 0;
   await expect(page.locator(".audio-library-browser")).toHaveCount(0);
   await expect(
     page.locator(".inspector-footer--export").getByRole("button"),
@@ -1548,7 +1560,7 @@ test("keeps configuration mode aligned with the selected UE node", async ({
   await expect(page.getByRole("tab", { name: "导演" })).toBeVisible();
   await expect(page.locator(".stage-view")).toBeVisible();
   const requestsAfterExit = selectionRequests;
-  await page.waitForTimeout(900);
+  await page.waitForTimeout(1_400);
   expect(selectionRequests).toBe(requestsAfterExit);
 });
 
