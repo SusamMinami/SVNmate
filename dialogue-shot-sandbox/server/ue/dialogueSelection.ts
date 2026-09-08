@@ -270,63 +270,165 @@ export async function readSelectedDialogueNodesFromConnection(
   };
 }
 
+function offlineSelectionResult(error: unknown): SelectedDialogueNodeResult {
+  return {
+    status: "offline",
+    dialogueNodeId: null,
+    selectedNodeCount: 0,
+    nodes: [],
+    message:
+      error instanceof Error
+        ? `无法读取 UE 当前节点：${error.message}`
+        : "无法读取 UE 当前节点",
+  };
+}
+
+async function readSelectedDialogueNodeFromConnection(
+  connection: UnrealInvoker,
+): Promise<SelectedDialogueNodeResult> {
+  const { nodes, seriaSelectionAvailable } =
+    await readSelectedDialogueNodesFromConnection(connection);
+  if (nodes.length === 0) {
+    return {
+      status: "empty",
+      dialogueNodeId: null,
+      selectedNodeCount: 0,
+      nodes,
+      message: seriaSelectionAvailable
+        ? "请在 UE 对话图中只选中一个节点"
+        : "UE 当前没有选中图节点",
+    };
+  }
+  if (nodes.length > 1) {
+    return {
+      status: "multiple",
+      dialogueNodeId: null,
+      selectedNodeCount: nodes.length,
+      nodes,
+      message: `UE 当前选中了 ${nodes.length} 个图节点`,
+    };
+  }
+  const dialogueNodeId = nodes[0].dialogueNodeId;
+  if (!dialogueNodeId) {
+    return {
+      status: "unrecognized",
+      dialogueNodeId: null,
+      selectedNodeCount: 1,
+      nodes,
+      message: "UE 当前选中项不是可识别的对话节点",
+    };
+  }
+  return {
+    status: "selected",
+    dialogueNodeId,
+    selectedNodeCount: 1,
+    nodes,
+    message: `已同步 UE 节点 ${dialogueNodeId}`,
+  };
+}
+
 export async function readSelectedDialogueNode(
   connectionFactory: () => UnrealInvoker = () => new UnrealMcpConnection(),
 ): Promise<SelectedDialogueNodeResult> {
   const connection = connectionFactory();
   try {
     await connection.connect();
-    const { nodes, seriaSelectionAvailable } =
-      await readSelectedDialogueNodesFromConnection(connection);
-    if (nodes.length === 0) {
-      return {
-        status: "empty",
-        dialogueNodeId: null,
-        selectedNodeCount: 0,
-        nodes,
-        message: seriaSelectionAvailable
-          ? "请在 UE 对话图中只选中一个节点"
-          : "UE 当前没有选中图节点",
-      };
-    }
-    if (nodes.length > 1) {
-      return {
-        status: "multiple",
-        dialogueNodeId: null,
-        selectedNodeCount: nodes.length,
-        nodes,
-        message: `UE 当前选中了 ${nodes.length} 个图节点`,
-      };
-    }
-    const dialogueNodeId = nodes[0].dialogueNodeId;
-    if (!dialogueNodeId) {
-      return {
-        status: "unrecognized",
-        dialogueNodeId: null,
-        selectedNodeCount: 1,
-        nodes,
-        message: "UE 当前选中项不是可识别的对话节点",
-      };
-    }
-    return {
-      status: "selected",
-      dialogueNodeId,
-      selectedNodeCount: 1,
-      nodes,
-      message: `已同步 UE 节点 ${dialogueNodeId}`,
-    };
+    return await readSelectedDialogueNodeFromConnection(connection);
   } catch (error) {
-    return {
-      status: "offline",
-      dialogueNodeId: null,
-      selectedNodeCount: 0,
-      nodes: [],
-      message:
-        error instanceof Error
-          ? `无法读取 UE 当前节点：${error.message}`
-          : "无法读取 UE 当前节点",
-    };
+    return offlineSelectionResult(error);
   } finally {
     connection.close();
   }
+}
+
+const DEFAULT_PERSISTENT_SELECTION_IDLE_TIMEOUT_MS = 15_000;
+
+export class PersistentDialogueSelectionReader {
+  private connection: UnrealInvoker | null = null;
+  private operationQueue: Promise<void> = Promise.resolve();
+  private idleTimer: ReturnType<typeof setTimeout> | null = null;
+  private pendingReads = 0;
+
+  constructor(
+    private readonly connectionFactory: () => UnrealInvoker = () =>
+      new UnrealMcpConnection(),
+    private readonly idleTimeoutMs =
+      DEFAULT_PERSISTENT_SELECTION_IDLE_TIMEOUT_MS,
+  ) {}
+
+  read(): Promise<SelectedDialogueNodeResult> {
+    this.clearIdleTimer();
+    this.pendingReads += 1;
+    const operation = this.operationQueue.then(
+      () => this.readOnce(),
+      () => this.readOnce(),
+    );
+    this.operationQueue = operation.then(() => undefined, () => undefined);
+    const finishRead = () => {
+      this.pendingReads -= 1;
+      if (this.pendingReads === 0) {
+        this.scheduleIdleRelease();
+      }
+    };
+    void operation.then(finishRead, finishRead);
+    return operation;
+  }
+
+  dispose(): void {
+    this.clearIdleTimer();
+    this.releaseConnection();
+  }
+
+  private async readOnce(): Promise<SelectedDialogueNodeResult> {
+    let connection = this.connection;
+    if (!connection) {
+      try {
+        connection = this.connectionFactory();
+        await connection.connect();
+        this.connection = connection;
+      } catch (error) {
+        connection?.close();
+        return offlineSelectionResult(error);
+      }
+    }
+    try {
+      return await readSelectedDialogueNodeFromConnection(connection);
+    } catch (error) {
+      if (this.connection === connection) {
+        this.connection = null;
+      }
+      connection.close();
+      return offlineSelectionResult(error);
+    }
+  }
+
+  private scheduleIdleRelease(): void {
+    if (!this.connection || this.idleTimeoutMs <= 0) {
+      return;
+    }
+    this.idleTimer = setTimeout(() => {
+      this.idleTimer = null;
+      this.releaseConnection();
+    }, this.idleTimeoutMs);
+  }
+
+  private clearIdleTimer(): void {
+    if (this.idleTimer !== null) {
+      clearTimeout(this.idleTimer);
+      this.idleTimer = null;
+    }
+  }
+
+  private releaseConnection(): void {
+    const connection = this.connection;
+    this.connection = null;
+    connection?.close();
+  }
+}
+
+const persistentDialogueSelectionReader =
+  new PersistentDialogueSelectionReader();
+
+export function readSelectedDialogueNodePersistent(): Promise<SelectedDialogueNodeResult> {
+  return persistentDialogueSelectionReader.read();
 }

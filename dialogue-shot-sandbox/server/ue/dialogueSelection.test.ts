@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   parseSelectedDialogueNodes,
   parseSeriaSelectedDialogueNode,
+  PersistentDialogueSelectionReader,
   readSelectedDialogueNode,
   SELECTED_GRAPH_NODES_ACTION,
 } from "./dialogueSelection";
@@ -219,5 +220,106 @@ describe("UE dialogue graph selection", () => {
       message: expect.stringContaining("连接 UE 编辑器超时"),
     });
     expect(connection.close).toHaveBeenCalledOnce();
+  });
+
+  it("reuses one UE connection across selection polls", async () => {
+    const connection = invoker([]);
+    connection.invoke.mockImplementation(async (action, args) => {
+      if (action === "script.eval_python_expression") {
+        return {
+          bSuccess: true,
+          Result:
+            "'[\"/Game/Seria/Task/dialoggraph/1009-Cha08/734200.734200\", \"1\"]'",
+        };
+      }
+      if (action === "editor.get_editor_subsystem") {
+        return "SeriaDialogEditorSubsystem_0";
+      }
+      if (action === "reflect.read_object_property") {
+        if (args.PropertyName === "CurrentDialogGraphSelectionCount") {
+          return 1;
+        }
+        if (args.PropertyName === "CurrentSelectedDialogNode") {
+          return "SeriaEdDialogGraphNode_15_2";
+        }
+        if (args.PropertyName === "DialogGraphNodeData") {
+          return "SeriaDialogGraphNodeData_0_66";
+        }
+        if (args.PropertyName === "CommonDialogGraphProperties") {
+          return [{ Alias: "id", CurrentUint32: 734219 }];
+        }
+      }
+      return [];
+    });
+    const factory = vi.fn(() => connection);
+    const reader = new PersistentDialogueSelectionReader(factory, 60_000);
+
+    await expect(reader.read()).resolves.toMatchObject({
+      status: "selected",
+      dialogueNodeId: "734219",
+    });
+    await expect(reader.read()).resolves.toMatchObject({
+      status: "selected",
+      dialogueNodeId: "734219",
+    });
+
+    expect(factory).toHaveBeenCalledOnce();
+    expect(connection.connect).toHaveBeenCalledOnce();
+    expect(connection.close).not.toHaveBeenCalled();
+    reader.dispose();
+    expect(connection.close).toHaveBeenCalledOnce();
+  });
+
+  it("reconnects on the poll after a transport failure", async () => {
+    const failedConnection = invoker([]);
+    failedConnection.invoke.mockRejectedValue(new Error("socket closed"));
+    const recoveredConnection = invoker([
+      {
+        NodeClass: "SeriaEdDialogGraphNode",
+        NodeTitle: "节点 735201",
+      },
+    ]);
+    const factory = vi
+      .fn<() => UnrealInvoker>()
+      .mockReturnValueOnce(failedConnection)
+      .mockReturnValueOnce(recoveredConnection);
+    const reader = new PersistentDialogueSelectionReader(factory, 60_000);
+
+    await expect(reader.read()).resolves.toMatchObject({
+      status: "offline",
+    });
+    await expect(reader.read()).resolves.toMatchObject({
+      status: "selected",
+      dialogueNodeId: "735201",
+    });
+
+    expect(factory).toHaveBeenCalledTimes(2);
+    expect(failedConnection.close).toHaveBeenCalledOnce();
+    expect(recoveredConnection.connect).toHaveBeenCalledOnce();
+    reader.dispose();
+  });
+
+  it("releases an idle polling connection", async () => {
+    vi.useFakeTimers();
+    const connection = invoker([
+      {
+        NodeClass: "SeriaEdDialogGraphNode",
+        NodeTitle: "节点 735201",
+      },
+    ]);
+    const reader = new PersistentDialogueSelectionReader(
+      () => connection,
+      15_000,
+    );
+    try {
+      await reader.read();
+      await vi.advanceTimersByTimeAsync(14_999);
+      expect(connection.close).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(connection.close).toHaveBeenCalledOnce();
+    } finally {
+      reader.dispose();
+      vi.useRealTimers();
+    }
   });
 });

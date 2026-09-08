@@ -54,11 +54,11 @@ import {
   updateDialogueContents,
   updateMissionTargetBlueprintPositions,
 } from "../ueBridge";
-import { readSelectedDialogueNode } from "./dialogueSelection";
+import { readSelectedDialogueNodePersistent } from "./dialogueSelection";
 
 export const ueServices = {
   readSceneReference,
-  readSelectedDialogueNode,
+  readSelectedDialogueNode: readSelectedDialogueNodePersistent,
   readExistingDialogueStoryboard,
   applyDialogueCameraQuickAction,
   appendMissionTargetBlueprint,
