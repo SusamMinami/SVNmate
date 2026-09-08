@@ -18,6 +18,7 @@ from svn_auto_tool import (
     SvnAutoTool,
     TaskRunSummary,
     WindowsTrayIcon,
+    _launch_detached_command,
     _window_dimensions_for_dpi,
     tool_module_primary_label,
 )
@@ -39,7 +40,7 @@ class ReleaseConfigTests(unittest.TestCase):
     def test_release_asset_name_is_stable_and_url_safe(self) -> None:
         self.assertEqual(RELEASE_ASSET_NAME, "SVNmate.zip")
         asset_url = RELEASE_DOWNLOAD_URL.format(tag=APP_VERSION, asset=RELEASE_ASSET_NAME)
-        self.assertTrue(asset_url.endswith("/v1.4.5/SVNmate.zip"))
+        self.assertTrue(asset_url.endswith("/v1.4.6/SVNmate.zip"))
 
 
 class LayoutAndSummaryTests(unittest.TestCase):
@@ -309,7 +310,35 @@ class ToolModuleIntegrationTests(unittest.TestCase):
 
 
 class SelfUpdateTests(unittest.TestCase):
-    def test_updater_is_detached_without_inherited_standard_handles(self) -> None:
+    @unittest.skipUnless(os.name == "nt", "Windows shell launch only")
+    def test_windows_shell_launches_detached_powershell(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="SVNmate detached ") as temp_dir:
+            marker_path = Path(temp_dir) / "started.txt"
+            script_path = Path(temp_dir) / "write-marker.ps1"
+            script_path.write_text(
+                f"Set-Content -LiteralPath '{marker_path}' -Value 'started'",
+                encoding="utf-8-sig",
+            )
+
+            _launch_detached_command(
+                [
+                    "powershell.exe",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(script_path),
+                ],
+                cwd=Path(temp_dir),
+            )
+
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline and not marker_path.exists():
+                time.sleep(0.05)
+            self.assertTrue(marker_path.exists())
+
+    def test_updater_uses_windows_shell_detached_launch(self) -> None:
         with tempfile.TemporaryDirectory(prefix="SVNmate self update ") as temp_dir:
             app_dir = Path(temp_dir)
             update_dir = app_dir / "_updates"
@@ -321,27 +350,15 @@ class SelfUpdateTests(unittest.TestCase):
             with (
                 patch("svn_auto_tool.APP_DIR", app_dir),
                 patch("svn_auto_tool.os.getpid", return_value=4321),
-                patch("svn_auto_tool.subprocess.Popen") as popen,
+                patch("svn_auto_tool._launch_detached_command") as launch,
             ):
                 tool._launch_update_installer(zip_path)
 
-            command = popen.call_args.args[0]
-            options = popen.call_args.kwargs
-            expected_flags = 0
-            if os.name == "nt":
-                expected_flags = (
-                    subprocess.DETACHED_PROCESS
-                    | subprocess.CREATE_NEW_PROCESS_GROUP
-                    | subprocess.CREATE_NO_WINDOW
-                )
-
+            command = launch.call_args.args[0]
             self.assertIn("-NonInteractive", command)
             self.assertIn("Hidden", command)
-            self.assertIs(options["stdin"], subprocess.DEVNULL)
-            self.assertIs(options["stdout"], subprocess.DEVNULL)
-            self.assertIs(options["stderr"], subprocess.DEVNULL)
-            self.assertTrue(options["close_fds"])
-            self.assertEqual(options["creationflags"], expected_flags)
+            self.assertEqual(command[0], "powershell.exe")
+            self.assertEqual(launch.call_args.kwargs["cwd"], app_dir)
 
     def test_update_script_waits_for_executable_unlock_and_logs_result(self) -> None:
         with tempfile.TemporaryDirectory(prefix="SVNmate self update ") as temp_dir:
@@ -355,7 +372,7 @@ class SelfUpdateTests(unittest.TestCase):
             with (
                 patch("svn_auto_tool.APP_DIR", app_dir),
                 patch("svn_auto_tool.os.getpid", return_value=4321),
-                patch("svn_auto_tool.subprocess.Popen"),
+                patch("svn_auto_tool._launch_detached_command"),
             ):
                 tool._launch_update_installer(zip_path)
 
@@ -370,9 +387,128 @@ class SelfUpdateTests(unittest.TestCase):
                 "更新包缺少程序文件：$payloadExe",
                 script,
             )
+            self.assertIn("-WorkingDirectory $appDir -PassThru", script)
+            self.assertIn("$restarted.HasExited", script)
             self.assertIn("'apply_update.log'", script)
             self.assertIn("Write-UpdateLog '更新完成", script)
             self.assertIn("更新失败：$message", script)
+
+    def test_invalid_handle_schedules_only_one_automatic_restart(self) -> None:
+        tool = SvnAutoTool.__new__(SvnAutoTool)
+        tool.root = Mock()
+        tool._log = Mock()
+        tool.invalid_handle_restart_pending = False
+        tool.invalid_handle_restart_lock = threading.Lock()
+        tool._restart_after_invalid_handle = Mock()
+
+        self.assertTrue(
+            tool._schedule_restart_for_invalid_handle(
+                OSError(6, "句柄无效。"),
+            )
+        )
+        self.assertTrue(
+            tool._schedule_restart_for_invalid_handle(
+                "[WinError 6] The handle is invalid",
+            )
+        )
+
+        tool.root.after.assert_called_once_with(
+            0,
+            tool._restart_after_invalid_handle,
+        )
+        self.assertTrue(tool.invalid_handle_restart_pending)
+
+    def test_invalid_handle_from_command_requests_restart(self) -> None:
+        tool = SvnAutoTool.__new__(SvnAutoTool)
+        tool._log = Mock()
+        tool._is_tortoise_command = Mock(return_value=True)
+        tool._run_tortoise_command = Mock(
+            side_effect=OSError(6, "句柄无效。")
+        )
+        tool._schedule_restart_for_invalid_handle = Mock()
+
+        result = tool._execute_command_once(
+            Path(r"C:\trunk\res"),
+            ["TortoiseProc.exe", "/command:update"],
+            "svn update",
+        )
+
+        self.assertFalse(result.success)
+        tool._schedule_restart_for_invalid_handle.assert_called_once()
+
+    def test_tortoise_process_does_not_inherit_standard_handles(self) -> None:
+        tool = SvnAutoTool.__new__(SvnAutoTool)
+        tool._click_tortoise_done_buttons = Mock(return_value=False)
+        tool._log = Mock()
+        process = Mock()
+        process.poll.return_value = 0
+        process.returncode = 0
+
+        with (
+            patch("svn_auto_tool.subprocess.Popen", return_value=process) as popen,
+            patch("svn_auto_tool.time.sleep"),
+        ):
+            result = tool._run_tortoise_command(
+                Path(r"C:\trunk\res"),
+                ["TortoiseProc.exe", "/command:update"],
+            )
+
+        self.assertEqual(result, (0, "", ""))
+        options = popen.call_args.kwargs
+        self.assertIs(options["stdin"], subprocess.DEVNULL)
+        self.assertIs(options["stdout"], subprocess.DEVNULL)
+        self.assertIs(options["stderr"], subprocess.DEVNULL)
+        self.assertTrue(options["close_fds"])
+
+    def test_restart_watcher_waits_for_exit_and_checks_new_process(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="SVNmate restart ") as temp_dir:
+            app_dir = Path(temp_dir)
+            tool = SvnAutoTool.__new__(SvnAutoTool)
+
+            with (
+                patch("svn_auto_tool.APP_DIR", app_dir),
+                patch("svn_auto_tool.os.getpid", return_value=8765),
+                patch("svn_auto_tool._launch_detached_command") as launch,
+            ):
+                tool._launch_restart_watcher()
+
+            script_path = app_dir / "_updates" / "restart_svnmate.ps1"
+            script = script_path.read_text(encoding="utf-8-sig")
+            self.assertIn("$pidToWait = 8765", script)
+            self.assertIn("等待旧实例退出", script)
+            self.assertIn("-WorkingDirectory $appDir -PassThru", script)
+            self.assertIn("$restarted.HasExited", script)
+            self.assertEqual(
+                launch.call_args.args[0][0],
+                "powershell.exe",
+            )
+            self.assertEqual(launch.call_args.kwargs["cwd"], app_dir)
+
+    def test_failed_updater_launch_keeps_current_instance_open(self) -> None:
+        tool = SvnAutoTool.__new__(SvnAutoTool)
+        tool.update_state = "ready"
+        tool.update_info = {"tag_name": "v1.4.6"}
+        tool._refresh_update_dot = Mock()
+        tool._launch_update_installer = Mock(
+            side_effect=OSError(6, "句柄无效。")
+        )
+        tool._log = Mock()
+        tool._stop_music = Mock()
+        tool.ipc_server = Mock()
+        tool.tray_icon = Mock()
+        tool.root = Mock()
+
+        with (
+            patch("svn_auto_tool.messagebox.askyesno", return_value=True),
+            patch("svn_auto_tool.messagebox.showerror") as showerror,
+        ):
+            tool._confirm_apply_update(Path("SVNmate.zip"), "v1.4.6")
+
+        showerror.assert_called_once()
+        tool._stop_music.assert_not_called()
+        tool.ipc_server.stop.assert_not_called()
+        tool.tray_icon.stop.assert_not_called()
+        tool.root.destroy.assert_not_called()
 
 
 class TrayInteractionTests(unittest.TestCase):

@@ -1,3 +1,19 @@
+# 一键更新SVN v1.4.6
+
+本版本修复自更新不重启，以及窗口进程继承无效标准句柄后所有 SVN 命令连续失败
+的问题。
+
+- 自更新 PowerShell 改由 Windows ShellExecute 独立启动，不依赖当前进程的
+  stdin/stdout/stderr；启动失败时保留当前 SVNmate 并显示错误。
+- 更新脚本使用安全 PowerShell 路径字面量，等待旧 EXE 解锁，替换后启动新实例，
+  并检查新实例是否立即退出。
+- TortoiseSVN 和命令行 SVN 子进程显式使用 `DEVNULL` 与关闭句柄继承，避免
+  windowed PyInstaller 进程中的 `[WinError 6]`。
+- 若仍检测到“句柄无效”，停止本轮 Update/Cleanup，不再对每个目录重复失败；
+  SVNmate 只安排一次独立自动重启，并写入 `_updates\restart_svnmate.log`。
+
+---
+
 # MigrationGuard v1.0.4
 
 - 迁移清单为空时明确列出无源提交和人工处理文件；旧 Jira 超出最大回溯范围时可

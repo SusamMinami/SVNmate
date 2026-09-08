@@ -8,6 +8,7 @@ from .update import (
     WorkspaceUpdateService,
     create_cli_update_service,
     dedupe_folders,
+    needs_process_restart,
     needs_svn_cleanup,
 )
 
@@ -21,5 +22,6 @@ __all__ = [
     "WorkspaceUpdateService",
     "create_cli_update_service",
     "dedupe_folders",
+    "needs_process_restart",
     "needs_svn_cleanup",
 ]

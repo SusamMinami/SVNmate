@@ -20,6 +20,19 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def needs_process_restart(message: str) -> bool:
+    normalized = message.casefold()
+    return any(
+        marker in normalized
+        for marker in (
+            "winerror 6",
+            "句柄无效",
+            "invalid handle",
+            "bad file descriptor",
+        )
+    )
+
+
 @dataclass(frozen=True)
 class CommandExecution:
     return_code: int
@@ -124,12 +137,14 @@ class StreamingCommandExecutor:
             process = subprocess.Popen(
                 list(command),
                 cwd=str(cwd),
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
                 errors="replace",
                 shell=False,
                 creationflags=self._creation_flags(),
+                close_fds=True,
             )
         except FileNotFoundError as exc:
             return CommandExecution(
@@ -223,6 +238,21 @@ class WorkspaceUpdateService:
             )
 
         failure_message = first_update.message
+        if needs_process_restart(failure_message):
+            self._emit(
+                target,
+                "svn update",
+                "自动重启",
+                "检测到 Windows 进程句柄无效，停止本轮更新并重启 SVNmate",
+            )
+            return WorkspaceUpdateResult(
+                folder=str(target),
+                success=False,
+                status="restart-required",
+                update_attempts=1,
+                cleanup_attempted=False,
+                steps=tuple(steps),
+            )
         if needs_svn_cleanup(failure_message):
             recovery_message = "SVN 提示工作副本需要清理，正在执行 cleanup"
         else:
@@ -282,15 +312,17 @@ class WorkspaceUpdateService:
         request_id: str | None = None,
     ) -> BatchUpdateResult:
         started_at = _utc_now()
-        results = tuple(
-            self.update_folder(folder)
-            for folder in dedupe_folders(folders)
-        )
+        results: list[WorkspaceUpdateResult] = []
+        for folder in dedupe_folders(folders):
+            result = self.update_folder(folder)
+            results.append(result)
+            if result.status == "restart-required":
+                break
         return BatchUpdateResult(
             request_id=request_id or str(uuid.uuid4()),
             started_at=started_at,
             finished_at=_utc_now(),
-            folders=results,
+            folders=tuple(results),
         )
 
     def _execute_step(

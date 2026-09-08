@@ -234,10 +234,12 @@ class ToolModuleManager:
         try:
             result = subprocess.run(
                 ["tasklist", "/FI", f"IMAGENAME eq {executable_name}", "/NH"],
+                stdin=subprocess.DEVNULL,
                 capture_output=True,
                 text=True,
                 errors="ignore",
                 creationflags=subprocess.CREATE_NO_WINDOW,
+                close_fds=True,
             )
         except OSError:
             return False
@@ -250,10 +252,12 @@ class ToolModuleManager:
         try:
             result = subprocess.run(
                 ["taskkill", "/IM", executable_name, "/T", "/F"],
+                stdin=subprocess.DEVNULL,
                 capture_output=True,
                 text=True,
                 errors="ignore",
                 creationflags=subprocess.CREATE_NO_WINDOW,
+                close_fds=True,
             )
         except OSError:
             return False

@@ -5,6 +5,16 @@
 多项目文档入口见
 [`docs/README.md`](https://github.com/SusamMinami/SVNmate/blob/main/docs/README.md)。
 
+## v1.4.6 更新摘要
+
+- 点击“重启并安装”后，更新器改由 Windows ShellExecute 独立启动；启动失败会
+  保留当前窗口并显示原因，不再静默退出或无响应。
+- 更新脚本会等待旧程序完全释放、替换文件、启动新实例，并检查新实例是否立即
+  退出；详细过程保存在 `_updates\apply_update.log`。
+- SVN 子进程不再继承可能失效的标准句柄。检测到 `[WinError 6] 句柄无效` 时，
+  本轮任务立即停止并由独立守护脚本自动重启 SVNmate；结果保存在
+  `_updates\restart_svnmate.log`。
+
 ## v1.4.5 更新摘要
 
 - 顶部音乐和“隐藏到托盘”改为固定尺寸图标按钮，并提供 Tooltip 与

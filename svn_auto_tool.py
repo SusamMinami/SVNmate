@@ -23,6 +23,7 @@ from svnmate_core import (
     CommandExecution,
     UpdateEvent,
     WorkspaceUpdateService,
+    needs_process_restart,
     needs_svn_cleanup,
 )
 from svnmate_ipc import IPC_PROTOCOL_VERSION, SvnMateIpcServer
@@ -113,7 +114,7 @@ CONFIG_PATH = APP_DIR / "svn_auto_tool_config.json"
 LOG_DIR = APP_DIR / "logs"
 LOG_RETENTION_DAYS = 7
 MUSIC_EXTENSIONS = (".mp3", ".wav")
-APP_VERSION = "v1.4.5"
+APP_VERSION = "v1.4.6"
 LATEST_RELEASE_URL = "https://github.com/SusamMinami/SVNmate/releases/latest"
 RELEASE_DOWNLOAD_URL = "https://github.com/SusamMinami/SVNmate/releases/download/{tag}/{asset}"
 RELEASE_ASSET_NAME = "SVNmate.zip"
@@ -138,6 +139,55 @@ ICON_MUSIC_ON = "\ue767"
 ICON_MUSIC_OFF = "\ue74f"
 ICON_HIDE_TO_TRAY = "\ue921"
 ICON_MORE = "\ue712"
+
+
+def _powershell_literal(value: str | Path) -> str:
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def _launch_detached_command(
+    command: Sequence[str],
+    *,
+    cwd: Path | None = None,
+) -> None:
+    arguments = [str(item) for item in command]
+    if not arguments:
+        raise ValueError("启动命令不能为空")
+    if os.name == "nt":
+        shell32 = ctypes.windll.shell32
+        shell32.ShellExecuteW.argtypes = [
+            wintypes.HWND,
+            wintypes.LPCWSTR,
+            wintypes.LPCWSTR,
+            wintypes.LPCWSTR,
+            wintypes.LPCWSTR,
+            ctypes.c_int,
+        ]
+        shell32.ShellExecuteW.restype = wintypes.HINSTANCE
+        result = shell32.ShellExecuteW(
+            None,
+            "open",
+            arguments[0],
+            subprocess.list2cmdline(arguments[1:]),
+            str(cwd) if cwd is not None else None,
+            0,
+        )
+        result_code = int(result or 0)
+        if result_code <= 32:
+            raise OSError(
+                result_code,
+                f"无法启动后台进程：{arguments[0]}",
+            )
+        return
+    subprocess.Popen(
+        arguments,
+        cwd=str(cwd) if cwd is not None else None,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        close_fds=True,
+        start_new_session=True,
+    )
 
 
 @dataclass(frozen=True)
@@ -746,6 +796,8 @@ class SvnAutoTool:
         self.dropped_live_log_items = 0
         self.worker_thread: threading.Thread | None = None
         self.running = False
+        self.invalid_handle_restart_pending = False
+        self.invalid_handle_restart_lock = threading.Lock()
         self.last_scheduled_key = ""
         self.last_bin_update_date = ""
         self.tortoise_proc = self._find_tortoise_proc()
@@ -1903,11 +1955,13 @@ class SvnAutoTool:
         try:
             result = subprocess.run(
                 ["tasklist", "/FI", f"IMAGENAME eq {executable_name}", "/FO", "CSV", "/NH"],
+                stdin=subprocess.DEVNULL,
                 capture_output=True,
                 text=True,
                 errors="replace",
                 timeout=5,
                 creationflags=subprocess.CREATE_NO_WINDOW,
+                close_fds=True,
                 check=False,
             )
         except (OSError, subprocess.SubprocessError):
@@ -2442,6 +2496,8 @@ class SvnAutoTool:
                         "svn update",
                         auto_cleanup=True,
                     )
+                    if getattr(self, "invalid_handle_restart_pending", False):
+                        return
                     attempted, success, queued = self._queue_update_bat_scripts(
                         folder,
                         update_ok,
@@ -2462,6 +2518,8 @@ class SvnAutoTool:
                         self._record(str(update_bat.parent), "Update.bat", "失败", f"后台任务异常：{exc}")
 
             for folder in valid_folders:
+                if getattr(self, "invalid_handle_restart_pending", False):
+                    return
                 self._run_cleanup_and_build(folder)
 
             if run_daily_bin_update and bin_update_attempted and bin_update_all_success:
@@ -2731,6 +2789,7 @@ class SvnAutoTool:
                 elapsed_seconds=(datetime.now() - started).total_seconds(),
             )
         except OSError as exc:
+            self._schedule_restart_for_invalid_handle(exc)
             return CommandExecution(
                 return_code=-1,
                 error=str(exc),
@@ -2742,12 +2801,15 @@ class SvnAutoTool:
             self._log(output)
         if error and not output_already_logged:
             self._log(error)
-        return CommandExecution(
+        execution = CommandExecution(
             return_code=return_code,
             output=output,
             error=error,
             elapsed_seconds=elapsed,
         )
+        if not execution.success:
+            self._schedule_restart_for_invalid_handle(execution.message)
+        return execution
 
     def _run_streamed_command(
         self,
@@ -2757,12 +2819,14 @@ class SvnAutoTool:
         process = subprocess.Popen(
             command,
             cwd=str(cwd),
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
             errors="replace",
             shell=False,
             creationflags=self._creation_flags(),
+            close_fds=True,
         )
         output_tail: deque[str] = deque(maxlen=80)
         if process.stdout is not None:
@@ -2858,10 +2922,12 @@ class SvnAutoTool:
         process = subprocess.Popen(
             command,
             cwd=str(cwd),
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             shell=False,
             creationflags=self._creation_flags(),
+            close_fds=True,
         )
         while process.poll() is None:
             if self._click_tortoise_done_buttons(process.pid, require_completion=True):
@@ -3466,6 +3532,128 @@ class SvnAutoTool:
         self.tray_icon.stop()
         self.root.destroy()
 
+    def _schedule_restart_for_invalid_handle(
+        self,
+        error: BaseException | str,
+    ) -> bool:
+        message = str(error)
+        if not needs_process_restart(message):
+            return False
+        lock = getattr(self, "invalid_handle_restart_lock", None)
+        if lock is None:
+            lock = threading.Lock()
+            self.invalid_handle_restart_lock = lock
+        with lock:
+            if getattr(self, "invalid_handle_restart_pending", False):
+                return True
+            self.invalid_handle_restart_pending = True
+        self._log(
+            "检测到 Windows 进程句柄无效，已停止本轮任务，SVNmate 将自动重启。"
+        )
+        try:
+            self.root.after(0, self._restart_after_invalid_handle)
+        except Exception as schedule_error:
+            self.invalid_handle_restart_pending = False
+            self._log(f"无法安排 SVNmate 自动重启：{schedule_error}")
+        return True
+
+    def _restart_after_invalid_handle(self) -> None:
+        try:
+            self._launch_restart_watcher()
+        except Exception as restart_error:
+            self.invalid_handle_restart_pending = False
+            message = f"SVNmate 自动重启失败：{restart_error}"
+            self._log(message)
+            messagebox.showerror("自动重启失败", message)
+            return
+        self._log("自动重启辅助进程已启动，正在退出当前实例。")
+        for cleanup in (
+            self._save_config,
+            self._stop_music,
+            self.ipc_server.stop,
+            self.tray_icon.stop,
+        ):
+            try:
+                cleanup()
+            except Exception as cleanup_error:
+                self._log(f"自动重启退出清理失败：{cleanup_error}")
+        self.root.destroy()
+
+    def _launch_restart_watcher(self) -> None:
+        update_dir = APP_DIR / "_updates"
+        update_dir.mkdir(parents=True, exist_ok=True)
+        script_path = update_dir / "restart_svnmate.ps1"
+        log_path = update_dir / "restart_svnmate.log"
+        restart_exe = Path(sys.executable).resolve()
+        restart_arguments = (
+            []
+            if getattr(sys, "frozen", False)
+            else [str(Path(__file__).resolve())]
+        )
+        argument_literals = ", ".join(
+            _powershell_literal(argument)
+            for argument in restart_arguments
+        )
+        script = f"""
+$ErrorActionPreference = 'Stop'
+$pidToWait = {os.getpid()}
+$appDir = {_powershell_literal(APP_DIR)}
+$restartExe = {_powershell_literal(restart_exe)}
+$restartArgs = @({argument_literals})
+$logPath = {_powershell_literal(log_path)}
+
+function Write-RestartLog([string] $message) {{
+    $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    Add-Content -LiteralPath $logPath -Value "$timestamp  $message" -Encoding UTF8
+}}
+
+try {{
+    Write-RestartLog '检测到无效句柄，等待旧实例退出'
+    while (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue) {{
+        Start-Sleep -Milliseconds 250
+    }}
+    if ($restartArgs.Count -gt 0) {{
+        $restarted = Start-Process -FilePath $restartExe -ArgumentList $restartArgs -WorkingDirectory $appDir -PassThru
+    }} else {{
+        $restarted = Start-Process -FilePath $restartExe -WorkingDirectory $appDir -PassThru
+    }}
+    Start-Sleep -Seconds 2
+    if ($restarted.HasExited) {{
+        throw "新实例启动后立即退出，退出码：$($restarted.ExitCode)"
+    }}
+    Write-RestartLog 'SVNmate 已自动重启'
+}} catch {{
+    $message = $_.Exception.Message
+    Write-RestartLog "自动重启失败：$message"
+    try {{
+        Add-Type -AssemblyName System.Windows.Forms
+        [System.Windows.Forms.MessageBox]::Show(
+            "SVNmate 自动重启失败：$message`n`n详细日志：$logPath",
+            'SVNmate 自动重启失败',
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Error
+        ) | Out-Null
+    }} catch {{
+    }}
+    exit 1
+}}
+"""
+        script_path.write_text(script.strip(), encoding="utf-8-sig")
+        _launch_detached_command(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-NonInteractive",
+                "-WindowStyle",
+                "Hidden",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(script_path),
+            ],
+            cwd=APP_DIR,
+        )
+
     def _check_for_updates_async(self) -> None:
         self.update_state = "checking"
         self._refresh_update_dot()
@@ -3544,7 +3732,15 @@ class SvnAutoTool:
         if not messagebox.askyesno("更新已下载", f"{tag} 已下载完成。是否现在重启并应用更新？"):
             os.startfile(str(zip_path.parent))
             return
-        self._launch_update_installer(zip_path)
+        try:
+            self._launch_update_installer(zip_path)
+        except Exception as launch_error:
+            self.update_state = "ready"
+            self._refresh_update_dot()
+            message = f"无法启动更新安装器：{launch_error}"
+            self._log(message)
+            messagebox.showerror("更新启动失败", message)
+            return
         self._stop_music()
         self.ipc_server.stop()
         self.tray_icon.stop()
@@ -3561,8 +3757,8 @@ class SvnAutoTool:
         script = f"""
 $ErrorActionPreference = 'Stop'
 $pidToWait = {os.getpid()}
-$appDir = {json.dumps(str(APP_DIR))}
-$zipPath = {json.dumps(str(zip_path))}
+$appDir = {_powershell_literal(APP_DIR)}
+$zipPath = {_powershell_literal(zip_path)}
 $extractDir = Join-Path (Split-Path -Parent $zipPath) 'extract'
 $logPath = Join-Path (Split-Path -Parent $zipPath) 'apply_update.log'
 $appExe = Join-Path $appDir 'SVNAutoTool.exe'
@@ -3615,7 +3811,11 @@ try {{
     }}
 
     Copy-Item -Path (Join-Path $payload '*') -Destination $appDir -Recurse -Force
-    Start-Process -FilePath $appExe
+    $restarted = Start-Process -FilePath $appExe -WorkingDirectory $appDir -PassThru
+    Start-Sleep -Seconds 2
+    if ($restarted.HasExited) {{
+        throw "新版本启动后立即退出，退出码：$($restarted.ExitCode)"
+    }}
     Write-UpdateLog '更新完成，已重新启动 SVNmate'
 }} catch {{
     $message = $_.Exception.Message
@@ -3634,16 +3834,9 @@ try {{
 }}
 """
         script_path.write_text(script.strip(), encoding="utf-8-sig")
-        creation_flags = 0
-        if os.name == "nt":
-            creation_flags = (
-                subprocess.DETACHED_PROCESS
-                | subprocess.CREATE_NEW_PROCESS_GROUP
-                | subprocess.CREATE_NO_WINDOW
-            )
-        subprocess.Popen(
+        _launch_detached_command(
             [
-                "powershell",
+                "powershell.exe",
                 "-NoProfile",
                 "-NonInteractive",
                 "-WindowStyle",
@@ -3653,11 +3846,7 @@ try {{
                 "-File",
                 str(script_path),
             ],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            creationflags=creation_flags,
-            close_fds=True,
+            cwd=APP_DIR,
         )
 
     @staticmethod

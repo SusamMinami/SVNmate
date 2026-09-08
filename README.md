@@ -64,6 +64,16 @@ result = update_working_copies(
 外部请求只执行指定目录的 SVN 更新和失败恢复，不会运行 SVNmate 中配置的
 `Update.bat`、`Build.bat` 或每日任务。
 
+## v1.4.6 更新摘要
+
+- 自更新辅助程序改由 Windows ShellExecute 独立启动，不再继承 SVNmate 的标准
+  输入输出句柄；启动失败时保留当前实例并直接显示错误。
+- 更新脚本等待旧程序释放后替换文件，并验证新实例没有立即退出；执行过程写入
+  `_updates\apply_update.log`。
+- TortoiseSVN 和命令行 SVN 子进程显式使用独立空输入句柄。检测到
+  `[WinError 6] 句柄无效` 时停止本轮 Update/Cleanup，自动重启 SVNmate，
+  并将结果写入 `_updates\restart_svnmate.log`。
+
 ## v1.4.5 更新摘要
 
 - 音乐与隐藏到托盘改为图标按钮，提供 Tooltip 和键盘快捷键。

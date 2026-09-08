@@ -9,6 +9,7 @@ from svnmate_core import (
     WorkspaceUpdateService,
     create_cli_update_service,
     dedupe_folders,
+    needs_process_restart,
     needs_svn_cleanup,
 )
 
@@ -100,6 +101,29 @@ class WorkspaceUpdateServiceTests(unittest.TestCase):
         self.assertEqual(result.update_attempts, 1)
         self.assertEqual(len(executor.calls), 2)
 
+    def test_invalid_handle_stops_batch_without_cleanup(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as first_dir,
+            tempfile.TemporaryDirectory() as second_dir,
+        ):
+            executor = _SequenceExecutor(
+                [CommandExecution(-1, error="[WinError 6] 句柄无效。")]
+            )
+            events: list[tuple[str, str]] = []
+
+            result = self._service(executor, events).update_folders(
+                [first_dir, second_dir],
+                request_id="invalid-handle",
+            )
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.status, "failed")
+        self.assertEqual(len(result.folders), 1)
+        self.assertEqual(result.folders[0].status, "restart-required")
+        self.assertFalse(result.folders[0].cleanup_attempted)
+        self.assertEqual(len(executor.calls), 1)
+        self.assertIn(("svn update", "自动重启"), events)
+
     def test_missing_folder_returns_structured_failure(self) -> None:
         executor = _SequenceExecutor([])
         events: list[tuple[str, str]] = []
@@ -137,6 +161,11 @@ class CoreUtilityTests(unittest.TestCase):
     def test_cleanup_message_detection(self) -> None:
         self.assertTrue(needs_svn_cleanup("E155004: Working copy locked"))
         self.assertFalse(needs_svn_cleanup("authorization failed"))
+
+    def test_invalid_handle_detection(self) -> None:
+        self.assertTrue(needs_process_restart("[WinError 6] 句柄无效。"))
+        self.assertTrue(needs_process_restart("OSError: invalid handle"))
+        self.assertFalse(needs_process_restart("working copy locked"))
 
     def test_dedupe_folders_is_case_insensitive_on_windows(self) -> None:
         folders = dedupe_folders([r"C:\Work\Res", r"c:\work\res"])
