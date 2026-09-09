@@ -59,10 +59,12 @@ import { AudioLibraryBrowser } from "./components/AudioLibraryBrowser";
 import { CharacterActionEditor } from "./components/CharacterActionEditor";
 import { DataSourceStatus } from "./components/DataSourceStatus";
 import { DirectorControl } from "./components/DirectorControl";
+import { ExistingAudioConfiguration } from "./components/ExistingAudioConfiguration";
 import { LaunchScreen } from "./components/LaunchScreen";
 import { MissingNpcModelModal } from "./components/MissingNpcModelModal";
 import { NodeCameraQuickActions } from "./components/NodeCameraQuickActions";
 import { OverlayScrollArea } from "./components/OverlayScrollArea";
+import { PreviewSchoolEditor } from "./components/PreviewSchoolEditor";
 import { MusicRecommendations } from "./components/MusicRecommendations";
 import { SoundEffectRecommendations } from "./components/SoundEffectRecommendations";
 import { SceneReferencePanel } from "./components/SceneReferencePanel";
@@ -92,7 +94,7 @@ import {
   type SoundEffectCatalogSnapshot,
 } from "./data/soundEffectCatalog";
 import {
-  recommendMusic,
+  musicRecommendationsFromCues,
   type MusicCatalogEntry,
   type MusicCatalogSnapshot,
   type MusicRecommendation,
@@ -360,8 +362,8 @@ type InspectorTab = "direction" | "shot" | "audio" | "ue";
 type ConfigurationSyncState =
   | "syncing"
   | "listening"
-  | "offline"
-  | "ignored";
+  | "configuration"
+  | "offline";
 
 function createConfigurationDialogueRow(dialogueId: string): DialogueRow {
   return {
@@ -395,6 +397,7 @@ interface CachedStoryboard {
   directorAnalysis: DirectorSceneAnalysis | undefined;
   dialogueIssues: RuleDialogueIssue[];
   soundEffects: DirectorSoundEffectRecommendation[];
+  generatedMusicRecommendations: MusicRecommendation[];
   directorBlocking: DirectorBlocking;
   activeFormationSource: "blueprint" | "generated";
   activeFormationVariant: FormationOptionId;
@@ -734,7 +737,7 @@ function dialogueIssueCategoryLabel(
 }
 
 interface ShotInspectorProps {
-  shot: ShotPlan;
+  shot?: ShotPlan;
   sequence: DialogueSequence;
   activeDialogueId: string;
   dialogueIssues: RuleDialogueIssue[];
@@ -867,8 +870,13 @@ function ShotInspector({
   const [audioPreview, setAudioPreview] =
     useState<AudioPreviewSession | null>(null);
   const storyOutlineExpanded = expandedOutlinePrefix === sequence.prefix;
+  const activeDialogueRow = activeDialogueId
+    ? sequence.rows.find((row) => row.id === activeDialogueId)
+    : undefined;
+  const inspectorDialogueIds = shot?.dialogueIds ??
+    (activeDialogueId ? [activeDialogueId] : []);
   const currentDialogueIssues = dialogueIssues.filter((issue) =>
-    shot.dialogueIds.includes(issue.dialogue_id),
+    inspectorDialogueIds.includes(issue.dialogue_id),
   );
   const configurationDialogueRow = configurationDialogueNodeId
     ? sequence.rows.find((row) => row.id === configurationDialogueNodeId)
@@ -887,19 +895,23 @@ function ShotInspector({
     ? configurationSelectionReady && configurationDialogueNodeId
       ? [configurationDialogueNodeId]
       : []
-    : shot.dialogueIds;
+    : inspectorDialogueIds;
   const editableDialogueIdSet = new Set(editableDialogueIds);
-  const configurationAudioCount =
+  const scopedAudioCount =
     soundEffects.filter((item) =>
       editableDialogueIdSet.has(item.dialogueId),
     ).length +
     musicRecommendations.filter((item) =>
       editableDialogueIdSet.has(item.dialogueId),
     ).length;
-  const configurationActionCount =
+  const scopedActionCount =
     characterActionEditor.exportActions.filter((item) =>
       editableDialogueIdSet.has(item.dialogueId),
     ).length;
+  const nodeScopedTools = configurationMode || !shot;
+  const nodeScopeReady = configurationMode
+    ? configurationSelectionReady
+    : Boolean(activeDialogueId);
   const slotLabelsBySlot = new Map(
     sequence.participants.map((participant) => [
       participant.slot,
@@ -960,8 +972,13 @@ function ShotInspector({
               </>
             ) : (
               <>
-                SHOT {String(activeIndex + 1).padStart(2, "0")} /{" "}
-                {String(shotCount).padStart(2, "0")}
+                {shot
+                  ? `SHOT ${String(activeIndex + 1).padStart(2, "0")} / ${String(
+                      shotCount,
+                    ).padStart(2, "0")}`
+                  : activeDialogueId
+                    ? `DIALOGUE NODE ${activeDialogueId}`
+                    : "DIALOGUE NODE"}
               </>
             )}
           </small>
@@ -970,7 +987,7 @@ function ShotInspector({
               configurationMode
                 ? configurationDialogueRow?.content ??
                   configurationSelectionMessage
-                : shot.label
+                : shot?.label ?? activeDialogueRow?.content ?? "对白已加载"
             }
           >
             {configurationMode
@@ -985,46 +1002,56 @@ function ShotInspector({
                         : "未知角色"
                     } · ${configurationDialogueRow.content}`
                 : configurationSelectionMessage
-              : shot.label}
+              : shot
+                ? shot.label
+                : activeDialogueRow
+                  ? `${
+                      activeDialogueRow.speakerSlot
+                        ? participantNamesBySlot.get(
+                            activeDialogueRow.speakerSlot,
+                          ) ?? "未知角色"
+                        : "未知角色"
+                    } · ${activeDialogueRow.content}`
+                  : "对白已加载"}
           </h2>
         </div>
-        <div className="shot-nav">
-          <div
-            className="shot-preference"
-            title={preferenceError || "将明确反馈同步到导演偏好库"}
-          >
-            <button
-              className={`icon-button ${preference === "accept" ? "is-active" : ""}`}
-              type="button"
-              title="采用此镜头并同步偏好"
-              aria-label="采用此镜头并同步偏好"
-              aria-pressed={preference === "accept"}
-              disabled={preferenceBusy}
-              onClick={() => onPreference("accept", "用户明确采用当前镜头")}
+        {shot && !configurationMode && (
+          <div className="shot-nav">
+            <div
+              className="shot-preference"
+              title={preferenceError || "将明确反馈同步到导演偏好库"}
             >
-              {preferenceBusy && preference !== "reject" ? (
-                <LoaderCircle className="spin" size={16} />
-              ) : (
-                <ThumbsUp size={16} />
-              )}
-            </button>
-            <button
-              className={`icon-button ${preference === "reject" ? "is-active" : ""}`}
-              type="button"
-              title="拒绝此镜头并同步偏好"
-              aria-label="拒绝此镜头并同步偏好"
-              aria-pressed={preference === "reject"}
-              disabled={preferenceBusy}
-              onClick={() => onPreference("reject", "用户明确拒绝当前镜头")}
-            >
-              {preferenceBusy && preference === "reject" ? (
-                <LoaderCircle className="spin" size={16} />
-              ) : (
-                <ThumbsDown size={16} />
-              )}
-            </button>
-          </div>
-          {!configurationMode && (
+              <button
+                className={`icon-button ${preference === "accept" ? "is-active" : ""}`}
+                type="button"
+                title="采用此镜头并同步偏好"
+                aria-label="采用此镜头并同步偏好"
+                aria-pressed={preference === "accept"}
+                disabled={preferenceBusy}
+                onClick={() => onPreference("accept", "用户明确采用当前镜头")}
+              >
+                {preferenceBusy && preference !== "reject" ? (
+                  <LoaderCircle className="spin" size={16} />
+                ) : (
+                  <ThumbsUp size={16} />
+                )}
+              </button>
+              <button
+                className={`icon-button ${preference === "reject" ? "is-active" : ""}`}
+                type="button"
+                title="拒绝此镜头并同步偏好"
+                aria-label="拒绝此镜头并同步偏好"
+                aria-pressed={preference === "reject"}
+                disabled={preferenceBusy}
+                onClick={() => onPreference("reject", "用户明确拒绝当前镜头")}
+              >
+                {preferenceBusy && preference === "reject" ? (
+                  <LoaderCircle className="spin" size={16} />
+                ) : (
+                  <ThumbsDown size={16} />
+                )}
+              </button>
+            </div>
             <>
               <button
                 className="icon-button"
@@ -1047,8 +1074,8 @@ function ShotInspector({
                 <ChevronRight size={18} />
               </button>
             </>
-          )}
-        </div>
+          </div>
+        )}
       </section>
 
       <nav className="inspector-tabs" aria-label="镜头检查器" role="tablist">
@@ -1091,7 +1118,7 @@ function ShotInspector({
           className="inspector-tab-panel"
           id="shot-inspector-panel"
           role="tabpanel"
-          key={`${shot.id}-${tab}`}
+          key={`${shot?.id || activeDialogueId || "empty"}-${tab}`}
         >
         {configurationMode &&
           (tab === "shot" || tab === "ue") &&
@@ -1117,7 +1144,7 @@ function ShotInspector({
                 onActivityChange={onConfigurationActivityChange}
               />
             )
-          ) : (
+          ) : shot ? (
             <>
             <section className="inspector-section">
               <div className="section-label">
@@ -1285,6 +1312,12 @@ function ShotInspector({
               </section>
             )}
             </>
+          ) : (
+            <section className="inspector-empty-state" role="status">
+              <Camera size={22} />
+              <strong>尚未生成镜头</strong>
+              <p>当前仅有对白文本，摄影参数、构图与投影验收暂无数据。</p>
+            </section>
           )
         )}
 
@@ -1353,140 +1386,154 @@ function ShotInspector({
                 </div>
               </section>
             )}
-            <section className="inspector-section actor-actions">
-              <div className="section-label">
-                <span>演员动作</span>
-                <small>{shot.actorActions.length} 项</small>
-              </div>
-              {shot.actorActions.length > 0 ? (
-                <div className="actor-action-list">
-                  {shot.actorActions.map((action) => (
-                    <div
-                      key={`${action.participantSlot}-${action.angleDegrees}`}
-                    >
-                      <RotateCw
-                        className={
-                          action.angleDegrees < 0 ? "is-counterclockwise" : ""
-                        }
-                        size={15}
-                      />
-                      <strong>
-                        {slotLabelsBySlot.get(action.participantSlot) ?? "?"}{" "}
-                        {action.participantName}
-                      </strong>
-                      <span>{actorTurnLabel(action.angleDegrees)}</span>
+            {shot ? (
+              <>
+                <section className="inspector-section actor-actions">
+                  <div className="section-label">
+                    <span>演员动作</span>
+                    <small>{shot.actorActions.length} 项</small>
+                  </div>
+                  {shot.actorActions.length > 0 ? (
+                    <div className="actor-action-list">
+                      {shot.actorActions.map((action) => (
+                        <div
+                          key={`${action.participantSlot}-${action.angleDegrees}`}
+                        >
+                          <RotateCw
+                            className={
+                              action.angleDegrees < 0
+                                ? "is-counterclockwise"
+                                : ""
+                            }
+                            size={15}
+                          />
+                          <strong>
+                            {slotLabelsBySlot.get(action.participantSlot) ?? "?"}{" "}
+                            {action.participantName}
+                          </strong>
+                          <span>{actorTurnLabel(action.angleDegrees)}</span>
+                          <small>
+                            <code>{action.montageName}</code> · {action.reason}
+                          </small>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p>本镜沿用上一镜角色朝向，无需新增转身动作。</p>
+                  )}
+                </section>
+                <section className="inspector-section">
+                  <div className="section-label">
+                    <span>导演意图</span>
+                  </div>
+                  <p>{shot.rationale}</p>
+                </section>
+                {shot.advisorReview && (
+                  <section className="inspector-section advisor-review">
+                    <div className="section-label">
+                      <span>端侧机位选优</span>
                       <small>
-                        <code>{action.montageName}</code> · {action.reason}
+                        {shot.advisorReview.model} ·{" "}
+                        {shot.advisorReview.candidates.length} 选 1
                       </small>
                     </div>
-                  ))}
-                </div>
-              ) : (
-                <p>本镜沿用上一镜角色朝向，无需新增转身动作。</p>
-              )}
-            </section>
-            <section className="inspector-section">
-              <div className="section-label">
-                <span>导演意图</span>
-              </div>
-              <p>{shot.rationale}</p>
-            </section>
-            {shot.advisorReview && (
-              <section className="inspector-section advisor-review">
-                <div className="section-label">
-                  <span>端侧机位选优</span>
-                  <small>
-                    {shot.advisorReview.model} ·{" "}
-                    {shot.advisorReview.candidates.length} 选 1
-                  </small>
-                </div>
-                <p>{shot.advisorReview.reason}</p>
-                <div className="advisor-candidate-list">
-                  {shot.advisorReview.candidates.map((candidate) => (
-                    <div
-                      className={
-                        candidate.selected
-                          ? "advisor-candidate is-selected"
-                          : "advisor-candidate"
-                      }
-                      key={candidate.candidateId}
-                      title={
-                        candidate.issues.length > 0
-                          ? candidate.issues.join("；")
-                          : candidate.assessment
-                      }
-                    >
-                      <span>
-                        {candidate.selected && (
-                          <Check size={12} aria-hidden="true" />
-                        )}
-                        <strong>{candidate.label}</strong>
-                        {candidate.baseline && <small>基线</small>}
-                      </span>
-                      <b>{candidate.score}</b>
-                      <small>
-                        构图 {candidate.composition} · 主体{" "}
-                        {candidate.subjectReadability} · 遮挡{" "}
-                        {candidate.occlusion} · 连续{" "}
-                        {candidate.continuity}
-                      </small>
+                    <p>{shot.advisorReview.reason}</p>
+                    <div className="advisor-candidate-list">
+                      {shot.advisorReview.candidates.map((candidate) => (
+                        <div
+                          className={
+                            candidate.selected
+                              ? "advisor-candidate is-selected"
+                              : "advisor-candidate"
+                          }
+                          key={candidate.candidateId}
+                          title={
+                            candidate.issues.length > 0
+                              ? candidate.issues.join("；")
+                              : candidate.assessment
+                          }
+                        >
+                          <span>
+                            {candidate.selected && (
+                              <Check size={12} aria-hidden="true" />
+                            )}
+                            <strong>{candidate.label}</strong>
+                            {candidate.baseline && <small>基线</small>}
+                          </span>
+                          <b>{candidate.score}</b>
+                          <small>
+                            构图 {candidate.composition} · 主体{" "}
+                            {candidate.subjectReadability} · 遮挡{" "}
+                            {candidate.occlusion} · 连续{" "}
+                            {candidate.continuity}
+                          </small>
+                        </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
+                  </section>
+                )}
+                {directorAnalysis && (
+                  <section className="inspector-section director-analysis">
+                    <div className="section-label">
+                      <span>全场导演分析</span>
+                      <small>{directorLabel(appliedDirector)}</small>
+                    </div>
+                    <dl>
+                      <div>
+                        <dt>戏剧目标</dt>
+                        <dd>{directorAnalysis.dramaticGoal}</dd>
+                      </div>
+                      <div>
+                        <dt>情绪推进</dt>
+                        <dd>{directorAnalysis.emotionalProgression}</dd>
+                      </div>
+                      <div>
+                        <dt>视觉策略</dt>
+                        <dd>{directorAnalysis.visualStrategy}</dd>
+                      </div>
+                    </dl>
+                  </section>
+                )}
+                <section className="inspector-section blocking-analysis">
+                  <div className="section-label">
+                    <span>站位调度</span>
+                    <small>{formationLabel(directorBlocking.formation)}</small>
+                  </div>
+                  <p>{directorBlocking.intent}</p>
+                  <div className="blocking-roster">
+                    {directorBlocking.placements.map((placement) => {
+                      const participant = sequence.participants.find(
+                        (item) => item.slot === placement.subject,
+                      );
+                      return (
+                        <div key={placement.subject}>
+                          <span style={{ backgroundColor: participant?.color }}>
+                            {participant
+                              ? participantSlotLabel(participant)
+                              : "?"}
+                          </span>
+                          <strong>
+                            {participant?.name ?? placement.subject}
+                          </strong>
+                          <small title={placement.intent}>
+                            {blockingPositionLabel(placement.position)} · 登场{" "}
+                            {placement.entry_dialogue_id} · 离场{" "}
+                            {placement.exit_dialogue_id ?? "本场结束"} ·{" "}
+                            {placement.intent}
+                          </small>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </section>
+              </>
+            ) : (
+              <section className="inspector-empty-state" role="status">
+                <Clapperboard size={22} />
+                <strong>尚未生成导演分析</strong>
+                <p>当前仅显示已加载的对白内容与剧情梗概。</p>
               </section>
             )}
-            {directorAnalysis && (
-              <section className="inspector-section director-analysis">
-                <div className="section-label">
-                  <span>全场导演分析</span>
-                  <small>{directorLabel(appliedDirector)}</small>
-                </div>
-                <dl>
-                  <div>
-                    <dt>戏剧目标</dt>
-                    <dd>{directorAnalysis.dramaticGoal}</dd>
-                  </div>
-                  <div>
-                    <dt>情绪推进</dt>
-                    <dd>{directorAnalysis.emotionalProgression}</dd>
-                  </div>
-                  <div>
-                    <dt>视觉策略</dt>
-                    <dd>{directorAnalysis.visualStrategy}</dd>
-                  </div>
-                </dl>
-              </section>
-            )}
-            <section className="inspector-section blocking-analysis">
-              <div className="section-label">
-                <span>站位调度</span>
-                <small>{formationLabel(directorBlocking.formation)}</small>
-              </div>
-              <p>{directorBlocking.intent}</p>
-              <div className="blocking-roster">
-                {directorBlocking.placements.map((placement) => {
-                  const participant = sequence.participants.find(
-                    (item) => item.slot === placement.subject,
-                  );
-                  return (
-                    <div key={placement.subject}>
-                      <span style={{ backgroundColor: participant?.color }}>
-                        {participant
-                          ? participantSlotLabel(participant)
-                          : "?"}
-                      </span>
-                      <strong>{participant?.name ?? placement.subject}</strong>
-                      <small title={placement.intent}>
-                        {blockingPositionLabel(placement.position)} · 登场{" "}
-                        {placement.entry_dialogue_id} · 离场{" "}
-                        {placement.exit_dialogue_id ?? "本场结束"} ·{" "}
-                        {placement.intent}
-                      </small>
-                    </div>
-                  );
-                })}
-              </div>
-            </section>
           </>
         )}
 
@@ -1501,53 +1548,63 @@ function ShotInspector({
             />
             {!configurationMode && (
               <>
-                <section className="inspector-section">
-                  <div className="section-label">
-                    <span>UE4 参考</span>
-                  </div>
-                  <div className="ue-reference">
-                    <div>
-                      <span>Camera</span>
-                      <code>
-                        {shot.cameraPosition
-                          .map((value) => value.toFixed(2))
-                          .join(", ")}
-                      </code>
+                {shot ? (
+                  <section className="inspector-section">
+                    <div className="section-label">
+                      <span>UE4 参考</span>
                     </div>
-                    <div>
-                      <span>Target</span>
-                      <code>
-                        {shot.cameraTarget
-                          .map((value) => value.toFixed(2))
-                          .join(", ")}
-                      </code>
+                    <div className="ue-reference">
+                      <div>
+                        <span>Camera</span>
+                        <code>
+                          {shot.cameraPosition
+                            .map((value) => value.toFixed(2))
+                            .join(", ")}
+                        </code>
+                      </div>
+                      <div>
+                        <span>Target</span>
+                        <code>
+                          {shot.cameraTarget
+                            .map((value) => value.toFixed(2))
+                            .join(", ")}
+                        </code>
+                      </div>
+                      {shot.cameraMovement !== "static" && (
+                        <>
+                          <div>
+                            <span>End Camera</span>
+                            <code>
+                              {shot.cameraEndPosition
+                                .map((value) => value.toFixed(2))
+                                .join(", ")}
+                            </code>
+                          </div>
+                          <div>
+                            <span>End Target</span>
+                            <code>
+                              {shot.cameraEndTarget
+                                .map((value) => value.toFixed(2))
+                                .join(", ")}
+                            </code>
+                          </div>
+                        </>
+                      )}
+                      <small>
+                        原型坐标为相对站位，用于构图参考，不直接等同于 UE4
+                        世界坐标。
+                      </small>
                     </div>
-                    {shot.cameraMovement !== "static" && (
-                      <>
-                        <div>
-                          <span>End Camera</span>
-                          <code>
-                            {shot.cameraEndPosition
-                              .map((value) => value.toFixed(2))
-                              .join(", ")}
-                          </code>
-                        </div>
-                        <div>
-                          <span>End Target</span>
-                          <code>
-                            {shot.cameraEndTarget
-                              .map((value) => value.toFixed(2))
-                              .join(", ")}
-                          </code>
-                        </div>
-                      </>
-                    )}
-                    <small>
-                      原型坐标为相对站位，用于构图参考，不直接等同于 UE4
-                      世界坐标。
-                    </small>
-                  </div>
-                </section>
+                  </section>
+                ) : (
+                  <section className="inspector-section">
+                    <div className="section-label">
+                      <span>镜头坐标</span>
+                      <small>未生成</small>
+                    </div>
+                    <p>当前节点尚无 Camera / Target 镜头坐标。</p>
+                  </section>
+                )}
                 {sequence.warnings.length > 0 && (
                   <section className="inspector-section warning-section">
                     <div className="section-label">
@@ -1578,13 +1635,13 @@ function ShotInspector({
           />
         ) : (
           <>
+            <ExistingAudioConfiguration
+              configuration={configurationNodeConfiguration}
+              loading={configurationMode && configurationNodeReading}
+              musicCatalog={musicCatalog}
+            />
             <SoundEffectRecommendations
               recommendations={soundEffects}
-              existingConfiguration={
-                configurationMode
-                  ? configurationNodeConfiguration
-                  : undefined
-              }
               dialogueRows={sequence.rows}
               currentDialogueIds={editableDialogueIds}
               busy={exportBusy}
@@ -1604,9 +1661,13 @@ function ShotInspector({
               onChange={onChangeSoundEffect}
             />
             <MusicRecommendations
-              recommendations={musicRecommendations}
-              dialogueOrder={sequence.rows.map((row) => row.id)}
+              recommendations={
+                configurationMode && !configurationNodeConfiguration
+                  ? []
+                  : musicRecommendations
+              }
               currentDialogueIds={editableDialogueIds}
+              existingConfiguration={configurationNodeConfiguration}
               playbackActive={
                 audioPreview?.owner === "music-recommendations"
               }
@@ -1641,10 +1702,10 @@ function ShotInspector({
         </OverlayScrollArea>
       )}
 
-      {configurationMode ? (
+      {nodeScopedTools ? (
         <footer className="inspector-footer inspector-footer--export">
           <div>
-            {exportError || !configurationSelectionReady ? (
+            {exportError || !nodeScopeReady ? (
               <AlertTriangle size={15} />
             ) : tab === "audio" ? (
               <AudioLines size={15} />
@@ -1655,17 +1716,21 @@ function ShotInspector({
             )}
             <span>
               {exportError ||
-                (!configurationSelectionReady
-                  ? configurationSelectionMessage
+                (!nodeScopeReady
+                  ? configurationMode
+                    ? configurationSelectionMessage
+                    : "未选择对白节点"
                   : tab === "audio"
-                    ? configurationAudioCount > 0
-                      ? `${configurationAudioCount} 项当前节点音频待导出`
+                    ? scopedAudioCount > 0
+                      ? `${scopedAudioCount} 项当前节点音频待导出`
                       : "当前节点未选择音效或音乐"
                     : tab === "ue"
-                      ? configurationActionCount > 0
-                        ? `${configurationActionCount} 组当前节点动作待导出`
+                      ? scopedActionCount > 0
+                        ? `${scopedActionCount} 组当前节点动作待导出`
                         : "当前节点未添加动作"
-                      : "镜头配置由上方操作直接写入并保存")}
+                      : configurationMode
+                        ? "镜头配置由上方操作直接写入并保存"
+                        : "当前仅有对白文本，尚无镜头可导出")}
             </span>
           </div>
           <button
@@ -1676,14 +1741,16 @@ function ShotInspector({
                 ? "预检并导出当前节点音效与音乐"
                 : tab === "ue"
                   ? "预检并导出当前节点角色动作"
-                  : "使用上方镜头快捷操作直接写入"
+                  : configurationMode
+                    ? "使用上方镜头快捷操作直接写入"
+                    : "当前尚未生成镜头"
             }
             disabled={
               exportBusy ||
-              !configurationSelectionReady ||
-              tab === "shot" ||
-              (tab === "audio" && configurationAudioCount === 0) ||
-              (tab === "ue" && configurationActionCount === 0)
+              !nodeScopeReady ||
+              (tab !== "audio" && tab !== "ue") ||
+              (tab === "audio" && scopedAudioCount === 0) ||
+              (tab === "ue" && scopedActionCount === 0)
             }
             onClick={
               tab === "audio" ? onExportNodeAudio : onExportNodeActions
@@ -1691,7 +1758,7 @@ function ShotInspector({
           >
             {exportBusy ? (
               <LoaderCircle className="spin" size={16} />
-            ) : tab === "shot" ? (
+            ) : tab !== "audio" && tab !== "ue" ? (
               <Camera size={16} />
             ) : (
               <Upload size={16} />
@@ -1702,7 +1769,9 @@ function ShotInspector({
                 ? "导出节点音频"
                 : tab === "ue"
                   ? "导出节点动作"
-                  : "镜头直接写入"}
+                  : configurationMode
+                    ? "镜头直接写入"
+                    : "尚无镜头"}
           </button>
         </footer>
       ) : (
@@ -1768,6 +1837,8 @@ export default function App() {
   const [preferenceError, setPreferenceError] = useState("");
   const [loading, setLoading] = useState(false);
   const [directorMode, setDirectorMode] = useState<DirectorMode>("rule");
+  const [selectedDirectorMode, setSelectedDirectorMode] =
+    useState<DirectorMode | null>(null);
   const [appliedDirector, setAppliedDirector] =
     useState<DirectorMode>("rule");
   const [directorLoading, setDirectorLoading] = useState(false);
@@ -1805,6 +1876,10 @@ export default function App() {
     missingAttachmentCount: 0,
     analyzedCount: 0,
   });
+  const [
+    generatedMusicRecommendations,
+    setGeneratedMusicRecommendations,
+  ] = useState<MusicRecommendation[]>([]);
   const [musicOverridesByDialogueId, setMusicOverridesByDialogueId] =
     useState<Map<string, MusicRecommendation | null>>(() => new Map());
   const [directorBlocking, setDirectorBlocking] =
@@ -1904,6 +1979,7 @@ export default function App() {
             directorAnalysis: initial.analysis,
             dialogueIssues: [],
             soundEffects: initial.soundEffects,
+            generatedMusicRecommendations: [],
             directorBlocking: initial.blocking,
             activeFormationSource: "generated",
             activeFormationVariant: "generated",
@@ -1950,6 +2026,9 @@ export default function App() {
   const soundEffectCatalogRef = useRef(soundEffectCatalog);
   const soundEffectCatalogLoadRef =
     useRef<Promise<SoundEffectCatalogSnapshot> | null>(null);
+  const musicCatalogRef = useRef(musicCatalog);
+  const musicCatalogLoadRef =
+    useRef<Promise<MusicCatalogSnapshot> | null>(null);
   const configurationAutoLoadNodeRef = useRef("");
   const configurationNodeReadKeysRef = useRef<Set<string>>(new Set());
   activeIndexRef.current = activeIndex;
@@ -1960,6 +2039,7 @@ export default function App() {
   playerPositionLockedRef.current =
     formationChoice?.playerPositionLocked ?? true;
   soundEffectCatalogRef.current = soundEffectCatalog;
+  musicCatalogRef.current = musicCatalog;
 
   const {
     selection: ueDialogueSelection,
@@ -1971,6 +2051,10 @@ export default function App() {
   );
   const selectedUeDialogueNodeId =
     ueDialogueSelection?.status === "selected"
+      ? ueDialogueSelection.dialogueNodeId
+      : null;
+  const selectedUeConfigurationNodeId =
+    ueDialogueSelection?.status === "configuration"
       ? ueDialogueSelection.dialogueNodeId
       : null;
   const selectedUeShotIndex = selectedUeDialogueNodeId
@@ -2033,16 +2117,16 @@ export default function App() {
   const configurationSyncState: ConfigurationSyncState =
     ueDialogueSelection?.status === "offline"
       ? "offline"
-      : ueDialogueSelection?.message.includes("00 配置节点")
-        ? "ignored"
+      : ueDialogueSelection?.status === "configuration"
+        ? "configuration"
         : ueDialogueSelectionPolling
           ? "syncing"
           : "listening";
   const configurationSyncStatus =
     configurationSyncState === "offline"
       ? "UE 离线"
-      : configurationSyncState === "ignored"
-        ? "00 节点已忽略"
+      : configurationSyncState === "configuration"
+        ? "00 配置节点"
         : configurationSyncState === "syncing"
           ? "同步中"
           : `监听中 · ${
@@ -2201,28 +2285,6 @@ export default function App() {
   ]);
 
   const activeShot: ShotPlan | undefined = shots[activeIndex] ?? shots[0];
-  const configurationFallbackShot = useMemo(() => {
-    if (
-      !configurationMode ||
-      activeShot ||
-      !selectedUeDialogueNodeId ||
-      !configurationSelectionReady ||
-      sequence.rows.length === 0
-    ) {
-      return undefined;
-    }
-    const preview = createShotPreview(sequence, { soundEffectCatalog: [] });
-    return preview.shots.find((shot) =>
-      shot.dialogueIds.includes(selectedUeDialogueNodeId),
-    ) ?? preview.shots[0];
-  }, [
-    activeShot,
-    configurationMode,
-    configurationSelectionReady,
-    selectedUeDialogueNodeId,
-    sequence,
-  ]);
-  const inspectorShot = activeShot ?? configurationFallbackShot;
   const characterActionDialogueIds = useMemo(
     () =>
       configurationMode && selectedUeDialogueNodeId
@@ -2238,7 +2300,7 @@ export default function App() {
       inspectorTab === "ue" &&
       (configurationMode
         ? configurationSelectionReady
-        : Boolean(inspectorShot)),
+        : sequence.rows.length > 0 && Boolean(selectedDialogueId)),
     releaseWhenDisabled:
       configurationMode || activeWorkspace !== "storyboard",
   });
@@ -2294,15 +2356,6 @@ export default function App() {
     activeShot,
     characterActionStage,
   ]);
-  const generatedMusicRecommendations = useMemo(
-    () =>
-      recommendMusic(
-        sequence,
-        musicCatalog.entries,
-        directorAnalysis?.emotionalProgression,
-      ),
-    [directorAnalysis?.emotionalProgression, musicCatalog.entries, sequence],
-  );
   const musicRecommendations = useMemo(() => {
     const dialogueOrder = new Map(
       sequence.rows.map((row, index) => [row.id, index]),
@@ -2368,6 +2421,9 @@ export default function App() {
       : selectedDialogueId;
   const activeDialogueRow = sequence.rows.find(
     (row) => row.id === activeDialogueId,
+  );
+  const activeNodeConfiguration = existingNodeConfigurations.find(
+    (configuration) => configuration.dialogueId === activeDialogueId,
   );
   const activeDialogueIssues = dialogueIssues.filter(
     (issue) => issue.dialogue_id === activeDialogueId,
@@ -2642,6 +2698,7 @@ export default function App() {
         fileName: entry.fileName,
         recordId: entry.recordId,
         audioSummary: entry.analysis?.summary ?? null,
+        source: "manual",
       });
       return next;
     });
@@ -2671,7 +2728,14 @@ export default function App() {
   useEffect(() => {
     void refreshTraeConnection();
     void refreshLarkConnection(false);
-    void getMusicCatalog().then(setMusicCatalog).catch(() => undefined);
+    const musicRequest = getMusicCatalog();
+    musicCatalogLoadRef.current = musicRequest;
+    void musicRequest
+      .then((snapshot) => {
+        musicCatalogRef.current = snapshot;
+        setMusicCatalog(snapshot);
+      })
+      .catch(() => undefined);
     const catalogRequest = getSoundEffectCatalog();
     soundEffectCatalogLoadRef.current = catalogRequest;
     void catalogRequest
@@ -2760,6 +2824,8 @@ export default function App() {
         cached.directorAnalysis === directorAnalysis &&
         cached.dialogueIssues === dialogueIssues &&
         cached.soundEffects === soundEffects &&
+        cached.generatedMusicRecommendations ===
+          generatedMusicRecommendations &&
         cached.directorBlocking === directorBlocking &&
         cached.activeFormationSource === activeFormationSource &&
         cached.activeFormationVariant === activeFormationVariant &&
@@ -2777,6 +2843,7 @@ export default function App() {
         directorAnalysis,
         dialogueIssues,
         soundEffects,
+        generatedMusicRecommendations,
         directorBlocking,
         activeFormationSource,
         activeFormationVariant,
@@ -2793,6 +2860,7 @@ export default function App() {
     dialogueIssues,
     directorAnalysis,
     directorBlocking,
+    generatedMusicRecommendations,
     formationStatus,
     formationChoice,
     loadedFormationSnapshot,
@@ -2834,7 +2902,10 @@ export default function App() {
 
   async function refreshMusicCatalogFromLark() {
     const snapshot = await syncMusicCatalog();
+    musicCatalogRef.current = snapshot;
     setMusicCatalog(snapshot);
+    setGeneratedMusicRecommendations([]);
+    setDesignedStoryboards(new Map());
     return snapshot;
   }
 
@@ -2857,12 +2928,24 @@ export default function App() {
     if (requestedMode !== "rule" && soundEffectCatalogLoadRef.current) {
       await soundEffectCatalogLoadRef.current.catch(() => undefined);
     }
+    if (
+      requestedMode === "rule" &&
+      options.useRuleAdvisor !== false &&
+      musicCatalogLoadRef.current
+    ) {
+      await musicCatalogLoadRef.current.catch(() => undefined);
+    }
     const {
       preserveInputPositions = false,
       lockPlayerPosition = true,
       keepCurrentPreview = false,
     } = options;
     const activeSoundEffectCatalog = soundEffectCatalogRef.current;
+    const activeMusicCatalog = musicCatalogRef.current;
+    const dialogueIdSet = new Set(nextSequence.rows.map((row) => row.id));
+    const activeNodeConfigurations = existingNodeConfigurations.filter(
+      (configuration) => dialogueIdSet.has(configuration.dialogueId),
+    );
     const keepsBackgroundRequest =
       requestedMode === "rule" && options.keepBackgroundRequest === true;
     const runId = keepsBackgroundRequest
@@ -2891,6 +2974,7 @@ export default function App() {
       setAppliedDirector("rule");
       setDirectorAnalysis(preview.analysis);
       setDialogueIssues([]);
+      setGeneratedMusicRecommendations([]);
       replaceSoundEffectRecommendations(preview.soundEffects);
       setDirectorBlocking(preview.blocking);
       focusPlanShot(
@@ -2920,6 +3004,8 @@ export default function App() {
           options.fallbackPreserveInputPositions,
         collectRevisionCases,
         soundEffectCatalog: activeSoundEffectCatalog.entries,
+        musicCatalog: activeMusicCatalog.entries,
+        existingNodeConfigurations: activeNodeConfigurations,
         forceRegenerate: options.forceRegenerate,
         signal: traeAbortController?.signal,
         onRuleAdvisorProgress:
@@ -2935,6 +3021,25 @@ export default function App() {
             ? (advice) => {
                 if (runId === directorRunRef.current) {
                   setDialogueIssues(advice.dialogue_issues ?? []);
+                  setGeneratedMusicRecommendations(
+                    musicRecommendationsFromCues(
+                      (advice.music_cues ?? []).map((cue) => ({
+                        dialogueId: cue.dialogue_id,
+                        stateId: cue.state_id,
+                        reason: cue.reason,
+                      })),
+                      activeMusicCatalog.entries,
+                      activeNodeConfigurations.flatMap((configuration) =>
+                        configuration.backgroundMusicStateId === null
+                          ? []
+                          : [{
+                              dialogueId: configuration.dialogueId,
+                              stateId:
+                                configuration.backgroundMusicStateId,
+                            }],
+                      ),
+                    ),
+                  );
                 }
               }
             : undefined,
@@ -3156,6 +3261,7 @@ export default function App() {
     setRuleAdvisorProgress(null);
     setRuleAdvisorSummary(result.ruleAdvisor ?? null);
     replaceSoundEffectRecommendations(result.soundEffects);
+    setGeneratedMusicRecommendations(result.musicRecommendations);
     setDirectorBlocking(result.blocking);
     setActiveFormationSource(
       usesBlueprintFormation ? "blueprint" : "generated",
@@ -3261,10 +3367,12 @@ export default function App() {
     setRuleAdvisorProgress(null);
     setRuleAdvisorSummary(null);
     replaceSoundEffectRecommendations([]);
+    setGeneratedMusicRecommendations([]);
     setMusicOverridesByDialogueId(new Map());
     setFallbackReason(null);
     setError("");
     setAppliedDirector("rule");
+    setSelectedDirectorMode(null);
     setActiveFormationSource("generated");
     setActiveFormationVariant("generated");
     setAwaitingDirectorDesign(true);
@@ -3782,6 +3890,7 @@ export default function App() {
       setRuleAdvisorProgress(null);
       setRuleAdvisorSummary(null);
       replaceSoundEffectRecommendations(selectedPreview.soundEffects);
+      setGeneratedMusicRecommendations([]);
       setDirectorBlocking(selectedPreview.blocking);
       setActiveFormationSource(
         choice === "blueprint" ? "blueprint" : "generated",
@@ -3867,6 +3976,7 @@ export default function App() {
     setShots(nextShots);
     setActiveIndex(Math.max(0, shotIndex));
     setSelectedDialogueId(dialogueNodeId);
+    setSelectedDirectorMode(null);
     setFormationChoice(cached?.formationChoice ?? null);
     setLoadedFormationSnapshot(
       cached?.loadedFormationSnapshot ?? null,
@@ -3886,6 +3996,9 @@ export default function App() {
     setDirectorAnalysis(cached?.directorAnalysis);
     setDialogueIssues(cached?.dialogueIssues ?? []);
     replaceSoundEffectRecommendations(cached?.soundEffects ?? []);
+    setGeneratedMusicRecommendations(
+      cached?.generatedMusicRecommendations ?? [],
+    );
     if (cached) {
       setDirectorBlocking(cached.directorBlocking);
     }
@@ -3961,13 +4074,16 @@ export default function App() {
     setRuleAdvisorProgress(null);
     setRuleAdvisorSummary(null);
     replaceSoundEffectRecommendations([]);
+    setGeneratedMusicRecommendations([]);
     setActiveFormationSource("generated");
     setActiveFormationVariant("generated");
     setAppliedDirector("rule");
+    setSelectedDirectorMode(null);
     setError("");
   }
 
   function changeDirectorMode(mode: DirectorMode) {
+    setSelectedDirectorMode(mode);
     const forceRegenerate =
       mode === "trae" && directorMode === "trae";
     if (
@@ -4234,11 +4350,12 @@ export default function App() {
 
   async function openCurrentNodeExport(
     kind: "audio" | "actions",
+    dialogueNodeId = selectedUeDialogueNodeId,
   ) {
-    if (!selectedUeDialogueNodeId) {
+    if (!dialogueNodeId) {
       return;
     }
-    const dialogueScope = [selectedUeDialogueNodeId];
+    const dialogueScope = [dialogueNodeId];
     if (configurationMode) {
       await changeConfigurationMode(false);
     }
@@ -5072,6 +5189,7 @@ export default function App() {
             )}
             <DirectorControl
               mode={directorMode}
+              selectedMode={selectedDirectorMode}
               appliedMode={appliedDirector}
               designState={
                 awaitingDirectorDesign
@@ -5615,10 +5733,19 @@ export default function App() {
                   <span>{shotPreparationMessage}</span>
                 </div>
               </div>
-              <div className="dialogue-preview" role="status">
+              <div className="dialogue-preview" aria-label="对白节点">
                 {hasLoadedDialogue ? (
                   sequence.rows.map((row) => (
-                    <div className="dialogue-preview__row" key={row.id}>
+                    <button
+                      className={`dialogue-preview__row ${
+                        activeDialogueId === row.id ? "is-active" : ""
+                      }`}
+                      type="button"
+                      aria-label={`选择对白节点 ${row.id}`}
+                      aria-pressed={activeDialogueId === row.id}
+                      key={row.id}
+                      onClick={() => setSelectedDialogueId(row.id)}
+                    >
                       <span
                         className="dialogue-strip__slot"
                         data-slot={row.speakerSlot ?? undefined}
@@ -5642,7 +5769,7 @@ export default function App() {
                         <p>{row.content}</p>
                       </div>
                       <small>{row.id}</small>
-                    </div>
+                    </button>
                   ))
                 ) : (
                   <div className="dialogue-preview__empty">
@@ -5666,10 +5793,16 @@ export default function App() {
         )}
 
         <aside className="right-panel">
-          {inspectorShot ? (
+          {configurationMode && selectedUeConfigurationNodeId ? (
+            <PreviewSchoolEditor
+              dialogueNodeId={selectedUeConfigurationNodeId}
+              careers={database.careers}
+              onActivityChange={setConfigurationCameraActivity}
+            />
+          ) : configurationMode || hasLoadedDialogue ? (
             <>
               <ShotInspector
-                shot={inspectorShot}
+                shot={activeShot}
                 sequence={
                   configurationMode ? configurationSequence : sequence
                 }
@@ -5683,7 +5816,7 @@ export default function App() {
                 directorBlocking={directorBlocking}
                 appliedDirector={appliedDirector}
                 activeIndex={activeIndex}
-                shotCount={Math.max(1, shots.length)}
+                shotCount={shots.length}
                 tab={inspectorTab}
                 workspaceActive={activeWorkspace === "storyboard"}
                 canExport={
@@ -5706,7 +5839,9 @@ export default function App() {
                 configurationMode={configurationMode}
                 configurationDialogueNodeId={selectedUeDialogueNodeId}
                 configurationNodeConfiguration={
-                  selectedUeNodeConfiguration
+                  configurationMode
+                    ? selectedUeNodeConfiguration
+                    : activeNodeConfiguration
                 }
                 configurationSelectionMessage={
                   configurationSelectionMessage
@@ -5722,14 +5857,15 @@ export default function App() {
                 }
                 onMove={moveShot}
                 preference={
-                  shotPreferences.get(
-                    `${sequence.prefix}:${inspectorShot.id}`,
-                  ) ??
-                  null
+                  activeShot
+                    ? shotPreferences.get(
+                        `${sequence.prefix}:${activeShot.id}`,
+                      ) ?? null
+                    : null
                 }
                 preferenceBusy={
-                  preferenceBusyKey ===
-                  `${sequence.prefix}:${inspectorShot.id}`
+                  Boolean(activeShot) &&
+                  preferenceBusyKey === `${sequence.prefix}:${activeShot?.id}`
                 }
                 preferenceError={preferenceError}
                 onPreference={(feedbackType, reason) =>
@@ -5748,16 +5884,16 @@ export default function App() {
                 }
                 onExportSoundEffects={() =>
                   void openSoundEffectExport(
-                    configurationMode && selectedUeDialogueNodeId
-                      ? [selectedUeDialogueNodeId]
+                    (configurationMode || !activeShot) && activeDialogueId
+                      ? [activeDialogueId]
                       : undefined,
                   )
                 }
                 onExportNodeAudio={() =>
-                  void openCurrentNodeExport("audio")
+                  void openCurrentNodeExport("audio", activeDialogueId)
                 }
                 onExportNodeActions={() =>
-                  void openCurrentNodeExport("actions")
+                  void openCurrentNodeExport("actions", activeDialogueId)
                 }
                 onChangeSoundEffect={updateSoundEffectRecommendation}
                 onApplySoundEffect={applySoundEffectFromLibrary}

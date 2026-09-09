@@ -194,6 +194,20 @@ export async function routeUeRequest(
       });
       return true;
     }
+    if (url.pathname === "/api/ue/dialogue/preview-school/inspect") {
+      sendJson(response, 200, {
+        ok: true,
+        data: await services.inspectDialoguePreviewSchool(body),
+      });
+      return true;
+    }
+    if (url.pathname === "/api/ue/dialogue/preview-school/apply") {
+      sendJson(response, 200, {
+        ok: true,
+        data: await services.applyDialoguePreviewSchool(body),
+      });
+      return true;
+    }
     if (url.pathname === "/api/ue/dialogue/storyboard/read") {
       sendJson(response, 200, {
         ok: true,

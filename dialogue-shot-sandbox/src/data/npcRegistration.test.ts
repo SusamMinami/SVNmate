@@ -65,6 +65,7 @@ function database(): DialogueDatabase {
         },
       ],
     ]),
+  careers: [],
     missionRows: [],
     missionPositions: [
       {

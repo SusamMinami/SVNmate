@@ -51,6 +51,48 @@ function assetName(assetPath: string): string {
   return assetPath.split("/").at(-1)?.split(".")[0] ?? assetPath;
 }
 
+function schoolCameraConfirmationPreview(
+  request: DialogueCameraQuickActionRequest,
+  configuration: ExistingDialogueNodeConfiguration,
+): DialogueCameraQuickActionPreview {
+  const existingKeys = Array.from(new Set(configuration.schoolCameraKeys));
+  const missingKeys = SCHOOL_CAMERA_ROLES
+    .map(({ key }) => key)
+    .filter((key) => !existingKeys.includes(key));
+  return {
+    reviewToken: "",
+    dialogueId: request.dialogueId,
+    startId: request.startId,
+    dialogueNodeId: request.dialogueNodeId,
+    dialogueAssetPath: "",
+    mode: "school_cameras",
+    sourceDialogueNodeId: null,
+    existingCameraPosition: configuration.cameraPosition,
+    desiredCameraPosition: configuration.cameraPosition,
+    existingMoveCount: configuration.moveCameraCount,
+    desiredMoveCount: configuration.moveCameraCount,
+    cameraMoveType: configuration.cameraMoveTypes[0] ?? "",
+    velocity: null,
+    blendOutTime: null,
+    fov: configuration.fov,
+    existingBlendCameraType: configuration.blendCameraType,
+    desiredBlendCameraType: configuration.blendCameraType,
+    existingBlendCurve: configuration.blendCurve,
+    desiredBlendCurve: configuration.blendCurve,
+    blendDuration: configuration.blendDuration,
+    existingSchoolCameraKeys: existingKeys,
+    addedSchoolCameraKeys: missingKeys,
+    desiredSchoolCameraKeys: [...existingKeys, ...missingKeys],
+    existingSchoolCameraCount: existingKeys.length,
+    desiredSchoolCameraCount: existingKeys.length + missingKeys.length,
+    changed: missingKeys.length > 0,
+    blockedReasons:
+      configuration.moveCameraCount > 0
+        ? []
+        : ["当前节点没有主 MoveCameras，请先添加或沿用一个镜头"],
+  };
+}
+
 export function NodeCameraQuickActions({
   dialogueId,
   startId,
@@ -153,9 +195,16 @@ export function NodeCameraQuickActions({
         : {}),
       mode,
     };
-    setBusy("inspect");
     setError("");
     setStatus("");
+    if (mode === "school_cameras" && existingConfiguration) {
+      setRequest(nextRequest);
+      setPreview(
+        schoolCameraConfirmationPreview(nextRequest, existingConfiguration),
+      );
+      return;
+    }
+    setBusy("inspect");
     try {
       setRequest(nextRequest);
       const nextPreview =
@@ -192,7 +241,7 @@ export function NodeCameraQuickActions({
     try {
       const result = await applyDialogueCameraQuickAction(
         request,
-        preview.reviewToken,
+        preview.reviewToken || undefined,
       );
       if (operationRun !== operationRunRef.current) {
         return;
@@ -309,8 +358,14 @@ export function NodeCameraQuickActions({
             allSchoolCamerasConfigured ? "is-configured" : undefined
           }
           type="button"
-          disabled={busy !== null}
-          title="保留已有角色相机，只用主 MoveCameras 补齐缺失项"
+          disabled={
+            busy !== null || configurationLoading || !existingConfiguration
+          }
+          title={
+            configurationLoading || !existingConfiguration
+              ? "等待读取当前节点镜头配置"
+              : "保留已有角色相机，只用主 MoveCameras 补齐缺失项"
+          }
           onClick={() => void inspect("school_cameras")}
         >
           <Users size={16} />
@@ -331,12 +386,7 @@ export function NodeCameraQuickActions({
               ))}
             </small>
           </span>
-          {busy === "inspect" &&
-          request?.mode === "school_cameras" ? (
-            <LoaderCircle className="spin" size={15} />
-          ) : (
-            <ChevronRight size={15} />
-          )}
+          <ChevronRight size={15} />
         </button>
       </div>
 

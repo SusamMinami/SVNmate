@@ -36,7 +36,7 @@ async function readPayload(request: DialogueCsvWorkerRequest): Promise<DialogueC
     sourceName: request.sourceName,
     dialogueText: "", startText: "", npcText: "", modelText: "",
     missionText: "", dungeonMissionText: "", missionPositionText: "",
-    mapConfigText: "", mapResourceText: "",
+    mapConfigText: "", mapResourceText: "", careerText: "",
   };
   await Promise.all(
     Object.entries(request.files).map(async ([key, file]) => {

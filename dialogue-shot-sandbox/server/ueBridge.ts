@@ -16,6 +16,9 @@ import type {
   DialogueCameraQuickActionPreview,
   DialogueCameraQuickActionRequest,
   DialogueCameraQuickActionResult,
+  DialoguePreviewSchoolPreview,
+  DialoguePreviewSchoolRequest,
+  DialoguePreviewSchoolResult,
   DialogueContentBatchUpdateRequest,
   DialogueContentBatchUpdateResult,
   DialogueContentUpdateRequest,
@@ -496,6 +499,18 @@ const DialogueCameraQuickActionRequestSchema = z.object({
 
 const DialogueCameraQuickActionApplyRequestSchema =
   DialogueCameraQuickActionRequestSchema.extend({
+    reviewToken: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  });
+
+const DialoguePreviewSchoolRequestSchema = z.object({
+  dialogueId: z.string().regex(/^\d{4}$/),
+  startId: z.string().regex(/^\d{6}$/),
+  dialogueNodeId: z.string().regex(/^\d{6}$/),
+  previewSchoolId: z.number().int().positive(),
+});
+
+const DialoguePreviewSchoolApplyRequestSchema =
+  DialoguePreviewSchoolRequestSchema.extend({
     reviewToken: z.string().regex(/^[a-f0-9]{64}$/),
   });
 
@@ -1423,6 +1438,13 @@ interface PreparedDialogueCameraQuickAction {
   desiredBlendCameraData: Record<string, unknown>;
   originalSchoolMoveCamerasMap: Record<string, unknown>;
   desiredSchoolMoveCamerasMap: Record<string, unknown>;
+}
+
+interface PreparedDialoguePreviewSchool {
+  preview: DialoguePreviewSchoolPreview;
+  dialogueAsset: string;
+  nodeDataPath: string;
+  originalPreviewSchoolId: number;
 }
 
 interface FormationExportLayout {
@@ -4092,7 +4114,10 @@ export async function applyDialogueCameraQuickAction(
       connection,
       request,
     );
-    if (prepared.preview.reviewToken !== reviewToken) {
+    if (!reviewToken && request.mode !== "school_cameras") {
+      throw new Error("镜头快捷操作缺少审核令牌，请重新检查后再写入");
+    }
+    if (reviewToken && prepared.preview.reviewToken !== reviewToken) {
       throw new Error("UE 中的节点相机数据已变化，请重新检查后再写入");
     }
     if (prepared.preview.blockedReasons.length > 0) {
@@ -4274,6 +4299,219 @@ export async function applyDialogueCameraQuickAction(
       dialogueNodeId: request.dialogueNodeId,
       dialogueAssetPath: prepared.preview.dialogueAssetPath,
       mode: request.mode,
+      saved: true,
+    };
+  } finally {
+    connection.close();
+  }
+}
+
+async function prepareDialoguePreviewSchool(
+  connection: UnrealInvoker,
+  request: DialoguePreviewSchoolRequest,
+): Promise<PreparedDialoguePreviewSchool> {
+  if (
+    !request.startId.startsWith(request.dialogueId) ||
+    request.dialogueNodeId !== request.startId ||
+    !request.dialogueNodeId.endsWith("00")
+  ) {
+    throw new Error("预览角色只能写入当前对话文件的 00 配置节点");
+  }
+  const dialogueAssets = await findDialogueAssetPath(
+    connection,
+    request.startId,
+  );
+  if (dialogueAssets.length === 0) {
+    throw new Error(`未找到对话资产 ${request.startId}`);
+  }
+  if (dialogueAssets.length > 1) {
+    throw new Error(
+      `找到多个名为 ${request.startId} 的对话资产，无法自动确认`,
+    );
+  }
+  const dialogueAssetPath = dialogueAssets[0];
+  const dialogueAsset = await connection.invoke(
+    "asset.get_asset_by_path",
+    { AssetPath: dialogueAssetPath },
+  );
+  if (!hasUnrealObjectReference(dialogueAsset)) {
+    throw new Error(`无法加载对话资产：${dialogueAssetPath}`);
+  }
+  const exportedText = await exportAssetText(
+    connection,
+    dialogueAssetPath,
+  );
+  const [node] = await readDialogueNodes(
+    connection,
+    dialogueAssetPath,
+    [request.dialogueNodeId],
+    exportedText,
+  );
+  const existingPreviewSchoolId = Number(
+    await readProperty(
+      connection,
+      node.nodeDataPath,
+      "PreviewSchoolID",
+    ),
+  );
+  if (
+    !Number.isSafeInteger(existingPreviewSchoolId) ||
+    existingPreviewSchoolId < 0
+  ) {
+    throw new Error(
+      `节点 ${request.dialogueNodeId} 的 PreviewSchoolID 回读无效`,
+    );
+  }
+  const changed = existingPreviewSchoolId !== request.previewSchoolId;
+  const reviewToken = createHash("sha256")
+    .update(
+      JSON.stringify({
+        dialogueAssetPath,
+        request,
+        existingPreviewSchoolId,
+      }),
+    )
+    .digest("hex");
+  return {
+    preview: {
+      ...request,
+      reviewToken,
+      dialogueAssetPath,
+      existingPreviewSchoolId,
+      changed,
+      blockedReasons: [],
+    },
+    dialogueAsset: String(dialogueAsset),
+    nodeDataPath: node.nodeDataPath,
+    originalPreviewSchoolId: existingPreviewSchoolId,
+  };
+}
+
+export async function inspectDialoguePreviewSchool(
+  rawRequest: unknown,
+  connectionFactory: () => UnrealInvoker = () => new UnrealMcpConnection(),
+): Promise<DialoguePreviewSchoolPreview> {
+  const request = DialoguePreviewSchoolRequestSchema.parse(
+    rawRequest,
+  ) as DialoguePreviewSchoolRequest;
+  const connection = connectionFactory();
+  await connectUnreal(connection);
+  try {
+    return (
+      await prepareDialoguePreviewSchool(connection, request)
+    ).preview;
+  } finally {
+    connection.close();
+  }
+}
+
+export async function applyDialoguePreviewSchool(
+  rawRequest: unknown,
+  connectionFactory: () => UnrealInvoker = () => new UnrealMcpConnection(),
+): Promise<DialoguePreviewSchoolResult> {
+  const parsed = DialoguePreviewSchoolApplyRequestSchema.parse(rawRequest);
+  const { reviewToken, ...requestValue } = parsed;
+  const request = requestValue as DialoguePreviewSchoolRequest;
+  const connection = connectionFactory();
+  await connectUnreal(connection);
+  try {
+    const { nodes: selectedNodes } =
+      await readSelectedDialogueNodesFromConnection(connection);
+    if (
+      selectedNodes.length !== 1 ||
+      selectedNodes[0].dialogueNodeId !== request.dialogueNodeId
+    ) {
+      throw new Error(
+        "UE 当前选中节点已变化，请重新选择 00 配置节点并再次检查",
+      );
+    }
+    const prepared = await prepareDialoguePreviewSchool(
+      connection,
+      request,
+    );
+    if (prepared.preview.reviewToken !== reviewToken) {
+      throw new Error(
+        "UE 中的 PreviewSchoolID 已变化，请重新检查后再写入",
+      );
+    }
+    if (!prepared.preview.changed) {
+      return {
+        ...request,
+        status: "unchanged",
+        dialogueAssetPath: prepared.preview.dialogueAssetPath,
+        saved: false,
+      };
+    }
+    let wrotePreviewSchoolId = false;
+    try {
+      await connection.invoke("reflect.write_object_property", {
+        ThisPtr: prepared.nodeDataPath,
+        PropertyName: "PreviewSchoolID",
+        Value: request.previewSchoolId,
+      });
+      wrotePreviewSchoolId = true;
+      const writtenPreviewSchoolId = Number(
+        await readProperty(
+          connection,
+          prepared.nodeDataPath,
+          "PreviewSchoolID",
+        ),
+      );
+      if (writtenPreviewSchoolId !== request.previewSchoolId) {
+        throw new Error(
+          `节点 ${request.dialogueNodeId} 的 PreviewSchoolID 回读不一致`,
+        );
+      }
+      const saveResult = await connection.invoke("asset.save_asset", {
+        Asset:
+          prepared.dialogueAsset ||
+          prepared.preview.dialogueAssetPath,
+      });
+      if (saveResult === false) {
+        throw new Error(
+          `对话资产保存失败：${prepared.preview.dialogueAssetPath}`,
+        );
+      }
+    } catch (error) {
+      let recoveryError: unknown;
+      if (wrotePreviewSchoolId) {
+        try {
+          await connection.invoke("reflect.write_object_property", {
+            ThisPtr: prepared.nodeDataPath,
+            PropertyName: "PreviewSchoolID",
+            Value: prepared.originalPreviewSchoolId,
+          });
+          const restoredPreviewSchoolId = Number(
+            await readProperty(
+              connection,
+              prepared.nodeDataPath,
+              "PreviewSchoolID",
+            ),
+          );
+          if (
+            restoredPreviewSchoolId !==
+            prepared.originalPreviewSchoolId
+          ) {
+            throw new Error("恢复回读不一致");
+          }
+        } catch (restoreError) {
+          recoveryError = restoreError;
+        }
+      }
+      throw new Error(
+        `${error instanceof Error ? error.message : "预览角色写入失败"}${
+          recoveryError
+            ? `；恢复失败，请立即在 UE 中检查：${String(recoveryError)}`
+            : wrotePreviewSchoolId
+              ? "；已恢复本轮未保存修改"
+              : ""
+        }`,
+      );
+    }
+    return {
+      ...request,
+      status: "updated",
+      dialogueAssetPath: prepared.preview.dialogueAssetPath,
       saved: true,
     };
   } finally {

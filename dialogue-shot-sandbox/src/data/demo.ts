@@ -37,9 +37,22 @@ const npcs = `##&NPC.id,NPC.name,NPC.npcintroduce
 2103,弥莎,擅长识破诱导战术，对异常保持警惕
 2104,赫克,沉稳的护卫，习惯承担防守位置`;
 
+const careers = `##&CareerInfor.id,CareerInfor.name,CareerInfor.bp
+##职业id,职业名,角色蓝图
+100,剑士,Eric/BP_Eric
+401,镰卫,Ring_Scythe/BP_Ring_Scythe
+500,圣职者,Jodie/BP_Jodie`;
+
 export const demoDatabase = parseDialogueDatabase(
   dialogues,
   starts,
   npcs,
   "内置演示数据",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  careers,
 );

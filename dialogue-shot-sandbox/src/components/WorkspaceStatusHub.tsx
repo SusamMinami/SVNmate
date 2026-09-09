@@ -14,7 +14,7 @@ import type { LarkStatus } from "../lark/client";
 import type { TraeCollaborationStatus } from "../trae/client";
 
 export interface ConfigurationDataStatus {
-  state: "syncing" | "listening" | "offline" | "ignored";
+  state: "syncing" | "listening" | "configuration" | "offline";
   label: string;
   activity: "idle" | "read" | "write";
 }
@@ -142,8 +142,8 @@ export function WorkspaceStatusHub({
         ? "读取中"
         : configurationDataStatus?.state === "offline"
           ? "连接中断"
-          : configurationDataStatus?.state === "ignored"
-            ? "配置节点已忽略"
+          : configurationDataStatus?.state === "configuration"
+            ? "配置节点已识别"
             : "等待下一次同步";
   const configurationStatusLabel = configurationDataStatus
     ? `UE 数据链路 · ${configurationDataStatus.label} · ${configurationActivityLabel}`

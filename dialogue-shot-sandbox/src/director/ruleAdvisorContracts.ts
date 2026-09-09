@@ -11,6 +11,28 @@ import {
 
 export const RuleBeatRequestSchema = z.object({
   input: DirectorInputSchema.omit({ sound_effect_catalog: true }),
+  music_catalog: z
+    .array(
+      z.object({
+        state_id: z.number().int().positive(),
+        state_name: z.string().min(1).max(128),
+        music_name: z.string().min(1).max(256),
+        tags: z.array(z.string().min(1).max(80)).max(16),
+        notes: z.string().max(500),
+        audio_summary: z.string().max(240).nullable(),
+      }),
+    )
+    .max(256)
+    .default([]),
+  existing_music: z
+    .array(
+      z.object({
+        dialogue_id: z.string().min(1),
+        state_id: z.number().int().positive(),
+      }),
+    )
+    .max(500)
+    .default([]),
 });
 
 export const RuleBeatAdviceSchema = z.object({
@@ -42,6 +64,16 @@ export const RuleBeatAdviceSchema = z.object({
       }),
     )
     .max(16)
+    .default([]),
+  music_cues: z
+    .array(
+      z.object({
+        dialogue_id: z.string().min(1),
+        state_id: z.number().int().positive(),
+        reason: z.string().min(2).max(240),
+      }),
+    )
+    .max(8)
     .default([]),
 });
 

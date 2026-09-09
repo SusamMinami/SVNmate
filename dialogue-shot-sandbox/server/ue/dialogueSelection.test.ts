@@ -424,6 +424,27 @@ describe("UE dialogue graph selection", () => {
     reader.dispose();
   });
 
+  it("recognizes an authoritative six-digit 00 configuration node", async () => {
+    const connection = invoker([]);
+    connection.invoke.mockResolvedValue({
+      bSuccess: true,
+      Result:
+        "'[\"/Game/Seria/Task/dialoggraph/Test/735200.735200\", \"735200\"]'",
+    });
+    const reader = new PersistentDialogueSelectionReader(
+      () => connection,
+      60_000,
+    );
+
+    await expect(reader.read()).resolves.toMatchObject({
+      status: "configuration",
+      dialogueNodeId: "735200",
+      selectedNodeCount: 1,
+      message: "已识别 UE 配置节点 735200",
+    });
+    reader.dispose();
+  });
+
   it("limits legacy reflected reads to the compatibility cadence", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
@@ -481,7 +502,7 @@ describe("UE dialogue graph selection", () => {
     }
   });
 
-  it("ignores a 00 configuration node without replacing the last dialogue node", async () => {
+  it("surfaces a 00 configuration node as its own selectable state", async () => {
     const connection = invoker([]);
     let dialogueNodeId = 734219;
     connection.invoke.mockImplementation(async (action, args) => {
@@ -523,9 +544,10 @@ describe("UE dialogue graph selection", () => {
     });
     dialogueNodeId = 734200;
     await expect(reader.read()).resolves.toMatchObject({
-      status: "selected",
-      dialogueNodeId: "734219",
-      message: "UE 当前为 00 配置节点，已暂停小窗同步",
+      status: "configuration",
+      dialogueNodeId: "734200",
+      selectedNodeCount: 1,
+      message: "已识别 UE 配置节点 734200",
     });
 
     expect(

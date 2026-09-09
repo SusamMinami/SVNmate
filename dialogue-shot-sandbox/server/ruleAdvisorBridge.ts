@@ -262,6 +262,9 @@ export function buildRuleBeatPrompt(
     "通常输出 2-6 个节拍。focus_slot 仅在需要强调明确角色时填写。",
     "同时审阅当前对白是否存在明确的表达问题。只标注明显影响理解、上下文连续、角色口吻、信息重复、叙事节奏或因果逻辑的问题；不要把个人文风偏好当成问题。",
     "dialogue_issues 只能引用当前 dialogue 中的 id。severity=warning 表示会明显损害理解或人物逻辑，severity=note 表示值得人工复核。reason 说明问题，suggestion 只给修改方向，不直接替换或改写原台词。没有可靠问题时返回空数组。",
+    "同时判断对白是否确实需要新增或切换配乐。music_cues 只能引用 music_catalog 中的 state_id 和当前 dialogue 的 id，每个节点最多一项。",
+    "existing_music 是 UE 当前已配置的节点配乐。现有配乐适合时不要重复推荐；只有现有配乐明显不符合剧情，或未配置且明确需要音乐来支撑开场或情绪转折时，才输出替换或新增建议。",
+    "不要为普通寒暄、信息核对或缺乏明确情绪依据的段落强行配乐。没有可靠建议、音乐目录为空或目录内没有合适音乐时，music_cues 必须返回空数组。",
     "只输出 rule-beat.v1 JSON。",
     `request_id 字段填写：${input.request_id}`,
     "场景：",
@@ -281,6 +284,8 @@ export function buildRuleBeatPrompt(
         content: line.content,
       })),
       adjacent_context: input.adjacent_context,
+      music_catalog: request.music_catalog,
+      existing_music: request.existing_music,
     }),
     "已确认用户偏好（只影响节拍与覆盖倾向，不能覆盖硬规则）：",
     JSON.stringify(preferences),
@@ -534,7 +539,7 @@ async function analyzeRuleBeats(request: RuleBeatRequest) {
     buildRuleBeatPrompt(request, preferences),
     RuleBeatAdviceSchema,
     undefined,
-    1_024,
+    1_536,
   );
   const dialogueIds = request.input.dialogue.map((line) => line.dialogue_id);
   const indexById = new Map(dialogueIds.map((id, index) => [id, index]));
@@ -572,10 +577,34 @@ async function analyzeRuleBeats(request: RuleBeatRequest) {
     seenDialogueIssues.add(key);
     return true;
   });
+  const musicStateIds = new Set(
+    request.music_catalog.map((item) => item.state_id),
+  );
+  const existingMusicByDialogueId = new Map(
+    request.existing_music.map((item) => [
+      item.dialogue_id,
+      item.state_id,
+    ]),
+  );
+  const seenMusicDialogueIds = new Set<string>();
+  const musicCues = advice.music_cues.filter((cue) => {
+    if (!indexById.has(cue.dialogue_id)) {
+      throw new Error("端侧顾问返回的配乐节点不在当前对白中");
+    }
+    if (!musicStateIds.has(cue.state_id)) {
+      throw new Error("端侧顾问返回了音乐目录外的状态");
+    }
+    if (seenMusicDialogueIds.has(cue.dialogue_id)) {
+      return false;
+    }
+    seenMusicDialogueIds.add(cue.dialogue_id);
+    return existingMusicByDialogueId.get(cue.dialogue_id) !== cue.state_id;
+  });
   return {
     ...advice,
     request_id: request.input.request_id,
     dialogue_issues: dialogueIssues,
+    music_cues: musicCues,
   };
 }
 

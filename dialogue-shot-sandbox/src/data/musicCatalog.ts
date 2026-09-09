@@ -53,6 +53,19 @@ export interface MusicRecommendation {
   fileName: string | null;
   recordId: string;
   audioSummary: string | null;
+  source?: "rule-advisor" | "manual" | "heuristic";
+  replacesStateId?: number | null;
+}
+
+export interface MusicCueSelection {
+  dialogueId: string;
+  stateId: number;
+  reason: string;
+}
+
+export interface ExistingMusicSelection {
+  dialogueId: string;
+  stateId: number;
 }
 
 type Mood =
@@ -361,6 +374,44 @@ export function recommendMusic(
     }
   }
   return recommendations;
+}
+
+export function musicRecommendationsFromCues(
+  cues: readonly MusicCueSelection[],
+  catalog: readonly MusicCatalogEntry[],
+  existingMusic: readonly ExistingMusicSelection[] = [],
+): MusicRecommendation[] {
+  const catalogByStateId = new Map(
+    catalog.map((entry) => [entry.stateId, entry]),
+  );
+  const existingByDialogueId = new Map(
+    existingMusic.map((item) => [item.dialogueId, item.stateId]),
+  );
+  const seenDialogueIds = new Set<string>();
+  return cues.flatMap((cue) => {
+    if (seenDialogueIds.has(cue.dialogueId)) {
+      return [];
+    }
+    seenDialogueIds.add(cue.dialogueId);
+    const entry = catalogByStateId.get(cue.stateId);
+    const existingStateId = existingByDialogueId.get(cue.dialogueId) ?? null;
+    if (!entry || existingStateId === cue.stateId) {
+      return [];
+    }
+    return [{
+      dialogueId: cue.dialogueId,
+      stateId: entry.stateId,
+      stateName: entry.stateName,
+      musicName: entry.name,
+      reason: cue.reason,
+      fileToken: entry.fileToken,
+      fileName: entry.fileName,
+      recordId: entry.recordId,
+      audioSummary: entry.analysis?.summary ?? null,
+      source: "rule-advisor" as const,
+      replacesStateId: existingStateId,
+    }];
+  });
 }
 
 export function activeMusicRecommendationForDialogueIds(

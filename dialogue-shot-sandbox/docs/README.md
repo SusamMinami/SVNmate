@@ -1,6 +1,6 @@
 # 镜头沙盘文档索引
 
-最近核对：2026-09-09，对应应用版本 `0.24.3`。
+最近核对：2026-09-09，对应应用版本 `0.24.4`。
 
 ## 现行入口
 
@@ -13,15 +13,15 @@
 
 ## 现行专题规范
 
-- `ue-formation-integration.md`：只读对话加载、Formation BP 站位、已有镜头、
-  身份模型、动作与通信。
-- `dialogue-camera-export-design.md`：已有镜头回读，以及镜头、动作、音效和音乐
-  的 UE 导出。
+- `ue-formation-integration.md`：只读对话加载、Formation BP 站位、无分镜节点
+  编辑、已有镜头、身份模型、动作与通信。
+- `dialogue-camera-export-design.md`：已有镜头与节点配置回读，以及镜头、动作、
+  音效、音乐和 `00` 节点预览角色的 UE 写入。
 - `mission-target-preview.md`：任务目标物、BP 创建/注册、站位同步和背景资产。
 - `npc-registration.md`：UE Actor 到模型/NPC/目标物 Excel 草稿。
 - `npc-migration.md`：全新 NPC、动作增补和面部补充。
 - `sound-effect-preview.md`：远端附件优先、本地 Wwise 回退的试听链路。
-- `music-analysis.md`：音乐特征分析、缓存和 Base 发布。
+- `music-analysis.md`：音乐特征分析、缓存、Base 发布与端侧顾问配乐约束。
 - `shot-language-rulebook.md`：规则导演与 AI 共用的镜头语言规则。
 - `scene-composition-integration.md`：场景定位、附近几何、RGB/深度参考及独立空镜
   的后续实施方案，明确已实现基础和待实测边界。

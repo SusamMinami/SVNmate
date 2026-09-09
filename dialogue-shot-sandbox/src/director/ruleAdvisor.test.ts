@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { demoDatabase } from "../data/demo";
 import { findDialogueSequence } from "../data/dialogueRepository";
 import {
@@ -6,11 +6,18 @@ import {
   resolveBlocking,
 } from "./blockingResolver";
 import { createDirectorInput } from "./contracts";
-import { applyRuleCandidateRanking } from "./ruleAdvisor";
+import {
+  applyRuleCandidateRanking,
+  requestRuleBeatAdvice,
+} from "./ruleAdvisor";
 import type { RuleAdvisorResponse } from "./ruleAdvisorContracts";
 import { generateRuleCameraCandidates } from "./shotCandidateGenerator";
 import { createRuleAnalysis, createRuleDecisions } from "./ruleDirector";
 import { resolveRulePlanWithRetry } from "./shotPlanner";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 function fixture() {
   const sequence = findDialogueSequence(demoDatabase, "2048");
@@ -131,5 +138,103 @@ describe("rule advisor camera ranking", () => {
     ).toBe(true);
     expect(result.shots.every((shot) => shot.projection.valid)).toBe(true);
     expect(result.analysis.visualStrategy).toContain("逐张检查");
+  });
+});
+
+describe("requestRuleBeatAdvice", () => {
+  it("sends the music catalog and existing UE music to the local advisor", async () => {
+    const input = createDirectorInput(
+      findDialogueSequence(demoDatabase, "2048"),
+      "rule-music-test",
+    );
+    let requestBody: Record<string, unknown> | undefined;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+      requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          data: {
+            schema_version: "rule-beat.v1",
+            request_id: input.request_id,
+            summary: "建立关系后进入悬疑。",
+            beats: [
+              {
+                start_dialogue_id: input.dialogue[0].dialogue_id,
+                end_dialogue_id: input.dialogue.at(-1)!.dialogue_id,
+                narrative_function: "development",
+                intensity: 45,
+                coverage_strategy: "relationship_hold",
+                reason: "保持连续关系。",
+              },
+            ],
+            dialogue_issues: [],
+            music_cues: [
+              {
+                dialogue_id: input.dialogue[0].dialogue_id,
+                state_id: 15,
+                reason: "秘密逐渐暴露，建议使用悬疑配乐。",
+              },
+            ],
+          },
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+    });
+
+    const advice = await requestRuleBeatAdvice(input, {
+      musicCatalog: [
+        {
+          recordId: "music-15",
+          name: "危机四伏",
+          stateName: "Hidden_Crisis",
+          stateId: 15,
+          tags: ["悬疑"],
+          notes: "逐步积累压力",
+          fileToken: null,
+          fileName: null,
+        },
+      ],
+      existingConfigurations: [
+        {
+          dialogueId: input.dialogue[0].dialogue_id,
+          cameraPosition: "",
+          moveCameraCount: 0,
+          cameraMoveTypes: [],
+          fov: null,
+          blendCameraType: "",
+          blendCurve: "",
+          blendDuration: 0,
+          schoolCameraKeys: [],
+          schoolCameraCount: 0,
+          soundEffectAssetPath: "",
+          soundEffectAssetName: "",
+          soundEffectDelaySeconds: 0,
+          backgroundMusicStateId: 18,
+          backgroundMusicDelaySeconds: 0,
+        },
+      ],
+    });
+
+    expect(requestBody).toMatchObject({
+      music_catalog: [
+        {
+          state_id: 15,
+          state_name: "Hidden_Crisis",
+          music_name: "危机四伏",
+        },
+      ],
+      existing_music: [
+        {
+          dialogue_id: input.dialogue[0].dialogue_id,
+          state_id: 18,
+        },
+      ],
+    });
+    expect(advice?.music_cues).toEqual([
+      expect.objectContaining({ state_id: 15 }),
+    ]);
   });
 });

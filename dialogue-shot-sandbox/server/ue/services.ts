@@ -30,6 +30,7 @@ import {
 import { readSceneReference } from "./sceneReference";
 import {
   applyDialogueCameraQuickAction,
+  applyDialoguePreviewSchool,
   appendMissionTargetBlueprint,
   applyBackgroundPropImport,
   clearMissionTargetPreview,
@@ -37,6 +38,7 @@ import {
   inspectBackgroundPropImport,
   inspectDialogueStoryboardExport,
   inspectDialogueCameraQuickAction,
+  inspectDialoguePreviewSchool,
   inspectMissionTargetBlueprint,
   inspectMissionTargetBlueprintCompatibility,
   inspectMissionTargetMap,
@@ -61,6 +63,7 @@ export const ueServices = {
   readSelectedDialogueNode: readSelectedDialogueNodePersistent,
   readExistingDialogueStoryboard,
   applyDialogueCameraQuickAction,
+  applyDialoguePreviewSchool,
   appendMissionTargetBlueprint,
   applyDialogNpcTableRegistration,
   applyNpcAssetMigration,
@@ -72,6 +75,7 @@ export const ueServices = {
   inspectBackgroundPropImport,
   inspectDialogNpcTableRegistration,
   inspectDialogueCameraQuickAction,
+  inspectDialoguePreviewSchool,
   inspectDialogueStoryboardExport,
   inspectMissionTargetBlueprint,
   inspectMissionTargetBlueprintCompatibility,

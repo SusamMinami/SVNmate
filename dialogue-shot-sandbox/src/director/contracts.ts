@@ -618,6 +618,13 @@ export interface RuleBeatAdvice {
     reason: string;
   }>;
   dialogue_issues?: RuleDialogueIssue[];
+  music_cues?: RuleMusicCueAdvice[];
+}
+
+export interface RuleMusicCueAdvice {
+  dialogue_id: string;
+  state_id: number;
+  reason: string;
 }
 
 export interface RuleDialogueIssue {

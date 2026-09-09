@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { parseDialogueDatabase } from "./csv";
+import {
+  parseCareerPreviewOptions,
+  parseDialogueDatabase,
+} from "./csv";
 import { findDocCsvFile } from "./csvLoader";
 
 function fixtureFile(relativePath: string): File {
@@ -118,5 +121,30 @@ describe("dialogue CSV parsing", () => {
       name: "NPC 101970",
       hasConfiguredName: false,
     });
+  });
+});
+
+describe("career preview CSV parsing", () => {
+  it("reads PreviewSchoolID options from the career configuration table", () => {
+    const careers = parseCareerPreviewOptions([
+      "##&CareerInfor.id,CareerInfor.name,CareerInfor.bp",
+      "##职业id,职业名,角色蓝图",
+      "401,镰卫,Ring_Scythe/BP_Ring_Scythe",
+      "100,剑士,Eric/BP_Eric",
+      "0,无效职业,Invalid/BP_Invalid",
+    ].join("\n"));
+
+    expect(careers).toEqual([
+      {
+        id: 100,
+        name: "剑士",
+        blueprintPath: "Eric/BP_Eric",
+      },
+      {
+        id: 401,
+        name: "镰卫",
+        blueprintPath: "Ring_Scythe/BP_Ring_Scythe",
+      },
+    ]);
   });
 });

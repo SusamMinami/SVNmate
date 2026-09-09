@@ -1,8 +1,10 @@
 import type {
   DialogueSequence,
+  ExistingDialogueNodeConfiguration,
   ShotAdvisorCandidateReview,
   ShotPlan,
 } from "../types";
+import type { MusicCatalogEntry } from "../data/musicCatalog";
 import type {
   DirectorDecision,
   DirectorInput,
@@ -44,14 +46,51 @@ function compactAdvisorInput(input: DirectorInput) {
 
 export async function requestRuleBeatAdvice(
   input: DirectorInput,
-  signal?: AbortSignal,
+  options: {
+    musicCatalog?: readonly MusicCatalogEntry[];
+    existingConfigurations?: readonly ExistingDialogueNodeConfiguration[];
+    signal?: AbortSignal;
+  } = {},
 ): Promise<RuleBeatAdvice | null> {
   try {
     const response = await fetch("/api/rule-advisor/beats", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ input: compactAdvisorInput(input) }),
-      signal,
+      body: JSON.stringify({
+        input: compactAdvisorInput(input),
+        music_catalog: (options.musicCatalog ?? [])
+          .filter(
+            (entry) =>
+              Number.isInteger(entry.stateId) &&
+              entry.stateId > 0 &&
+              entry.stateName.trim() &&
+              entry.name.trim(),
+          )
+          .slice(0, 256)
+          .map((entry) => ({
+            state_id: entry.stateId,
+            state_name: entry.stateName.trim().slice(0, 128),
+            music_name: entry.name.trim().slice(0, 256),
+            tags: entry.tags
+              .map((tag) => tag.trim().slice(0, 80))
+              .filter(Boolean)
+              .slice(0, 16),
+            notes: entry.notes.trim().slice(0, 500),
+            audio_summary:
+              entry.analysis?.summary.trim().slice(0, 240) || null,
+          })),
+        existing_music: (options.existingConfigurations ?? [])
+          .flatMap((configuration) =>
+            configuration.backgroundMusicStateId === null
+              ? []
+              : [{
+                  dialogue_id: configuration.dialogueId,
+                  state_id: configuration.backgroundMusicStateId,
+                }],
+          )
+          .slice(0, 500),
+      }),
+      signal: options.signal,
     });
     if (!response.ok) return null;
     const envelope = (await response.json()) as AdvisorEnvelope;

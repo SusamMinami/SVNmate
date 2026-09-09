@@ -1,10 +1,16 @@
 import type {
   DialogueParticipant,
   DialogueSequence,
+  ExistingDialogueNodeConfiguration,
   ParticipantSlot,
   ShotPlan,
 } from "../types";
 import type { SoundEffectCatalogEntry } from "../data/soundEffectCatalog";
+import {
+  musicRecommendationsFromCues,
+  type MusicCatalogEntry,
+  type MusicRecommendation,
+} from "../data/musicCatalog";
 import { resolveBlocking } from "./blockingResolver";
 import {
   createDirectorInput,
@@ -55,6 +61,7 @@ export interface DirectorRunResult {
   fallbackReason: string | null;
   analysis?: DirectorSceneAnalysis;
   soundEffects: DirectorSoundEffectRecommendation[];
+  musicRecommendations: MusicRecommendation[];
   blocking: DirectorBlocking;
   participants: DialogueParticipant[];
   input: DirectorInput;
@@ -80,6 +87,8 @@ interface DirectorRunOptions {
   fallbackPreserveInputPositions?: boolean;
   collectRevisionCases?: boolean;
   soundEffectCatalog?: readonly SoundEffectCatalogEntry[];
+  musicCatalog?: readonly MusicCatalogEntry[];
+  existingNodeConfigurations?: readonly ExistingDialogueNodeConfiguration[];
   forceRegenerate?: boolean;
   signal?: AbortSignal;
   useRuleAdvisor?: boolean;
@@ -114,12 +123,16 @@ async function runProvider(
       total: 1,
       current_shot_index: null,
       current_candidate_label: null,
-      message: "端侧模型正在分析连续叙事节拍",
+      message: "端侧模型正在分析叙事节拍、台词与配乐",
     });
   }
   const beatAdvice =
     mode === "rule" && options.useRuleAdvisor !== false
-      ? await requestRuleBeatAdvice(input, options.signal)
+      ? await requestRuleBeatAdvice(input, {
+          musicCatalog: options.musicCatalog,
+          existingConfigurations: options.existingNodeConfigurations,
+          signal: options.signal,
+        })
       : null;
   if (beatAdvice) {
     options.onRuleBeatAdvice?.(beatAdvice);
@@ -274,6 +287,22 @@ async function runProvider(
     appliedMode: mode,
     analysis,
     soundEffects: providerResult.soundEffects,
+    musicRecommendations: musicRecommendationsFromCues(
+      (beatAdvice?.music_cues ?? []).map((cue) => ({
+        dialogueId: cue.dialogue_id,
+        stateId: cue.state_id,
+        reason: cue.reason,
+      })),
+      options.musicCatalog ?? [],
+      (options.existingNodeConfigurations ?? []).flatMap((configuration) =>
+        configuration.backgroundMusicStateId === null
+          ? []
+          : [{
+              dialogueId: configuration.dialogueId,
+              stateId: configuration.backgroundMusicStateId,
+            }],
+      ),
+    ),
     blocking: providerResult.blocking,
     participants,
     input,
@@ -319,6 +348,8 @@ export async function designShots(
           options.preserveInputPositions,
         lockPlayerPosition: options.lockPlayerPosition,
         soundEffectCatalog: options.soundEffectCatalog,
+        musicCatalog: options.musicCatalog,
+        existingNodeConfigurations: options.existingNodeConfigurations,
         useRuleAdvisor: false,
       })),
       requestedMode,
@@ -457,6 +488,7 @@ export function createSharedPlanPreview(
         input,
         plan.sound_effects,
       ),
+      musicRecommendations: [],
       blocking: plan.blocking,
       participants,
       input,

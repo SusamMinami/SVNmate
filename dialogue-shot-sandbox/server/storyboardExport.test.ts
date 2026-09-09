@@ -1424,6 +1424,35 @@ describe("dialogue camera quick actions", () => {
     });
   });
 
+  it("writes role cameras directly after confirmation without a review token", async () => {
+    const connection = new FakeStoryboardExportConnection();
+    connection.selectedDialogueNodeId = "735202";
+
+    await expect(
+      applyDialogueCameraQuickAction(
+        {
+          dialogueId: "7352",
+          startId: "735200",
+          dialogueNodeId: "735202",
+          mode: "school_cameras",
+        },
+        () => connection,
+      ),
+    ).resolves.toMatchObject({
+      status: "updated",
+      dialogueNodeId: "735202",
+      saved: true,
+    });
+    expect(connection.schoolCamerasByData.get("ActionData2")).toEqual({
+      Keys: ["ERing", "ENino", "EJodie"],
+      Values: [
+        { MoveCameras: [{ CameraMoveType: "EPush", FOV: 90 }] },
+        { MoveCameras: [{ CameraMoveType: "EPush", FOV: 90 }] },
+        { MoveCameras: [{ CameraMoveType: "EPush", FOV: 90 }] },
+      ],
+    });
+  });
+
   it("preserves configured role cameras and only fills missing roles", async () => {
     const connection = new FakeStoryboardExportConnection();
     connection.selectedDialogueNodeId = "735202";
@@ -1470,6 +1499,24 @@ describe("dialogue camera quick actions", () => {
         { MoveCameras: [{ CameraMoveType: "EPush", FOV: 90 }] },
       ],
     });
+  });
+
+  it("still requires a review token for non-role-camera shortcuts", async () => {
+    const connection = new FakeStoryboardExportConnection();
+    connection.selectedDialogueNodeId = "735201";
+
+    await expect(
+      applyDialogueCameraQuickAction(
+        {
+          dialogueId: "7352",
+          startId: "735200",
+          dialogueNodeId: "735201",
+          mode: "default",
+        },
+        () => connection,
+      ),
+    ).rejects.toThrow("缺少审核令牌");
+    expect(connection.commonWriteCount).toBe(0);
   });
 
   it("invalidates the write when UE selection changes after preview", async () => {
@@ -1538,6 +1585,10 @@ describe("dialogue camera quick actions", () => {
 describe("existing dialogue storyboard", () => {
   it("reads one node configuration without resolving Formation layout", async () => {
     const connection = new FakeStoryboardExportConnection();
+    const common = connection.commonByData.get("ActionData1")!;
+    common.find(
+      (property) => property.Alias === "BackgroundMusic",
+    )!.CurrentUint32 = 18;
 
     const result = await readExistingDialogueStoryboard(
       {
@@ -1553,7 +1604,11 @@ describe("existing dialogue storyboard", () => {
     expect(result.status).toBe("found");
     expect(result.nodes).toEqual([]);
     expect(result.configurations).toHaveLength(1);
-    expect(result.configurations[0].dialogueId).toBe("735201");
+    expect(result.configurations[0]).toMatchObject({
+      dialogueId: "735201",
+      backgroundMusicStateId: 18,
+      backgroundMusicDelaySeconds: 2.5,
+    });
     expect(
       connection.calls.some(
         (call) => call.action === "bp.get_blueprint_by_path",

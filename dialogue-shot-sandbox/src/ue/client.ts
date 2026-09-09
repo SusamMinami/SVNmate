@@ -6,6 +6,9 @@ import type {
   DialogueCameraQuickActionPreview,
   DialogueCameraQuickActionRequest,
   DialogueCameraQuickActionResult,
+  DialoguePreviewSchoolPreview,
+  DialoguePreviewSchoolRequest,
+  DialoguePreviewSchoolResult,
   DialogueContentBatchUpdateRequest,
   DialogueContentBatchUpdateResult,
   DialogueContentUpdateRequest,
@@ -443,10 +446,31 @@ export function inspectDialogueCameraQuickAction(
 
 export function applyDialogueCameraQuickAction(
   request: DialogueCameraQuickActionRequest,
-  reviewToken: string,
+  reviewToken?: string,
 ): Promise<DialogueCameraQuickActionResult> {
   return postUe(
     "/api/ue/dialogue/camera/apply",
+    { ...request, ...(reviewToken ? { reviewToken } : {}) },
+    false,
+  );
+}
+
+export function inspectDialoguePreviewSchool(
+  request: DialoguePreviewSchoolRequest,
+): Promise<DialoguePreviewSchoolPreview> {
+  return postUe(
+    "/api/ue/dialogue/preview-school/inspect",
+    request,
+    false,
+  );
+}
+
+export function applyDialoguePreviewSchool(
+  request: DialoguePreviewSchoolRequest,
+  reviewToken: string,
+): Promise<DialoguePreviewSchoolResult> {
+  return postUe(
+    "/api/ue/dialogue/preview-school/apply",
     { ...request, reviewToken },
     false,
   );

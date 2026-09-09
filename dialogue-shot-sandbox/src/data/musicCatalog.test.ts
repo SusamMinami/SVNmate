@@ -3,6 +3,7 @@ import { demoDatabase } from "./demo";
 import { findDialogueSequence } from "./dialogueRepository";
 import {
   activeMusicRecommendationForDialogueIds,
+  musicRecommendationsFromCues,
   recommendMusic,
   type MusicAudioAnalysis,
   type MusicCatalogEntry,
@@ -258,5 +259,44 @@ describe("recommendMusic", () => {
         ["204805"],
       )?.stateName,
     ).toBe("Sincere");
+  });
+});
+
+describe("musicRecommendationsFromCues", () => {
+  it("maps valid model cues and marks replacements", () => {
+    expect(
+      musicRecommendationsFromCues(
+        [
+          {
+            dialogueId: "204804",
+            stateId: 18,
+            reason: "关系缓和，建议切换到更真诚的配乐。",
+          },
+        ],
+        catalog,
+        [{ dialogueId: "204804", stateId: 13 }],
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        dialogueId: "204804",
+        stateId: 18,
+        source: "rule-advisor",
+        replacesStateId: 13,
+      }),
+    ]);
+  });
+
+  it("drops duplicate, unchanged and unknown model cues", () => {
+    expect(
+      musicRecommendationsFromCues(
+        [
+          { dialogueId: "204801", stateId: 13, reason: "保持当前。" },
+          { dialogueId: "204801", stateId: 18, reason: "重复节点。" },
+          { dialogueId: "204802", stateId: 999, reason: "目录外。" },
+        ],
+        catalog,
+        [{ dialogueId: "204801", stateId: 13 }],
+      ),
+    ).toEqual([]);
   });
 });

@@ -1,5 +1,6 @@
 import type { DialogueDatabase } from "../types";
 import {
+  CAREER_FILENAME,
   DIALOGUE_FILENAME,
   DUNGEON_MISSION_FILENAME,
   MAP_CONFIG_FILENAME,
@@ -95,6 +96,7 @@ export async function loadDocDirectory(
     missionPositionText,
     mapConfigText,
     mapResourceText,
+    careerText,
   ] = await Promise.all([
     readDirectoryFile(csvDirectory, DIALOGUE_FILENAME),
     readDirectoryFile(csvDirectory, START_FILENAME),
@@ -105,6 +107,7 @@ export async function loadDocDirectory(
     readOptionalDirectoryFile(csvDirectory, MISSION_POSITION_FILENAME),
     readOptionalDirectoryFile(csvDirectory, MAP_CONFIG_FILENAME),
     readOptionalDirectoryFile(csvDirectory, MAP_RESOURCE_FILENAME),
+    readOptionalDirectoryFile(csvDirectory, CAREER_FILENAME),
   ]);
   return parseDialogueDatabase({
     kind: "files",
@@ -112,6 +115,7 @@ export async function loadDocDirectory(
     files: {
       dialogueText, startText, npcText, modelText, missionText,
       dungeonMissionText, missionPositionText, mapConfigText, mapResourceText,
+      careerText,
     },
   });
 }
@@ -188,6 +192,7 @@ export async function loadDocFiles(
   );
   const mapConfig = fileByName(files, MAP_CONFIG_FILENAME, false);
   const mapResource = fileByName(files, MAP_RESOURCE_FILENAME, false);
+  const career = fileByName(files, CAREER_FILENAME, false);
   const rootName = dialogue.webkitRelativePath.split(/[\\/]/)[0] || "已选目录";
   return parseDialogueDatabase({
     kind: "files",
@@ -202,6 +207,7 @@ export async function loadDocFiles(
       missionPositionText: missionPosition ?? undefined,
       mapConfigText: mapConfig ?? undefined,
       mapResourceText: mapResource ?? undefined,
+      careerText: career ?? undefined,
     },
   });
 }

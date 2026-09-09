@@ -77,12 +77,29 @@ describe("rule advisor bridge", () => {
       "beat-prompt-test",
     );
     const { sound_effect_catalog: _catalog, ...advisorInput } = input;
-    const prompt = buildRuleBeatPrompt({ input: advisorInput });
+    const prompt = buildRuleBeatPrompt({
+      input: advisorInput,
+      music_catalog: [
+        {
+          state_id: 15,
+          state_name: "Hidden_Crisis",
+          music_name: "危机四伏",
+          tags: ["悬疑"],
+          notes: "逐步积累压力",
+          audio_summary: "慢速、低能量、音色偏暗",
+        },
+      ],
+      existing_music: [{ dialogue_id: "204801", state_id: 18 }],
+    });
 
     expect(prompt).toContain("不负责生成摄影机参数");
     expect(prompt).toContain("所有对白必须按原顺序恰好覆盖一次");
     expect(prompt).toContain("relationship_hold");
     expect(prompt).toContain("dialogue_issues");
     expect(prompt).toContain("不直接替换或改写原台词");
+    expect(prompt).toContain("music_cues");
+    expect(prompt).toContain("没有可靠建议");
+    expect(prompt).toContain("Hidden_Crisis");
+    expect(prompt).toContain('"state_id":18');
   });
 });

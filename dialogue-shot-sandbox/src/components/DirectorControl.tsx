@@ -14,6 +14,7 @@ import type { RuleAdvisorProgress } from "../director/ruleAdvisorContracts";
 
 interface DirectorControlProps {
   mode: DirectorMode;
+  selectedMode: DirectorMode | null;
   appliedMode: DirectorMode;
   designState: "idle" | "existing" | "designed";
   loading: boolean;
@@ -34,6 +35,7 @@ function modeLabel(mode: DirectorMode): string {
 
 export function DirectorControl({
   mode,
+  selectedMode,
   appliedMode,
   designState,
   loading,
@@ -73,8 +75,8 @@ export function DirectorControl({
       <div className="mode-segment" role="group" aria-label="导演模式">
         <button
           type="button"
-          className={mode === "rule" ? "is-active" : ""}
-          aria-pressed={mode === "rule"}
+          className={selectedMode === "rule" ? "is-active" : ""}
+          aria-pressed={selectedMode === "rule"}
           onClick={() => onModeChange("rule")}
           disabled={loading && mode === "rule"}
         >
@@ -83,8 +85,8 @@ export function DirectorControl({
         </button>
         <button
           type="button"
-          className={mode === "trae" ? "is-active" : ""}
-          aria-pressed={mode === "trae"}
+          className={selectedMode === "trae" ? "is-active" : ""}
+          aria-pressed={selectedMode === "trae"}
           title={
             mode === "trae" && !loading
               ? "再次提交并重新生成 TRAE 方案"
@@ -98,8 +100,8 @@ export function DirectorControl({
         </button>
         <button
           type="button"
-          className={mode === "mira" ? "is-active" : ""}
-          aria-pressed={mode === "mira"}
+          className={selectedMode === "mira" ? "is-active" : ""}
+          aria-pressed={selectedMode === "mira"}
           onClick={() => onModeChange("mira")}
           disabled={loading}
         >
@@ -107,7 +109,10 @@ export function DirectorControl({
           Mira AI
         </button>
       </div>
-      {(advisorMessage || (mode === "rule" && appliedMode === "rule")) && (
+      {(advisorBusy ||
+        (designState === "designed" &&
+          selectedMode === "rule" &&
+          (advisorMessage || appliedMode === "rule"))) && (
         <div
           className="rule-advisor-state"
           data-state={advisorState ?? "idle"}

@@ -358,6 +358,15 @@ function selectedDialogueNodeResult(
       message: "UE 当前选中项不是可识别的对话节点",
     };
   }
+  if (dialogueNodeId.endsWith("00")) {
+    return {
+      status: "configuration",
+      dialogueNodeId,
+      selectedNodeCount: 1,
+      nodes,
+      message: `已识别 UE 配置节点 ${dialogueNodeId}`,
+    };
+  }
   return {
     status: "selected",
     dialogueNodeId,
@@ -459,18 +468,9 @@ export class PersistentDialogueSelectionReader {
         if (preliminaryNode) {
           const {
             fingerprint,
-            localNodeId,
             authoritativeDialogueNodeId,
           } =
             seriaSelectionIdentity(rawSelection);
-          if (
-            authoritativeDialogueNodeId?.endsWith("00")
-          ) {
-            this.lastSelectionFingerprint = fingerprint;
-            const ignoredResult =
-              this.ignoredConfigurationNodeResult();
-            return ignoredResult;
-          }
           if (
             authoritativeDialogueNodeId &&
             fingerprint === this.lastSelectionFingerprint &&
@@ -505,10 +505,6 @@ export class PersistentDialogueSelectionReader {
           if (!reflectedDialogueId) {
             return this.lastSelectionResult ??
               selectedDialogueNodeResult([], true);
-          }
-          if (reflectedDialogueId.endsWith("00")) {
-            this.lastSelectionFingerprint = fingerprint;
-            return this.ignoredConfigurationNodeResult();
           }
           result = selectedDialogueNodeResult(
             [{
@@ -573,21 +569,6 @@ export class PersistentDialogueSelectionReader {
     this.lastLegacyDeepReadAt = 0;
   }
 
-  private ignoredConfigurationNodeResult(): SelectedDialogueNodeResult {
-    if (this.lastSelectionResult) {
-      return {
-        ...this.lastSelectionResult,
-        message: "UE 当前为 00 配置节点，已暂停小窗同步",
-      };
-    }
-    return {
-      status: "empty",
-      dialogueNodeId: null,
-      selectedNodeCount: 0,
-      nodes: [],
-      message: "UE 当前为 00 配置节点，已暂停小窗同步",
-    };
-  }
 }
 
 const persistentDialogueSelectionReader =

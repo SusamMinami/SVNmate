@@ -285,8 +285,8 @@ textarea:focus-visible {
   background: var(--danger);
 }
 
-.workspace-status-icon[data-state="ignored"]::after {
-  background: var(--text-muted);
+.workspace-status-icon[data-state="configuration"]::after {
+  background: var(--signal);
 }
 
 .configuration-mode-toggle::after,
@@ -343,19 +343,19 @@ textarea:focus-visible {
 
 .workspace-status-icon--data[data-state="listening"]
   .workspace-status-light--link {
-  animation: data-link-heartbeat 1.45s steps(1, end) infinite;
+  animation: data-link-heartbeat 1.9s steps(1, end) infinite alternate;
 }
 
-.workspace-status-icon--data[data-state="ignored"]
+.workspace-status-icon--data[data-state="configuration"]
   .workspace-status-light--link {
-  background: var(--text-muted);
-  animation: data-link-idle 2.2s steps(1, end) infinite;
+  background: var(--state);
+  animation: none;
 }
 
 .workspace-status-icon--data[data-state="offline"]
   .workspace-status-light--write {
   background: color-mix(in srgb, var(--danger) 62%, var(--ink));
-  animation: data-link-offline 1.1s steps(1, end) infinite;
+  animation: data-link-offline 1.8s steps(1, end) infinite;
 }
 
 .workspace-status-icon--data[data-activity="read"]
@@ -407,14 +407,21 @@ textarea:focus-visible {
 
 @keyframes data-link-heartbeat {
   0%,
-  12%,
-  24% {
-    opacity: 0.68;
-  }
-  6%,
-  18%,
+  9%,
+  17%,
+  55%,
+  72%,
+  92%,
   100% {
     opacity: 0.08;
+  }
+
+  4%,
+  13%,
+  44%,
+  60%,
+  86% {
+    opacity: 0.72;
   }
 }
 
@@ -2453,11 +2460,35 @@ textarea:focus-visible {
   display: grid;
   grid-template-columns: 28px minmax(0, 1fr) auto;
   align-items: start;
+  width: 100%;
   max-width: 780px;
   gap: 11px;
   padding: 11px 0;
   margin: 0 auto;
+  color: inherit;
+  background: transparent;
+  border: 0;
   border-bottom: 1px solid #cbd1d6;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color 160ms ease-out,
+    box-shadow 160ms ease-out;
+}
+
+.dialogue-preview__row:hover {
+  background: var(--surface-muted);
+}
+
+.dialogue-preview__row.is-active {
+  background: var(--surface);
+  box-shadow: inset 1px 0 var(--signal);
+}
+
+.dialogue-preview__row:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: -2px;
 }
 
 .dialogue-preview__row > div {
@@ -3224,6 +3255,12 @@ textarea:focus-visible {
   margin-bottom: 12px;
 }
 
+.ue-existing-audio .section-label > small {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .ue-existing-audio dl,
 .node-camera-existing dl {
   margin: 0 0 10px;
@@ -3260,6 +3297,23 @@ textarea:focus-visible {
   color: var(--text-muted);
   background: var(--paper);
   border-right: 1px solid var(--border);
+}
+
+.ue-existing-audio dd {
+  display: grid;
+  align-content: center;
+  gap: 1px;
+}
+
+.ue-existing-audio dd strong,
+.ue-existing-audio dd span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ue-existing-audio dd span {
+  color: var(--text-muted);
+  font-size: 8px;
 }
 
 .sound-effect-list > div {
@@ -10337,6 +10391,33 @@ textarea:focus-visible {
   line-height: 17px;
 }
 
+.inspector-empty-state {
+  display: grid;
+  min-height: 180px;
+  padding: 24px 18px;
+  color: var(--text-muted);
+  text-align: center;
+  place-content: center;
+  justify-items: center;
+}
+
+.inspector-empty-state svg {
+  margin-bottom: 9px;
+}
+
+.inspector-empty-state strong {
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.inspector-empty-state p {
+  max-width: 30ch;
+  margin: 5px 0 0;
+  overflow-wrap: anywhere;
+  font-size: 10px;
+  line-height: 16px;
+}
+
 .node-camera-command-list {
   display: grid;
   border: 1px solid var(--border);
@@ -10372,6 +10453,66 @@ textarea:focus-visible {
   background: transparent;
   font-family: "Cascadia Code", Consolas, monospace;
   font-size: 10px;
+}
+
+.preview-school-editor {
+  background: var(--paper);
+}
+
+.preview-school-field {
+  display: grid;
+  grid-template-columns: 74px minmax(0, 1fr);
+  align-items: center;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.preview-school-field > span {
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  color: var(--text-muted);
+  background: var(--paper);
+  border-right: 1px solid var(--border);
+  font-size: 9px;
+}
+
+.preview-school-field select {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  padding: 0 8px;
+  border: 0;
+  background: var(--surface);
+  font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
+  font-size: 11px;
+}
+
+.preview-school-field > small {
+  grid-column: 1 / -1;
+  min-width: 0;
+  padding: 6px 8px;
+  overflow: hidden;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview-school-field + .node-camera-command-list {
+  margin-top: 8px;
+}
+
+.preview-school-review dd {
+  justify-content: flex-end;
+  text-align: right;
+}
+
+.preview-school-editor > .inline-error,
+.preview-school-editor > .node-camera-quick-actions__status {
+  margin: 10px 12px;
 }
 
 .node-camera-command-list > button {
@@ -10592,7 +10733,7 @@ textarea:focus-visible {
 }
 
 .node-camera-quick-actions__status {
-  color: var(--state);
+  color: var(--success);
   border: 1px solid var(--border);
 }
 
@@ -11059,6 +11200,23 @@ textarea:focus-visible {
   }
 }
 
+.app-shell[data-ark-theme="endfield"] .button--primary:has(> .spin)::before {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  background: transparent;
+  border: 2px solid color-mix(in srgb, currentColor 25%, transparent);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  clip-path: none;
+  animation: spin 0.9s linear infinite;
+  transform: none;
+}
+
+.app-shell[data-ark-theme="endfield"] .button--primary:has(> .spin) > .spin {
+  display: none;
+}
+
 @media (max-width: 1180px) {
   .app-shell[data-ark-theme="endfield"] {
     grid-template-columns: 50px minmax(0, 1fr);
@@ -11223,9 +11381,14 @@ textarea:focus-visible {
     animation: none !important;
   }
 
+  .app-shell[data-ark-theme="endfield"]
+    .button--primary:has(> .spin)::before {
+    animation: none;
+  }
+
   .workspace-status-icon--data[data-state="listening"]
     .workspace-status-light--link,
-  .workspace-status-icon--data[data-state="ignored"]
+  .workspace-status-icon--data[data-state="configuration"]
     .workspace-status-light--link,
   .workspace-status-icon--data[data-state="offline"]
     .workspace-status-light--write {

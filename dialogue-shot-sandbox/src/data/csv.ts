@@ -1,5 +1,6 @@
 import Papa from "papaparse";
 import type {
+  CareerPreviewOption,
   DialogueDatabase,
   DialogueRow,
   DialogueStart,
@@ -14,6 +15,7 @@ export const DIALOGUE_FILENAME = "对话表.csv";
 export const START_FILENAME = "对话表_开始节点.csv";
 export const NPC_FILENAME = "NPC表.csv";
 export const MODEL_FILENAME = "m模型资源表.csv";
+export const CAREER_FILENAME = "z职业配置表.csv";
 export const MISSION_FILENAME = "任务表.csv";
 export const DUNGEON_MISSION_FILENAME = "副本任务表.csv";
 export const MISSION_POSITION_FILENAME = "m目标物表.csv";
@@ -26,6 +28,7 @@ export interface DialogueCsvPayload {
   npcText: string;
   sourceName: string;
   modelText: string;
+  careerText?: string;
   missionText: string;
   dungeonMissionText: string;
   missionPositionText: string;
@@ -392,6 +395,34 @@ function parseModels(text: string): Map<number, ModelResource> {
   return models;
 }
 
+export function parseCareerPreviewOptions(
+  text: string,
+): CareerPreviewOption[] {
+  if (!text.trim()) {
+    return [];
+  }
+  const careers: CareerPreviewOption[] = [];
+  forEachCsvDataRow(
+    CAREER_FILENAME,
+    text,
+    ["CareerInfor.id", "CareerInfor.name", "CareerInfor.bp"],
+    () => null,
+    (row, _rowNumber, { indexes }) => {
+      const id = optionalInteger(valueAt(row, indexes, "CareerInfor.id"));
+      const name = valueAt(row, indexes, "CareerInfor.name");
+      if (id === null || id <= 0 || !name) {
+        return;
+      }
+      careers.push({
+        id,
+        name,
+        blueprintPath: valueAt(row, indexes, "CareerInfor.bp"),
+      });
+    },
+  );
+  return careers.sort((left, right) => left.id - right.id);
+}
+
 function parseMissions(
   filename: string,
   text: string,
@@ -547,12 +578,14 @@ export function parseDialogueDatabase(
   missionPositionText = "",
   mapConfigText = "",
   mapResourceText = "",
+  careerText = "",
 ): DialogueDatabase {
   return {
     dialogueRows: parseDialogues(dialogueText),
     starts: parseStarts(startText),
     npcs: parseNpcs(npcText),
     models: parseModels(modelText),
+    careers: parseCareerPreviewOptions(careerText),
     missionRows: [
       ...parseMissions(MISSION_FILENAME, missionText, "任务表"),
       ...parseMissions(
@@ -581,6 +614,7 @@ export function parseDialogueDatabasePayload(
     payload.missionPositionText,
     payload.mapConfigText,
     payload.mapResourceText,
+    payload.careerText ?? "",
   );
 }
 
@@ -597,6 +631,7 @@ export function parseNpcRegistrationDatabase(
     starts: [],
     npcs: parseNpcs(npcText),
     models: parseModels(modelText),
+    careers: [],
     missionRows: [],
     missionPositions: parseMissionPositions(missionPositionText),
     mapConfigs: parseMapConfigs(mapConfigText, mapResourceText),
@@ -619,6 +654,7 @@ export function parseMissionTargetDatabase(
     starts: [],
     npcs: parseNpcs(npcText),
     models: parseModels(modelText),
+    careers: [],
     missionRows: [
       ...parseMissions(MISSION_FILENAME, missionText, "任务表"),
       ...parseMissions(

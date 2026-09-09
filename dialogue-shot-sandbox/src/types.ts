@@ -65,6 +65,12 @@ export interface ModelResource {
   rowNumber: number;
 }
 
+export interface CareerPreviewOption {
+  id: number;
+  name: string;
+  blueprintPath: string;
+}
+
 export interface MissionTaskRow {
   id: string;
   name: string;
@@ -100,6 +106,7 @@ export interface DialogueDatabase {
   starts: DialogueStart[];
   npcs: Map<number, NpcProfile>;
   models: Map<number, ModelResource>;
+  careers: CareerPreviewOption[];
   missionRows: MissionTaskRow[];
   missionPositions: MissionPositionRow[];
   mapConfigs: MapConfigRow[];
@@ -707,6 +714,29 @@ export interface DialogueCameraQuickActionResult {
   saved: boolean;
 }
 
+export interface DialoguePreviewSchoolRequest {
+  dialogueId: string;
+  startId: string;
+  dialogueNodeId: string;
+  previewSchoolId: number;
+}
+
+export interface DialoguePreviewSchoolPreview
+  extends DialoguePreviewSchoolRequest {
+  reviewToken: string;
+  dialogueAssetPath: string;
+  existingPreviewSchoolId: number;
+  changed: boolean;
+  blockedReasons: string[];
+}
+
+export interface DialoguePreviewSchoolResult
+  extends DialoguePreviewSchoolRequest {
+  status: "updated" | "unchanged";
+  dialogueAssetPath: string;
+  saved: boolean;
+}
+
 export interface ExistingDialogueCameraNode {
   dialogueId: string;
   cameraName: string;
@@ -750,6 +780,7 @@ export interface ExistingDialogueStoryboardResult {
 
 export type DialogueNodeSelectionStatus =
   | "selected"
+  | "configuration"
   | "empty"
   | "multiple"
   | "unrecognized"
