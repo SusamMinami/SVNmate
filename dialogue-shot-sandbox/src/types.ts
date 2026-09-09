@@ -216,6 +216,7 @@ export interface BlueprintMontageAction {
 export interface BlueprintMontageCatalog {
   modelIndex: number;
   blueprintClassPath: string;
+  characterLabel?: string;
   status: "loaded" | "unsupported" | "missing" | "failed";
   message: string;
   actions: BlueprintMontageAction[];

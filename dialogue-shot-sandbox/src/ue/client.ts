@@ -457,6 +457,7 @@ export function readExistingDialogueStoryboard(request: {
   startId: string;
   dialogueIds: string[];
   formationClassPath?: string;
+  configurationOnly?: boolean;
   participantModelIndexes: number[];
 }): Promise<ExistingDialogueStoryboardResult> {
   return postUe(

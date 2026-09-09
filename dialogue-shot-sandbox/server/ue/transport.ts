@@ -48,8 +48,10 @@ export function configureUnrealMcpPort(port: number): void {
 
 export class UnrealMcpConnection implements UnrealInvoker {
   private readonly socket = new net.Socket();
-  private buffer = Buffer.alloc(0);
-  private expectedLength: number | null = null;
+  private readonly header = Buffer.alloc(4);
+  private headerOffset = 0;
+  private responseBuffer: Buffer | null = null;
+  private responseOffset = 0;
   private waiters: Array<{
     resolve: (value: UnrealResponse) => void;
     reject: (error: Error) => void;
@@ -102,7 +104,8 @@ export class UnrealMcpConnection implements UnrealInvoker {
   }
 
   close(): void {
-    this.socket.end();
+    this.rejectAll(new Error("UE 编辑器连接已关闭"));
+    this.socket.destroy();
   }
 
   private request(
@@ -110,12 +113,15 @@ export class UnrealMcpConnection implements UnrealInvoker {
     timeoutMs = REQUEST_TIMEOUT_MS,
     action = "UE 操作",
   ): Promise<UnrealResponse> {
+    if (this.socket.destroyed || this.socket.readyState !== "open") {
+      return Promise.reject(new Error("UE 编辑器连接已关闭"));
+    }
     const body = Buffer.from(JSON.stringify(payload), "utf8");
     const header = Buffer.alloc(4);
     header.writeUInt32BE(body.length);
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
-        reject(
+        this.rejectAll(
           new Error(
             `UE 编辑器执行 ${action} 超时（${Math.ceil(timeoutMs / 1_000)} 秒）`,
           ),
@@ -128,26 +134,36 @@ export class UnrealMcpConnection implements UnrealInvoker {
   }
 
   private consume(chunk: Buffer): void {
-    this.buffer = Buffer.concat([this.buffer, chunk]);
-    while (true) {
-      if (this.expectedLength === null) {
-        if (this.buffer.length < 4) {
-          return;
-        }
-        this.expectedLength = this.buffer.readUInt32BE(0);
-        this.buffer = this.buffer.subarray(4);
-        if (this.expectedLength > MAX_RESPONSE_BYTES) {
+    let offset = 0;
+    while (offset < chunk.length) {
+      if (this.responseBuffer === null) {
+        const count = Math.min(4 - this.headerOffset, chunk.length - offset);
+        chunk.copy(this.header, this.headerOffset, offset, offset + count);
+        this.headerOffset += count;
+        offset += count;
+        if (this.headerOffset < 4) return;
+        const length = this.header.readUInt32BE(0);
+        this.headerOffset = 0;
+        if (length > MAX_RESPONSE_BYTES) {
           this.rejectAll(new Error("UE 编辑器响应超过大小限制"));
           this.socket.destroy();
           return;
         }
+        // Allocate once per frame, instead of copying the accumulated body per packet.
+        this.responseBuffer = Buffer.allocUnsafe(length);
+        this.responseOffset = 0;
       }
-      if (this.buffer.length < this.expectedLength) {
-        return;
-      }
-      const payload = this.buffer.subarray(0, this.expectedLength);
-      this.buffer = this.buffer.subarray(this.expectedLength);
-      this.expectedLength = null;
+      const count = Math.min(
+        this.responseBuffer.length - this.responseOffset,
+        chunk.length - offset,
+      );
+      chunk.copy(this.responseBuffer, this.responseOffset, offset, offset + count);
+      this.responseOffset += count;
+      offset += count;
+      if (this.responseOffset < this.responseBuffer.length) return;
+      const payload = this.responseBuffer;
+      this.responseBuffer = null;
+      this.responseOffset = 0;
       const waiter = this.waiters.shift();
       if (!waiter) {
         continue;
@@ -162,6 +178,9 @@ export class UnrealMcpConnection implements UnrealInvoker {
   }
 
   private rejectAll(error: Error): void {
+    this.responseBuffer = null;
+    this.responseOffset = 0;
+    this.headerOffset = 0;
     for (const waiter of this.waiters.splice(0)) {
       clearTimeout(waiter.timer);
       waiter.reject(error);

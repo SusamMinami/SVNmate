@@ -51,19 +51,13 @@ export function getDialogueDatabaseIndex(
 
   const dialogueRowsById = new Map<string, DialogueRow>();
   const dialogueRowsByPrefix = new Map<string, DialogueRow[]>();
-  const searchableDialogueRows: DialogueDatabaseIndex["searchableDialogueRows"] =
-    [];
+  let searchableDialogueRows:
+    DialogueDatabaseIndex["searchableDialogueRows"] | undefined;
   for (const row of database.dialogueRows) {
     if (!dialogueRowsById.has(row.id)) {
       dialogueRowsById.set(row.id, row);
     }
     append(dialogueRowsByPrefix, row.id.slice(0, 4), row);
-    if (row.state !== 4 && row.content && /^\d{4,}$/.test(row.id)) {
-      searchableDialogueRows.push({
-        row,
-        normalizedContent: row.content.toLocaleLowerCase(),
-      });
-    }
   }
   for (const rows of dialogueRowsByPrefix.values()) {
     rows.sort((left, right) => numericSort(left.id, right.id));
@@ -96,7 +90,14 @@ export function getDialogueDatabaseIndex(
     dialogueRowsById,
     dialogueRowsByPrefix,
     startsByPrefix,
-    searchableDialogueRows,
+    get searchableDialogueRows() {
+      // Exact-ID navigation does not need a second copy of every dialogue string.
+      return searchableDialogueRows ??= database.dialogueRows.flatMap((row) =>
+        row.state !== 4 && row.content && /^\d{4,}$/.test(row.id)
+          ? [{ row, normalizedContent: row.content.toLocaleLowerCase() }]
+          : [],
+      );
+    },
     missionRowsById,
     missionPositionsById,
     mapConfigsById,

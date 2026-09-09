@@ -6,7 +6,6 @@ import type {
 } from "../types";
 import type { SoundEffectCatalogEntry } from "../data/soundEffectCatalog";
 import { resolveBlocking } from "./blockingResolver";
-import { renderRuleCandidateFrames } from "./candidateFrameRenderer";
 import {
   createDirectorInput,
   type DirectorInput,
@@ -168,7 +167,8 @@ async function runProvider(
     const candidateVisuals =
       candidateSets.length === 0
         ? null
-        : renderRuleCandidateFrames(participants, candidateSets);
+        : (await import("./candidateFrameRenderer"))
+            .renderRuleCandidateFrames(participants, candidateSets);
     const stagedInput: DirectorInput = {
       ...input,
       participants: input.participants.map((participant) => {

@@ -357,7 +357,6 @@ const DialogueCharacterActionReadRequestSchema = z.object({
         blueprintClassPath: BlueprintClassPathSchema,
       }),
     )
-    .min(1)
     .max(64),
 });
 
@@ -505,6 +504,7 @@ const ExistingDialogueStoryboardRequestSchema = z.object({
   startId: z.string().regex(/^\d{4,}$/),
   dialogueIds: z.array(z.string().regex(/^\d+$/)).min(1).max(200),
   formationClassPath: z.string().max(1024).optional(),
+  configurationOnly: z.boolean().optional().default(false),
   participantModelIndexes: z
     .array(z.number().int().nonnegative())
     .max(64)
@@ -2362,6 +2362,16 @@ export async function readExistingDialogueStoryboard(
         ),
       ),
     );
+    if (request.configurationOnly) {
+      return {
+        status: "found",
+        dialogueAssetPath,
+        nodes: [],
+        configurations,
+        warnings: [],
+        message: `已读取节点 ${request.dialogueIds.join("、")} 的配置`,
+      };
+    }
     const cameraNodes = nodes.filter(
       (node) =>
         node.existingCameraPosition.trim() ||
@@ -2476,17 +2486,50 @@ export async function readDialogueCharacterActions(
       connection,
       dialogueAssetPath,
     );
+    const exportedDialogue = parseDialogueExport(exportedText);
     const nodes = await readDialogueNodes(
       connection,
       dialogueAssetPath,
       request.dialogueIds,
       exportedText,
     );
+    const models =
+      request.models.length > 0
+        ? request.models
+        : Array.from(
+            (
+              await readFormationExportLayout(
+                connection,
+                request.startId,
+                exportedDialogue.formationClassPath ?? "",
+                [],
+                false,
+                false,
+                true,
+              )
+            ).modelClassPaths,
+            ([modelIndex, blueprintClassPath]) => ({
+              modelIndex,
+              blueprintClassPath,
+            }),
+          ).filter(({ modelIndex }) => {
+            if (
+              exportedDialogue.dialogueModels.length === 0 ||
+              modelIndex === 0
+            ) {
+              return true;
+            }
+            const modelName =
+              exportedDialogue.dialogueModels[modelIndex]?.trim().toLowerCase();
+            return Boolean(
+              modelName && !["none", "null"].includes(modelName),
+            );
+          });
     const uniqueModelsByPath = new Map<
       string,
-      (typeof request.models)[number]
+      (typeof models)[number]
     >();
-    for (const model of request.models) {
+    for (const model of models) {
       const normalizedPath = model.blueprintClassPath.toLowerCase();
       if (!uniqueModelsByPath.has(normalizedPath)) {
         uniqueModelsByPath.set(normalizedPath, model);
@@ -2512,7 +2555,7 @@ export async function readDialogueCharacterActions(
       const { modelIndex: _modelIndex, ...sharedCatalog } = loaded;
       catalogByPath.set(normalizedPath, sharedCatalog);
     }
-    const catalogs = request.models.map((model) => {
+    const catalogs = models.map((model) => {
       const normalizedPath = model.blueprintClassPath.toLowerCase();
       const catalog = catalogByPath.get(normalizedPath);
       if (!catalog) {
@@ -2521,10 +2564,13 @@ export async function readDialogueCharacterActions(
       return {
         modelIndex: model.modelIndex,
         ...catalog,
+        characterLabel:
+          exportedDialogue.dialogueModels[model.modelIndex] ||
+          assetNameFromPath(model.blueprintClassPath),
       };
     });
     const requestedModelIndexes = new Set(
-      request.models.map((model) => model.modelIndex),
+      models.map((model) => model.modelIndex),
     );
     const tracks = (
       await Promise.all(
@@ -2576,6 +2622,7 @@ async function readFormationExportLayout(
   participantModelIndexes: number[],
   requireCamera = true,
   requireLocations = true,
+  includeAllModelSlots = false,
 ): Promise<FormationExportLayout> {
   const assetPath = await resolveAssetPath(
     connection,
@@ -2618,14 +2665,14 @@ async function readFormationExportLayout(
     }
     return (
       /^\d+$/.test(variableName) &&
-      requestedIndexes.has(Number(variableName))
+      (includeAllModelSlots || requestedIndexes.has(Number(variableName)))
     );
   });
   const componentNodes = await Promise.all(
     relevantNodes.map(async ({ nodePath, variableName }) => {
       const isRequestedSlot =
         /^\d+$/.test(variableName) &&
-        requestedIndexes.has(Number(variableName));
+        (includeAllModelSlots || requestedIndexes.has(Number(variableName)));
       const [componentClass, componentTemplate] = await Promise.all([
         readProperty(connection, nodePath, "ComponentClass"),
         isRequestedSlot
@@ -2652,7 +2699,8 @@ async function readFormationExportLayout(
     }
     if (
       !/^\d+$/.test(variableName) ||
-      !requestedIndexes.has(Number(variableName)) ||
+      (!includeAllModelSlots &&
+        !requestedIndexes.has(Number(variableName))) ||
       !componentClass.endsWith("ChildActorComponent") ||
       !hasUnrealObjectReference(componentTemplate)
     ) {
@@ -3930,19 +3978,6 @@ async function prepareDialogueCameraQuickAction(
       originalSchoolMoveCamerasMap,
       desiredSchoolMoveCamerasMap,
     ) !== null;
-  const dialoguePackagePath = dialogueAssetPath.split(".")[0];
-  const dirtyPackages = new Set(
-    (await dirtyContentPackages(connection)).map((path) =>
-      path.toLowerCase(),
-    ),
-  );
-  const blockedReasons = dirtyPackages.has(
-    dialoguePackagePath.toLowerCase(),
-  )
-    ? [
-        `对话资产 ${dialoguePackagePath} 存在未保存修改，请先在 UE 中保存或撤销`,
-      ]
-    : [];
   const reviewToken = createHash("sha256")
     .update(
       JSON.stringify({
@@ -3998,7 +4033,7 @@ async function prepareDialogueCameraQuickAction(
       desiredSchoolCameraCount:
         reflectedSchoolCameraKeys(desiredSchoolMoveCamerasMap).length,
       changed,
-      blockedReasons,
+      blockedReasons: [],
     },
     dialogueAsset: String(dialogueAsset),
     nodeDataPath: currentNode.nodeDataPath,
@@ -7816,6 +7851,14 @@ function backgroundPropComponentSpec(actor: SelectedLevelActor): {
   return null;
 }
 
+function isDialogueNpcActor(actor: SelectedLevelActor): boolean {
+  return (
+    actor.sceneObjectNpc === true ||
+    String(actor.parentClassPath ?? "").toLowerCase() ===
+      "/script/seria.serianpc"
+  );
+}
+
 function backgroundPropReviewToken(
   preview: Omit<BackgroundPropImportPreview, "reviewToken">,
 ): string {
@@ -7981,12 +8024,12 @@ async function prepareBackgroundPropImport(
         Number(component.variableName),
       ),
     ) + 1;
-  const sceneObjectNpcAssignments = new Map<
+  const dialogueNpcAssignments = new Map<
     string,
     { modelIndex: number; existingComponent: BlueprintComponentInfo | null }
   >();
   if (parentKind === "position_mode") {
-    for (const actor of actors.filter((candidate) => candidate.sceneObjectNpc)) {
+    for (const actor of actors.filter(isDialogueNpcActor)) {
       const relativeTransform = blueprintTransformFromWorld(
         actor.transform,
         rootTransform,
@@ -8007,7 +8050,7 @@ async function prepareBackgroundPropImport(
       if (existingComponent) {
         claimedNumericComponentNames.add(existingComponent.variableName);
       }
-      sceneObjectNpcAssignments.set(actor.actorRef, {
+      dialogueNpcAssignments.set(actor.actorRef, {
         modelIndex: existingComponent
           ? Number(existingComponent.variableName)
           : nextModelIndex++,
@@ -8019,14 +8062,14 @@ async function prepareBackgroundPropImport(
   const preparedItems: PreparedBackgroundPropItem[] = actors.map(
     (actor) => {
       const spec = backgroundPropComponentSpec(actor);
-      const sceneObjectNpcAssignment = sceneObjectNpcAssignments.get(
+      const dialogueNpcAssignment = dialogueNpcAssignments.get(
         actor.actorRef,
       );
-      const importMode = sceneObjectNpcAssignment
+      const importMode = dialogueNpcAssignment
         ? "dialogue_npc" as const
         : "background" as const;
-      const componentName = sceneObjectNpcAssignment
-        ? String(sceneObjectNpcAssignment.modelIndex)
+      const componentName = dialogueNpcAssignment
+        ? String(dialogueNpcAssignment.modelIndex)
         : backgroundPropAssetName(actor);
       const relativeTransform = blueprintTransformFromWorld(
         actor.transform,
@@ -8034,14 +8077,14 @@ async function prepareBackgroundPropImport(
         actor.transform.scale,
       );
       const existingComponent =
-        sceneObjectNpcAssignment?.existingComponent ??
+        dialogueNpcAssignment?.existingComponent ??
         blueprint.components.find(
             (component) =>
               component.variableName.toLowerCase() ===
               componentName.toLowerCase(),
           ) ??
         null;
-      const legacyComponent = sceneObjectNpcAssignment
+      const legacyComponent = dialogueNpcAssignment
         ? blueprint.components.find(
             (component) =>
               !/^\d+$/.test(component.variableName) &&
@@ -8111,8 +8154,8 @@ async function prepareBackgroundPropImport(
           assetKind: actor.assetKind ?? "unsupported",
           assetPath: actor.assetPath ?? "",
           componentName,
-          ...(sceneObjectNpcAssignment
-            ? { modelIndex: sceneObjectNpcAssignment.modelIndex }
+          ...(dialogueNpcAssignment
+            ? { modelIndex: dialogueNpcAssignment.modelIndex }
             : {}),
           componentClass: spec?.componentClass ?? "",
           assetPropertyName: spec?.assetPropertyName ?? "",
@@ -8144,7 +8187,7 @@ async function prepareBackgroundPropImport(
         normalizeObjectPath(PLAYER_CLASS)
     ) {
       blockedReasons.push(
-        "SceneObject NPC 写入要求 BP 的 0 号位为玩家 BP_Eric",
+        "对话 NPC 写入要求 BP 的 0 号位为玩家 BP_Eric",
       );
     }
     const baseDialogueContext = await readDialogueRegistrationContext(
@@ -8319,7 +8362,7 @@ export async function applyBackgroundPropImport(
     );
     if (selectedDialogueNpcItems.length > 0) {
       if (!prepared.dialogueContext) {
-        throw new Error("无法读取 SceneObject NPC 对应的对话注册信息");
+        throw new Error("无法读取对话 NPC 对应的对话注册信息");
       }
       const dialoguePackagePath =
         prepared.dialogueContext.dialogueAssetPath.split(".")[0];

@@ -1451,6 +1451,93 @@ describe("background prop import", () => {
     ]);
   });
 
+  it("imports repeated direct SeriaNPC actors as dialogue slots", async () => {
+    await writeConfigFixture();
+    const connection = new BackgroundPropConnection();
+    connection.commonProperties[0].CurrentBool = true;
+    connection.specialProperties[0].CurrentBool = true;
+    connection.previewLevel = "/Game/Test/Maps/PlacedMap.PlacedMap";
+    connection.dialogNpcNames = ["Guard", "Added"];
+    connection.dialogNpcPaths = [
+      "/Game/Test/BP_Guard.BP_Guard_C",
+      "/Game/Test/BP_Added.BP_Added_C",
+    ];
+    connection.selectedPlacementActors = [
+      {
+        actor_ref: "PersistentLevel.BP_Added_C_2",
+        label: "BP_Added",
+        class_path: "/Game/Test/BP_Added.BP_Added_C",
+        parent_class_path: "/Script/Seria.SeriaNPC",
+        child_preview_class_path: "",
+        location: [140, 250, 300],
+        rotation: [0, 30, 0],
+        scale: [1, 1, 1],
+      },
+      {
+        actor_ref: "PersistentLevel.BP_Added_C_3",
+        label: "BP_Added2",
+        class_path: "/Game/Test/BP_Added.BP_Added_C",
+        parent_class_path: "/Script/Seria.SeriaNPC",
+        child_preview_class_path: "",
+        location: [180, 290, 310],
+        rotation: [0, -30, 0],
+        scale: [1, 1, 1],
+      },
+    ];
+    const actorRefs = connection.selectedPlacementActors.map((actor) =>
+      String(actor.actor_ref),
+    );
+
+    const preview = await inspectBackgroundPropImport(
+      { blueprintName: "BP_735200", actorRefs },
+      () => connection,
+    );
+
+    expect(preview.blockedReasons).toEqual([]);
+    expect(
+      preview.items.map((item) => ({
+        componentName: item.componentName,
+        importMode: item.importMode,
+        dialogueModelName: item.dialogueModelName,
+        action: item.action,
+      })),
+    ).toEqual([
+      {
+        componentName: "2",
+        importMode: "dialogue_npc",
+        dialogueModelName: "Added",
+        action: "create",
+      },
+      {
+        componentName: "3",
+        importMode: "dialogue_npc",
+        dialogueModelName: "Added",
+        action: "create",
+      },
+    ]);
+
+    const result = await applyBackgroundPropImport(
+      {
+        blueprintName: "BP_735200",
+        reviewToken: preview.reviewToken,
+        selectedActorRefs: actorRefs,
+        reviewedActorRefs: actorRefs,
+      },
+      () => connection,
+    );
+
+    expect(result).toMatchObject({
+      status: "updated",
+      createdComponentNames: ["2", "3"],
+      dialogueRegistration: {
+        dialogueModels: ["player", "Guard", "Added", "Added"],
+        registeredCount: 3,
+        unresolvedIndexes: [],
+      },
+      saved: true,
+    });
+  });
+
   it("blocks SceneObject NPCs that were previously written as named background components", async () => {
     await writeConfigFixture();
     const connection = new BackgroundPropConnection();

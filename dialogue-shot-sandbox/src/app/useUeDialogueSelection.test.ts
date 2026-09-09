@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { SelectedDialogueNodeResult } from "../types";
 import {
   nextSelectionPollInterval,
+  selectionPollDelayAfterResponse,
   SELECTION_POLL_MAX_INTERVAL_MS,
   SELECTION_POLL_MIN_INTERVAL_MS,
 } from "./useUeDialogueSelection";
@@ -28,8 +29,8 @@ function selection(
   };
 }
 
-describe("UE dialogue selection polling backoff", () => {
-  it("starts at three seconds and backs off to five seconds", () => {
+describe("UE dialogue selection polling cadence", () => {
+  it("keeps online selection polling at 1.2 seconds", () => {
     const selected = selection("734219");
 
     const initialInterval = nextSelectionPollInterval(
@@ -42,44 +43,33 @@ describe("UE dialogue selection polling backoff", () => {
       selected,
       initialInterval,
     );
-    const secondBackoff = nextSelectionPollInterval(
-      selected,
-      selected,
-      firstBackoff,
-    );
-    const cappedBackoff = nextSelectionPollInterval(
-      selected,
-      selected,
-      secondBackoff,
-    );
-
-    expect(initialInterval).toBe(3_000);
-    expect(firstBackoff).toBe(4_000);
-    expect(secondBackoff).toBe(5_000);
-    expect(cappedBackoff).toBe(SELECTION_POLL_MAX_INTERVAL_MS);
+    expect(initialInterval).toBe(1_200);
+    expect(firstBackoff).toBe(1_200);
   });
 
-  it("returns to three seconds when the selected node changes", () => {
+  it("returns to 1.2 seconds when the selected node changes", () => {
     expect(
       nextSelectionPollInterval(
         selection("734219"),
         selection("734220"),
         SELECTION_POLL_MAX_INTERVAL_MS,
       ),
-    ).toBe(SELECTION_POLL_MIN_INTERVAL_MS);
+    ).toBe(1_200);
   });
 
   it("backs off repeated offline results but resets after recovery", () => {
     const offline = selection(null, "offline");
     const selected = selection("735201");
 
+    const firstBackoff = nextSelectionPollInterval(
+      offline,
+      offline,
+      SELECTION_POLL_MIN_INTERVAL_MS,
+    );
+    expect(firstBackoff).toBe(2_200);
     expect(
-      nextSelectionPollInterval(
-        offline,
-        offline,
-        SELECTION_POLL_MIN_INTERVAL_MS,
-      ),
-    ).toBe(4_000);
+      nextSelectionPollInterval(offline, offline, firstBackoff),
+    ).toBe(3_200);
     expect(
       nextSelectionPollInterval(
         offline,
@@ -87,5 +77,10 @@ describe("UE dialogue selection polling backoff", () => {
         SELECTION_POLL_MAX_INTERVAL_MS,
       ),
     ).toBe(SELECTION_POLL_MIN_INTERVAL_MS);
+  });
+
+  it("subtracts request time without scheduling overlapping reads", () => {
+    expect(selectionPollDelayAfterResponse(1_200, 200)).toBe(1_000);
+    expect(selectionPollDelayAfterResponse(1_200, 2_000)).toBe(250);
   });
 });

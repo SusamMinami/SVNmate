@@ -13,7 +13,12 @@ import {
   inspectDialogueStoryboardExport,
 } from "../ue/client";
 
-type StoryboardExportMode = "current" | "all" | "sound";
+export type StoryboardExportMode =
+  | "current"
+  | "all"
+  | "sound"
+  | "node-audio"
+  | "node-actions";
 
 interface UseStoryboardExportOptions {
   sequence: DialogueSequence;
@@ -308,7 +313,7 @@ export function useStoryboardExport({
           activeDialogueIds.has(recommendation.dialogueId),
         ),
       );
-      const activeIndex = shots.indexOf(activeShot);
+      const activeIndex = activeShot ? shots.indexOf(activeShot) : -1;
       setMode("current");
       setCurrentShotNumber((activeIndex >= 0 ? activeIndex : 0) + 1);
       setRequest(nextRequest);
@@ -335,21 +340,23 @@ export function useStoryboardExport({
     setError("");
     setResult("");
     try {
-      if (!activeShot) {
-        throw new Error("当前没有可导出的分镜");
+      const scopedDialogueIds =
+        dialogueScope ?? activeShot?.dialogueIds ?? [];
+      if (scopedDialogueIds.length === 0) {
+        throw new Error("当前没有可导出的音效节点");
       }
       const activeDialogueIds = new Set(
-        dialogueScope ?? activeShot.dialogueIds,
+        scopedDialogueIds,
       );
       const currentSoundEffects = soundEffects.filter((recommendation) =>
         activeDialogueIds.has(recommendation.dialogueId),
       );
       if (currentSoundEffects.length === 0) {
-        throw new Error("当前分镜没有可写入的音效建议");
+        throw new Error("当前节点没有可写入的音效");
       }
       const nextRequest = buildRequest([], [], currentSoundEffects, []);
-      const activeIndex = shots.indexOf(activeShot);
-      setMode("sound");
+      const activeIndex = activeShot ? shots.indexOf(activeShot) : -1;
+      setMode(dialogueScope ? "node-audio" : "sound");
       setCurrentShotNumber((activeIndex >= 0 ? activeIndex : 0) + 1);
       setRequest(nextRequest);
       setPreview(createLocalExportPreview(nextRequest));
@@ -361,6 +368,73 @@ export function useStoryboardExport({
       );
     }
   }, [activeShot, buildRequest, shots, soundEffects]);
+
+  const previewCurrentNodeAudio = useCallback(async (
+    dialogueScope: readonly string[],
+  ) => {
+    setError("");
+    setResult("");
+    try {
+      const activeDialogueIds = new Set(dialogueScope);
+      const currentSoundEffects = soundEffects.filter((recommendation) =>
+        activeDialogueIds.has(recommendation.dialogueId),
+      );
+      const currentMusic = musicRecommendations.filter((recommendation) =>
+        activeDialogueIds.has(recommendation.dialogueId),
+      );
+      if (currentSoundEffects.length === 0 && currentMusic.length === 0) {
+        throw new Error("当前节点没有可导出的音频配置");
+      }
+      const nextRequest = buildRequest(
+        [],
+        [],
+        currentSoundEffects,
+        currentMusic,
+      );
+      setMode("node-audio");
+      setCurrentShotNumber(1);
+      setRequest(nextRequest);
+      setPreview(createLocalExportPreview(nextRequest));
+    } catch (exportError) {
+      setError(
+        exportError instanceof Error
+          ? exportError.message
+          : "无法检查当前节点音频写入",
+      );
+    }
+  }, [buildRequest, musicRecommendations, soundEffects]);
+
+  const previewCurrentNodeActions = useCallback(async (
+    dialogueScope: readonly string[],
+  ) => {
+    setError("");
+    setResult("");
+    try {
+      const activeDialogueIds = new Set(dialogueScope);
+      const currentCharacterActions = characterActions.filter((track) =>
+        activeDialogueIds.has(track.dialogueId),
+      );
+      if (currentCharacterActions.length === 0) {
+        throw new Error("当前节点没有可导出的动作配置");
+      }
+      const nextRequest = buildRequest(
+        [],
+        currentCharacterActions,
+        [],
+        [],
+      );
+      setMode("node-actions");
+      setCurrentShotNumber(1);
+      setRequest(nextRequest);
+      setPreview(createLocalExportPreview(nextRequest));
+    } catch (exportError) {
+      setError(
+        exportError instanceof Error
+          ? exportError.message
+          : "无法检查当前节点动作写入",
+      );
+    }
+  }, [buildRequest, characterActions]);
 
   const previewAll = useCallback(async () => {
     setError("");
@@ -530,6 +604,8 @@ export function useStoryboardExport({
     exportUnavailableReason: availability.unavailableReason,
     previewCurrent,
     previewCurrentSoundEffects,
+    previewCurrentNodeAudio,
+    previewCurrentNodeActions,
     previewAll,
     refresh,
     confirm,

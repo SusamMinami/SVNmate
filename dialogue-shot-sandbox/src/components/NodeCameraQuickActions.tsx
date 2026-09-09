@@ -27,7 +27,9 @@ interface NodeCameraQuickActionsProps {
   dialogueNodeId: string;
   previousDialogueNodeId?: string;
   existingConfiguration?: ExistingDialogueNodeConfiguration;
+  configurationLoading?: boolean;
   onApplied?: () => void;
+  onActivityChange?: (activity: "idle" | "read" | "write") => void;
 }
 
 function actionLabel(mode: DialogueCameraQuickActionMode): string {
@@ -39,13 +41,25 @@ function actionLabel(mode: DialogueCameraQuickActionMode): string {
   }[mode];
 }
 
+const SCHOOL_CAMERA_ROLES = [
+  { key: "ERing", label: "Ring" },
+  { key: "ENino", label: "Nino" },
+  { key: "EJodie", label: "Jodie" },
+] as const;
+
+function assetName(assetPath: string): string {
+  return assetPath.split("/").at(-1)?.split(".")[0] ?? assetPath;
+}
+
 export function NodeCameraQuickActions({
   dialogueId,
   startId,
   dialogueNodeId,
   previousDialogueNodeId,
   existingConfiguration,
+  configurationLoading = false,
   onApplied,
+  onActivityChange,
 }: NodeCameraQuickActionsProps) {
   const operationRunRef = useRef(0);
   const [preview, setPreview] =
@@ -57,6 +71,51 @@ export function NodeCameraQuickActions({
   const [status, setStatus] = useState("");
   const [blendCurveAssetName, setBlendCurveAssetName] =
     useState("trans_6015");
+  const cameraConfigured = Boolean(
+    existingConfiguration?.cameraPosition ||
+      existingConfiguration?.moveCameraCount,
+  );
+  const cameraSummary = configurationLoading
+    ? "正在读取当前节点参数..."
+    : cameraConfigured
+    ? [
+        existingConfiguration?.cameraPosition,
+        existingConfiguration?.cameraMoveTypes.join(" / "),
+        existingConfiguration?.fov !== null &&
+        existingConfiguration?.fov !== undefined
+          ? `FOV ${existingConfiguration.fov}`
+          : "",
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : existingConfiguration
+      ? "未配置 · 将写入 c1 / EPush / FOV 62"
+      : "未读取 · 将写入 c1 / EPush / FOV 62";
+  const blendConfigured = Boolean(
+    existingConfiguration?.blendCameraType === "EBlend" ||
+      existingConfiguration?.blendCurve,
+  );
+  const blendSummary = configurationLoading
+    ? "正在读取当前节点 Blend..."
+    : blendConfigured
+    ? [
+        existingConfiguration?.blendCameraType,
+        existingConfiguration?.blendCurve
+          ? assetName(existingConfiguration.blendCurve)
+          : "",
+        existingConfiguration?.blendDuration
+          ? `${existingConfiguration.blendDuration}s`
+          : "",
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : `${blendCurveAssetName || "请输入 CurveFloat 资产名"} · EBlend`;
+  const configuredSchoolCameraKeys = new Set(
+    existingConfiguration?.schoolCameraKeys ?? [],
+  );
+  const allSchoolCamerasConfigured = SCHOOL_CAMERA_ROLES.every(
+    ({ key }) => configuredSchoolCameraKeys.has(key),
+  );
 
   useEffect(() => {
     operationRunRef.current += 1;
@@ -66,6 +125,19 @@ export function NodeCameraQuickActions({
     setError("");
     setStatus("");
   }, [dialogueNodeId]);
+
+  useEffect(() => {
+    onActivityChange?.(
+      busy === "apply" ? "write" : busy === "inspect" ? "read" : "idle",
+    );
+  }, [busy, onActivityChange]);
+
+  useEffect(
+    () => () => {
+      onActivityChange?.("idle");
+    },
+    [onActivityChange],
+  );
 
   async function inspect(mode: DialogueCameraQuickActionMode) {
     const operationRun = ++operationRunRef.current;
@@ -151,64 +223,6 @@ export function NodeCameraQuickActions({
 
   return (
     <section className="inspector-section node-camera-quick-actions">
-      <div className="node-camera-existing">
-        <div className="section-label">
-          <span>UE 当前镜头配置</span>
-          <small>
-            {existingConfiguration?.cameraPosition ||
-            existingConfiguration?.moveCameraCount
-              ? "已配置"
-              : "未配置"}
-          </small>
-        </div>
-        <dl>
-          <div>
-            <dt>Camera Position</dt>
-            <dd>
-              <code>
-                {existingConfiguration?.cameraPosition || "空"}
-              </code>
-            </dd>
-          </div>
-          <div>
-            <dt>Move Cameras</dt>
-            <dd>
-              {existingConfiguration?.moveCameraCount ?? 0} 项
-              {existingConfiguration?.cameraMoveTypes.length
-                ? ` · ${existingConfiguration.cameraMoveTypes.join(" / ")}`
-                : ""}
-              {existingConfiguration?.fov !== null &&
-              existingConfiguration?.fov !== undefined
-                ? ` · FOV ${existingConfiguration.fov}`
-                : ""}
-            </dd>
-          </div>
-          <div>
-            <dt>Blend</dt>
-            <dd>
-              {existingConfiguration?.blendCameraType || "未配置"}
-              {existingConfiguration?.blendCurve
-                ? ` · ${existingConfiguration.blendCurve
-                    .split("/")
-                    .at(-1)}`
-                : ""}
-            </dd>
-          </div>
-          <div>
-            <dt>角色相机</dt>
-            <dd>
-              {existingConfiguration?.schoolCameraKeys.length
-                ? existingConfiguration.schoolCameraKeys
-                    .map((key) => key.replace(/^E/, ""))
-                    .join(" · ")
-                : existingConfiguration?.schoolCameraCount
-                  ? `${existingConfiguration.schoolCameraCount} 组`
-                  : "未配置"}
-            </dd>
-          </div>
-        </dl>
-      </div>
-
       <div className="section-label">
         <span>镜头快捷操作</span>
         <small>节点 {dialogueNodeId}</small>
@@ -255,6 +269,7 @@ export function NodeCameraQuickActions({
           )}
         </button>
         <button
+          className={cameraConfigured ? "is-configured" : undefined}
           type="button"
           disabled={busy !== null}
           title="写入 c1、EPush、速度 1、Blend Out 1、FOV 62"
@@ -263,7 +278,7 @@ export function NodeCameraQuickActions({
           <Camera size={16} />
           <span>
             <strong>添加默认镜头</strong>
-            <small>c1 · EPush · 速度 1 · Blend Out 1 · FOV 62</small>
+            <small>{cameraSummary}</small>
           </span>
           {busy === "inspect" && request?.mode === "default" ? (
             <LoaderCircle className="spin" size={15} />
@@ -272,6 +287,7 @@ export function NodeCameraQuickActions({
           )}
         </button>
         <button
+          className={blendConfigured ? "is-configured" : undefined}
           type="button"
           disabled={busy !== null || !blendCurveAssetName.trim()}
           title="设置 DialogBlendCameraData 为 EBlend 并写入指定 CurveFloat"
@@ -280,7 +296,7 @@ export function NodeCameraQuickActions({
           <GitMerge size={16} />
           <span>
             <strong>添加镜头曲线</strong>
-            <small>{blendCurveAssetName || "请输入 CurveFloat 资产名"} · EBlend</small>
+            <small>{blendSummary}</small>
           </span>
           {busy === "inspect" && request?.mode === "blend_curve" ? (
             <LoaderCircle className="spin" size={15} />
@@ -289,6 +305,9 @@ export function NodeCameraQuickActions({
           )}
         </button>
         <button
+          className={
+            allSchoolCamerasConfigured ? "is-configured" : undefined
+          }
           type="button"
           disabled={busy !== null}
           title="保留已有角色相机，只用主 MoveCameras 补齐缺失项"
@@ -297,7 +316,20 @@ export function NodeCameraQuickActions({
           <Users size={16} />
           <span>
             <strong>添加角色相机</strong>
-            <small>保留已有项，补齐 Ring · Nino · Jodie</small>
+            <small className="node-camera-role-list">
+              {SCHOOL_CAMERA_ROLES.map(({ key, label }) => (
+                <span
+                  className={
+                    configuredSchoolCameraKeys.has(key)
+                      ? "is-configured"
+                      : undefined
+                  }
+                  key={key}
+                >
+                  {label}
+                </span>
+              ))}
+            </small>
           </span>
           {busy === "inspect" &&
           request?.mode === "school_cameras" ? (
@@ -309,17 +341,35 @@ export function NodeCameraQuickActions({
       </div>
 
       {preview && request && (
-        <div className="node-camera-review" aria-label="节点镜头写入确认">
-          <header>
-            <Camera size={15} />
-            <span>
-              <strong>{actionLabel(preview.mode)}</strong>
-              <small>
-                {preview.changed ? "检测到参数变化" : "当前参数已经一致"}
-              </small>
-            </span>
-          </header>
-          <dl>
+        <div
+          className={`node-camera-review ${
+            preview.mode === "school_cameras"
+              ? "node-camera-review--confirmation"
+              : ""
+          }`}
+          aria-label="节点镜头写入确认"
+        >
+          {preview.mode === "school_cameras" ? (
+            <div className="node-camera-review__confirmation">
+              <Users size={16} />
+              <strong>
+                {preview.changed
+                  ? "确认写入角色相机？"
+                  : "角色相机已完整配置"}
+              </strong>
+            </div>
+          ) : (
+            <>
+              <header>
+                <Camera size={15} />
+                <span>
+                  <strong>{actionLabel(preview.mode)}</strong>
+                  <small>
+                    {preview.changed ? "检测到参数变化" : "当前参数已经一致"}
+                  </small>
+                </span>
+              </header>
+              <dl>
             <div>
               <dt>来源</dt>
               <dd>
@@ -382,39 +432,9 @@ export function NodeCameraQuickActions({
                 </div>
               </>
             )}
-            {preview.mode === "school_cameras" && (
-              <>
-                <div>
-                  <dt>主镜头配置</dt>
-                  <dd>{preview.existingMoveCount} 项 MoveCameras</dd>
-                </div>
-                <div>
-                  <dt>已有角色</dt>
-                  <dd>
-                    {(preview.existingSchoolCameraKeys ?? [])
-                      .map((key) => key.replace(/^E/, ""))
-                      .join(" · ") || "无"}
-                  </dd>
-                </div>
-                <div>
-                  <dt>本次补齐</dt>
-                  <dd>
-                    {(preview.addedSchoolCameraKeys ?? [])
-                      .map((key) => key.replace(/^E/, ""))
-                      .join(" · ") || "无需补齐"}
-                  </dd>
-                </div>
-                <div>
-                  <dt>角色相机</dt>
-                  <dd>
-                    {preview.existingSchoolCameraCount} 组
-                    <ChevronRight size={12} />
-                    {preview.desiredSchoolCameraCount} 组
-                  </dd>
-                </div>
-              </>
-            )}
-          </dl>
+              </dl>
+            </>
+          )}
           {preview.blockedReasons.map((reason) => (
             <p className="node-camera-review__warning" key={reason}>
               <AlertTriangle size={13} />
@@ -438,7 +458,9 @@ export function NodeCameraQuickActions({
               className="button button--primary"
               type="button"
               disabled={
-                busy !== null || preview.blockedReasons.length > 0
+                busy !== null ||
+                preview.blockedReasons.length > 0 ||
+                (preview.mode === "school_cameras" && !preview.changed)
               }
               onClick={() => void apply()}
             >

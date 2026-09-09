@@ -62,9 +62,9 @@ import { DirectorControl } from "./components/DirectorControl";
 import { LaunchScreen } from "./components/LaunchScreen";
 import { MissingNpcModelModal } from "./components/MissingNpcModelModal";
 import { NodeCameraQuickActions } from "./components/NodeCameraQuickActions";
+import { OverlayScrollArea } from "./components/OverlayScrollArea";
 import { MusicRecommendations } from "./components/MusicRecommendations";
 import { SoundEffectRecommendations } from "./components/SoundEffectRecommendations";
-import { StageView } from "./components/StageView";
 import { SceneReferencePanel } from "./components/SceneReferencePanel";
 import { useSceneReference } from "./app/useSceneReference";
 import { projectionIssues, projectionStatus, projectionStatusLabel } from "./director/shotValidation";
@@ -160,6 +160,11 @@ import type {
   ShotSize,
 } from "./types";
 
+const LazyStageView = lazy(() =>
+  import("./components/StageView").then((module) => ({
+    default: module.StageView,
+  })),
+);
 const LazyBlueprintFormationModal = lazy(() =>
   import("./components/BlueprintFormationModal").then((module) => ({
     default: module.BlueprintFormationModal,
@@ -352,6 +357,27 @@ interface ApplySequenceOptions {
 }
 
 type InspectorTab = "direction" | "shot" | "audio" | "ue";
+type ConfigurationSyncState =
+  | "syncing"
+  | "listening"
+  | "offline"
+  | "ignored";
+
+function createConfigurationDialogueRow(dialogueId: string): DialogueRow {
+  return {
+    id: dialogueId,
+    npcId: null,
+    content: "UE 配置节点（本地对白未收录）",
+    nextId: null,
+    isEnd: false,
+    rowNumber: -1,
+    state: null,
+    speakerSlot: null,
+    speakerModelIndex: null,
+    relativeTransformsString: "",
+    characterBehaviourString: "",
+  };
+}
 type AudioPreviewOwner =
   | "sound-effect-recommendations"
   | "music-recommendations"
@@ -730,7 +756,6 @@ interface ShotInspectorProps {
   exportUnavailableReason: string;
   backgroundGenerationActive: boolean;
   configurationMode: boolean;
-  configurationModeBusy: boolean;
   configurationDialogueNodeId: string | null;
   configurationNodeConfiguration:
     | ExistingDialogueNodeConfiguration
@@ -738,7 +763,11 @@ interface ShotInspectorProps {
   configurationSelectionMessage: string;
   configurationSelectionReady: boolean;
   configurationSelectionRefreshing: boolean;
+  configurationNodeReading: boolean;
   characterActionEditor: CharacterActionEditorController;
+  onConfigurationActivityChange: (
+    activity: "idle" | "read" | "write",
+  ) => void;
   onMove: (offset: number) => void;
   preference: "accept" | "reject" | null;
   preferenceBusy: boolean;
@@ -748,10 +777,11 @@ interface ShotInspectorProps {
     reason: string,
   ) => void;
   onTabChange: (tab: InspectorTab) => void;
-  onConfigurationModeChange: (enabled: boolean) => void;
-  onReloadExistingStoryboard: () => void;
+  onReloadCurrentNodeConfiguration: () => void;
   onExport: () => void;
   onExportSoundEffects: () => void;
+  onExportNodeAudio: () => void;
+  onExportNodeActions: () => void;
   onChangeSoundEffect: (
     recommendation: DirectorSoundEffectRecommendation,
     update: Pick<
@@ -808,23 +838,25 @@ function ShotInspector({
   exportUnavailableReason,
   backgroundGenerationActive,
   configurationMode,
-  configurationModeBusy,
   configurationDialogueNodeId,
   configurationNodeConfiguration,
   configurationSelectionMessage,
   configurationSelectionReady,
   configurationSelectionRefreshing,
+  configurationNodeReading,
   characterActionEditor,
+  onConfigurationActivityChange,
   onMove,
   preference,
   preferenceBusy,
   preferenceError,
   onPreference,
   onTabChange,
-  onConfigurationModeChange,
-  onReloadExistingStoryboard,
+  onReloadCurrentNodeConfiguration,
   onExport,
   onExportSoundEffects,
+  onExportNodeAudio,
+  onExportNodeActions,
   onChangeSoundEffect,
   onApplySoundEffect,
   onApplyMusic,
@@ -847,7 +879,8 @@ function ShotInspector({
       )
     : -1;
   const previousConfigurationDialogueNodeId =
-    configurationDialogueRowIndex > 0
+    configurationDialogueRowIndex > 0 &&
+    configurationDialogueRow?.rowNumber !== -1
       ? sequence.rows[configurationDialogueRowIndex - 1].id
       : undefined;
   const editableDialogueIds = configurationMode
@@ -855,6 +888,18 @@ function ShotInspector({
       ? [configurationDialogueNodeId]
       : []
     : shot.dialogueIds;
+  const editableDialogueIdSet = new Set(editableDialogueIds);
+  const configurationAudioCount =
+    soundEffects.filter((item) =>
+      editableDialogueIdSet.has(item.dialogueId),
+    ).length +
+    musicRecommendations.filter((item) =>
+      editableDialogueIdSet.has(item.dialogueId),
+    ).length;
+  const configurationActionCount =
+    characterActionEditor.exportActions.filter((item) =>
+      editableDialogueIdSet.has(item.dialogueId),
+    ).length;
   const slotLabelsBySlot = new Map(
     sequence.participants.map((participant) => [
       participant.slot,
@@ -909,8 +954,8 @@ function ShotInspector({
                 ) : (
                   <MousePointer2 size={11} />
                 )}
-                {configurationSelectionReady && configurationDialogueNodeId
-                  ? `UE NODE ${configurationDialogueNodeId} · 已同步`
+                {configurationDialogueNodeId
+                  ? `UE NODE ${configurationDialogueNodeId}`
                   : "UE NODE"}
               </>
             ) : (
@@ -930,13 +975,15 @@ function ShotInspector({
           >
             {configurationMode
               ? configurationDialogueRow
-                ? `${
-                    configurationDialogueRow.speakerSlot
-                      ? participantNamesBySlot.get(
-                          configurationDialogueRow.speakerSlot,
-                        ) ?? "未知角色"
-                      : "未知角色"
-                  } · ${configurationDialogueRow.content}`
+                ? configurationDialogueRow.rowNumber === -1
+                  ? configurationDialogueRow.content
+                  : `${
+                      configurationDialogueRow.speakerSlot
+                        ? participantNamesBySlot.get(
+                            configurationDialogueRow.speakerSlot,
+                          ) ?? "未知角色"
+                        : "未知角色"
+                    } · ${configurationDialogueRow.content}`
                 : configurationSelectionMessage
               : shot.label}
           </h2>
@@ -977,23 +1024,6 @@ function ShotInspector({
               )}
             </button>
           </div>
-          <button
-            className="icon-button configuration-mode-toggle"
-            type="button"
-            title={configurationMode ? "返回完整窗口" : "进入配置小窗"}
-            aria-label={configurationMode ? "返回完整窗口" : "进入配置小窗"}
-            aria-pressed={configurationMode}
-            disabled={configurationModeBusy}
-            onClick={() => onConfigurationModeChange(!configurationMode)}
-          >
-            {configurationModeBusy ? (
-              <LoaderCircle className="spin" size={17} />
-            ) : configurationMode ? (
-              <Maximize2 size={17} />
-            ) : (
-              <PanelRightClose size={17} />
-            )}
-          </button>
           {!configurationMode && (
             <>
               <button
@@ -1057,7 +1087,7 @@ function ShotInspector({
       </nav>
 
       {tab !== "audio" && (
-        <div
+        <OverlayScrollArea
           className="inspector-tab-panel"
           id="shot-inspector-panel"
           role="tabpanel"
@@ -1079,10 +1109,12 @@ function ShotInspector({
                 startId={sequence.startId}
                 dialogueNodeId={configurationDialogueNodeId}
                 existingConfiguration={configurationNodeConfiguration}
+                configurationLoading={configurationNodeReading}
                 previousDialogueNodeId={
                   previousConfigurationDialogueNodeId
                 }
-                onApplied={onReloadExistingStoryboard}
+                onApplied={onReloadCurrentNodeConfiguration}
+                onActivityChange={onConfigurationActivityChange}
               />
             )
           ) : (
@@ -1530,10 +1562,10 @@ function ShotInspector({
             )}
           </>
         )}
-        </div>
+        </OverlayScrollArea>
       )}
       {(tab === "audio" || audioPreview !== null) && (
-        <div
+        <OverlayScrollArea
           className="inspector-tab-panel audio-inspector-content"
           id="shot-inspector-panel-audio"
           role="tabpanel"
@@ -1606,48 +1638,114 @@ function ShotInspector({
             />
           </>
         )}
-        </div>
+        </OverlayScrollArea>
       )}
 
-      <footer className="inspector-footer inspector-footer--export">
-        <div>
-          {exportError || exportUnavailableReason ? (
-            <AlertTriangle size={15} />
-          ) : (
-            <Users size={15} />
-          )}
-          <span>
-            {exportUnavailableReason ||
-              exportError ||
-              `${shotCount} 镜已绑定 BP 站位${
-                backgroundGenerationActive
-                  ? " · AI 后台生成中，可导出当前方案"
-                  : ""
-              }`}
-          </span>
-        </div>
-        <button
-          className="button button--primary"
-          type="button"
-          title={
-            exportUnavailableReason ||
-            (exportBusy
-              ? "正在预检当前分镜"
-              : "预检并导出当前分镜到 UE Dialog Graph")
-          }
-          disabled={!canExport || exportBusy}
-          onClick={onExport}
-        >
-          {exportBusy ? (
-            <LoaderCircle className="spin" size={16} />
-          ) : exportUnavailableReason ? (
-            <AlertTriangle size={16} />
-          ) : (
-            <Upload size={16} />
-          )}
-          {exportBusy ? "正在检查 UE" : exportButtonLabel}
-        </button>
-      </footer>
+      {configurationMode ? (
+        <footer className="inspector-footer inspector-footer--export">
+          <div>
+            {exportError || !configurationSelectionReady ? (
+              <AlertTriangle size={15} />
+            ) : tab === "audio" ? (
+              <AudioLines size={15} />
+            ) : tab === "ue" ? (
+              <Users size={15} />
+            ) : (
+              <Camera size={15} />
+            )}
+            <span>
+              {exportError ||
+                (!configurationSelectionReady
+                  ? configurationSelectionMessage
+                  : tab === "audio"
+                    ? configurationAudioCount > 0
+                      ? `${configurationAudioCount} 项当前节点音频待导出`
+                      : "当前节点未选择音效或音乐"
+                    : tab === "ue"
+                      ? configurationActionCount > 0
+                        ? `${configurationActionCount} 组当前节点动作待导出`
+                        : "当前节点未添加动作"
+                      : "镜头配置由上方操作直接写入并保存")}
+            </span>
+          </div>
+          <button
+            className="button button--primary"
+            type="button"
+            title={
+              tab === "audio"
+                ? "预检并导出当前节点音效与音乐"
+                : tab === "ue"
+                  ? "预检并导出当前节点角色动作"
+                  : "使用上方镜头快捷操作直接写入"
+            }
+            disabled={
+              exportBusy ||
+              !configurationSelectionReady ||
+              tab === "shot" ||
+              (tab === "audio" && configurationAudioCount === 0) ||
+              (tab === "ue" && configurationActionCount === 0)
+            }
+            onClick={
+              tab === "audio" ? onExportNodeAudio : onExportNodeActions
+            }
+          >
+            {exportBusy ? (
+              <LoaderCircle className="spin" size={16} />
+            ) : tab === "shot" ? (
+              <Camera size={16} />
+            ) : (
+              <Upload size={16} />
+            )}
+            {exportBusy
+              ? "正在检查 UE"
+              : tab === "audio"
+                ? "导出节点音频"
+                : tab === "ue"
+                  ? "导出节点动作"
+                  : "镜头直接写入"}
+          </button>
+        </footer>
+      ) : (
+        <footer className="inspector-footer inspector-footer--export">
+          <div>
+            {exportError || exportUnavailableReason ? (
+              <AlertTriangle size={15} />
+            ) : (
+              <Users size={15} />
+            )}
+            <span>
+              {exportUnavailableReason ||
+                exportError ||
+                `${shotCount} 镜已绑定 BP 站位${
+                  backgroundGenerationActive
+                    ? " · AI 后台生成中，可导出当前方案"
+                    : ""
+                }`}
+            </span>
+          </div>
+          <button
+            className="button button--primary"
+            type="button"
+            title={
+              exportUnavailableReason ||
+              (exportBusy
+                ? "正在预检当前分镜"
+                : "预检并导出当前分镜到 UE Dialog Graph")
+            }
+            disabled={!canExport || exportBusy}
+            onClick={onExport}
+          >
+            {exportBusy ? (
+              <LoaderCircle className="spin" size={16} />
+            ) : exportUnavailableReason ? (
+              <AlertTriangle size={16} />
+            ) : (
+              <Upload size={16} />
+            )}
+            {exportBusy ? "正在检查 UE" : exportButtonLabel}
+          </button>
+        </footer>
+      )}
     </>
   );
 }
@@ -1693,6 +1791,12 @@ export default function App() {
     existingNodeConfigurations,
     setExistingNodeConfigurations,
   ] = useState<ExistingDialogueNodeConfiguration[]>([]);
+  const [configurationNodeReading, setConfigurationNodeReading] =
+    useState(false);
+  const [
+    configurationNodeReadRevision,
+    setConfigurationNodeReadRevision,
+  ] = useState(0);
   const [musicCatalog, setMusicCatalog] = useState<MusicCatalogSnapshot>({
     entries: [],
     revision: 0,
@@ -1827,6 +1931,8 @@ export default function App() {
     useState<InspectorTab>("direction");
   const [configurationMode, setConfigurationMode] = useState(false);
   const [configurationModeBusy, setConfigurationModeBusy] = useState(false);
+  const [configurationCameraActivity, setConfigurationCameraActivity] =
+    useState<"idle" | "read" | "write">("idle");
   const [configurationModeTransition, setConfigurationModeTransition] =
     useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1845,6 +1951,7 @@ export default function App() {
   const soundEffectCatalogLoadRef =
     useRef<Promise<SoundEffectCatalogSnapshot> | null>(null);
   const configurationAutoLoadNodeRef = useRef("");
+  const configurationNodeReadKeysRef = useRef<Set<string>>(new Set());
   activeIndexRef.current = activeIndex;
   directorModeRef.current = directorMode;
   sequenceRef.current = sequence;
@@ -1857,6 +1964,8 @@ export default function App() {
   const {
     selection: ueDialogueSelection,
     refreshing: ueDialogueSelectionRefreshing,
+    polling: ueDialogueSelectionPolling,
+    pollIntervalMs: ueDialogueSelectionPollIntervalMs,
   } = useUeDialogueSelection(
     configurationMode && activeWorkspace === "storyboard",
   );
@@ -1872,6 +1981,38 @@ export default function App() {
   const selectedUeDialogueRow = selectedUeDialogueNodeId
     ? sequence.rows.find((row) => row.id === selectedUeDialogueNodeId)
     : undefined;
+  const selectedUeDialoguePrefix = selectedUeDialogueNodeId?.slice(0, 4);
+  const configurationDialogueRow = useMemo(
+    () =>
+      selectedUeDialogueRow ??
+      (selectedUeDialogueNodeId &&
+      selectedUeDialoguePrefix === sequence.prefix
+        ? createConfigurationDialogueRow(selectedUeDialogueNodeId)
+        : undefined),
+    [
+      selectedUeDialogueNodeId,
+      selectedUeDialoguePrefix,
+      selectedUeDialogueRow,
+      sequence.prefix,
+    ],
+  );
+  const configurationSequence = useMemo(
+    () =>
+      configurationMode &&
+      configurationDialogueRow &&
+      !selectedUeDialogueRow
+        ? {
+            ...sequence,
+            rows: [...sequence.rows, configurationDialogueRow],
+          }
+        : sequence,
+    [
+      configurationDialogueRow,
+      configurationMode,
+      selectedUeDialogueRow,
+      sequence,
+    ],
+  );
   const selectedUeDialogueRowIndex = selectedUeDialogueNodeId
     ? sequence.rows.findIndex(
         (row) => row.id === selectedUeDialogueNodeId,
@@ -1888,17 +2029,39 @@ export default function App() {
       )
     : undefined;
   const configurationSelectionReady =
-    Boolean(selectedUeDialogueRow);
+    Boolean(configurationDialogueRow);
+  const configurationSyncState: ConfigurationSyncState =
+    ueDialogueSelection?.status === "offline"
+      ? "offline"
+      : ueDialogueSelection?.message.includes("00 配置节点")
+        ? "ignored"
+        : ueDialogueSelectionPolling
+          ? "syncing"
+          : "listening";
+  const configurationSyncStatus =
+    configurationSyncState === "offline"
+      ? "UE 离线"
+      : configurationSyncState === "ignored"
+        ? "00 节点已忽略"
+        : configurationSyncState === "syncing"
+          ? "同步中"
+          : `监听中 · ${
+              ueDialogueSelectionPollIntervalMs % 1_000 === 0
+                ? ueDialogueSelectionPollIntervalMs / 1_000
+                : (ueDialogueSelectionPollIntervalMs / 1_000).toFixed(1)
+            }s`;
   const configurationSelectionMessage = !ueDialogueSelection
     ? "正在读取 UE 当前节点"
     : ueDialogueSelection.status !== "selected"
       ? ueDialogueSelection.message
-      : !selectedUeDialogueRow
+      : !configurationDialogueRow
         ? formationChecking
           ? `正在加载节点 ${selectedUeDialogueNodeId} 的对话`
-          : `节点 ${selectedUeDialogueNodeId} 不属于当前对话 ${sequence.prefix || "未加载"}`
+          : `正在加载节点 ${selectedUeDialogueNodeId} 所属对话`
+        : !selectedUeDialogueRow
+          ? `已同步 UE 配置节点 ${selectedUeDialogueNodeId}，本地对白未收录`
         : selectedUeShotIndex < 0
-          ? `已同步 UE 节点 ${selectedUeDialogueNodeId}，当前没有已有镜头`
+          ? `已同步 UE 节点 ${selectedUeDialogueNodeId}`
           : ueDialogueSelection.message;
 
   useEffect(() => {
@@ -1908,7 +2071,7 @@ export default function App() {
     }
     if (
       !selectedUeDialogueNodeId ||
-      selectedUeDialogueRow ||
+      selectedUeDialoguePrefix === sequence.prefix ||
       formationChecking ||
       loading ||
       configurationAutoLoadNodeRef.current === selectedUeDialogueNodeId
@@ -1918,7 +2081,9 @@ export default function App() {
     const prefix = selectedUeDialogueNodeId.slice(0, 4);
     configurationAutoLoadNodeRef.current = selectedUeDialogueNodeId;
     setQuery(prefix);
-    void applySearch(database, prefix).catch((searchError) => {
+    void applySearch(database, prefix, {
+      loadUeConfiguration: false,
+    }).catch((searchError) => {
       setError(
         searchError instanceof Error
           ? searchError.message
@@ -1931,7 +2096,8 @@ export default function App() {
     formationChecking,
     loading,
     selectedUeDialogueNodeId,
-    selectedUeDialogueRow,
+    selectedUeDialoguePrefix,
+    sequence.prefix,
   ]);
 
   useEffect(() => {
@@ -1959,13 +2125,89 @@ export default function App() {
     selectedUeShotIndex,
   ]);
 
+  useEffect(() => {
+    if (!configurationMode) {
+      configurationNodeReadKeysRef.current.clear();
+      setConfigurationNodeReading(false);
+      return;
+    }
+    if (
+      !configurationSelectionReady ||
+      !selectedUeDialogueNodeId ||
+      (inspectorTab !== "shot" && inspectorTab !== "audio")
+    ) {
+      setConfigurationNodeReading(false);
+      return;
+    }
+    const cacheKey =
+      `${sequence.prefix}:${selectedUeDialogueNodeId}:` +
+      configurationNodeReadRevision;
+    if (configurationNodeReadKeysRef.current.has(cacheKey)) {
+      return;
+    }
+    configurationNodeReadKeysRef.current.add(cacheKey);
+    let active = true;
+    setConfigurationNodeReading(true);
+    void readExistingDialogueStoryboard({
+      dialogueId: sequence.prefix,
+      startId: sequence.startId,
+      dialogueIds: [selectedUeDialogueNodeId],
+      configurationOnly: true,
+      participantModelIndexes: [],
+    })
+      .then((snapshot) => {
+        if (!active) {
+          return;
+        }
+        const configuration = snapshot.configurations.find(
+          (item) => item.dialogueId === selectedUeDialogueNodeId,
+        );
+        if (!configuration) {
+          return;
+        }
+        setExistingNodeConfigurations((current) => [
+          ...current.filter(
+            (item) => item.dialogueId !== configuration.dialogueId,
+          ),
+          configuration,
+        ]);
+      })
+      .catch((configurationError) => {
+        configurationNodeReadKeysRef.current.delete(cacheKey);
+        if (active) {
+          setError(
+            configurationError instanceof Error
+              ? configurationError.message
+              : "无法读取 UE 当前节点配置",
+          );
+        }
+      })
+      .finally(() => {
+        if (active) {
+          setConfigurationNodeReading(false);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [
+    configurationMode,
+    configurationNodeReadRevision,
+    configurationSelectionReady,
+    inspectorTab,
+    selectedUeDialogueNodeId,
+    sequence.prefix,
+    sequence.startId,
+  ]);
+
   const activeShot: ShotPlan | undefined = shots[activeIndex] ?? shots[0];
   const configurationFallbackShot = useMemo(() => {
     if (
       !configurationMode ||
       activeShot ||
       !selectedUeDialogueNodeId ||
-      !selectedUeDialogueRow
+      !configurationSelectionReady ||
+      sequence.rows.length === 0
     ) {
       return undefined;
     }
@@ -1976,21 +2218,39 @@ export default function App() {
   }, [
     activeShot,
     configurationMode,
+    configurationSelectionReady,
     selectedUeDialogueNodeId,
-    selectedUeDialogueRow,
     sequence,
   ]);
   const inspectorShot = activeShot ?? configurationFallbackShot;
+  const characterActionDialogueIds = useMemo(
+    () =>
+      configurationMode && selectedUeDialogueNodeId
+        ? [selectedUeDialogueNodeId]
+        : sequence.rows.map((row) => row.id),
+    [configurationMode, selectedUeDialogueNodeId, sequence.rows],
+  );
   const characterActionEditor = useCharacterActionEditor({
     sequence,
+    dialogueIds: characterActionDialogueIds,
     enabled:
       activeWorkspace === "storyboard" &&
       inspectorTab === "ue" &&
-      Boolean(activeShot) &&
-      (!configurationMode || configurationSelectionReady),
+      (configurationMode
+        ? configurationSelectionReady
+        : Boolean(inspectorShot)),
     releaseWhenDisabled:
       configurationMode || activeWorkspace !== "storyboard",
   });
+  const configurationDataActivity =
+    configurationCameraActivity === "write"
+      ? "write"
+      : configurationCameraActivity === "read" ||
+          ueDialogueSelectionPolling ||
+          configurationNodeReading ||
+          characterActionEditor.loading
+        ? "read"
+        : "idle";
   const characterActionStage = useMemo(() => {
     if (!activeShot) {
       return {
@@ -2081,6 +2341,8 @@ export default function App() {
     exportUnavailableReason: storyboardExportUnavailableReason,
     previewCurrent: previewStoryboardExport,
     previewCurrentSoundEffects: previewCurrentSoundEffectExport,
+    previewCurrentNodeAudio,
+    previewCurrentNodeActions,
     previewAll: previewAllStoryboardExport,
     refresh: refreshStoryboardExportPreview,
     confirm: confirmStoryboardExport,
@@ -2970,7 +3232,10 @@ export default function App() {
   async function applySearch(
     nextDatabase: DialogueDatabase,
     prefix: string,
+    options: { loadUeConfiguration?: boolean } = {},
   ) {
+    const loadUeConfiguration =
+      options.loadUeConfiguration !== false;
     const nextSequence = findDialogueSequence(nextDatabase, prefix);
     setContentSearch(null);
     cancelDialogueEdit();
@@ -3003,9 +3268,17 @@ export default function App() {
     setActiveFormationSource("generated");
     setActiveFormationVariant("generated");
     setAwaitingDirectorDesign(true);
-    setFormationStatus("正在检查 UE Blueprint 站位...");
+    setFormationChecking(false);
+    setFormationStatus(
+      loadUeConfiguration
+        ? "正在检查 UE Blueprint 站位..."
+        : "已从本地加载对白，小窗未读取整段 UE 配置",
+    );
     if (nextDatabase.sourceName === "内置演示数据") {
       setFormationStatus("对话文字已加载，等待选择导演生成分镜");
+      return;
+    }
+    if (!loadUeConfiguration) {
       return;
     }
 
@@ -3134,70 +3407,6 @@ export default function App() {
       if (formationRunId === formationRunRef.current) {
         setFormationChecking(false);
       }
-    }
-  }
-
-  async function reloadExistingStoryboard() {
-    const targetSequence = sequence;
-    if (!targetSequence.prefix || targetSequence.rows.length === 0) {
-      return;
-    }
-    try {
-      const existing = await readExistingDialogueStoryboard({
-        dialogueId: targetSequence.prefix,
-        startId: targetSequence.startId,
-        dialogueIds: targetSequence.rows.map((row) => row.id),
-        formationClassPath:
-          loadedFormationSnapshot?.blueprintClassPath ??
-          targetSequence.formation?.classPath,
-        participantModelIndexes: targetSequence.participants.flatMap(
-          (participant) =>
-            participant.modelIndex === null
-              ? []
-              : [participant.modelIndex],
-        ),
-      });
-      if (sequenceRef.current.prefix !== targetSequence.prefix) {
-        return;
-      }
-      setExistingNodeConfigurations(existing.configurations ?? []);
-      const imported = createExistingStoryboardPreview(
-        targetSequence,
-        existing,
-      );
-      if (imported) {
-        const activeDialogueNodeId =
-          selectedUeDialogueNodeId ||
-          targetSequence.rows[0]?.id ||
-          "";
-        const nextActiveIndex = imported.shots.findIndex((shot) =>
-          shot.dialogueIds.includes(activeDialogueNodeId),
-        );
-        setSequence(imported.sequence);
-        setShots(imported.shots);
-        setDirectorAnalysis(imported.analysis);
-        setDirectorBlocking(imported.blocking);
-        setDialogueIssues([]);
-        setRuleAdvisorProgress(null);
-        setRuleAdvisorSummary(null);
-        replaceSoundEffectRecommendations([]);
-        setMusicOverridesByDialogueId(new Map());
-        setFallbackReason(null);
-        setActiveIndex(Math.max(0, nextActiveIndex));
-        setSelectedDialogueId(activeDialogueNodeId);
-        setAwaitingDirectorDesign(true);
-      }
-      setFormationStatus(
-        [existing.message, ...existing.warnings]
-          .filter(Boolean)
-          .join("；"),
-      );
-    } catch (reloadError) {
-      setFormationStatus(
-        reloadError instanceof Error
-          ? `已有镜头回读失败：${reloadError.message}`
-          : "已有镜头回读失败",
-      );
     }
   }
 
@@ -3948,31 +4157,35 @@ export default function App() {
     setConfigurationModeTransition(true);
     setError("");
     try {
-      await new Promise<void>((resolve) =>
-        window.requestAnimationFrame(() => resolve()),
-      );
+      if (enabled) {
+        if (
+          inspectorTab !== "shot" &&
+          inspectorTab !== "audio" &&
+          inspectorTab !== "ue"
+        ) {
+          setInspectorTab("shot");
+        }
+        setConfigurationMode(true);
+        await new Promise<void>((resolve) =>
+          window.requestAnimationFrame(() =>
+            window.requestAnimationFrame(() => resolve()),
+          ),
+        );
+      }
       await window.shotSandboxDesktop?.setConfigurationWindowMode?.(
         enabled,
         contentSize,
       );
-      if (
-        enabled &&
-        inspectorTab !== "shot" &&
-        inspectorTab !== "audio" &&
-        inspectorTab !== "ue"
-      ) {
-        setInspectorTab("shot");
+      if (!enabled) {
+        setConfigurationMode(false);
       }
-      setConfigurationMode(enabled);
       await new Promise<void>((resolve) =>
         window.requestAnimationFrame(() =>
           window.requestAnimationFrame(() => resolve()),
         ),
       );
     } catch (windowError) {
-      if (!enabled) {
-        setConfigurationMode(false);
-      }
+      setConfigurationMode(!enabled);
       setError(
         windowError instanceof Error
           ? windowError.message
@@ -3984,6 +4197,20 @@ export default function App() {
     }
   }
 
+  function reloadCurrentNodeConfiguration() {
+    if (!selectedUeDialogueNodeId) {
+      return;
+    }
+    configurationNodeReadKeysRef.current.clear();
+    setExistingNodeConfigurations((current) =>
+      current.filter(
+        (configuration) =>
+          configuration.dialogueId !== selectedUeDialogueNodeId,
+      ),
+    );
+    setConfigurationNodeReadRevision((current) => current + 1);
+  }
+
   async function openStoryboardExport(
     dialogueScope?: readonly string[],
   ) {
@@ -3991,6 +4218,35 @@ export default function App() {
       await changeConfigurationMode(false);
     }
     await previewStoryboardExport(dialogueScope);
+  }
+
+  async function openSoundEffectExport(
+    dialogueScope?: readonly string[],
+  ) {
+    const scopedDialogueIds = dialogueScope
+      ? [...dialogueScope]
+      : undefined;
+    if (configurationMode) {
+      await changeConfigurationMode(false);
+    }
+    await previewCurrentSoundEffectExport(scopedDialogueIds);
+  }
+
+  async function openCurrentNodeExport(
+    kind: "audio" | "actions",
+  ) {
+    if (!selectedUeDialogueNodeId) {
+      return;
+    }
+    const dialogueScope = [selectedUeDialogueNodeId];
+    if (configurationMode) {
+      await changeConfigurationMode(false);
+    }
+    if (kind === "audio") {
+      await previewCurrentNodeAudio(dialogueScope);
+    } else {
+      await previewCurrentNodeActions(dialogueScope);
+    }
   }
 
   async function chooseDirectory(
@@ -4599,6 +4855,32 @@ export default function App() {
 
         <div className="app-header__status">
           {activeWorkspace === "storyboard" && (
+            <button
+              className="workspace-status-icon configuration-mode-toggle"
+              type="button"
+              title={configurationMode ? "返回完整窗口" : "进入配置小窗"}
+              aria-label={
+                configurationMode ? "返回完整窗口" : "进入配置小窗"
+              }
+              aria-pressed={configurationMode}
+              disabled={configurationModeBusy}
+              onClick={() =>
+                void changeConfigurationMode(!configurationMode)
+              }
+            >
+              {configurationModeBusy ? (
+                <LoaderCircle className="spin" size={17} />
+              ) : configurationMode ? (
+                <Maximize2 size={17} />
+              ) : (
+                <PanelRightClose size={17} />
+              )}
+              <span className="workspace-status-tooltip">
+                {configurationMode ? "返回完整窗口" : "进入配置小窗"}
+              </span>
+            </button>
+          )}
+          {activeWorkspace === "storyboard" && (
             <WorkspaceStatusHub
               mode={directorMode}
               traeLoading={traeLoading}
@@ -4614,7 +4896,16 @@ export default function App() {
               onReorderPendingTasks={reorderPendingTasks}
               onDeletePendingTask={deletePendingTask}
               onCancelTask={cancelTraeTaskFromStatus}
-              disabled={configurationMode || configurationModeBusy}
+              configurationDataStatus={
+                configurationMode
+                  ? {
+                      state: configurationSyncState,
+                      label: configurationSyncStatus,
+                      activity: configurationDataActivity,
+                    }
+                  : undefined
+              }
+              disabled={configurationModeBusy}
             />
           )}
           <DataSourceStatus
@@ -5101,16 +5392,23 @@ export default function App() {
                   </span>
                 </div>
               </div>
-              <StageView
-                sceneReference={sceneReference.current}
-                participants={characterActionStage.participants}
-                dialogueParticipantSlots={dialogueParticipantSlotSet}
-                showCastRoster
-                shot={stageShot ?? activeShot}
-                shotIndex={activeIndex}
-                shotCount={shots.length}
-                active={activeWorkspace === "storyboard"}
-              />
+              {(!window.shotSandboxDesktop ||
+                (desktopSetup &&
+                  (!desktopSetup.defaultDataReady ||
+                    database.sourceName !== "内置演示数据"))) ? (
+                <Suspense fallback={<div className="stage-view" />}>
+                  <LazyStageView
+                    sceneReference={sceneReference.current}
+                    participants={characterActionStage.participants}
+                    dialogueParticipantSlots={dialogueParticipantSlotSet}
+                    showCastRoster
+                    shot={stageShot ?? activeShot}
+                    shotIndex={activeIndex}
+                    shotCount={shots.length}
+                    active={activeWorkspace === "storyboard"}
+                  />
+                </Suspense>
+              ) : <div className="stage-view" />}
               {directorLoading && (
                 <div className="director-loading" role="status">
                   <LoaderCircle className="spin" size={20} />
@@ -5175,7 +5473,13 @@ export default function App() {
                     activeDialogueRow?.speakerSlot ?? activeShot.speakerSlot,
                   ) ?? "?"}
                 </span>
-                <div className="dialogue-strip__content">
+                <div
+                  className="dialogue-strip__content"
+                  role="region"
+                  aria-label="当前节点对白"
+                  tabIndex={editingDialogueId ? undefined : 0}
+                  key={activeDialogueRow?.id ?? activeShot.dialogueId}
+                >
                   <strong>
                     {activeDialogueRow?.speakerSlot
                       ? participantNamesBySlot.get(
@@ -5366,7 +5670,9 @@ export default function App() {
             <>
               <ShotInspector
                 shot={inspectorShot}
-                sequence={sequence}
+                sequence={
+                  configurationMode ? configurationSequence : sequence
+                }
                 activeDialogueId={activeDialogueId}
                 dialogueIssues={dialogueIssues}
                 directorAnalysis={directorAnalysis}
@@ -5398,7 +5704,6 @@ export default function App() {
                 }
                 backgroundGenerationActive={directorLoading}
                 configurationMode={configurationMode}
-                configurationModeBusy={configurationModeBusy}
                 configurationDialogueNodeId={selectedUeDialogueNodeId}
                 configurationNodeConfiguration={
                   selectedUeNodeConfiguration
@@ -5410,7 +5715,11 @@ export default function App() {
                 configurationSelectionRefreshing={
                   ueDialogueSelectionRefreshing
                 }
+                configurationNodeReading={configurationNodeReading}
                 characterActionEditor={characterActionEditor}
+                onConfigurationActivityChange={
+                  setConfigurationCameraActivity
+                }
                 onMove={moveShot}
                 preference={
                   shotPreferences.get(
@@ -5427,11 +5736,8 @@ export default function App() {
                   void submitShotPreference(feedbackType, reason)
                 }
                 onTabChange={setInspectorTab}
-                onConfigurationModeChange={(enabled) =>
-                  void changeConfigurationMode(enabled)
-                }
-                onReloadExistingStoryboard={() =>
-                  void reloadExistingStoryboard()
+                onReloadCurrentNodeConfiguration={
+                  reloadCurrentNodeConfiguration
                 }
                 onExport={() =>
                   void openStoryboardExport(
@@ -5441,11 +5747,17 @@ export default function App() {
                   )
                 }
                 onExportSoundEffects={() =>
-                  void previewCurrentSoundEffectExport(
+                  void openSoundEffectExport(
                     configurationMode && selectedUeDialogueNodeId
                       ? [selectedUeDialogueNodeId]
                       : undefined,
                   )
+                }
+                onExportNodeAudio={() =>
+                  void openCurrentNodeExport("audio")
+                }
+                onExportNodeActions={() =>
+                  void openCurrentNodeExport("actions")
                 }
                 onChangeSoundEffect={updateSoundEffectRecommendation}
                 onApplySoundEffect={applySoundEffectFromLibrary}
@@ -5474,48 +5786,29 @@ export default function App() {
                   </small>
                   <h2>
                     {configurationMode
-                      ? selectedUeDialogueRow
-                        ? selectedUeDialogueRow.content
+                      ? configurationDialogueRow
+                        ? configurationDialogueRow.content
                         : configurationSelectionMessage
                       : hasLoadedDialogue
                         ? "对话已加载"
                         : "等待对话"}
                   </h2>
                 </div>
-                <button
-                  className="icon-button configuration-mode-toggle"
-                  type="button"
-                  title={
-                    configurationMode ? "返回完整窗口" : "进入配置小窗"
-                  }
-                  aria-label={
-                    configurationMode ? "返回完整窗口" : "进入配置小窗"
-                  }
-                  aria-pressed={configurationMode}
-                  disabled={configurationModeBusy}
-                  onClick={() =>
-                    void changeConfigurationMode(!configurationMode)
-                  }
-                >
-                  {configurationModeBusy ? (
-                    <LoaderCircle className="spin" size={17} />
-                  ) : configurationMode ? (
-                    <Maximize2 size={17} />
-                  ) : (
-                    <PanelRightClose size={17} />
-                  )}
-                </button>
               </section>
               {configurationMode ? (
-                selectedUeDialogueRow && !formationChecking ? (
+                configurationSelectionReady &&
+                selectedUeDialogueNodeId &&
+                !formationChecking ? (
                   <NodeCameraQuickActions
                     dialogueId={sequence.prefix}
                     startId={sequence.startId}
-                    dialogueNodeId={selectedUeDialogueRow.id}
+                    dialogueNodeId={selectedUeDialogueNodeId}
+                    configurationLoading={configurationNodeReading}
                     previousDialogueNodeId={
                       previousSelectedUeDialogueNodeId
                     }
-                    onApplied={() => void reloadExistingStoryboard()}
+                    onApplied={reloadCurrentNodeConfiguration}
+                    onActivityChange={setConfigurationCameraActivity}
                   />
                 ) : (
                   <ConfigurationSelectionState

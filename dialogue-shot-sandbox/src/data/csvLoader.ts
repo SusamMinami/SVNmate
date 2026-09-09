@@ -9,29 +9,33 @@ import {
   MODEL_FILENAME,
   NPC_FILENAME,
   START_FILENAME,
-  type DialogueCsvPayload,
 } from "./csv";
-
-type DialogueCsvWorkerResponse =
-  | { ok: true; database: DialogueDatabase }
-  | { ok: false; message: string };
-
-interface ApiEnvelope<T> {
-  ok: boolean;
-  data?: T;
-  error?: { message?: string };
-}
+import type {
+  DialogueCsvWorkerRequest,
+  DialogueCsvWorkerResponse,
+} from "./csvWorkerProtocol";
 
 function parseDialogueDatabase(
-  payload: DialogueCsvPayload,
+  request: DialogueCsvWorkerRequest,
 ): Promise<DialogueDatabase> {
   const worker = new Worker(new URL("./csv.worker.ts", import.meta.url), {
     type: "module",
     name: "dialogue-csv-parser",
   });
   return new Promise((resolve, reject) => {
-    worker.onmessage = (event: MessageEvent<DialogueCsvWorkerResponse>) => {
+    const cleanup = () => {
+      clearTimeout(timer);
+      worker.onmessage = null;
+      worker.onerror = null;
+      worker.onmessageerror = null;
       worker.terminate();
+    };
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error("CSV 后台读取或解析超时，请检查目录后重试"));
+    }, 120_000);
+    worker.onmessage = (event: MessageEvent<DialogueCsvWorkerResponse>) => {
+      cleanup();
       if (event.data.ok) {
         resolve(event.data.database);
       } else {
@@ -39,14 +43,19 @@ function parseDialogueDatabase(
       }
     };
     worker.onerror = (event) => {
-      worker.terminate();
+      cleanup();
       reject(new Error(event.message || "CSV 后台解析失败"));
     };
     worker.onmessageerror = () => {
-      worker.terminate();
+      cleanup();
       reject(new Error("CSV 后台解析结果无法读取"));
     };
-    worker.postMessage(payload);
+    try {
+      worker.postMessage(request);
+    } catch (error) {
+      cleanup();
+      reject(error);
+    }
   });
 }
 
@@ -55,17 +64,17 @@ async function readDirectoryFile(
   filename: string,
 ) {
   const handle = await directory.getFileHandle(filename);
-  return (await handle.getFile()).text();
+  return handle.getFile();
 }
 
 async function readOptionalDirectoryFile(
   directory: FileSystemDirectoryHandle,
   filename: string,
-): Promise<string> {
+): Promise<File | undefined> {
   try {
     return await readDirectoryFile(directory, filename);
   } catch {
-    return "";
+    return undefined;
   }
 }
 
@@ -98,35 +107,17 @@ export async function loadDocDirectory(
     readOptionalDirectoryFile(csvDirectory, MAP_RESOURCE_FILENAME),
   ]);
   return parseDialogueDatabase({
-    dialogueText,
-    startText,
-    npcText,
+    kind: "files",
     sourceName: `${root.name}\\csvdir`,
-    modelText,
-    missionText,
-    dungeonMissionText,
-    missionPositionText,
-    mapConfigText,
-    mapResourceText,
+    files: {
+      dialogueText, startText, npcText, modelText, missionText,
+      dungeonMissionText, missionPositionText, mapConfigText, mapResourceText,
+    },
   });
 }
 
 export async function loadConfiguredDatabase(): Promise<DialogueDatabase> {
-  const response = await fetch("/api/ue/config-data/read", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: "{}",
-  });
-  const result = (await response.json().catch(() => null)) as
-    | ApiEnvelope<DialogueCsvPayload>
-    | null;
-  if (!response.ok || !result?.ok || !result.data) {
-    throw new Error(
-      result?.error?.message ||
-        `已保存的数据目录读取失败（HTTP ${response.status}）`,
-    );
-  }
-  return parseDialogueDatabase(result.data);
+  return parseDialogueDatabase({ kind: "configured" });
 }
 
 export function findDocCsvFile(
@@ -197,38 +188,20 @@ export async function loadDocFiles(
   );
   const mapConfig = fileByName(files, MAP_CONFIG_FILENAME, false);
   const mapResource = fileByName(files, MAP_RESOURCE_FILENAME, false);
-  const [
-    dialogueText,
-    startText,
-    npcText,
-    modelText,
-    missionText,
-    dungeonMissionText,
-    missionPositionText,
-    mapConfigText,
-    mapResourceText,
-  ] = await Promise.all([
-    dialogue.text(),
-    start.text(),
-    npc.text(),
-    model?.text() ?? "",
-    mission?.text() ?? "",
-    dungeonMission?.text() ?? "",
-    missionPosition?.text() ?? "",
-    mapConfig?.text() ?? "",
-    mapResource?.text() ?? "",
-  ]);
   const rootName = dialogue.webkitRelativePath.split(/[\\/]/)[0] || "已选目录";
   return parseDialogueDatabase({
-    dialogueText,
-    startText,
-    npcText,
+    kind: "files",
     sourceName: rootName,
-    modelText,
-    missionText,
-    dungeonMissionText,
-    missionPositionText,
-    mapConfigText,
-    mapResourceText,
+    files: {
+      dialogueText: dialogue,
+      startText: start,
+      npcText: npc,
+      modelText: model ?? undefined,
+      missionText: mission ?? undefined,
+      dungeonMissionText: dungeonMission ?? undefined,
+      missionPositionText: missionPosition ?? undefined,
+      mapConfigText: mapConfig ?? undefined,
+      mapResourceText: mapResource ?? undefined,
+    },
   });
 }

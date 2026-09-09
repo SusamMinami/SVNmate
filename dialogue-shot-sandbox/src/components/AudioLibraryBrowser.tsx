@@ -269,74 +269,77 @@ export function AudioLibraryBrowser({
 
   return (
     <section className="inspector-section audio-library-browser">
-      <div className="section-label">
-        <span>资料库试听</span>
-        <small>
-          {soundEffectCatalog.entries.length} 音效 ·{" "}
-          {musicCatalog.entries.length} 音乐
-        </small>
-      </div>
-
       <div
-        className="audio-library-browser__switch"
-        role="group"
-        aria-label="选择试听资料库"
+        className="audio-library-browser__sticky-controls"
       >
-        <button
-          type="button"
-          aria-expanded={library === "sound-effect"}
-          aria-pressed={library === "sound-effect"}
-          disabled={soundEffectCatalog.entries.length === 0}
-          title={
-            soundEffectCatalog.entries.length > 0
-              ? "浏览音效资料库"
-              : "音效资料库为空，请先在设置中同步"
-          }
-          onClick={() => selectLibrary("sound-effect")}
-        >
-          <AudioLines size={14} />
-          <span>音效资料库</span>
-          <small>{soundEffectCatalog.entries.length}</small>
-          <ChevronDown size={13} />
-        </button>
-        <button
-          type="button"
-          aria-expanded={library === "music"}
-          aria-pressed={library === "music"}
-          disabled={musicCatalog.entries.length === 0}
-          title={
-            musicCatalog.entries.length > 0
-              ? "浏览音乐资料库"
-              : "音乐资料库为空，请先在设置中同步"
-          }
-          onClick={() => selectLibrary("music")}
-        >
-          <Music2 size={14} />
-          <span>音乐资料库</span>
-          <small>{musicCatalog.entries.length}</small>
-          <ChevronDown size={13} />
-        </button>
-      </div>
+        <div className="section-label">
+          <span>资料库试听</span>
+          <small>
+            {soundEffectCatalog.entries.length} 音效 ·{" "}
+            {musicCatalog.entries.length} 音乐
+          </small>
+        </div>
 
-      {library && (
-        <>
-          <label className="audio-library-browser__target">
-            <span>应用到节点</span>
-            <select
-              aria-label="资料库资源应用节点"
-              value={targetDialogueId}
-              onChange={(event) => setTargetDialogueId(event.target.value)}
-            >
-              {currentDialogueIds.map((dialogueId) => (
-                <option key={dialogueId} value={dialogueId}>
-                  {dialogueId}
-                  {dialogueById.get(dialogueId)?.content
-                    ? ` · ${dialogueById.get(dialogueId)!.content}`
-                    : ""}
-                </option>
-              ))}
-            </select>
-          </label>
+        <div
+          className="audio-library-browser__switch"
+          role="group"
+          aria-label="选择试听资料库"
+        >
+          <button
+            type="button"
+            aria-expanded={library === "sound-effect"}
+            aria-pressed={library === "sound-effect"}
+            disabled={soundEffectCatalog.entries.length === 0}
+            title={
+              soundEffectCatalog.entries.length > 0
+                ? "浏览音效资料库"
+                : "音效资料库为空，请先在设置中同步"
+            }
+            onClick={() => selectLibrary("sound-effect")}
+          >
+            <AudioLines size={14} />
+            <span>音效资料库</span>
+            <small>{soundEffectCatalog.entries.length}</small>
+            <ChevronDown size={13} />
+          </button>
+          <button
+            type="button"
+            aria-expanded={library === "music"}
+            aria-pressed={library === "music"}
+            disabled={musicCatalog.entries.length === 0}
+            title={
+              musicCatalog.entries.length > 0
+                ? "浏览音乐资料库"
+                : "音乐资料库为空，请先在设置中同步"
+            }
+            onClick={() => selectLibrary("music")}
+          >
+            <Music2 size={14} />
+            <span>音乐资料库</span>
+            <small>{musicCatalog.entries.length}</small>
+            <ChevronDown size={13} />
+          </button>
+        </div>
+
+        {library && (
+          <>
+            <label className="audio-library-browser__target">
+              <span>应用到节点</span>
+              <select
+                aria-label="资料库资源应用节点"
+                value={targetDialogueId}
+                onChange={(event) => setTargetDialogueId(event.target.value)}
+              >
+                {currentDialogueIds.map((dialogueId) => (
+                  <option key={dialogueId} value={dialogueId}>
+                    {dialogueId}
+                    {dialogueById.get(dialogueId)?.content
+                      ? ` · ${dialogueById.get(dialogueId)!.content}`
+                      : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
           <div
             className="audio-library-browser__categories"
             role="group"
@@ -355,8 +358,9 @@ export function AudioLibraryBrowser({
               </button>
             ))}
           </div>
-        </>
-      )}
+          </>
+        )}
+      </div>
 
       {library === "sound-effect" && category && (
         <div

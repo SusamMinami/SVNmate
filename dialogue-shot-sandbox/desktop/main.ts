@@ -966,6 +966,9 @@ async function createMainWindow(port: number): Promise<void> {
     height: 900,
     minWidth: DEFAULT_WINDOW_MIN_WIDTH,
     minHeight: DEFAULT_WINDOW_MIN_HEIGHT,
+    ...(app.isPackaged
+      ? {}
+      : { icon: join(app.getAppPath(), "build", "icon.png") }),
     backgroundColor: "#eef0f2",
     show: false,
     autoHideMenuBar: true,
@@ -1040,6 +1043,9 @@ async function runDesktop(): Promise<void> {
 }
 
 app.setName("镜头沙盘");
+if (process.platform === "win32") {
+  app.setAppUserModelId("cn.trae.shotsandbox");
+}
 configureRuntimeEnvironment();
 
 if (isMcpProcess) {

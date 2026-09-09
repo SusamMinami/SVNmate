@@ -29,6 +29,7 @@ import type {
   DialogueSequence,
 } from "../types";
 import { dialogueParticipantsByModelIndex } from "../data/characterActions";
+import { PARTICIPANT_COLORS } from "../data/dialogueRepository";
 
 interface CharacterActionEditorProps {
   controller: CharacterActionEditorController;
@@ -445,6 +446,11 @@ function actionTypeLabel(action: DialogueCharacterActionItem): string {
   }[type.toLowerCase()] ?? type;
 }
 
+function blueprintActorLabel(classPath: string, modelIndex: number): string {
+  const assetName = classPath.split("/").at(-1)?.split(".")[0] ?? "";
+  return assetName.replace(/^BP_/i, "") || `BP 槽 ${modelIndex}`;
+}
+
 function groupTracksByDialogue<T extends { dialogueId: string }>(
   tracks: readonly T[],
 ): Map<string, T[]> {
@@ -472,29 +478,6 @@ export function CharacterActionEditor({
   const [draggedAction, setDraggedAction] =
     useState<DraggedAction | null>(null);
   const editingDisabled = busy || controller.loading;
-  const editableParticipants = useMemo(
-    () =>
-      sequence.participants
-        .filter(
-          (participant) =>
-            participant.modelIndex !== null && participant.modelClassPath,
-        )
-        .sort(
-          (left, right) =>
-            (left.modelIndex ?? 0) - (right.modelIndex ?? 0),
-        ),
-    [sequence.participants],
-  );
-  const editableParticipantByModelIndex = useMemo(
-    () =>
-      new Map(
-        editableParticipants.map((participant) => [
-          participant.modelIndex!,
-          participant,
-        ]),
-      ),
-    [editableParticipants],
-  );
   const participantByModelIndex = useMemo(
     () =>
       dialogueParticipantsByModelIndex(
@@ -512,6 +495,43 @@ export function CharacterActionEditor({
         ]),
       ),
     [controller.catalogs],
+  );
+  const editableParticipants = useMemo(
+    () =>
+      controller.catalogs
+        .map((catalog) => {
+          const participant = participantByModelIndex.get(catalog.modelIndex);
+          return {
+            instanceId:
+              participant?.instanceId ??
+              `bp:${catalog.blueprintClassPath}:${catalog.modelIndex}`,
+            modelIndex: catalog.modelIndex,
+            name:
+              participant?.name ??
+              catalog.characterLabel ??
+              blueprintActorLabel(
+                catalog.blueprintClassPath,
+                catalog.modelIndex,
+              ),
+            color:
+              participant?.color ??
+              PARTICIPANT_COLORS[
+                catalog.modelIndex % PARTICIPANT_COLORS.length
+              ],
+          };
+        })
+        .sort((left, right) => left.modelIndex - right.modelIndex),
+    [controller.catalogs, participantByModelIndex],
+  );
+  const editableParticipantByModelIndex = useMemo(
+    () =>
+      new Map(
+        editableParticipants.map((participant) => [
+          participant.modelIndex,
+          participant,
+        ]),
+      ),
+    [editableParticipants],
   );
   const actionByNameByModelIndex = useMemo(
     () =>
@@ -535,10 +555,13 @@ export function CharacterActionEditor({
   const dialogueScope = dialogueIds.join("|");
   const rows = useMemo(
     () =>
-      dialogueIds.flatMap((dialogueId) => {
-        const row = rowsById.get(dialogueId);
-        return row ? [row] : [];
-      }),
+      dialogueIds.map(
+        (dialogueId) =>
+          rowsById.get(dialogueId) ?? {
+            id: dialogueId,
+            content: "UE 配置节点（本地对白未收录）",
+          },
+      ),
     [dialogueScope, rowsById],
   );
   const existingTracksByDialogue = useMemo(
@@ -674,10 +697,11 @@ export function CharacterActionEditor({
                   id={`character-action-node-${row.id}`}
                 >
                   {modelIndexes.map((modelIndex) => {
-                    const participant = participantByModelIndex.get(modelIndex);
+                    const participant =
+                      editableParticipantByModelIndex.get(modelIndex) ??
+                      participantByModelIndex.get(modelIndex);
                     const catalog =
-                      editableParticipantByModelIndex.get(modelIndex) ===
-                      participant
+                      editableParticipantByModelIndex.has(modelIndex)
                         ? catalogByModelIndex.get(modelIndex)
                         : undefined;
                     const existingTrack = existingTracks.find(

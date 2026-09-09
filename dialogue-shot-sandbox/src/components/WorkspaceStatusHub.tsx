@@ -13,6 +13,12 @@ import type { DirectorMode } from "../director/contracts";
 import type { LarkStatus } from "../lark/client";
 import type { TraeCollaborationStatus } from "../trae/client";
 
+export interface ConfigurationDataStatus {
+  state: "syncing" | "listening" | "offline" | "ignored";
+  label: string;
+  activity: "idle" | "read" | "write";
+}
+
 interface WorkspaceStatusHubProps {
   mode: DirectorMode;
   traeLoading: boolean;
@@ -28,6 +34,7 @@ interface WorkspaceStatusHubProps {
   onReorderPendingTasks: (requestIds: string[]) => Promise<void>;
   onDeletePendingTask: (requestId: string) => Promise<void>;
   onCancelTask: (requestId: string) => Promise<void>;
+  configurationDataStatus?: ConfigurationDataStatus;
   disabled?: boolean;
 }
 
@@ -69,12 +76,17 @@ export function WorkspaceStatusHub({
   onReorderPendingTasks,
   onDeletePendingTask,
   onCancelTask,
+  configurationDataStatus,
   disabled = false,
 }: WorkspaceStatusHubProps) {
   const [open, setOpen] = useState(false);
   const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);
   const [queueBusy, setQueueBusy] = useState(false);
   const [queueError, setQueueError] = useState("");
+  const [displayedActivity, setDisplayedActivity] =
+    useState<ConfigurationDataStatus["activity"]>("idle");
+  const activityReleaseTimerRef =
+    useRef<ReturnType<typeof globalThis.setTimeout> | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const activeTasks =
     traeStatus?.tasks ??
@@ -123,11 +135,47 @@ export function WorkspaceStatusHub({
       : miraReady
         ? `飞书用户：${larkStatus?.userName || "已授权用户"}`
         : "不可用时会自动降级到规则导演";
+  const configurationActivityLabel =
+    displayedActivity === "write"
+      ? "写入中"
+      : displayedActivity === "read"
+        ? "读取中"
+        : configurationDataStatus?.state === "offline"
+          ? "连接中断"
+          : configurationDataStatus?.state === "ignored"
+            ? "配置节点已忽略"
+            : "等待下一次同步";
+  const configurationStatusLabel = configurationDataStatus
+    ? `UE 数据链路 · ${configurationDataStatus.label} · ${configurationActivityLabel}`
+    : "";
+
   useEffect(() => {
-    if (disabled) {
+    if (activityReleaseTimerRef.current !== null) {
+      globalThis.clearTimeout(activityReleaseTimerRef.current);
+      activityReleaseTimerRef.current = null;
+    }
+    const nextActivity = configurationDataStatus?.activity ?? "idle";
+    if (nextActivity !== "idle") {
+      setDisplayedActivity(nextActivity);
+      return;
+    }
+    activityReleaseTimerRef.current = globalThis.setTimeout(() => {
+      setDisplayedActivity("idle");
+      activityReleaseTimerRef.current = null;
+    }, 520);
+    return () => {
+      if (activityReleaseTimerRef.current !== null) {
+        globalThis.clearTimeout(activityReleaseTimerRef.current);
+        activityReleaseTimerRef.current = null;
+      }
+    };
+  }, [configurationDataStatus?.activity]);
+
+  useEffect(() => {
+    if (disabled || configurationDataStatus) {
       setOpen(false);
     }
-  }, [disabled]);
+  }, [configurationDataStatus, disabled]);
 
   useEffect(() => {
     if (!open) {
@@ -220,29 +268,54 @@ export function WorkspaceStatusHub({
 
   return (
     <div className="workspace-status-hub" ref={rootRef}>
-      <button
-        className="workspace-status-icon"
-        data-state={
-          providerLoading ? "loading" : providerReady ? "ready" : "warning"
-        }
-        type="button"
-        aria-label="协作连接状态"
-        aria-haspopup="dialog"
-        aria-expanded={!disabled && open}
-        disabled={disabled}
-        onClick={() => setOpen((current) => !current)}
-      >
-        {providerLoading ? (
-          <LoaderCircle className="spin" size={17} />
-        ) : providerIsTrae ? (
-          <SquareTerminal size={17} />
-        ) : (
-          <Bot size={17} />
-        )}
-        <span className="workspace-status-tooltip">{providerLabel}</span>
-      </button>
+      {configurationDataStatus ? (
+        <div
+          className="workspace-status-icon workspace-status-icon--data"
+          data-state={configurationDataStatus.state}
+          data-activity={displayedActivity}
+          role="status"
+          tabIndex={0}
+          title={configurationStatusLabel}
+          aria-label={configurationStatusLabel}
+        >
+          <SquareTerminal
+            className="workspace-status-data-glyph"
+            size={18}
+          />
+          <span className="workspace-status-lights" aria-hidden="true">
+            <i className="workspace-status-light workspace-status-light--link" />
+            <i className="workspace-status-light workspace-status-light--read" />
+            <i className="workspace-status-light workspace-status-light--write" />
+          </span>
+          <span className="workspace-status-tooltip">
+            {configurationStatusLabel}
+          </span>
+        </div>
+      ) : (
+        <button
+          className="workspace-status-icon"
+          data-state={
+            providerLoading ? "loading" : providerReady ? "ready" : "warning"
+          }
+          type="button"
+          aria-label="协作连接状态"
+          aria-haspopup="dialog"
+          aria-expanded={!disabled && open}
+          disabled={disabled}
+          onClick={() => setOpen((current) => !current)}
+        >
+          {providerLoading ? (
+            <LoaderCircle className="spin" size={17} />
+          ) : providerIsTrae ? (
+            <SquareTerminal size={17} />
+          ) : (
+            <Bot size={17} />
+          )}
+          <span className="workspace-status-tooltip">{providerLabel}</span>
+        </button>
+      )}
 
-      {open && !disabled && (
+      {open && !disabled && !configurationDataStatus && (
         <section
           className="workspace-status-popover"
           role="dialog"

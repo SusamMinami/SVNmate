@@ -609,6 +609,41 @@ describe("dialogue storyboard export", () => {
     });
   });
 
+  it("discovers Formation character slots when the editor has only local dialogue data", async () => {
+    const connection = new FakeStoryboardExportConnection();
+
+    const result = await readDialogueCharacterActions(
+      {
+        startId: "735200",
+        dialogueIds: ["735201"],
+        models: [],
+      },
+      () => connection,
+    );
+
+    expect(
+      result.catalogs.map((catalog) => ({
+        modelIndex: catalog.modelIndex,
+        blueprintClassPath: catalog.blueprintClassPath,
+        characterLabel: catalog.characterLabel,
+        actionCount: catalog.actions.length,
+      })),
+    ).toEqual([
+      {
+        modelIndex: 0,
+        blueprintClassPath: "/Game/Test/BP_Player.BP_Player_C",
+        characterLabel: "BP_Player",
+        actionCount: 4,
+      },
+      {
+        modelIndex: 1,
+        blueprintClassPath: "/Game/Test/BP_Npc.BP_Npc_C",
+        characterLabel: "BP_Npc",
+        actionCount: 4,
+      },
+    ]);
+  });
+
   it("appends ordered Montage actions and maps AM_Turn to ERotate", async () => {
     const connection = new FakeStoryboardExportConnection();
     connection.behavioursByData.set("ActionData1", [
@@ -1253,6 +1288,39 @@ describe("dialogue camera quick actions", () => {
     expect(connection.movesByData.get("ActionData1")).toEqual([
       buildDefaultDialogueCameraMove(),
     ]);
+    expect(
+      connection.calls.some((call) => call.action === "asset.save_asset"),
+    ).toBe(true);
+  });
+
+  it("writes and saves quick camera changes when the dialogue asset is already dirty", async () => {
+    const connection = new FakeStoryboardExportConnection();
+    connection.dirtyPackages = ["/Game/Test/735200"];
+    const request = {
+      dialogueId: "7352",
+      startId: "735200",
+      dialogueNodeId: "735201",
+      mode: "default" as const,
+    };
+
+    const preview = await inspectDialogueCameraQuickAction(
+      request,
+      () => connection,
+    );
+    expect(preview.blockedReasons).toEqual([]);
+
+    await expect(
+      applyDialogueCameraQuickAction(
+        { ...request, reviewToken: preview.reviewToken },
+        () => connection,
+      ),
+    ).resolves.toMatchObject({
+      status: "updated",
+      saved: true,
+    });
+    expect(
+      connection.calls.some((call) => call.action === "asset.save_asset"),
+    ).toBe(true);
   });
 
   it("copies the previous node camera without changing its values", async () => {
@@ -1468,6 +1536,31 @@ describe("dialogue camera quick actions", () => {
 });
 
 describe("existing dialogue storyboard", () => {
+  it("reads one node configuration without resolving Formation layout", async () => {
+    const connection = new FakeStoryboardExportConnection();
+
+    const result = await readExistingDialogueStoryboard(
+      {
+        dialogueId: "7352",
+        startId: "735200",
+        dialogueIds: ["735201"],
+        participantModelIndexes: [],
+        configurationOnly: true,
+      },
+      () => connection,
+    );
+
+    expect(result.status).toBe("found");
+    expect(result.nodes).toEqual([]);
+    expect(result.configurations).toHaveLength(1);
+    expect(result.configurations[0].dialogueId).toBe("735201");
+    expect(
+      connection.calls.some(
+        (call) => call.action === "bp.get_blueprint_by_path",
+      ),
+    ).toBe(false);
+  });
+
   it("reads and converts existing EPush camera data without writing", async () => {
     const connection = new FakeStoryboardExportConnection();
     const common = connection.commonByData.get("ActionData2")!;

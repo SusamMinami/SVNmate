@@ -12,11 +12,12 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import type { StoryboardExportMode } from "../app/useStoryboardExport";
 import type { DialogueStoryboardExportPreview } from "../types";
 
 interface StoryboardExportModalProps {
   preview: DialogueStoryboardExportPreview;
-  mode: "current" | "all" | "sound";
+  mode: StoryboardExportMode;
   currentShotNumber: number;
   busy: boolean;
   busyLabel: string;
@@ -344,7 +345,11 @@ export function StoryboardExportModal({
                 {reviewed ? "UE Dialog Graph 写入预检" : "本地待导出清单"}
               </small>
               <h2 id="storyboard-export-title">
-                {mode === "sound"
+                {mode === "node-audio"
+                  ? "导出当前节点音频"
+                  : mode === "node-actions"
+                    ? "导出当前节点动作"
+                    : mode === "sound"
                   ? `写入当前分镜音效 ${String(currentShotNumber).padStart(2, "0")}`
                   : mode === "current"
                     ? `导出当前镜头 ${String(currentShotNumber).padStart(2, "0")}`
@@ -390,7 +395,9 @@ export function StoryboardExportModal({
             <div>
               <dt>分镜</dt>
               <dd>
-                {mode === "sound"
+                {mode === "sound" ||
+                mode === "node-audio" ||
+                mode === "node-actions"
                   ? "不导出"
                   : mode === "current"
                   ? `${String(currentShotNumber).padStart(2, "0")} · ${

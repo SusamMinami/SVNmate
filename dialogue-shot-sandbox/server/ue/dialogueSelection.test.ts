@@ -222,7 +222,7 @@ describe("UE dialogue graph selection", () => {
     expect(connection.close).toHaveBeenCalledOnce();
   });
 
-  it("reuses one UE connection across selection polls", async () => {
+  it("reuses one UE connection and revalidates a legacy non-unique node id", async () => {
     const connection = invoker([]);
     connection.invoke.mockImplementation(async (action, args) => {
       if (action === "script.eval_python_expression") {
@@ -252,7 +252,7 @@ describe("UE dialogue graph selection", () => {
       return [];
     });
     const factory = vi.fn(() => connection);
-    const reader = new PersistentDialogueSelectionReader(factory, 60_000);
+    const reader = new PersistentDialogueSelectionReader(factory, 60_000, 0);
 
     await expect(reader.read()).resolves.toMatchObject({
       status: "selected",
@@ -266,8 +266,276 @@ describe("UE dialogue graph selection", () => {
     expect(factory).toHaveBeenCalledOnce();
     expect(connection.connect).toHaveBeenCalledOnce();
     expect(connection.close).not.toHaveBeenCalled();
+    expect(connection.invoke).toHaveBeenCalledTimes(12);
+    expect(
+      connection.invoke.mock.calls.filter(
+        ([action, args]) =>
+          action === "reflect.read_object_property" &&
+          args.PropertyName === "CommonDialogGraphProperties",
+      ),
+    ).toHaveLength(2);
     reader.dispose();
     expect(connection.close).toHaveBeenCalledOnce();
+  });
+
+  it("resolves full node properties again after the selection changes", async () => {
+    const connection = invoker([]);
+    let dialogueNodeId = 734219;
+    connection.invoke.mockImplementation(async (action, args) => {
+      if (action === "script.eval_python_expression") {
+        return {
+          bSuccess: true,
+          Result:
+            "'[\"/Game/Seria/Task/dialoggraph/1009-Cha08/734200.734200\", \"1\"]'",
+        };
+      }
+      if (action === "editor.get_editor_subsystem") {
+        return "SeriaDialogEditorSubsystem_0";
+      }
+      if (action === "reflect.read_object_property") {
+        if (args.PropertyName === "CurrentDialogGraphSelectionCount") {
+          return 1;
+        }
+        if (args.PropertyName === "CurrentSelectedDialogNode") {
+          return `SeriaEdDialogGraphNode_${dialogueNodeId}`;
+        }
+        if (args.PropertyName === "DialogGraphNodeData") {
+          return `SeriaDialogGraphNodeData_${dialogueNodeId}`;
+        }
+        if (args.PropertyName === "CommonDialogGraphProperties") {
+          return [{
+            Alias: "id",
+            CurrentUint32: dialogueNodeId,
+          }];
+        }
+      }
+      return [];
+    });
+    const reader = new PersistentDialogueSelectionReader(
+      () => connection,
+      60_000,
+      0,
+    );
+
+    await expect(reader.read()).resolves.toMatchObject({
+      dialogueNodeId: "734219",
+    });
+    dialogueNodeId = 734220;
+    await expect(reader.read()).resolves.toMatchObject({
+      dialogueNodeId: "734220",
+    });
+
+    expect(
+      connection.invoke.mock.calls.filter(
+        ([action, args]) =>
+          action === "reflect.read_object_property" &&
+          args.PropertyName === "CommonDialogGraphProperties",
+      ),
+    ).toHaveLength(2);
+    reader.dispose();
+  });
+
+  it("defers legacy reflection while UE is busy and retries on the next responsive poll", async () => {
+    const connection = invoker([]);
+    let dialogueNodeId = 734219;
+    let slowLightweightRead = false;
+    connection.invoke.mockImplementation(async (action, args) => {
+      if (action === "script.eval_python_expression") {
+        if (slowLightweightRead) {
+          await new Promise((resolve) => setTimeout(resolve, 120));
+        }
+        return {
+          bSuccess: true,
+          Result:
+            "'[\"/Game/Seria/Task/dialoggraph/1009-Cha08/734200.734200\", \"1\"]'",
+        };
+      }
+      if (action === "editor.get_editor_subsystem") {
+        return "SeriaDialogEditorSubsystem_0";
+      }
+      if (action === "reflect.read_object_property") {
+        if (args.PropertyName === "CurrentDialogGraphSelectionCount") {
+          return 1;
+        }
+        if (args.PropertyName === "CurrentSelectedDialogNode") {
+          return `SeriaEdDialogGraphNode_${dialogueNodeId}`;
+        }
+        if (args.PropertyName === "DialogGraphNodeData") {
+          return `SeriaDialogGraphNodeData_${dialogueNodeId}`;
+        }
+        if (args.PropertyName === "CommonDialogGraphProperties") {
+          return [{ Alias: "id", CurrentUint32: dialogueNodeId }];
+        }
+      }
+      return [];
+    });
+    const reader = new PersistentDialogueSelectionReader(
+      () => connection,
+      60_000,
+      0,
+    );
+
+    await expect(reader.read()).resolves.toMatchObject({
+      dialogueNodeId: "734219",
+    });
+    dialogueNodeId = 734220;
+    slowLightweightRead = true;
+    await expect(reader.read()).resolves.toMatchObject({
+      dialogueNodeId: "734219",
+    });
+    slowLightweightRead = false;
+    await expect(reader.read()).resolves.toMatchObject({
+      dialogueNodeId: "734220",
+    });
+
+    expect(
+      connection.invoke.mock.calls.filter(
+        ([action, args]) =>
+          action === "reflect.read_object_property" &&
+          args.PropertyName === "CommonDialogGraphProperties",
+      ),
+    ).toHaveLength(2);
+    reader.dispose();
+  });
+
+  it("trusts and caches a six-digit node id from an upgraded UE helper", async () => {
+    const connection = invoker([]);
+    connection.invoke.mockResolvedValue({
+      bSuccess: true,
+      Result:
+        "'[\"/Game/Seria/Task/dialoggraph/1009-Cha08/734200.734200\", \"734219\"]'",
+    });
+    const reader = new PersistentDialogueSelectionReader(
+      () => connection,
+      60_000,
+    );
+
+    await expect(reader.read()).resolves.toMatchObject({
+      dialogueNodeId: "734219",
+    });
+    await expect(reader.read()).resolves.toMatchObject({
+      dialogueNodeId: "734219",
+    });
+    expect(connection.invoke).toHaveBeenCalledTimes(2);
+    expect(connection.invoke).not.toHaveBeenCalledWith(
+      "editor.get_editor_subsystem",
+      expect.anything(),
+    );
+    reader.dispose();
+  });
+
+  it("limits legacy reflected reads to the compatibility cadence", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const connection = invoker([]);
+    let dialogueNodeId = 734219;
+    connection.invoke.mockImplementation(async (action, args) => {
+      if (action === "script.eval_python_expression") {
+        return {
+          bSuccess: true,
+          Result:
+            "'[\"/Game/Seria/Task/dialoggraph/1009-Cha08/734200.734200\", \"1\"]'",
+        };
+      }
+      if (action === "editor.get_editor_subsystem") {
+        return "SeriaDialogEditorSubsystem_0";
+      }
+      if (action === "reflect.read_object_property") {
+        if (args.PropertyName === "CurrentDialogGraphSelectionCount") return 1;
+        if (args.PropertyName === "CurrentSelectedDialogNode") return "Node";
+        if (args.PropertyName === "DialogGraphNodeData") return "NodeData";
+        if (args.PropertyName === "CommonDialogGraphProperties") {
+          return [{ Alias: "id", CurrentUint32: dialogueNodeId }];
+        }
+      }
+      return [];
+    });
+    const reader = new PersistentDialogueSelectionReader(
+      () => connection,
+      60_000,
+      4_800,
+    );
+    try {
+      await expect(reader.read()).resolves.toMatchObject({
+        dialogueNodeId: "734219",
+      });
+      dialogueNodeId = 734220;
+      vi.setSystemTime(14_799);
+      await expect(reader.read()).resolves.toMatchObject({
+        dialogueNodeId: "734219",
+      });
+      vi.setSystemTime(14_800);
+      await expect(reader.read()).resolves.toMatchObject({
+        dialogueNodeId: "734220",
+      });
+      expect(
+        connection.invoke.mock.calls.filter(
+          ([action, args]) =>
+            action === "reflect.read_object_property" &&
+            args.PropertyName === "CommonDialogGraphProperties",
+        ),
+      ).toHaveLength(2);
+    } finally {
+      reader.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("ignores a 00 configuration node without replacing the last dialogue node", async () => {
+    const connection = invoker([]);
+    let dialogueNodeId = 734219;
+    connection.invoke.mockImplementation(async (action, args) => {
+      if (action === "script.eval_python_expression") {
+        return {
+          bSuccess: true,
+          Result:
+            "'[\"/Game/Seria/Task/dialoggraph/1009-Cha08/734200.734200\", \"1\"]'",
+        };
+      }
+      if (action === "editor.get_editor_subsystem") {
+        return "SeriaDialogEditorSubsystem_0";
+      }
+      if (action === "reflect.read_object_property") {
+        if (args.PropertyName === "CurrentDialogGraphSelectionCount") {
+          return 1;
+        }
+        if (args.PropertyName === "CurrentSelectedDialogNode") {
+          return "SeriaEdDialogGraphNode_1";
+        }
+        if (args.PropertyName === "DialogGraphNodeData") {
+          return "SeriaDialogGraphNodeData_1";
+        }
+        if (args.PropertyName === "CommonDialogGraphProperties") {
+          return [{ Alias: "id", CurrentUint32: dialogueNodeId }];
+        }
+      }
+      return [];
+    });
+    const reader = new PersistentDialogueSelectionReader(
+      () => connection,
+      60_000,
+      0,
+    );
+
+    await expect(reader.read()).resolves.toMatchObject({
+      status: "selected",
+      dialogueNodeId: "734219",
+    });
+    dialogueNodeId = 734200;
+    await expect(reader.read()).resolves.toMatchObject({
+      status: "selected",
+      dialogueNodeId: "734219",
+      message: "UE 当前为 00 配置节点，已暂停小窗同步",
+    });
+
+    expect(
+      connection.invoke.mock.calls.filter(
+        ([action, args]) =>
+          action === "reflect.read_object_property" &&
+          args.PropertyName === "CommonDialogGraphProperties",
+      ),
+    ).toHaveLength(2);
+    reader.dispose();
   });
 
   it("reconnects on the poll after a transport failure", async () => {

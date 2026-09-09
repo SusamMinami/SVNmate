@@ -34,26 +34,26 @@ function New-RoundedRectangle {
 $background = New-RoundedRectangle 28 28 456 456 72
 $graphics.FillPath(
   (New-Object System.Drawing.SolidBrush(
-    [System.Drawing.Color]::FromArgb(255, 32, 40, 48)
+    [System.Drawing.Color]::FromArgb(255, 238, 255, 0)
   )),
   $background
 )
 
-$whitePen = New-Object System.Drawing.Pen(
-  [System.Drawing.Color]::FromArgb(255, 244, 247, 249),
+$inkPen = New-Object System.Drawing.Pen(
+  [System.Drawing.Color]::FromArgb(255, 21, 22, 20),
   26
 )
-$whitePen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
-$whitePen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
-$graphics.DrawRectangle($whitePen, 112, 188, 288, 210)
-$graphics.DrawLine($whitePen, 112, 188, 392, 188)
-$graphics.DrawLine($whitePen, 128, 114, 388, 72)
-$graphics.DrawLine($whitePen, 151, 110, 198, 178)
-$graphics.DrawLine($whitePen, 245, 94, 292, 162)
-$graphics.DrawLine($whitePen, 339, 79, 384, 142)
+$inkPen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
+$inkPen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
+$graphics.DrawRectangle($inkPen, 112, 188, 288, 210)
+$graphics.DrawLine($inkPen, 112, 188, 392, 188)
+$graphics.DrawLine($inkPen, 128, 114, 388, 72)
+$graphics.DrawLine($inkPen, 151, 110, 198, 178)
+$graphics.DrawLine($inkPen, 245, 94, 292, 162)
+$graphics.DrawLine($inkPen, 339, 79, 384, 142)
 
 $accentBrush = New-Object System.Drawing.SolidBrush(
-  [System.Drawing.Color]::FromArgb(255, 47, 150, 232)
+  [System.Drawing.Color]::FromArgb(255, 0, 181, 194)
 )
 $graphics.FillEllipse($accentBrush, 202, 238, 108, 108)
 $graphics.FillPolygon(
@@ -73,7 +73,7 @@ $bitmap.Save(
 )
 
 $accentBrush.Dispose()
-$whitePen.Dispose()
+$inkPen.Dispose()
 $background.Dispose()
 $graphics.Dispose()
 $bitmap.Dispose()

@@ -2,9 +2,10 @@ import { useEffect, useState } from "react";
 import type { SelectedDialogueNodeResult } from "../types";
 import { readSelectedDialogueNode } from "../ue/client";
 
-export const SELECTION_POLL_MIN_INTERVAL_MS = 3_000;
+export const SELECTION_POLL_MIN_INTERVAL_MS = 1_200;
 export const SELECTION_POLL_MAX_INTERVAL_MS = 5_000;
 const SELECTION_POLL_BACKOFF_STEP_MS = 1_000;
+const SELECTION_POLL_MIN_DELAY_AFTER_RESPONSE_MS = 250;
 
 function sameSelection(
   current: SelectedDialogueNodeResult | null,
@@ -36,7 +37,7 @@ export function nextSelectionPollInterval(
   next: SelectedDialogueNodeResult,
   currentIntervalMs: number,
 ): number {
-  return sameSelection(current, next)
+  return current?.status === "offline" && next.status === "offline"
     ? Math.min(
         SELECTION_POLL_MAX_INTERVAL_MS,
         Math.max(SELECTION_POLL_MIN_INTERVAL_MS, currentIntervalMs) +
@@ -45,18 +46,36 @@ export function nextSelectionPollInterval(
     : SELECTION_POLL_MIN_INTERVAL_MS;
 }
 
+export function selectionPollDelayAfterResponse(
+  intervalMs: number,
+  requestDurationMs: number,
+): number {
+  return Math.max(
+    SELECTION_POLL_MIN_DELAY_AFTER_RESPONSE_MS,
+    intervalMs - requestDurationMs,
+  );
+}
+
 export function useUeDialogueSelection(enabled: boolean): {
   selection: SelectedDialogueNodeResult | null;
   refreshing: boolean;
+  polling: boolean;
+  pollIntervalMs: number;
 } {
   const [selection, setSelection] =
     useState<SelectedDialogueNodeResult | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [polling, setPolling] = useState(false);
+  const [pollIntervalMs, setPollIntervalMs] = useState(
+    SELECTION_POLL_MIN_INTERVAL_MS,
+  );
 
   useEffect(() => {
     if (!enabled) {
       setSelection(null);
       setRefreshing(false);
+      setPolling(false);
+      setPollIntervalMs(SELECTION_POLL_MIN_INTERVAL_MS);
       return;
     }
 
@@ -65,8 +84,9 @@ export function useUeDialogueSelection(enabled: boolean): {
     let initialReadPending = true;
     let lastSelection: SelectedDialogueNodeResult | null = null;
     let pollIntervalMs = SELECTION_POLL_MIN_INTERVAL_MS;
-
     const poll = async () => {
+      const pollStartedAt = Date.now();
+      setPolling(true);
       if (initialReadPending) {
         setRefreshing(true);
       }
@@ -101,6 +121,13 @@ export function useUeDialogueSelection(enabled: boolean): {
             next!,
             pollIntervalMs,
           );
+          const pollDurationMs = Date.now() - pollStartedAt;
+          const nextDelayMs = selectionPollDelayAfterResponse(
+            pollIntervalMs,
+            pollDurationMs,
+          );
+          setPollIntervalMs(pollIntervalMs);
+          setPolling(false);
           lastSelection = next!;
           if (initialReadPending) {
             initialReadPending = false;
@@ -108,7 +135,7 @@ export function useUeDialogueSelection(enabled: boolean): {
           }
           timer = globalThis.setTimeout(
             poll,
-            pollIntervalMs,
+            nextDelayMs,
           );
         }
       }
@@ -123,5 +150,5 @@ export function useUeDialogueSelection(enabled: boolean): {
     };
   }, [enabled]);
 
-  return { selection, refreshing };
+  return { selection, refreshing, polling, pollIntervalMs };
 }

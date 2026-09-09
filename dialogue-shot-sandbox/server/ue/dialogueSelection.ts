@@ -14,6 +14,8 @@ const SERIA_DIALOG_SELECTION_EXPRESSION =
   "__import__('json').dumps(list(unreal.get_editor_subsystem(unreal.SeriaDialogEditorSubsystem).get_current_selected_dialog_node_info()))";
 const SERIA_DIALOG_SUBSYSTEM_CLASS =
   "/Script/SeriaDialogEditor.SeriaDialogEditorSubsystem";
+const LEGACY_DEEP_READ_BUSY_THRESHOLD_MS = 100;
+const LEGACY_DEEP_READ_INTERVAL_MS = 4_800;
 
 function recordValue(
   record: Record<string, unknown>,
@@ -178,6 +180,26 @@ async function selectedDialogueIdFromNodeData(
   );
 }
 
+function seriaSelectionIdentity(value: unknown): {
+  fingerprint: string;
+  localNodeId: string;
+  authoritativeDialogueNodeId: string | null;
+} {
+  const selected = pythonJsonResult(value);
+  const assetPath = Array.isArray(selected)
+    ? String(selected[0] ?? "").trim()
+    : "";
+  const localNodeId = Array.isArray(selected)
+    ? String(selected[1] ?? "").trim()
+    : "";
+  return {
+    fingerprint: JSON.stringify([assetPath, localNodeId]),
+    localNodeId,
+    authoritativeDialogueNodeId:
+      /^\d{6}$/.test(localNodeId) ? localNodeId : null,
+  };
+}
+
 export function parseSeriaSelectedDialogueNode(
   value: unknown,
   selectedDialogueId?: string | null,
@@ -202,6 +224,23 @@ export function parseSeriaSelectedDialogueNode(
     nodeComment: assetPath,
     dialogueNodeId,
   };
+}
+
+async function readSelectedDialogueNodesFromSeriaSelection(
+  connection: UnrealInvoker,
+  rawSelection: unknown,
+): Promise<SelectedDialogueNodeInfo[]> {
+  const preliminaryNode = parseSeriaSelectedDialogueNode(rawSelection);
+  if (!preliminaryNode) {
+    return [];
+  }
+  const reflectedDialogueId =
+    await selectedDialogueIdFromNodeData(connection).catch(() => null);
+  return [{
+    ...preliminaryNode,
+    dialogueNodeId:
+      reflectedDialogueId ?? preliminaryNode.dialogueNodeId,
+  }];
 }
 
 export function parseSelectedDialogueNodes(
@@ -245,15 +284,17 @@ export async function readSelectedDialogueNodesFromConnection(
         Expression: SERIA_DIALOG_SELECTION_EXPRESSION,
       },
     );
-    const reflectedDialogueId =
-      await selectedDialogueIdFromNodeData(connection).catch(() => null);
-    const selectedNode = parseSeriaSelectedDialogueNode(
-      rawSelection,
-      reflectedDialogueId,
-    );
+    const selectedNodes =
+      await readSelectedDialogueNodesFromSeriaSelection(
+        connection,
+        rawSelection,
+      );
     seriaSelectionAvailable = true;
-    if (selectedNode) {
-      return { nodes: [selectedNode], seriaSelectionAvailable };
+    if (selectedNodes.length > 0) {
+      return {
+        nodes: selectedNodes,
+        seriaSelectionAvailable,
+      };
     }
   } catch {
     // Older projects may not expose the Seria dialogue editor subsystem.
@@ -283,11 +324,10 @@ function offlineSelectionResult(error: unknown): SelectedDialogueNodeResult {
   };
 }
 
-async function readSelectedDialogueNodeFromConnection(
-  connection: UnrealInvoker,
-): Promise<SelectedDialogueNodeResult> {
-  const { nodes, seriaSelectionAvailable } =
-    await readSelectedDialogueNodesFromConnection(connection);
+function selectedDialogueNodeResult(
+  nodes: SelectedDialogueNodeInfo[],
+  seriaSelectionAvailable: boolean,
+): SelectedDialogueNodeResult {
   if (nodes.length === 0) {
     return {
       status: "empty",
@@ -327,6 +367,14 @@ async function readSelectedDialogueNodeFromConnection(
   };
 }
 
+async function readSelectedDialogueNodeFromConnection(
+  connection: UnrealInvoker,
+): Promise<SelectedDialogueNodeResult> {
+  const { nodes, seriaSelectionAvailable } =
+    await readSelectedDialogueNodesFromConnection(connection);
+  return selectedDialogueNodeResult(nodes, seriaSelectionAvailable);
+}
+
 export async function readSelectedDialogueNode(
   connectionFactory: () => UnrealInvoker = () => new UnrealMcpConnection(),
 ): Promise<SelectedDialogueNodeResult> {
@@ -348,12 +396,17 @@ export class PersistentDialogueSelectionReader {
   private operationQueue: Promise<void> = Promise.resolve();
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingReads = 0;
+  private lastSelectionFingerprint: string | null = null;
+  private lastSelectionResult: SelectedDialogueNodeResult | null = null;
+  private lastLegacyDeepReadAt = 0;
 
   constructor(
     private readonly connectionFactory: () => UnrealInvoker = () =>
       new UnrealMcpConnection(),
     private readonly idleTimeoutMs =
       DEFAULT_PERSISTENT_SELECTION_IDLE_TIMEOUT_MS,
+    private readonly legacyDeepReadIntervalMs =
+      LEGACY_DEEP_READ_INTERVAL_MS,
   ) {}
 
   read(): Promise<SelectedDialogueNodeResult> {
@@ -392,7 +445,95 @@ export class PersistentDialogueSelectionReader {
       }
     }
     try {
-      return await readSelectedDialogueNodeFromConnection(connection);
+      let result: SelectedDialogueNodeResult;
+      let rawSelection: unknown;
+      try {
+        const lightweightStartedAt = Date.now();
+        rawSelection = await connection.invoke(
+          SERIA_DIALOG_SELECTION_ACTION,
+          { Expression: SERIA_DIALOG_SELECTION_EXPRESSION },
+        );
+        const lightweightDurationMs = Date.now() - lightweightStartedAt;
+        const preliminaryNode =
+          parseSeriaSelectedDialogueNode(rawSelection);
+        if (preliminaryNode) {
+          const {
+            fingerprint,
+            localNodeId,
+            authoritativeDialogueNodeId,
+          } =
+            seriaSelectionIdentity(rawSelection);
+          if (
+            authoritativeDialogueNodeId?.endsWith("00")
+          ) {
+            this.lastSelectionFingerprint = fingerprint;
+            const ignoredResult =
+              this.ignoredConfigurationNodeResult();
+            return ignoredResult;
+          }
+          if (
+            authoritativeDialogueNodeId &&
+            fingerprint === this.lastSelectionFingerprint &&
+            this.lastSelectionResult
+          ) {
+            return this.lastSelectionResult;
+          }
+          if (authoritativeDialogueNodeId) {
+            result = selectedDialogueNodeResult(
+              [{
+                ...preliminaryNode,
+                dialogueNodeId: authoritativeDialogueNodeId,
+              }],
+              true,
+            );
+            this.lastSelectionFingerprint = fingerprint;
+            this.lastSelectionResult = result;
+            return result;
+          }
+          const legacyDeepReadAgeMs =
+            Date.now() - this.lastLegacyDeepReadAt;
+          if (
+            this.lastSelectionResult &&
+            (lightweightDurationMs > LEGACY_DEEP_READ_BUSY_THRESHOLD_MS ||
+              legacyDeepReadAgeMs < this.legacyDeepReadIntervalMs)
+          ) {
+            return this.lastSelectionResult;
+          }
+          this.lastLegacyDeepReadAt = Date.now();
+          const reflectedDialogueId =
+            await selectedDialogueIdFromNodeData(connection).catch(() => null);
+          if (!reflectedDialogueId) {
+            return this.lastSelectionResult ??
+              selectedDialogueNodeResult([], true);
+          }
+          if (reflectedDialogueId.endsWith("00")) {
+            this.lastSelectionFingerprint = fingerprint;
+            return this.ignoredConfigurationNodeResult();
+          }
+          result = selectedDialogueNodeResult(
+            [{
+              ...preliminaryNode,
+              dialogueNodeId: reflectedDialogueId,
+            }],
+            true,
+          );
+          this.lastSelectionFingerprint = fingerprint;
+          this.lastSelectionResult = result;
+        } else {
+          this.clearSelectionCache();
+          const fallbackNodes = parseSelectedDialogueNodes(
+            await connection.invoke(SELECTED_GRAPH_NODES_ACTION, {}),
+          );
+          result = selectedDialogueNodeResult(fallbackNodes, true);
+        }
+      } catch {
+        this.clearSelectionCache();
+        const fallbackNodes = parseSelectedDialogueNodes(
+          await connection.invoke(SELECTED_GRAPH_NODES_ACTION, {}),
+        );
+        result = selectedDialogueNodeResult(fallbackNodes, false);
+      }
+      return result;
     } catch (error) {
       if (this.connection === connection) {
         this.connection = null;
@@ -422,7 +563,30 @@ export class PersistentDialogueSelectionReader {
   private releaseConnection(): void {
     const connection = this.connection;
     this.connection = null;
+    this.clearSelectionCache();
     connection?.close();
+  }
+
+  private clearSelectionCache(): void {
+    this.lastSelectionFingerprint = null;
+    this.lastSelectionResult = null;
+    this.lastLegacyDeepReadAt = 0;
+  }
+
+  private ignoredConfigurationNodeResult(): SelectedDialogueNodeResult {
+    if (this.lastSelectionResult) {
+      return {
+        ...this.lastSelectionResult,
+        message: "UE 当前为 00 配置节点，已暂停小窗同步",
+      };
+    }
+    return {
+      status: "empty",
+      dialogueNodeId: null,
+      selectedNodeCount: 0,
+      nodes: [],
+      message: "UE 当前为 00 配置节点，已暂停小窗同步",
+    };
   }
 }
 

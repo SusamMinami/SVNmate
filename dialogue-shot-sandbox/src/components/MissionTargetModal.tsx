@@ -1023,7 +1023,7 @@ export function MissionTargetModal({
       !window.confirm(
         `将向 ${backgroundPropPreview.blueprintAssetPath} 写入 ${selectedBackgroundCount} 个 UE Actor。` +
           (dialogueNpcCount > 0
-            ? `\n${dialogueNpcCount} 个 SceneObject NPC 将按数字槽位顺序写入，并同步对应对话的 DialogModels。`
+            ? `\n${dialogueNpcCount} 个对话 NPC 将按数字槽位顺序写入，并同步对应对话的 DialogModels。`
             : "") +
           (backgroundAssetCount > 0
             ? `\n${backgroundAssetCount} 个背景资产使用资产原名写入。`

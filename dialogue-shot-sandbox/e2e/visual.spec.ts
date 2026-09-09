@@ -1212,6 +1212,7 @@ test("keeps configuration mode aligned with the selected UE node", async ({
   const requestedWindowModes: Array<{
     enabled: boolean;
     contentSize?: { width: number; height: number };
+    layoutMode?: string | null;
   }> = [];
   let selectionRequests = 0;
   let selectionResponseDelayMs = 0;
@@ -1219,6 +1220,22 @@ test("keeps configuration mode aligned with the selected UE node", async ({
   let selectedNodeCount = 1;
   const cameraInspectRequests: Array<Record<string, unknown>> = [];
   const cameraApplyRequests: Array<Record<string, unknown>> = [];
+  let cameraApplyResponseDelayMs = 0;
+  let formationReadRequests = 0;
+  let storyboardReadRequests = 0;
+  const storyboardReadBodies: Array<Record<string, unknown>> = [];
+  page.on("request", (request) => {
+    const pathname = new URL(request.url()).pathname;
+    if (pathname === "/api/ue/formation/read") {
+      formationReadRequests += 1;
+    }
+    if (pathname === "/api/ue/dialogue/storyboard/read") {
+      storyboardReadRequests += 1;
+      storyboardReadBodies.push(
+        request.postDataJSON() as Record<string, unknown>,
+      );
+    }
+  });
   await page.unroute("**/api/ue/dialogue/selection");
   await page.route("**/api/ue/dialogue/selection", async (route) => {
     selectionRequests += 1;
@@ -1318,6 +1335,11 @@ test("keeps configuration mode aligned with the selected UE node", async ({
   await page.route("**/api/ue/dialogue/camera/apply", async (route) => {
     const request = route.request().postDataJSON() as Record<string, unknown>;
     cameraApplyRequests.push(request);
+    if (cameraApplyResponseDelayMs > 0) {
+      await new Promise((resolve) =>
+        globalThis.setTimeout(resolve, cameraApplyResponseDelayMs),
+      );
+    }
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -1340,8 +1362,9 @@ test("keeps configuration mode aligned with the selected UE node", async ({
     (
       enabled: boolean,
       contentSize?: { width: number; height: number },
+      layoutMode?: string | null,
     ) => {
-      requestedWindowModes.push({ enabled, contentSize });
+      requestedWindowModes.push({ enabled, contentSize, layoutMode });
     },
   );
   await page.addInitScript(() => {
@@ -1386,21 +1409,78 @@ test("keeps configuration mode aligned with the selected UE node", async ({
             __recordConfigurationWindowMode: (
               value: boolean,
               nextContentSize?: { width: number; height: number },
+              layoutMode?: string | null,
             ) => Promise<void>;
           }
-        ).__recordConfigurationWindowMode(enabled, contentSize);
+        ).__recordConfigurationWindowMode(
+          enabled,
+          contentSize,
+          document
+            .querySelector(".app-shell")
+            ?.getAttribute("data-configuration-mode"),
+        );
         return enabled;
       },
     } as unknown as NonNullable<Window["shotSandboxDesktop"]>;
   });
   await page.goto("/");
+  const fullViewportSize = page.viewportSize();
+  expect(fullViewportSize).not.toBeNull();
   await page.waitForTimeout(100);
   expect(selectionRequests).toBe(0);
   const fullPanelBounds = await page.locator(".right-panel").boundingBox();
   const fullHeaderBounds = await page.locator(".app-header").boundingBox();
   expect(fullPanelBounds).not.toBeNull();
   expect(fullHeaderBounds).not.toBeNull();
-  await page.getByRole("button", { name: "进入配置小窗" }).click();
+  const configurationModeToggle = page.getByRole("button", {
+    name: "进入配置小窗",
+  });
+  const collaborationStatus = page.getByRole("button", {
+    name: "协作连接状态",
+  });
+  const dataSourceStatus = page.getByRole("button", {
+    name: "数据源状态",
+  });
+  const [
+    configurationModeToggleBounds,
+    collaborationStatusBounds,
+    dataSourceStatusBounds,
+  ] = await Promise.all([
+    configurationModeToggle.boundingBox(),
+    collaborationStatus.boundingBox(),
+    dataSourceStatus.boundingBox(),
+  ]);
+  expect(configurationModeToggleBounds).not.toBeNull();
+  expect(collaborationStatusBounds).not.toBeNull();
+  expect(dataSourceStatusBounds).not.toBeNull();
+  expect(configurationModeToggleBounds!.width).toBeCloseTo(
+    collaborationStatusBounds!.width,
+    1,
+  );
+  expect(configurationModeToggleBounds!.height).toBeCloseTo(
+    collaborationStatusBounds!.height,
+    1,
+  );
+  expect(configurationModeToggleBounds!.width).toBeCloseTo(
+    dataSourceStatusBounds!.width,
+    1,
+  );
+  expect(configurationModeToggleBounds!.height).toBeCloseTo(
+    dataSourceStatusBounds!.height,
+    1,
+  );
+  expect(configurationModeToggleBounds!.x).toBeLessThan(
+    collaborationStatusBounds!.x,
+  );
+  expect(collaborationStatusBounds!.x).toBeLessThan(
+    dataSourceStatusBounds!.x,
+  );
+  await expect(
+    page
+      .locator(".inspector-header")
+      .getByRole("button", { name: "进入配置小窗" }),
+  ).toHaveCount(0);
+  await configurationModeToggle.click();
   await expect.poll(() => requestedWindowModes.length).toBe(1);
   expect(requestedWindowModes[0]).toEqual({
     enabled: true,
@@ -1408,6 +1488,7 @@ test("keeps configuration mode aligned with the selected UE node", async ({
       width: Math.round(fullPanelBounds!.width),
       height: Math.round(fullPanelBounds!.height + fullHeaderBounds!.height),
     },
+    layoutMode: "true",
   });
 
   const appShell = page.locator(".app-shell");
@@ -1419,7 +1500,34 @@ test("keeps configuration mode aligned with the selected UE node", async ({
   await expect(page.locator(".app-header")).toBeVisible();
   await expect(
     page.getByRole("button", { name: "协作连接状态" }),
-  ).toBeDisabled();
+  ).toHaveCount(0);
+  const ueDataStatus = page.getByRole("status", {
+    name: /UE 数据链路/,
+  });
+  await expect(ueDataStatus).toBeVisible();
+  await expect(
+    ueDataStatus.locator(".lucide-square-terminal"),
+  ).toBeVisible();
+  await expect(
+    ueDataStatus.locator(".workspace-status-data-glyph"),
+  ).toHaveCSS("width", "18px");
+  await expect(
+    ueDataStatus.locator(".workspace-status-light"),
+  ).toHaveCount(3);
+  await expect(
+    ueDataStatus.locator(".workspace-status-lights"),
+  ).toHaveCSS("flex-direction", "column");
+  await expect(
+    ueDataStatus.locator(".workspace-status-lights"),
+  ).toHaveCSS("right", "0px");
+  await expect(
+    ueDataStatus.locator(".workspace-status-light").first(),
+  ).toHaveCSS("width", "4px");
+  await expect(
+    page
+      .getByRole("button", { name: "返回完整窗口" })
+      .locator(".workspace-status-light"),
+  ).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: "数据源状态" }),
   ).toBeDisabled();
@@ -1436,14 +1544,47 @@ test("keeps configuration mode aligned with the selected UE node", async ({
   await expect(page.getByRole("tab", { name: "音频" })).toBeVisible();
   await expect(page.getByRole("tab", { name: "UE" })).toBeVisible();
   await expect(page.locator(".inspector-header")).toContainText(
-    "UE NODE 204801 · 已同步",
+    "UE NODE 204801",
   );
+  await expect(ueDataStatus).toHaveAttribute(
+    "title",
+    /^UE 数据链路 · (同步中|监听中 · 1\.2s) · (读取中|等待下一次同步)$/,
+  );
+  await expect(ueDataStatus).toHaveAttribute(
+    "data-state",
+    /^(syncing|listening)$/,
+  );
+  await expect(ueDataStatus).toHaveAttribute(
+    "data-activity",
+    /^(idle|read)$/,
+  );
+  await expect(
+    page.locator(".inspector-header .configuration-sync-status"),
+  ).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: "下一个镜头" }),
   ).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: "使用上一相机参数" }),
   ).toBeDisabled();
+  const defaultCameraAction = page.getByRole("button", {
+    name: "添加默认镜头",
+  });
+  await expect(defaultCameraAction).toHaveClass(/is-configured/);
+  await expect(defaultCameraAction).toContainText("c1 · EPush · FOV 62");
+  await expect(
+    page.getByRole("button", { name: "添加镜头曲线" }),
+  ).not.toHaveClass(/is-configured/);
+  const roleCameraAction = page.getByRole("button", {
+    name: "添加角色相机",
+  });
+  await expect(
+    roleCameraAction.locator(".node-camera-role-list .is-configured"),
+  ).toHaveText("Ring");
+  await expect(ueDataStatus).toHaveAttribute("data-state", "listening");
+  await expect(
+    ueDataStatus.locator(".workspace-status-light--link"),
+  ).toHaveCSS("animation-name", "data-link-heartbeat");
   await page
     .getByRole("button", { name: "添加默认镜头" })
     .click();
@@ -1458,14 +1599,34 @@ test("keeps configuration mode aligned with the selected UE node", async ({
     dialogueNodeId: "204801",
     mode: "default",
   });
-  await page.getByRole("button", { name: "确认写入" }).click();
+  cameraApplyResponseDelayMs = 600;
+  const cameraApplyRequest = page.waitForRequest(
+    "**/api/ue/dialogue/camera/apply",
+  );
+  await page
+    .getByRole("button", { name: "确认写入" })
+    .click();
+  await cameraApplyRequest;
+  await expect(ueDataStatus).toHaveAttribute("data-activity", "write");
+  await expect(
+    ueDataStatus.locator(".workspace-status-light--write"),
+  ).toHaveCSS("opacity", "0.82");
+  cameraApplyResponseDelayMs = 0;
   await expect(
     page.getByText("节点 204801 的镜头配置已写入并保存"),
   ).toBeVisible();
-  await expect(page.getByText("UE 当前镜头配置")).toBeVisible();
-  await expect(page.locator(".node-camera-existing")).toContainText(
-    "c1",
-  );
+  await expect(page.locator(".node-camera-existing")).toHaveCount(0);
+  await expect.poll(() => storyboardReadRequests).toBe(2);
+  expect(storyboardReadBodies).toEqual([
+    expect.objectContaining({
+      dialogueIds: ["204801"],
+      configurationOnly: true,
+    }),
+    expect.objectContaining({
+      dialogueIds: ["204801"],
+      configurationOnly: true,
+    }),
+  ]);
   expect(cameraApplyRequests[0]).toMatchObject({
     dialogueNodeId: "204801",
     mode: "default",
@@ -1481,8 +1642,12 @@ test("keeps configuration mode aligned with the selected UE node", async ({
   });
   await page.getByRole("button", { name: "取消" }).click();
   await page.getByRole("button", { name: "添加角色相机" }).click();
-  await expect(cameraReview).toContainText("已有角色");
-  await expect(cameraReview).toContainText("Nino · Jodie");
+  await expect(cameraReview).toContainText("确认写入角色相机？");
+  await expect(cameraReview.locator("dl")).toHaveCount(0);
+  await page.screenshot({
+    path: testInfo.outputPath("configuration-school-camera-confirmation.png"),
+    fullPage: true,
+  });
   expect(cameraInspectRequests[2]).toMatchObject({
     dialogueNodeId: "204801",
     mode: "school_cameras",
@@ -1491,7 +1656,7 @@ test("keeps configuration mode aligned with the selected UE node", async ({
 
   selectedDialogueNodeId = "204803";
   await expect(page.locator(".inspector-header")).toContainText(
-    "UE NODE 204803 · 已同步",
+    "UE NODE 204803",
   );
   await page
     .getByRole("button", { name: "使用上一相机参数" })
@@ -1514,6 +1679,10 @@ test("keeps configuration mode aligned with the selected UE node", async ({
   expect(compactPanelBounds).not.toBeNull();
   expect(compactPanelBounds!.width).toBeCloseTo(fullPanelBounds!.width, 1);
   expect(compactPanelBounds!.height).toBeCloseTo(fullPanelBounds!.height, 1);
+  await expect(page.locator(".right-panel")).toHaveCSS(
+    "overflow-y",
+    "hidden",
+  );
   await page
     .getByRole("button", { name: "添加默认镜头" })
     .click();
@@ -1534,9 +1703,14 @@ test("keeps configuration mode aligned with the selected UE node", async ({
     "A_SFX_Dialog_204803",
   );
   await expect(page.locator(".ue-existing-audio")).toContainText("0.4s");
+  expect(storyboardReadRequests).toBe(3);
   await expect(page.locator(".inspector-tab-panel:visible")).toHaveCSS(
     "animation-name",
     "none",
+  );
+  const audioPanel = page.locator(".inspector-tab-panel:visible");
+  const audioPanelWidthBeforeLibrary = await audioPanel.evaluate(
+    (element) => element.clientWidth,
   );
   const audioLibrary = page.locator(".audio-library-browser");
   await expect(audioLibrary).toBeVisible();
@@ -1557,6 +1731,45 @@ test("keeps configuration mode aligned with the selected UE node", async ({
     "overflow-y",
     "auto",
   );
+  await expect(audioPanel).toHaveCSS("scrollbar-width", "none");
+  expect(await audioPanel.evaluate((element) => element.clientWidth)).toBe(
+    audioPanelWidthBeforeLibrary,
+  );
+  const overlayScrollbarThumb = page.locator(
+    ".inspector-overlay-scrollbar__thumb",
+  );
+  await expect(overlayScrollbarThumb).toBeVisible();
+  await audioPanel.evaluate((element) => {
+    element.scrollTop = 0;
+  });
+  const thumbBounds = await overlayScrollbarThumb.boundingBox();
+  expect(thumbBounds).not.toBeNull();
+  await page.mouse.move(
+    thumbBounds!.x + thumbBounds!.width / 2,
+    thumbBounds!.y + thumbBounds!.height / 2,
+  );
+  await page.mouse.down();
+  await page.mouse.move(
+    thumbBounds!.x + thumbBounds!.width / 2,
+    thumbBounds!.y + thumbBounds!.height / 2 + 30,
+  );
+  await page.mouse.up();
+  expect(await audioPanel.evaluate((element) => element.scrollTop)).toBeGreaterThan(
+    0,
+  );
+  await audioPanel.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+  });
+  const audioPanelBounds = await audioPanel.boundingBox();
+  const stickyControlsBounds = await audioLibrary
+    .locator(".audio-library-browser__sticky-controls")
+    .boundingBox();
+  expect(audioPanelBounds).not.toBeNull();
+  expect(stickyControlsBounds).not.toBeNull();
+  expect(stickyControlsBounds!.y).toBeCloseTo(audioPanelBounds!.y, 1);
+  await expect(
+    audioLibrary.getByRole("button", { name: /音效资料库/ }),
+  ).toBeVisible();
   await page.waitForTimeout(350);
   await page.screenshot({
     path: testInfo.outputPath("configuration-window.png"),
@@ -1585,6 +1798,64 @@ test("keeps configuration mode aligned with the selected UE node", async ({
       name: "音效 A_SFX_Dialog_516301 的延迟",
     })
     .fill("0.4");
+  await expect(
+    page.getByRole("button", { name: "导出节点音频" }),
+  ).toBeEnabled();
+  await page.getByRole("button", { name: "写入本镜音效" }).click();
+  await expect(appShell).toHaveAttribute(
+    "data-configuration-mode",
+    "false",
+  );
+  const nodeAudioDialog = page.getByRole("dialog", {
+    name: "导出当前节点音频",
+  });
+  await expect(nodeAudioDialog).toBeVisible();
+  await expect(
+    nodeAudioDialog.getByRole("checkbox", {
+      name: "选择音效 A_SFX_Dialog_516301",
+    }),
+  ).toBeChecked();
+  await expect(nodeAudioDialog.getByText("镜头数据")).toHaveCount(0);
+  await nodeAudioDialog.getByRole("button", { name: "关闭" }).click();
+  await page.setViewportSize(fullViewportSize!);
+  await page.getByRole("button", { name: "进入配置小窗" }).click();
+  await expect(appShell).toHaveAttribute(
+    "data-configuration-mode",
+    "true",
+  );
+  await page.setViewportSize({
+    width: Math.round(fullPanelBounds!.width),
+    height: Math.round(fullPanelBounds!.height + fullHeaderBounds!.height),
+  });
+  await expect(page.getByRole("tab", { name: "音频" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect.poll(() => storyboardReadRequests).toBe(4);
+
+  const ueReadsBeforeLocalSwitch = {
+    formation: formationReadRequests,
+    storyboard: storyboardReadRequests,
+  };
+  selectedDialogueNodeId = "309901";
+  await expect(page.locator(".inspector-header")).toContainText(
+    "UE NODE 309901",
+    { timeout: 10_000 },
+  );
+  await expect(page.locator(".inspector-header")).toContainText(
+    "所有人先别动，门外有脚步声。",
+  );
+  await page.waitForTimeout(500);
+  expect(formationReadRequests).toBe(
+    ueReadsBeforeLocalSwitch.formation,
+  );
+  expect(storyboardReadRequests).toBe(
+    ueReadsBeforeLocalSwitch.storyboard + 1,
+  );
+  expect(storyboardReadBodies.at(-1)).toMatchObject({
+    dialogueIds: ["309901"],
+    configurationOnly: true,
+  });
 
   selectedDialogueNodeId = null;
   selectedNodeCount = 2;
@@ -1593,24 +1864,29 @@ test("keeps configuration mode aligned with the selected UE node", async ({
   ).toBeVisible();
   selectionResponseDelayMs = 500;
   await page.waitForRequest("**/api/ue/dialogue/selection");
+  await expect(ueDataStatus).toHaveAttribute("data-activity", "read");
+  await expect(
+    ueDataStatus.locator(".workspace-status-light--read"),
+  ).toHaveCSS("opacity", "0.82");
   await expect(
     page.locator(".configuration-selection-state .spin"),
   ).toHaveCount(0);
   selectionResponseDelayMs = 0;
   await expect(page.locator(".audio-library-browser")).toHaveCount(0);
   await expect(
-    page.locator(".inspector-footer--export").getByRole("button"),
-  ).toBeDisabled();
+    page.locator(".inspector-footer--export"),
+  ).toHaveCount(0);
 
   await page.getByRole("button", { name: "返回完整窗口" }).click();
-  await expect.poll(() => requestedWindowModes.length).toBe(2);
-  expect(requestedWindowModes[1]).toEqual({
+  await expect.poll(() => requestedWindowModes.length).toBe(4);
+  expect(requestedWindowModes.at(-1)).toEqual({
     enabled: false,
     contentSize: undefined,
+    layoutMode: "true",
   });
   await expect(appShell).toHaveAttribute("data-configuration-mode", "false");
-  await expect(page.getByRole("tab", { name: "导演" })).toBeVisible();
-  await expect(page.locator(".stage-view")).toBeVisible();
+  await expect(page.locator(".left-panel")).toBeVisible();
+  await expect(page.locator(".dialogue-preview")).toBeVisible();
   const requestsAfterExit = selectionRequests;
   await page.waitForTimeout(1_400);
   expect(selectionRequests).toBe(requestsAfterExit);
@@ -4511,6 +4787,7 @@ test("offers the detected Blueprint formation before designing shots", async ({
   page,
 }, testInfo) => {
   test.setTimeout(90_000);
+  let selectedDialogueNodeId = "735001";
   await page.unroute("**/api/ue/dialogue/selection");
   await page.route("**/api/ue/dialogue/selection", async (route) => {
     await route.fulfill({
@@ -4520,17 +4797,17 @@ test("offers the detected Blueprint formation before designing shots", async ({
         ok: true,
         data: {
           status: "selected",
-          dialogueNodeId: "735001",
+          dialogueNodeId: selectedDialogueNodeId,
           selectedNodeCount: 1,
           nodes: [
             {
               nodeClass: "SeriaEdDialogGraphNode",
-              nodeTitle: "节点 735001",
+              nodeTitle: `节点 ${selectedDialogueNodeId}`,
               nodeComment: "",
-              dialogueNodeId: "735001",
+              dialogueNodeId: selectedDialogueNodeId,
             },
           ],
-          message: "已同步 UE 节点 735001",
+          message: `已同步 UE 节点 ${selectedDialogueNodeId}`,
         },
       }),
     });
@@ -4546,6 +4823,13 @@ test("offers the detected Blueprint formation before designing shots", async ({
   let exportRequests = 0;
   let formationDirty = true;
   let formationRequests = 0;
+  const characterActionReadRequests: Array<{
+    dialogueIds: string[];
+    models: Array<{
+      modelIndex: number;
+      blueprintClassPath: string;
+    }>;
+  }> = [];
   let releaseFormation!: () => void;
   const formationGate = new Promise<void>((resolve) => {
     releaseFormation = resolve;
@@ -4758,11 +5042,13 @@ test("offers the detected Blueprint formation before designing shots", async ({
   });
   await page.route("**/api/ue/npc-actions/read", async (route) => {
     const request = route.request().postDataJSON() as {
+      dialogueIds: string[];
       models: Array<{
         modelIndex: number;
         blueprintClassPath: string;
       }>;
     };
+    characterActionReadRequests.push(request);
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -5418,10 +5704,102 @@ test("offers the detected Blueprint formation before designing shots", async ({
   await expect(
     guardActions.locator(".character-action-row").first().getByRole("combobox"),
   ).toHaveValue("AM_Wave");
+  selectedDialogueNodeId = "735015";
+  await expect(page.locator(".inspector-header")).toContainText(
+    "UE NODE 735015",
+    { timeout: 10_000 },
+  );
+  await expect(page.locator(".inspector-header")).toContainText(
+    "UE 配置节点（本地对白未收录）",
+  );
+  await expect(
+    page.getByText(/不属于当前对话/),
+  ).toHaveCount(0);
+  const hiddenConfigurationNode = page.locator(
+    ".character-action-node",
+  );
+  await expect(hiddenConfigurationNode).toHaveCount(1);
+  await expect(
+    hiddenConfigurationNode.locator(".character-action-node__toggle"),
+  ).toContainText("735015");
+  await expect.poll(
+    () => characterActionReadRequests.at(-1)?.dialogueIds,
+  ).toEqual(["735015"]);
+  await hiddenConfigurationNode
+    .getByRole("combobox", { name: "节点 735015 添加角色" })
+    .selectOption("1");
+  await hiddenConfigurationNode
+    .getByRole("button", { name: "添加角色" })
+    .click();
+  const hiddenNodeGuardActions = hiddenConfigurationNode
+    .locator(".character-action-track")
+    .filter({ hasText: "商会安保" });
+  const hiddenNodeActionPicker = hiddenNodeGuardActions
+    .locator(".character-action-row")
+    .first()
+    .getByRole("combobox");
+  await hiddenNodeActionPicker.fill("wave");
+  await hiddenNodeGuardActions
+    .getByRole("option", { name: "AM_Wave", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "导出节点动作" }),
+  ).toBeEnabled();
+  const hiddenNodeFullViewport = page.viewportSize();
+  expect(hiddenNodeFullViewport).not.toBeNull();
+  await page.setViewportSize({ width: 310, height: 900 });
+  await page.screenshot({
+    path: testInfo.outputPath("configuration-hidden-node-actions.png"),
+    fullPage: true,
+  });
+  await page.setViewportSize(hiddenNodeFullViewport!);
+  await hiddenNodeGuardActions
+    .getByRole("button", {
+      name: "移除 商会安保 的新增动作",
+    })
+    .click();
+  selectedDialogueNodeId = "735001";
+  await expect(page.locator(".inspector-header")).toContainText(
+    "UE NODE 735001",
+    { timeout: 10_000 },
+  );
+  const nodeActionExportButton = page.getByRole("button", {
+    name: "导出节点动作",
+  });
+  await expect(nodeActionExportButton).toBeEnabled();
+  await nodeActionExportButton.click();
+  await expect(page.locator(".app-shell")).toHaveAttribute(
+    "data-configuration-mode",
+    "false",
+  );
+  const nodeActionDialog = page.getByRole("dialog", {
+    name: "导出当前节点动作",
+  });
+  await expect(nodeActionDialog).toBeVisible();
+  await expect(nodeActionDialog.getByText("商会安保")).toBeVisible();
+  await expect(nodeActionDialog).toContainText("735001");
+  await expect(nodeActionDialog.getByText("镜头数据")).toHaveCount(0);
+  await nodeActionDialog.getByRole("button", { name: "关闭" }).click();
+  await page.getByRole("button", { name: "进入配置小窗" }).click();
+  await expect(page.locator(".app-shell")).toHaveAttribute(
+    "data-configuration-mode",
+    "true",
+  );
   await page.getByRole("tab", { name: "音频" }).click();
   await expect(page.locator(".music-recommendation-list")).toContainText(
     "情绪-危机爆发",
   );
+  const nodeAudioExportButton = page.getByRole("button", {
+    name: "导出节点音频",
+  });
+  await expect(nodeAudioExportButton).toBeEnabled();
+  await nodeAudioExportButton.click();
+  const nodeAudioDialog = page.getByRole("dialog", {
+    name: "导出当前节点音频",
+  });
+  await expect(nodeAudioDialog).toContainText("情绪-危机爆发");
+  await expect(nodeAudioDialog.getByText("镜头数据")).toHaveCount(0);
+  await nodeAudioDialog.getByRole("button", { name: "关闭" }).click();
   const exportButton = page.getByRole("button", { name: "导出到 UE" });
   await expect(exportButton).toBeEnabled();
   await exportButton.click();
@@ -5447,6 +5825,9 @@ test("offers the detected Blueprint formation before designing shots", async ({
   await expect(exportDialog.getByText("01 · 未选")).toBeVisible();
   await exportDialog
     .getByRole("checkbox", { name: "选择音乐 情绪-危机爆发" })
+    .uncheck();
+  await exportDialog
+    .getByRole("checkbox", { name: "选择音效 A_SFX_Dialog_729701" })
     .uncheck();
   await exportDialog
     .getByRole("button", { name: "检查所选内容" })

@@ -72,10 +72,12 @@ function trackKey(dialogueId: string, modelIndex: number): string {
 
 export function useCharacterActionEditor({
   sequence,
+  dialogueIds,
   enabled,
   releaseWhenDisabled = false,
 }: {
   sequence: DialogueSequence;
+  dialogueIds: string[];
   enabled: boolean;
   releaseWhenDisabled?: boolean;
 }): CharacterActionEditorController {
@@ -114,7 +116,7 @@ export function useCharacterActionEditor({
     () => mergeDialogueCharacterActionTracks(localTracks, ueTracks),
     [localTracks, ueTracks],
   );
-  const signature = useMemo(
+  const draftSignature = useMemo(
     () =>
       JSON.stringify({
         startId: sequence.startId,
@@ -123,14 +125,23 @@ export function useCharacterActionEditor({
       }),
     [models, sequence.rows, sequence.startId],
   );
+  const readSignature = useMemo(
+    () =>
+      JSON.stringify({
+        startId: sequence.startId,
+        dialogueIds,
+        models,
+      }),
+    [dialogueIds, models, sequence.startId],
+  );
   const tracks = useMemo(
-    () => tracksBySignature.get(signature) ?? [],
-    [signature, tracksBySignature],
+    () => tracksBySignature.get(draftSignature) ?? [],
+    [draftSignature, tracksBySignature],
   );
   const setTracks = useCallback(
     (update: SetStateAction<CharacterActionTrackDraft[]>) => {
       setTracksBySignature((current) => {
-        const currentTracks = current.get(signature) ?? [];
+        const currentTracks = current.get(draftSignature) ?? [];
         const nextTracks =
           typeof update === "function" ? update(currentTracks) : update;
         if (nextTracks === currentTracks) {
@@ -138,14 +149,14 @@ export function useCharacterActionEditor({
         }
         const next = new Map(current);
         if (nextTracks.length > 0) {
-          next.set(signature, nextTracks);
+          next.set(draftSignature, nextTracks);
         } else {
-          next.delete(signature);
+          next.delete(draftSignature);
         }
         return next;
       });
     },
-    [signature],
+    [draftSignature],
   );
 
   const nextActionId = useCallback(
@@ -156,7 +167,7 @@ export function useCharacterActionEditor({
 
   const load = useCallback(async (discardDrafts: boolean) => {
     const requestRun = ++requestRunRef.current;
-    loadedSignatureRef.current = signature;
+    loadedSignatureRef.current = readSignature;
     if (models.length === 0) {
       setCatalogs([]);
       setUeTracks([]);
@@ -179,7 +190,7 @@ export function useCharacterActionEditor({
     try {
       const snapshot = await readDialogueCharacterActions({
         startId: sequence.startId,
-        dialogueIds: sequence.rows.map((row) => row.id),
+        dialogueIds,
         models,
       });
       if (requestRun !== requestRunRef.current) {
@@ -221,11 +232,11 @@ export function useCharacterActionEditor({
     }
   }, [
     localTracks,
+    dialogueIds,
     models,
-    sequence.rows,
     sequence.startId,
     setTracks,
-    signature,
+    readSignature,
   ]);
 
   useEffect(() => {
@@ -237,14 +248,14 @@ export function useCharacterActionEditor({
     setDialogueAssetPath("");
     setCatalogs([]);
     setUeTracks([]);
-  }, [signature]);
+  }, [readSignature]);
 
   useEffect(() => {
-    if (!enabled || loadedSignatureRef.current === signature) {
+    if (!enabled || loadedSignatureRef.current === readSignature) {
       return;
     }
     void load(false);
-  }, [enabled, load, signature]);
+  }, [enabled, load, readSignature]);
 
   useEffect(() => {
     if (enabled || !releaseWhenDisabled) {
