@@ -4,6 +4,7 @@ import {
   ChevronDown,
   ChevronRight,
   GripVertical,
+  ListChecks,
   LoaderCircle,
   LockKeyhole,
   Plus,
@@ -563,6 +564,10 @@ export function CharacterActionEditor({
     useState<Record<string, number>>({});
   const [draggedAction, setDraggedAction] =
     useState<DraggedAction | null>(null);
+  const [sectionExpansionByDialogue, setSectionExpansionByDialogue] =
+    useState<
+      Record<string, { actions?: boolean; viewLines?: boolean }>
+    >({});
   const editingDisabled = busy || controller.loading;
   const participantByModelIndex = useMemo(
     () =>
@@ -683,10 +688,37 @@ export function CharacterActionEditor({
     await controller.refresh();
   }
 
+  function sectionExpanded(
+    dialogueId: string,
+    section: "actions" | "viewLines",
+  ): boolean {
+    return (
+      sectionExpansionByDialogue[dialogueId]?.[section] ??
+      (section === "actions")
+    );
+  }
+
+  function toggleSection(
+    dialogueId: string,
+    section: "actions" | "viewLines",
+  ) {
+    setSectionExpansionByDialogue((current) => {
+      const expanded =
+        current[dialogueId]?.[section] ?? (section === "actions");
+      return {
+        ...current,
+        [dialogueId]: {
+          ...current[dialogueId],
+          [section]: !expanded,
+        },
+      };
+    });
+  }
+
   return (
     <section className="inspector-section character-action-editor">
       <div className="section-label">
-        <span>动作编辑</span>
+        <span>{showViewLines ? "动作与视线" : "动作编辑"}</span>
         <button
           className="icon-button"
           type="button"
@@ -808,6 +840,28 @@ export function CharacterActionEditor({
               (total, track) => total + track.actions.length,
               0,
             );
+          const pendingActionCount = pendingTracks.reduce(
+            (total, track) => total + track.actions.length,
+            0,
+          );
+          const actionsExpanded = sectionExpanded(row.id, "actions");
+          const viewLinesExpanded = sectionExpanded(
+            row.id,
+            "viewLines",
+          );
+          const actionSummary =
+            `${modelIndexes.length} 角色 · ${actionCount} 动作` +
+            (pendingActionCount > 0
+              ? ` · ${pendingActionCount} 待写入`
+              : "");
+          const viewLineSummary =
+            `${effectiveViewLines.length} 项` +
+            (pendingViewLines.length > 0
+              ? ` · ${pendingViewLines.length} 待写入`
+              : "") +
+            ((existingViewLineNode?.preservedComplexLineCount ?? 0) > 0
+              ? ` · 保留 ${existingViewLineNode!.preservedComplexLineCount} 项点视线`
+              : "");
           return (
             <article
               className="character-action-node"
@@ -841,6 +895,32 @@ export function CharacterActionEditor({
                   className="character-action-node__body"
                   id={`character-action-node-${row.id}`}
                 >
+                  <section
+                    className="character-action-section character-action-section--actions"
+                    data-expanded={actionsExpanded}
+                  >
+                    <button
+                      className="character-action-section__toggle"
+                      id={`character-actions-toggle-${row.id}`}
+                      type="button"
+                      aria-label={`${actionsExpanded ? "收起" : "展开"}角色动作`}
+                      aria-expanded={actionsExpanded}
+                      aria-controls={`character-actions-panel-${row.id}`}
+                      title={actionSummary}
+                      onClick={() => toggleSection(row.id, "actions")}
+                    >
+                      <ChevronRight size={13} />
+                      <ListChecks size={14} />
+                      <strong>角色动作</strong>
+                      <small>{actionSummary}</small>
+                    </button>
+                    {actionsExpanded && (
+                      <div
+                        className="character-action-section__body"
+                        id={`character-actions-panel-${row.id}`}
+                        role="region"
+                        aria-labelledby={`character-actions-toggle-${row.id}`}
+                      >
                   {modelIndexes.map((modelIndex) => {
                     const participant =
                       editableParticipantByModelIndex.get(modelIndex) ??
@@ -1144,20 +1224,37 @@ export function CharacterActionEditor({
                       添加角色
                     </button>
                   </div>
+                      </div>
+                    )}
+                  </section>
 
                   {showViewLines && (
-                    <section className="dialogue-view-lines">
-                      <header>
+                    <section
+                      className="character-action-section dialogue-view-lines"
+                      data-expanded={viewLinesExpanded}
+                    >
+                      <button
+                        className="character-action-section__toggle"
+                        id={`character-view-lines-toggle-${row.id}`}
+                        type="button"
+                        aria-label={`${viewLinesExpanded ? "收起" : "展开"}角色视线`}
+                        aria-expanded={viewLinesExpanded}
+                        aria-controls={`character-view-lines-panel-${row.id}`}
+                        title={viewLineSummary}
+                        onClick={() => toggleSection(row.id, "viewLines")}
+                      >
+                        <ChevronRight size={13} />
                         <Eye size={14} />
                         <strong>角色视线</strong>
-                        <small>
-                          {effectiveViewLines.length} 项
-                          {(existingViewLineNode
-                            ?.preservedComplexLineCount ?? 0) > 0
-                            ? ` · 保留 ${existingViewLineNode!.preservedComplexLineCount} 项点视线`
-                            : ""}
-                        </small>
-                      </header>
+                        <small>{viewLineSummary}</small>
+                      </button>
+                      {viewLinesExpanded && (
+                        <div
+                          className="dialogue-view-lines__body"
+                          id={`character-view-lines-panel-${row.id}`}
+                          role="region"
+                          aria-labelledby={`character-view-lines-toggle-${row.id}`}
+                        >
                       {effectiveViewLines.length > 0 && (
                         <div className="dialogue-view-lines__list">
                           {effectiveViewLines.map((line) => {
@@ -1345,6 +1442,8 @@ export function CharacterActionEditor({
                           添加视线
                         </button>
                       </div>
+                        </div>
+                      )}
                     </section>
                   )}
                 </div>

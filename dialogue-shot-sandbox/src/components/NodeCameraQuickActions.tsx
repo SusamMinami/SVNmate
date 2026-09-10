@@ -2,24 +2,31 @@ import {
   AlertTriangle,
   Camera,
   Check,
+  ChevronDown,
   ChevronRight,
   Copy,
   GitMerge,
+  GripVertical,
   LoaderCircle,
   Users,
   X,
 } from "lucide-react";
 import {
+  type DragEvent as ReactDragEvent,
   forwardRef,
+  type ReactNode,
   useEffect,
   useImperativeHandle,
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import type {
   DialogueCameraQuickActionMode,
   DialogueCameraQuickActionPreview,
   DialogueCameraQuickActionRequest,
+  DialogueSchoolCameraCopy,
+  DialogueSchoolCameraRole,
   ExistingDialogueNodeConfiguration,
 } from "../types";
 import {
@@ -35,6 +42,7 @@ interface NodeCameraQuickActionsProps {
   existingConfiguration?: ExistingDialogueNodeConfiguration;
   configurationLoading?: boolean;
   externalConfirmation?: boolean;
+  reviewHost?: HTMLElement | null;
   onApplied?: () => void;
   onActivityChange?: (activity: "idle" | "read" | "write") => void;
   onSelectionChange?: (
@@ -56,12 +64,28 @@ export interface NodeCameraQuickActionSelection {
   busy: "inspect" | "apply" | null;
 }
 
+function ReviewPlacement({
+  children,
+  external,
+  host,
+}: {
+  children: ReactNode;
+  external: boolean;
+  host?: HTMLElement | null;
+}) {
+  if (!external) {
+    return children;
+  }
+  return host ? createPortal(children, host) : null;
+}
+
 function actionLabel(mode: DialogueCameraQuickActionMode): string {
   return {
     copy_previous: "使用上一相机参数",
     default: "添加默认镜头",
     blend_curve: "添加镜头曲线",
     school_cameras: "添加角色相机",
+    copy_school_cameras: "复制角色相机",
   }[mode];
 }
 
@@ -69,7 +93,21 @@ const SCHOOL_CAMERA_ROLES = [
   { key: "ERing", label: "Ring" },
   { key: "ENino", label: "Nino" },
   { key: "EJodie", label: "Jodie" },
-] as const;
+] as const satisfies ReadonlyArray<{
+  key: DialogueSchoolCameraRole;
+  label: string;
+}>;
+
+const SCHOOL_CAMERA_DRAG_TYPE =
+  "application/x-shot-sandbox-school-camera";
+
+function schoolCameraRoleLabel(role: DialogueSchoolCameraRole): string {
+  return SCHOOL_CAMERA_ROLES.find(({ key }) => key === role)?.label ?? role;
+}
+
+function isSchoolCameraRole(value: string): value is DialogueSchoolCameraRole {
+  return SCHOOL_CAMERA_ROLES.some(({ key }) => key === value);
+}
 
 function assetName(assetPath: string): string {
   return assetPath.split("/").at(-1)?.split(".")[0] ?? assetPath;
@@ -107,6 +145,7 @@ function schoolCameraConfirmationPreview(
     existingSchoolCameraKeys: existingKeys,
     addedSchoolCameraKeys: missingKeys,
     desiredSchoolCameraKeys: [...existingKeys, ...missingKeys],
+    schoolCameraCopies: [],
     existingSchoolCameraCount: existingKeys.length,
     desiredSchoolCameraCount: existingKeys.length + missingKeys.length,
     changed: missingKeys.length > 0,
@@ -146,9 +185,52 @@ function defaultCameraConfirmationPreview(
     existingSchoolCameraKeys: existingKeys,
     addedSchoolCameraKeys: [],
     desiredSchoolCameraKeys: existingKeys,
+    schoolCameraCopies: [],
     existingSchoolCameraCount: configuration.schoolCameraCount,
     desiredSchoolCameraCount: configuration.schoolCameraCount,
     changed: true,
+    blockedReasons: [],
+  };
+}
+
+function schoolCameraCopyDraftPreview(
+  request: DialogueCameraQuickActionRequest,
+  configuration: ExistingDialogueNodeConfiguration,
+): DialogueCameraQuickActionPreview {
+  const existingKeys = Array.from(new Set(configuration.schoolCameraKeys));
+  const copies = request.schoolCameraCopies ?? [];
+  const addedKeys = copies
+    .map(({ targetRole }) => targetRole)
+    .filter((key) => !existingKeys.includes(key));
+  const desiredKeys = Array.from(new Set([...existingKeys, ...addedKeys]));
+  return {
+    reviewToken: "",
+    dialogueId: request.dialogueId,
+    startId: request.startId,
+    dialogueNodeId: request.dialogueNodeId,
+    dialogueAssetPath: "",
+    mode: "copy_school_cameras",
+    sourceDialogueNodeId: null,
+    existingCameraPosition: configuration.cameraPosition,
+    desiredCameraPosition: configuration.cameraPosition,
+    existingMoveCount: configuration.moveCameraCount,
+    desiredMoveCount: configuration.moveCameraCount,
+    cameraMoveType: configuration.cameraMoveTypes[0] ?? "",
+    velocity: null,
+    blendOutTime: null,
+    fov: configuration.fov,
+    existingBlendCameraType: configuration.blendCameraType,
+    desiredBlendCameraType: configuration.blendCameraType,
+    existingBlendCurve: configuration.blendCurve,
+    desiredBlendCurve: configuration.blendCurve,
+    blendDuration: configuration.blendDuration,
+    existingSchoolCameraKeys: existingKeys,
+    addedSchoolCameraKeys: addedKeys,
+    desiredSchoolCameraKeys: desiredKeys,
+    schoolCameraCopies: copies,
+    existingSchoolCameraCount: existingKeys.length,
+    desiredSchoolCameraCount: desiredKeys.length,
+    changed: copies.length > 0,
     blockedReasons: [],
   };
 }
@@ -164,6 +246,7 @@ export const NodeCameraQuickActions = forwardRef<
   existingConfiguration,
   configurationLoading = false,
   externalConfirmation = false,
+  reviewHost,
   onApplied,
   onActivityChange,
   onSelectionChange,
@@ -178,6 +261,16 @@ export const NodeCameraQuickActions = forwardRef<
   const [status, setStatus] = useState("");
   const [blendCurveAssetName, setBlendCurveAssetName] =
     useState("trans_6015");
+  const [
+    selectedSchoolCameraSource,
+    setSelectedSchoolCameraSource,
+  ] = useState<DialogueSchoolCameraRole | null>(null);
+  const [
+    draggedSchoolCameraSource,
+    setDraggedSchoolCameraSource,
+  ] = useState<DialogueSchoolCameraRole | null>(null);
+  const [schoolCameraDropTarget, setSchoolCameraDropTarget] =
+    useState<DialogueSchoolCameraRole | null>(null);
   const cameraConfigured = Boolean(
     existingConfiguration?.cameraPosition ||
       existingConfiguration?.moveCameraCount,
@@ -223,6 +316,13 @@ export const NodeCameraQuickActions = forwardRef<
   const allSchoolCamerasConfigured = SCHOOL_CAMERA_ROLES.every(
     ({ key }) => configuredSchoolCameraKeys.has(key),
   );
+  const schoolCameraCopies =
+    request?.mode === "copy_school_cameras"
+      ? request.schoolCameraCopies ?? []
+      : [];
+  const schoolCameraEditorOpen =
+    request?.mode === "school_cameras" ||
+    request?.mode === "copy_school_cameras";
 
   useEffect(() => {
     operationRunRef.current += 1;
@@ -231,6 +331,9 @@ export const NodeCameraQuickActions = forwardRef<
     setBusy(null);
     setError("");
     setStatus("");
+    setSelectedSchoolCameraSource(null);
+    setDraggedSchoolCameraSource(null);
+    setSchoolCameraDropTarget(null);
   }, [dialogueNodeId]);
 
   useEffect(() => {
@@ -278,6 +381,9 @@ export const NodeCameraQuickActions = forwardRef<
     };
     setError("");
     setStatus("");
+    setSelectedSchoolCameraSource(null);
+    setDraggedSchoolCameraSource(null);
+    setSchoolCameraDropTarget(null);
     if (mode === "school_cameras" && existingConfiguration) {
       setRequest(nextRequest);
       setPreview(
@@ -318,6 +424,138 @@ export const NodeCameraQuickActions = forwardRef<
     }
   }
 
+  async function inspectSchoolCameraCopies(
+    copies: DialogueSchoolCameraCopy[],
+  ) {
+    if (!existingConfiguration || copies.length === 0) {
+      return;
+    }
+    const operationRun = ++operationRunRef.current;
+    const nextRequest: DialogueCameraQuickActionRequest = {
+      dialogueId,
+      startId,
+      dialogueNodeId,
+      mode: "copy_school_cameras",
+      schoolCameraCopies: copies,
+    };
+    const draftPreview = schoolCameraCopyDraftPreview(
+      nextRequest,
+      existingConfiguration,
+    );
+    setRequest(nextRequest);
+    setPreview(draftPreview);
+    setBusy("inspect");
+    setError("");
+    setStatus("");
+    try {
+      const nextPreview =
+        await inspectDialogueCameraQuickAction(nextRequest);
+      if (operationRun === operationRunRef.current) {
+        setPreview(nextPreview);
+      }
+    } catch (inspectError) {
+      if (operationRun !== operationRunRef.current) {
+        return;
+      }
+      const message =
+        inspectError instanceof Error
+          ? inspectError.message
+          : "无法检查角色相机复制";
+      setPreview({
+        ...draftPreview,
+        changed: false,
+        blockedReasons: [message],
+      });
+    } finally {
+      if (operationRun === operationRunRef.current) {
+        setBusy(null);
+      }
+    }
+  }
+
+  function stageSchoolCameraCopy(
+    sourceRole: DialogueSchoolCameraRole,
+    targetRole: DialogueSchoolCameraRole,
+  ) {
+    if (
+      busy !== null ||
+      sourceRole === targetRole ||
+      !configuredSchoolCameraKeys.has(sourceRole)
+    ) {
+      return;
+    }
+    const copyByTarget = new Map(
+      schoolCameraCopies.map((copy) => [copy.targetRole, copy]),
+    );
+    copyByTarget.set(targetRole, { sourceRole, targetRole });
+    const nextCopies = SCHOOL_CAMERA_ROLES.flatMap(({ key }) => {
+      const copy = copyByTarget.get(key);
+      return copy ? [copy] : [];
+    });
+    setSelectedSchoolCameraSource(null);
+    setDraggedSchoolCameraSource(null);
+    setSchoolCameraDropTarget(null);
+    void inspectSchoolCameraCopies(nextCopies);
+  }
+
+  function removeSchoolCameraCopy(targetRole: DialogueSchoolCameraRole) {
+    if (!existingConfiguration || busy !== null) {
+      return;
+    }
+    const nextCopies = schoolCameraCopies.filter(
+      (copy) => copy.targetRole !== targetRole,
+    );
+    setSelectedSchoolCameraSource(null);
+    setDraggedSchoolCameraSource(null);
+    setSchoolCameraDropTarget(null);
+    if (nextCopies.length > 0) {
+      void inspectSchoolCameraCopies(nextCopies);
+      return;
+    }
+    operationRunRef.current += 1;
+    const nextRequest: DialogueCameraQuickActionRequest = {
+      dialogueId,
+      startId,
+      dialogueNodeId,
+      mode: "school_cameras",
+    };
+    setRequest(nextRequest);
+    setPreview(
+      schoolCameraConfirmationPreview(nextRequest, existingConfiguration),
+    );
+    setBusy(null);
+    setError("");
+  }
+
+  function schoolCameraDragStart(
+    event: ReactDragEvent<HTMLButtonElement>,
+    sourceRole: DialogueSchoolCameraRole,
+  ) {
+    if (busy !== null || !configuredSchoolCameraKeys.has(sourceRole)) {
+      event.preventDefault();
+      return;
+    }
+    event.dataTransfer.effectAllowed = "copy";
+    event.dataTransfer.setData(SCHOOL_CAMERA_DRAG_TYPE, sourceRole);
+    setDraggedSchoolCameraSource(sourceRole);
+    setSchoolCameraDropTarget(null);
+  }
+
+  function schoolCameraDrop(
+    event: ReactDragEvent<HTMLDivElement>,
+    targetRole: DialogueSchoolCameraRole,
+  ) {
+    event.preventDefault();
+    const sourceRole = event.dataTransfer.getData(
+      SCHOOL_CAMERA_DRAG_TYPE,
+    );
+    setDraggedSchoolCameraSource(null);
+    setSchoolCameraDropTarget(null);
+    if (isSchoolCameraRole(sourceRole)) {
+      stageSchoolCameraCopy(sourceRole, targetRole);
+    }
+  }
+
   async function apply() {
     if (!preview || !request) {
       return;
@@ -336,6 +574,9 @@ export const NodeCameraQuickActions = forwardRef<
       }
       setPreview(null);
       setRequest(null);
+      setSelectedSchoolCameraSource(null);
+      setDraggedSchoolCameraSource(null);
+      setSchoolCameraDropTarget(null);
       setStatus(
         result.status === "updated"
           ? `节点 ${result.dialogueNodeId} 的镜头配置已写入并保存`
@@ -364,6 +605,9 @@ export const NodeCameraQuickActions = forwardRef<
     setRequest(null);
     setBusy(null);
     setError("");
+    setSelectedSchoolCameraSource(null);
+    setDraggedSchoolCameraSource(null);
+    setSchoolCameraDropTarget(null);
   }
 
   useImperativeHandle(ref, () => ({
@@ -472,17 +716,19 @@ export const NodeCameraQuickActions = forwardRef<
           className={
             [
               allSchoolCamerasConfigured ? "is-configured" : "",
-              request?.mode === "school_cameras" ? "is-selected" : "",
+              schoolCameraEditorOpen ? "is-selected" : "",
             ].filter(Boolean).join(" ") || undefined
           }
           type="button"
+          aria-expanded={schoolCameraEditorOpen}
+          aria-controls={`school-camera-editor-${dialogueNodeId}`}
           disabled={
             busy !== null || configurationLoading || !existingConfiguration
           }
           title={
             configurationLoading || !existingConfiguration
               ? "等待读取当前节点镜头配置"
-              : "保留已有角色相机，只用主 MoveCameras 补齐缺失项"
+              : "补齐缺失角色相机，或展开后复制已有角色相机参数"
           }
           onClick={() => void inspect("school_cameras")}
         >
@@ -504,156 +750,334 @@ export const NodeCameraQuickActions = forwardRef<
               ))}
             </small>
           </span>
-          <ChevronRight size={15} />
+          {schoolCameraEditorOpen ? (
+            <ChevronDown size={15} />
+          ) : (
+            <ChevronRight size={15} />
+          )}
         </button>
       </div>
 
       {preview && request && (
-        <div
-          className={`node-camera-review ${
-            preview.mode === "school_cameras"
-              ? "node-camera-review--confirmation"
-              : ""
-          }`}
-          aria-label="节点镜头写入确认"
+        <ReviewPlacement
+          external={externalConfirmation}
+          host={reviewHost}
         >
-          <button
-            className="icon-button node-camera-review__clear"
-            type="button"
-            title="取消当前镜头方案"
-            aria-label="取消当前镜头方案"
-            disabled={busy !== null}
-            onClick={clear}
+          <div
+            className={`node-camera-review ${
+              preview.mode === "school_cameras" ||
+              preview.mode === "copy_school_cameras"
+                ? "node-camera-review--confirmation"
+                : ""
+            }`}
+            aria-label="节点镜头写入确认"
           >
-            <X size={13} />
-          </button>
-          {preview.mode === "school_cameras" ? (
-            <div className="node-camera-review__confirmation">
-              <Users size={16} />
-              <strong>
-                {preview.changed
-                  ? "确认写入角色相机？"
-                  : "角色相机已完整配置"}
-              </strong>
-            </div>
-          ) : (
-            <>
-              <header>
-                <Camera size={15} />
-                <span>
-                  <strong>{actionLabel(preview.mode)}</strong>
-                  <small>
-                    {preview.changed ? "检测到参数变化" : "当前参数已经一致"}
-                  </small>
-                </span>
-              </header>
-              <dl>
-            <div>
-              <dt>来源</dt>
-              <dd>
-                {preview.sourceDialogueNodeId
-                  ? `节点 ${preview.sourceDialogueNodeId}`
-                  : preview.mode === "default"
-                    ? "全新默认参数"
-                    : "当前节点"}
-              </dd>
-            </div>
-            {(preview.mode === "copy_previous" ||
-              preview.mode === "default") && (
+            <button
+              className="icon-button node-camera-review__clear"
+              type="button"
+              title="取消当前镜头方案"
+              aria-label="取消当前镜头方案"
+              disabled={busy !== null}
+              onClick={clear}
+            >
+              <X size={13} />
+            </button>
+            {preview.mode === "school_cameras" ||
+            preview.mode === "copy_school_cameras" ? (
+              <div
+                className={[
+                  "node-camera-review__school-editor",
+                  schoolCameraCopies.length > 0 ? "has-overwrite" : "",
+                ].filter(Boolean).join(" ")}
+                id={`school-camera-editor-${dialogueNodeId}`}
+              >
+                <div className="node-camera-review__confirmation">
+                  <Users size={16} />
+                  <span>
+                    <strong>
+                      {schoolCameraCopies.length > 0
+                        ? "确认角色相机覆盖"
+                        : preview.changed
+                          ? "确认补齐角色相机"
+                          : "角色相机已完整配置"}
+                    </strong>
+                    <small>
+                      {schoolCameraCopies.length > 0
+                        ? schoolCameraCopies
+                            .map(
+                              ({ sourceRole, targetRole }) =>
+                                `${schoolCameraRoleLabel(sourceRole)} → ${schoolCameraRoleLabel(targetRole)}`,
+                            )
+                            .join(" · ")
+                        : preview.addedSchoolCameraKeys.length > 0
+                          ? `${preview.addedSchoolCameraKeys.length} 项将从主镜头补齐`
+                          : `${preview.existingSchoolCameraCount} 项已配置`}
+                    </small>
+                  </span>
+                </div>
+                <div
+                  className="school-camera-copy-grid"
+                  role="group"
+                  aria-label="角色相机复制映射"
+                >
+                  {SCHOOL_CAMERA_ROLES.map(({ key, label }) => {
+                    const configured =
+                      configuredSchoolCameraKeys.has(key);
+                    const stagedCopy = schoolCameraCopies.find(
+                      (copy) => copy.targetRole === key,
+                    );
+                    const activeSource =
+                      draggedSchoolCameraSource ??
+                      selectedSchoolCameraSource;
+                    const canReceive =
+                      activeSource !== null && activeSource !== key;
+                    return (
+                      <div
+                        className={[
+                          "school-camera-role-card",
+                          configured ? "is-configured" : "",
+                          stagedCopy ? "has-copy" : "",
+                          selectedSchoolCameraSource === key
+                            ? "is-source"
+                            : "",
+                          draggedSchoolCameraSource === key
+                            ? "is-dragging"
+                            : "",
+                          schoolCameraDropTarget === key && canReceive
+                            ? "is-drop-target"
+                            : "",
+                        ].filter(Boolean).join(" ")}
+                        data-school-camera-role={key}
+                        key={key}
+                        onDragEnter={(event) => {
+                          if (canReceive) {
+                            event.preventDefault();
+                            setSchoolCameraDropTarget(key);
+                          }
+                        }}
+                        onDragOver={(event) => {
+                          if (canReceive) {
+                            event.preventDefault();
+                            event.dataTransfer.dropEffect = "copy";
+                            setSchoolCameraDropTarget(key);
+                          }
+                        }}
+                        onDragLeave={() => {
+                          if (schoolCameraDropTarget === key) {
+                            setSchoolCameraDropTarget(null);
+                          }
+                        }}
+                        onDrop={(event) =>
+                          schoolCameraDrop(event, key)
+                        }
+                      >
+                        <button
+                          className="school-camera-role-card__source"
+                          type="button"
+                          draggable={configured && busy === null}
+                          disabled={busy !== null}
+                          aria-pressed={
+                            selectedSchoolCameraSource === key
+                          }
+                          aria-label={
+                            configured
+                              ? `${label} 角色相机，选择为复制来源`
+                              : `${label} 角色相机未配置，可作为覆盖目标`
+                          }
+                          title={
+                            configured
+                              ? `拖动 ${label} 到目标角色，或先选择再选择目标`
+                              : activeSource
+                                ? `使用 ${schoolCameraRoleLabel(activeSource)} 覆盖 ${label}`
+                                : `${label} 尚未配置角色相机`
+                          }
+                          onClick={() => {
+                            if (
+                              selectedSchoolCameraSource &&
+                              selectedSchoolCameraSource !== key
+                            ) {
+                              stageSchoolCameraCopy(
+                                selectedSchoolCameraSource,
+                                key,
+                              );
+                              return;
+                            }
+                            if (configured) {
+                              setSelectedSchoolCameraSource(
+                                selectedSchoolCameraSource === key
+                                  ? null
+                                  : key,
+                              );
+                            }
+                          }}
+                          onDragStart={(event) =>
+                            schoolCameraDragStart(event, key)
+                          }
+                          onDragEnd={() => {
+                            setDraggedSchoolCameraSource(null);
+                            setSchoolCameraDropTarget(null);
+                          }}
+                        >
+                          <GripVertical size={13} />
+                          <span>
+                            <strong>{label}</strong>
+                            <small>
+                              {stagedCopy
+                                ? `${schoolCameraRoleLabel(stagedCopy.sourceRole)} → ${label}`
+                                : configured
+                                  ? "已配置"
+                                  : "未配置"}
+                            </small>
+                          </span>
+                        </button>
+                        {stagedCopy && (
+                          <button
+                            className="icon-button school-camera-role-card__clear"
+                            type="button"
+                            title={`取消覆盖 ${label}`}
+                            aria-label={`取消覆盖 ${label}`}
+                            disabled={busy !== null}
+                            onClick={() =>
+                              removeSchoolCameraCopy(key)
+                            }
+                          >
+                            <X size={11} />
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : (
               <>
-                <div>
-                  <dt>Camera Position</dt>
-                  <dd>
-                    <code>{preview.existingCameraPosition || "空"}</code>
-                    <ChevronRight size={12} />
-                    <code>{preview.desiredCameraPosition || "空"}</code>
-                  </dd>
-                </div>
-                <div>
-                  <dt>Camera Config</dt>
-                  <dd>
-                    {preview.existingMoveCount} 项
-                    <ChevronRight size={12} />
-                    {preview.desiredMoveCount} 项
-                  </dd>
-                </div>
-                <div>
-                  <dt>目标参数</dt>
-                  <dd>
-                    {preview.cameraMoveType || "-"} · 速度{" "}
-                    {preview.velocity ?? "-"} · Blend Out{" "}
-                    {preview.blendOutTime ?? "-"} · FOV{" "}
-                    {preview.fov ?? "-"}
-                  </dd>
-                </div>
+                <header>
+                  <Camera size={15} />
+                  <span>
+                    <strong>{actionLabel(preview.mode)}</strong>
+                    <small>
+                      {preview.changed
+                        ? "检测到参数变化"
+                        : "当前参数已经一致"}
+                    </small>
+                  </span>
+                </header>
+                <dl>
+                  <div>
+                    <dt>来源</dt>
+                    <dd>
+                      {preview.sourceDialogueNodeId
+                        ? `节点 ${preview.sourceDialogueNodeId}`
+                        : preview.mode === "default"
+                          ? "全新默认参数"
+                          : "当前节点"}
+                    </dd>
+                  </div>
+                  {(preview.mode === "copy_previous" ||
+                    preview.mode === "default") && (
+                    <>
+                      <div>
+                        <dt>Camera Position</dt>
+                        <dd>
+                          <code>
+                            {preview.existingCameraPosition || "空"}
+                          </code>
+                          <ChevronRight size={12} />
+                          <code>
+                            {preview.desiredCameraPosition || "空"}
+                          </code>
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>Camera Config</dt>
+                        <dd>
+                          {preview.existingMoveCount} 项
+                          <ChevronRight size={12} />
+                          {preview.desiredMoveCount} 项
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>目标参数</dt>
+                        <dd>
+                          {preview.cameraMoveType || "-"} · 速度{" "}
+                          {preview.velocity ?? "-"} · Blend Out{" "}
+                          {preview.blendOutTime ?? "-"} · FOV{" "}
+                          {preview.fov ?? "-"}
+                        </dd>
+                      </div>
+                    </>
+                  )}
+                  {preview.mode === "blend_curve" && (
+                    <>
+                      <div>
+                        <dt>Blend Type</dt>
+                        <dd>
+                          <code>
+                            {preview.existingBlendCameraType || "-"}
+                          </code>
+                          <ChevronRight size={12} />
+                          <code>{preview.desiredBlendCameraType}</code>
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>Blend Curve</dt>
+                        <dd>
+                          <code>{preview.desiredBlendCurve}</code>
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>Duration</dt>
+                        <dd>{preview.blendDuration}s · 保留当前值</dd>
+                      </div>
+                    </>
+                  )}
+                </dl>
               </>
             )}
-            {preview.mode === "blend_curve" && (
-              <>
-                <div>
-                  <dt>Blend Type</dt>
-                  <dd>
-                    <code>{preview.existingBlendCameraType || "-"}</code>
-                    <ChevronRight size={12} />
-                    <code>{preview.desiredBlendCameraType}</code>
-                  </dd>
-                </div>
-                <div>
-                  <dt>Blend Curve</dt>
-                  <dd>
-                    <code>{preview.desiredBlendCurve}</code>
-                  </dd>
-                </div>
-                <div>
-                  <dt>Duration</dt>
-                  <dd>{preview.blendDuration}s · 保留当前值</dd>
-                </div>
-              </>
+            {preview.blockedReasons.map((reason) => (
+              <p className="node-camera-review__warning" key={reason}>
+                <AlertTriangle size={13} />
+                <span>{reason}</span>
+              </p>
+            ))}
+            {!externalConfirmation && (
+              <footer>
+                <button
+                  className="button"
+                  type="button"
+                  disabled={busy !== null}
+                  onClick={clear}
+                >
+                  <X size={14} />
+                  取消
+                </button>
+                <button
+                  className="button button--primary"
+                  type="button"
+                  disabled={
+                    busy !== null ||
+                    preview.blockedReasons.length > 0 ||
+                    ((preview.mode === "school_cameras" ||
+                      preview.mode === "copy_school_cameras") &&
+                      !preview.changed)
+                  }
+                  onClick={() => void apply()}
+                >
+                  {busy === "apply" ? (
+                    <LoaderCircle className="spin" size={14} />
+                  ) : (
+                    <Check size={14} />
+                  )}
+                  {busy === "apply"
+                    ? "正在写入"
+                    : preview.changed
+                      ? "确认写入"
+                      : "确认无改动"}
+                </button>
+              </footer>
             )}
-              </dl>
-            </>
-          )}
-          {preview.blockedReasons.map((reason) => (
-            <p className="node-camera-review__warning" key={reason}>
-              <AlertTriangle size={13} />
-              <span>{reason}</span>
-            </p>
-          ))}
-          {!externalConfirmation && (
-            <footer>
-              <button
-                className="button"
-                type="button"
-                disabled={busy !== null}
-                onClick={clear}
-              >
-                <X size={14} />
-                取消
-              </button>
-              <button
-                className="button button--primary"
-                type="button"
-                disabled={
-                  busy !== null ||
-                  preview.blockedReasons.length > 0 ||
-                  (preview.mode === "school_cameras" && !preview.changed)
-                }
-                onClick={() => void apply()}
-              >
-                {busy === "apply" ? (
-                  <LoaderCircle className="spin" size={14} />
-                ) : (
-                  <Check size={14} />
-                )}
-                {busy === "apply"
-                  ? "正在写入"
-                  : preview.changed
-                    ? "确认写入"
-                    : "确认无改动"}
-              </button>
-            </footer>
-          )}
-        </div>
+          </div>
+        </ReviewPlacement>
       )}
 
       {error && (

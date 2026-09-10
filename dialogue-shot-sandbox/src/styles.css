@@ -2780,6 +2780,67 @@ textarea:focus-visible {
   border-top: 1px solid #e2e4df;
 }
 
+.character-action-section + .character-action-section {
+  border-top: 1px solid var(--border);
+}
+
+.character-action-section__toggle {
+  display: grid;
+  width: 100%;
+  min-height: 36px;
+  grid-template-columns: 14px 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 7px;
+  color: var(--ink);
+  background: #eef0ed;
+  border: 0;
+  text-align: left;
+  cursor: pointer;
+}
+
+.character-action-section__toggle:hover {
+  background: #e6e9e5;
+}
+
+.character-action-section__toggle:focus-visible {
+  outline: 2px solid var(--ark-cyan);
+  outline-offset: -2px;
+}
+
+.character-action-section__toggle > svg:first-child {
+  color: var(--text-muted);
+  transition: transform 180ms ease;
+}
+
+.character-action-section[data-expanded="true"]
+  > .character-action-section__toggle
+  > svg:first-child {
+  transform: rotate(90deg);
+}
+
+.character-action-section__toggle > svg:nth-child(2) {
+  color: #3c6877;
+}
+
+.character-action-section__toggle > strong {
+  min-width: 0;
+  font-size: 10px;
+}
+
+.character-action-section__toggle > small {
+  max-width: 138px;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.character-action-section__body {
+  border-top: 1px solid #e2e4df;
+}
+
 .character-action-track {
   padding: 9px 7px;
   border-bottom: 1px solid #e2e4df;
@@ -3106,33 +3167,11 @@ textarea:focus-visible {
 }
 
 .dialogue-view-lines {
-  padding: 9px 7px;
   background: #f1f3f0;
-  border-top: 1px solid var(--border);
 }
 
-.dialogue-view-lines > header {
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 7px;
-}
-
-.dialogue-view-lines > header svg {
-  color: #3c6877;
-}
-
-.dialogue-view-lines > header strong {
-  font-size: 10px;
-}
-
-.dialogue-view-lines > header small {
-  overflow: hidden;
-  color: var(--text-muted);
-  font-size: 8px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.dialogue-view-lines__body {
+  padding: 9px 7px;
 }
 
 .dialogue-view-lines__list {
@@ -10804,6 +10843,34 @@ textarea:focus-visible {
   color: inherit;
 }
 
+.node-camera-review-dock {
+  flex: 0 0 auto;
+  max-height: min(42vh, 280px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  scrollbar-color: color-mix(in srgb, var(--ink) 38%, transparent) transparent;
+  scrollbar-width: thin;
+}
+
+.node-camera-review-dock:empty {
+  display: none;
+}
+
+.node-camera-review-dock::-webkit-scrollbar {
+  width: 5px;
+}
+
+.node-camera-review-dock::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--ink) 38%, transparent);
+}
+
+.node-camera-review-dock > .node-camera-review {
+  margin: 0;
+  border: 0;
+}
+
 .node-camera-review {
   position: relative;
   margin-top: 10px;
@@ -10833,9 +10900,156 @@ textarea:focus-visible {
   color: var(--success);
 }
 
+.node-camera-review__school-editor.has-overwrite
+  .node-camera-review__confirmation
+  svg {
+  color: var(--warning);
+}
+
+.node-camera-review__confirmation > span {
+  display: grid;
+  min-width: 0;
+  padding-right: 28px;
+  gap: 1px;
+}
+
 .node-camera-review__confirmation strong {
+  overflow: hidden;
   font-size: 10px;
   line-height: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node-camera-review__confirmation small {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 9px;
+  line-height: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.school-camera-copy-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--border);
+  border-top: 1px solid var(--border);
+}
+
+.school-camera-role-card {
+  position: relative;
+  min-width: 0;
+  min-height: 62px;
+  background: var(--surface);
+  outline: 1px solid transparent;
+  outline-offset: -1px;
+  transition:
+    background-color 140ms ease,
+    color 140ms ease,
+    outline-color 140ms ease;
+}
+
+.school-camera-role-card__source {
+  display: grid;
+  grid-template-columns: 13px minmax(0, 1fr);
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  min-height: 62px;
+  padding: 8px 7px;
+  gap: 4px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 0;
+  text-align: left;
+}
+
+.school-camera-role-card__source[draggable="true"] {
+  color: var(--ink);
+  cursor: grab;
+}
+
+.school-camera-role-card__source[draggable="true"]:active {
+  cursor: grabbing;
+}
+
+.school-camera-role-card__source > span {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.school-camera-role-card__source strong,
+.school-camera-role-card__source small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.school-camera-role-card__source strong {
+  font-size: 10px;
+}
+
+.school-camera-role-card__source small {
+  font-size: 8px;
+}
+
+.school-camera-role-card.is-configured {
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 6%, var(--surface));
+}
+
+.school-camera-role-card.is-configured
+  .school-camera-role-card__source {
+  color: inherit;
+}
+
+.school-camera-role-card.has-copy {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--signal) 22%, var(--surface));
+}
+
+.school-camera-role-card.is-source,
+.school-camera-role-card.is-drop-target {
+  color: var(--surface);
+  background: var(--ink);
+  outline-color: var(--signal);
+}
+
+.school-camera-role-card.is-source
+  .school-camera-role-card__source,
+.school-camera-role-card.is-drop-target
+  .school-camera-role-card__source {
+  color: inherit;
+}
+
+.school-camera-role-card.is-dragging {
+  opacity: 0.58;
+}
+
+.school-camera-role-card__source:focus-visible {
+  position: relative;
+  z-index: 1;
+  outline: 1px solid var(--ink);
+  outline-offset: -3px;
+}
+
+.school-camera-role-card.is-source
+  .school-camera-role-card__source:focus-visible,
+.school-camera-role-card.is-drop-target
+  .school-camera-role-card__source:focus-visible {
+  outline-color: var(--signal);
+}
+
+.school-camera-role-card__clear {
+  position: absolute;
+  z-index: 2;
+  top: 3px;
+  right: 3px;
+  width: 22px;
+  height: 22px;
 }
 
 .node-camera-review--confirmation > footer {

@@ -653,13 +653,16 @@ export function useStoryboardExport({
       ) {
         throw new Error("当前节点没有可写入的动作或视线配置");
       }
-      const nextRequest = buildRequest(
-        [],
-        currentCharacterActions,
-        currentSoundEffects,
-        currentMusic,
-        currentViewLines,
-      );
+      const nextRequest: StoryboardExportRequest = {
+        ...buildRequest(
+          [],
+          currentCharacterActions,
+          currentSoundEffects,
+          currentMusic,
+          currentViewLines,
+        ),
+        dialogueAssetDirtyPolicy: "save_existing",
+      };
       setMode(kind === "audio" ? "node-audio" : "node-actions");
       const inspectedPreview =
         await inspectDialogueStoryboardExport(nextRequest);

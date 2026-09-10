@@ -16,6 +16,7 @@ import type {
   DialogueCameraQuickActionPreview,
   DialogueCameraQuickActionRequest,
   DialogueCameraQuickActionResult,
+  DialogueSchoolCameraRole,
   DialoguePreviewSchoolPreview,
   DialoguePreviewSchoolRequest,
   DialoguePreviewSchoolResult,
@@ -372,6 +373,10 @@ const StoryboardExportRequestSchema = z.object({
     .array(z.number().int().nonnegative())
     .max(12),
   usesBlueprintFormation: z.boolean(),
+  dialogueAssetDirtyPolicy: z
+    .enum(["block", "save_existing"])
+    .optional()
+    .default("block"),
   shots: z
     .array(
       z.object({
@@ -490,6 +495,34 @@ const DialogueContentBatchUpdateRequestSchema = z.object({
   items: z.array(DialogueContentUpdateRequestSchema).min(1).max(200),
 });
 
+const DialogueSchoolCameraCopySchema = z
+  .object({
+    sourceRole: z.enum(SCHOOL_CAMERA_KEYS),
+    targetRole: z.enum(SCHOOL_CAMERA_KEYS),
+  })
+  .refine((copy) => copy.sourceRole !== copy.targetRole, {
+    message: "角色相机来源和目标不能相同",
+    path: ["targetRole"],
+  });
+
+const DialogueSchoolCameraCopiesSchema = z
+  .array(DialogueSchoolCameraCopySchema)
+  .min(1)
+  .max(SCHOOL_CAMERA_KEYS.length)
+  .superRefine((copies, context) => {
+    const targetRoles = new Set<DialogueSchoolCameraRole>();
+    copies.forEach((copy, index) => {
+      if (targetRoles.has(copy.targetRole)) {
+        context.addIssue({
+          code: "custom",
+          message: `角色相机目标 ${copy.targetRole} 重复`,
+          path: [index, "targetRole"],
+        });
+      }
+      targetRoles.add(copy.targetRole);
+    });
+  });
+
 const DialogueCameraQuickActionRequestSchema = z.object({
   dialogueId: z.string().regex(/^\d{4}$/),
   startId: z.string().regex(/^\d{4,}$/),
@@ -504,11 +537,13 @@ const DialogueCameraQuickActionRequestSchema = z.object({
     .regex(/^[A-Za-z0-9_]+$/)
     .max(128)
     .optional(),
+  schoolCameraCopies: DialogueSchoolCameraCopiesSchema.optional(),
   mode: z.enum([
     "copy_previous",
     "default",
     "blend_curve",
     "school_cameras",
+    "copy_school_cameras",
   ]),
 });
 
@@ -2128,6 +2163,43 @@ function validateStoryboardCoverage(request: StoryboardExportRequest): void {
       `音乐节点 ${invalidMusicNode} 不属于对话 ${request.dialogueId}`,
     );
   }
+  saveExistingDialogueTargetId(request);
+}
+
+function saveExistingDialogueTargetId(
+  request: StoryboardExportRequest,
+): string | null {
+  if (request.dialogueAssetDirtyPolicy !== "save_existing") {
+    return null;
+  }
+  const characterActions = request.characterActions ?? [];
+  const viewLines = request.viewLines ?? [];
+  const soundEffects = request.soundEffects ?? [];
+  const music = request.music ?? [];
+  const editsActions =
+    characterActions.length > 0 || viewLines.length > 0;
+  const editsAudio = soundEffects.length > 0 || music.length > 0;
+  if (
+    request.shots.length > 0 ||
+    request.dialogueIds.length > 0 ||
+    editsActions === editsAudio
+  ) {
+    throw new Error(
+      "合并保存未保存对话资产只允许单节点动作/视线或单节点音频写入",
+    );
+  }
+  const targetIds = new Set([
+    ...characterActions.map((item) => item.dialogueId),
+    ...viewLines.map((item) => item.dialogueId),
+    ...soundEffects.map((item) => item.dialogueId),
+    ...music.map((item) => item.dialogueId),
+  ]);
+  if (targetIds.size !== 1) {
+    throw new Error(
+      "合并保存未保存对话资产时只能写入一个台词节点",
+    );
+  }
+  return Array.from(targetIds)[0];
 }
 
 function objectReferencePath(value: unknown): string {
@@ -3524,6 +3596,11 @@ async function prepareStoryboardExport(
     ),
   );
   const dialoguePackagePath = dialogueAssetPath.split(".")[0];
+  const dialogueAssetDirty = dirtyPackages.has(
+    dialoguePackagePath.toLowerCase(),
+  );
+  const savesExistingDialogueChanges =
+    request.dialogueAssetDirtyPolicy === "save_existing";
   const formationPackagePath = layout?.assetPath.split(".")[0] ?? "";
   const characterBlueprintPackagePaths = new Map<number, string>();
   for (const item of requestedCharacterActions) {
@@ -3543,7 +3620,7 @@ async function prepareStoryboardExport(
     blockedReasons: storyboardShotBlockedReasons(shot, shotIndex),
   }));
   const globalBlockedReasons = [
-    ...(dirtyPackages.has(dialoguePackagePath.toLowerCase())
+    ...(dialogueAssetDirty && !savesExistingDialogueChanges
       ? [
           `对话资产 ${dialoguePackagePath} 存在未保存修改，请先在 UE 中保存或撤销`,
         ]
@@ -3574,13 +3651,23 @@ async function prepareStoryboardExport(
   const invalidShotCount = request.shots.filter(
     (shot) => !shot.projectionValid,
   ).length;
-  const warnings = invalidShotCount
-    ? [`${invalidShotCount} 个镜头的投影验收未通过，确认后仍可导出`]
-    : [];
+  const warnings = [
+    ...(invalidShotCount
+      ? [`${invalidShotCount} 个镜头的投影验收未通过，确认后仍可导出`]
+      : []),
+    ...(dialogueAssetDirty && savesExistingDialogueChanges
+      ? [
+          `对话资产 ${dialoguePackagePath} 的已有未保存修改将随本次节点写入一并保存`,
+        ]
+      : []),
+  ];
   const reviewToken = createHash("sha256")
     .update(
       JSON.stringify({
         dialogueAssetPath,
+        dialogueAssetRevision: createHash("sha256")
+          .update(exportedText)
+          .digest("hex"),
         formationAssetPath: layout?.assetPath ?? "",
         request,
         nodes: changes.map((change) => ({
@@ -3677,6 +3764,26 @@ async function prepareStoryboardExport(
   };
 }
 
+async function assertStoryboardNodeWriteSelection(
+  connection: UnrealInvoker,
+  request: StoryboardExportRequest,
+): Promise<void> {
+  const targetDialogueId = saveExistingDialogueTargetId(request);
+  if (!targetDialogueId) {
+    return;
+  }
+  const { nodes } =
+    await readSelectedDialogueNodesFromConnection(connection);
+  if (
+    nodes.length !== 1 ||
+    nodes[0].dialogueNodeId !== targetDialogueId
+  ) {
+    throw new Error(
+      "UE 当前选中节点已变化，请重新选择目标节点后再写入",
+    );
+  }
+}
+
 export async function inspectDialogueStoryboardExport(
   rawRequest: unknown,
   connectionFactory: () => UnrealInvoker = () => new UnrealMcpConnection(),
@@ -3687,6 +3794,7 @@ export async function inspectDialogueStoryboardExport(
   const connection = connectionFactory();
   try {
     await connection.connect();
+    await assertStoryboardNodeWriteSelection(connection, request);
     return (await prepareStoryboardExport(connection, request)).preview;
   } finally {
     connection.close();
@@ -3703,6 +3811,7 @@ export async function exportDialogueStoryboard(
   const connection = connectionFactory();
   try {
     await connection.connect();
+    await assertStoryboardNodeWriteSelection(connection, request);
     const prepared = await prepareStoryboardExport(connection, request);
     if (prepared.preview.reviewToken !== reviewToken) {
       throw new Error(
@@ -4079,7 +4188,9 @@ function reflectedSchoolCameraValues(
   return reflectedArray(value.Values ?? [], "SchoolMoveCamerasMap.Values");
 }
 
-function canonicalSchoolCameraKey(value: unknown): string | null {
+function canonicalSchoolCameraKey(
+  value: unknown,
+): DialogueSchoolCameraRole | null {
   const normalized = String(value ?? "")
     .trim()
     .replace(/^.*::/, "")
@@ -4101,6 +4212,50 @@ function reflectedSchoolCameraKeys(
     const canonical = canonicalSchoolCameraKey(key);
     return canonical ? [canonical] : [];
   });
+}
+
+function alignedSchoolCameraMap(
+  value: Record<string, unknown>,
+  exportedKeys: string[],
+): {
+  keys: string[];
+  values: unknown[];
+  canonicalKeys: Array<DialogueSchoolCameraRole | null>;
+  indexByRole: Map<DialogueSchoolCameraRole, number>;
+} {
+  const values = reflectedSchoolCameraValues(value);
+  const reflectedKeys = reflectedArray(
+    value.Keys ?? [],
+    "SchoolMoveCamerasMap.Keys",
+  ).map((key) => String(key).trim());
+  const keys =
+    reflectedKeys.length === values.length && reflectedKeys.every(Boolean)
+      ? reflectedKeys
+      : exportedKeys.length === values.length && exportedKeys.every(Boolean)
+        ? exportedKeys
+        : [];
+  if (keys.length !== values.length) {
+    throw new Error(
+      "当前节点已有角色相机，但 UE 未返回可识别的角色键，无法安全编辑",
+    );
+  }
+  const canonicalKeys = keys.map(canonicalSchoolCameraKey);
+  const indexByRole = new Map<DialogueSchoolCameraRole, number>();
+  canonicalKeys.forEach((key, index) => {
+    if (!key) {
+      return;
+    }
+    if (indexByRole.has(key)) {
+      throw new Error(`当前节点包含重复的角色相机 ${key}，无法安全编辑`);
+    }
+    indexByRole.set(key, index);
+  });
+  return {
+    keys,
+    values,
+    canonicalKeys,
+    indexByRole,
+  };
 }
 
 function schoolCameraMapMismatch(
@@ -4173,6 +4328,19 @@ async function prepareDialogueCameraQuickAction(
     !request.previousDialogueNodeIds?.length
   ) {
     throw new Error("当前节点之前没有可查找的对话节点");
+  }
+  const schoolCameraCopies = request.schoolCameraCopies ?? [];
+  if (
+    request.mode === "copy_school_cameras" &&
+    schoolCameraCopies.length === 0
+  ) {
+    throw new Error("角色相机复制至少需要一个来源和目标");
+  }
+  if (
+    request.mode !== "copy_school_cameras" &&
+    schoolCameraCopies.length > 0
+  ) {
+    throw new Error("角色相机复制映射只能用于角色相机复制模式");
   }
   const dialogueAssets = await findDialogueAssetPath(
     connection,
@@ -4293,58 +4461,82 @@ async function prepareDialogueCameraQuickAction(
         curveName,
       ),
     };
-  } else if (request.mode === "school_cameras") {
-    const existingSchoolCameraValues = reflectedSchoolCameraValues(
-      originalSchoolMoveCamerasMap,
-    );
-    const rawSchoolCameraKeys = reflectedArray(
-      originalSchoolMoveCamerasMap.Keys ?? [],
-      "SchoolMoveCamerasMap.Keys",
-    ).map((key) => String(key).trim());
-    const exportedRawSchoolCameraKeys =
+  } else if (
+    request.mode === "school_cameras" ||
+    request.mode === "copy_school_cameras"
+  ) {
+    const exportedSchoolCameraKeys =
       exportedSchoolCameraKeysByDialogueId(exportedText).get(
         request.dialogueNodeId,
       ) ?? [];
-    const alignedSchoolCameraKeys =
-      rawSchoolCameraKeys.length === existingSchoolCameraValues.length &&
-      rawSchoolCameraKeys.every(Boolean)
-        ? rawSchoolCameraKeys
-        : exportedRawSchoolCameraKeys.length ===
-            existingSchoolCameraValues.length
-          ? exportedRawSchoolCameraKeys
-          : [];
-    existingSchoolCameraKeys = alignedSchoolCameraKeys.flatMap((key) => {
-      const canonical = canonicalSchoolCameraKey(key);
-      return canonical ? [canonical] : [];
-    });
-    if (currentNode.existingMoveCameras.length === 0) {
-      throw new Error(
-        "当前节点没有主 MoveCameras，请先添加或沿用一个镜头",
-      );
-    }
-    if (existingSchoolCameraValues.length > 0) {
-      if (alignedSchoolCameraKeys.length !== existingSchoolCameraValues.length) {
+    const schoolCameraMap = alignedSchoolCameraMap(
+      originalSchoolMoveCamerasMap,
+      exportedSchoolCameraKeys,
+    );
+    existingSchoolCameraKeys = schoolCameraMap.canonicalKeys.flatMap(
+      (key) => key ? [key] : [],
+    );
+    if (request.mode === "school_cameras") {
+      if (currentNode.existingMoveCameras.length === 0) {
         throw new Error(
-          "当前节点已有角色相机，但 UE 未返回可识别的角色键，无法安全补齐",
+          "当前节点没有主 MoveCameras，请先添加或沿用一个镜头",
         );
       }
+      const missingSchoolCameraKeys = SCHOOL_CAMERA_KEYS.filter(
+        (key) => !schoolCameraMap.indexByRole.has(key),
+      );
+      addedSchoolCameraKeys = [...missingSchoolCameraKeys];
+      desiredSchoolMoveCamerasMap = {
+        Keys: [
+          ...clonedValue(schoolCameraMap.keys),
+          ...missingSchoolCameraKeys,
+        ],
+        Values: [
+          ...clonedValue(schoolCameraMap.values),
+          ...missingSchoolCameraKeys.map(() => ({
+            MoveCameras: clonedValue(currentNode.existingMoveCameras),
+          })),
+        ],
+      };
+    } else {
+      const desiredKeys = clonedValue(schoolCameraMap.keys);
+      const desiredValues = clonedValue(schoolCameraMap.values);
+      const desiredIndexByRole = new Map(schoolCameraMap.indexByRole);
+      for (const copy of schoolCameraCopies) {
+        const sourceIndex = schoolCameraMap.indexByRole.get(copy.sourceRole);
+        if (sourceIndex === undefined) {
+          throw new Error(
+            `来源角色 ${copy.sourceRole} 尚未配置角色相机，无法复制`,
+          );
+        }
+        const sourceValue = reflectedRecord(
+          schoolCameraMap.values[sourceIndex],
+          `SchoolMoveCamerasMap.${copy.sourceRole}`,
+        );
+        const sourceMoves = reflectedArray(
+          sourceValue.MoveCameras ?? [],
+          `SchoolMoveCamerasMap.${copy.sourceRole}.MoveCameras`,
+        );
+        if (sourceMoves.length === 0) {
+          throw new Error(
+            `来源角色 ${copy.sourceRole} 的角色相机为空，无法复制`,
+          );
+        }
+        const targetIndex = desiredIndexByRole.get(copy.targetRole);
+        if (targetIndex === undefined) {
+          desiredIndexByRole.set(copy.targetRole, desiredKeys.length);
+          desiredKeys.push(copy.targetRole);
+          desiredValues.push(clonedValue(sourceValue));
+          addedSchoolCameraKeys.push(copy.targetRole);
+        } else {
+          desiredValues[targetIndex] = clonedValue(sourceValue);
+        }
+      }
+      desiredSchoolMoveCamerasMap = {
+        Keys: desiredKeys,
+        Values: desiredValues,
+      };
     }
-    const missingSchoolCameraKeys = SCHOOL_CAMERA_KEYS.filter(
-      (key) => !existingSchoolCameraKeys.includes(key),
-    );
-    addedSchoolCameraKeys = missingSchoolCameraKeys;
-    desiredSchoolMoveCamerasMap = {
-      Keys: [
-        ...clonedValue(alignedSchoolCameraKeys),
-        ...missingSchoolCameraKeys,
-      ],
-      Values: [
-        ...clonedValue(existingSchoolCameraValues),
-        ...missingSchoolCameraKeys.map(() => ({
-          MoveCameras: clonedValue(currentNode.existingMoveCameras),
-        })),
-      ],
-    };
   }
 
   const desiredCommonProperties = clonedValue(
@@ -4421,9 +4613,11 @@ async function prepareDialogueCameraQuickAction(
       existingSchoolCameraKeys,
       addedSchoolCameraKeys,
       desiredSchoolCameraKeys:
-        request.mode === "school_cameras"
+        request.mode === "school_cameras" ||
+        request.mode === "copy_school_cameras"
           ? reflectedSchoolCameraKeys(desiredSchoolMoveCamerasMap)
           : [],
+      schoolCameraCopies,
       existingSchoolCameraCount: existingSchoolCameraKeys.length,
       desiredSchoolCameraCount:
         reflectedSchoolCameraKeys(desiredSchoolMoveCamerasMap).length,

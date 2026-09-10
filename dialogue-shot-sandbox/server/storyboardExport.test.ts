@@ -1124,6 +1124,105 @@ describe("dialogue storyboard export", () => {
     ).toBe(false);
   });
 
+  it("writes one dirty dialogue node and saves existing changes with it", async () => {
+    const connection = new FakeStoryboardExportConnection();
+    connection.dirtyPackages = [
+      "/Game/Seria/Task/dialoggraph/Test/735200",
+    ];
+    const request: StoryboardExportRequest = {
+      ...exportRequest(),
+      dialogueIds: [],
+      dialogueAssetDirtyPolicy: "save_existing",
+      shots: [],
+      characterActions: [
+        {
+          dialogueId: "735201",
+          modelIndex: 1,
+          actions: [{ montageName: "AM_Wave", delaySeconds: 0.4 }],
+        },
+      ],
+      viewLines: [
+        {
+          dialogueId: "735201",
+          observerModelIndex: 1,
+          targetModelIndex: 0,
+        },
+      ],
+    };
+
+    const preview = await inspectDialogueStoryboardExport(
+      request,
+      () => connection,
+    );
+    expect(preview.blockedReasons).toEqual([]);
+    expect(preview.warnings).toContainEqual(
+      expect.stringContaining("已有未保存修改将随本次节点写入一并保存"),
+    );
+    await expect(
+      exportDialogueStoryboard(
+        { ...request, reviewToken: preview.reviewToken },
+        () => connection,
+      ),
+    ).resolves.toMatchObject({
+      status: "exported",
+      changedCharacterActionCount: 1,
+      changedViewLineCount: 1,
+      saved: true,
+    });
+    expect(
+      connection.calls.filter(
+        (call) => call.action === "asset.save_asset",
+      ),
+    ).toHaveLength(1);
+    expect(connection.behavioursByData.get("ActionData1")).toHaveLength(2);
+    expect(connection.viewLinesByData.get("ActionData1")).toMatchObject({
+      Keys: ["0", "1"],
+      Values: [{ ModelIndex: 1 }, { ModelIndex: 0 }],
+    });
+  });
+
+  it("restricts dirty dialogue saving to the selected single node", async () => {
+    const multipleNodes: StoryboardExportRequest = {
+      ...exportRequest(),
+      dialogueIds: [],
+      dialogueAssetDirtyPolicy: "save_existing",
+      shots: [],
+      characterActions: [
+        {
+          dialogueId: "735201",
+          modelIndex: 0,
+          actions: [{ montageName: "AM_Wave", delaySeconds: 0.4 }],
+        },
+        {
+          dialogueId: "735202",
+          modelIndex: 0,
+          actions: [{ montageName: "AM_Talk", delaySeconds: 0.4 }],
+        },
+      ],
+    };
+    const connection = new FakeStoryboardExportConnection();
+    await expect(
+      inspectDialogueStoryboardExport(
+        multipleNodes,
+        () => connection,
+      ),
+    ).rejects.toThrow("只能写入一个台词节点");
+    expect(connection.commonWriteCount).toBe(0);
+
+    const changedSelection = new FakeStoryboardExportConnection();
+    changedSelection.selectedDialogueNodeId = "735202";
+    await expect(
+      inspectDialogueStoryboardExport(
+        {
+          ...multipleNodes,
+          characterActions: [multipleNodes.characterActions![0]],
+        },
+        () => changedSelection,
+      ),
+    ).rejects.toThrow("UE 当前选中节点已变化");
+    expect(changedSelection.commonWriteCount).toBe(0);
+  });
+
   it("blocks character action export when its NPC Blueprint is dirty", async () => {
     const connection = new FakeStoryboardExportConnection();
     connection.dirtyPackages = ["/Game/Test/BP_Player"];
@@ -1692,6 +1791,141 @@ describe("dialogue camera quick actions", () => {
         { MoveCameras: [{ CameraMoveType: "EPush", FOV: 90 }] },
       ],
     });
+  });
+
+  it("copies complete role camera values over existing and missing roles", async () => {
+    const connection = new FakeStoryboardExportConnection();
+    connection.selectedDialogueNodeId = "735202";
+    connection.movesByData.set("ActionData2", []);
+    const ringCamera = {
+      MoveCameras: [
+        {
+          CameraMoveType: "ERotate",
+          FOV: 48,
+          RotateCameraArg: {
+            CameraName: "c_ring",
+            RotationSpeed: 1.25,
+          },
+        },
+      ],
+      BlendWeight: 0.75,
+      CustomMetadata: { Owner: "Ring", Revision: 3 },
+    };
+    connection.schoolCamerasByData.set("ActionData2", {
+      Keys: ["ERing", "ENino"],
+      Values: [
+        ringCamera,
+        {
+          MoveCameras: [{ CameraMoveType: "EPush", FOV: 70 }],
+          BlendWeight: 0.25,
+        },
+      ],
+    });
+    const request = {
+      dialogueId: "7352",
+      startId: "735200",
+      dialogueNodeId: "735202",
+      mode: "copy_school_cameras" as const,
+      schoolCameraCopies: [
+        { sourceRole: "ERing" as const, targetRole: "ENino" as const },
+        { sourceRole: "ERing" as const, targetRole: "EJodie" as const },
+      ],
+    };
+
+    const preview = await inspectDialogueCameraQuickAction(
+      request,
+      () => connection,
+    );
+    expect(preview).toMatchObject({
+      existingSchoolCameraKeys: ["ERing", "ENino"],
+      addedSchoolCameraKeys: ["EJodie"],
+      desiredSchoolCameraKeys: ["ERing", "ENino", "EJodie"],
+      schoolCameraCopies: request.schoolCameraCopies,
+      existingSchoolCameraCount: 2,
+      desiredSchoolCameraCount: 3,
+      changed: true,
+      blockedReasons: [],
+    });
+
+    await expect(
+      applyDialogueCameraQuickAction(request, () => connection),
+    ).rejects.toThrow("镜头快捷操作缺少审核令牌");
+    await expect(
+      applyDialogueCameraQuickAction(
+        { ...request, reviewToken: preview.reviewToken },
+        () => connection,
+      ),
+    ).resolves.toMatchObject({
+      status: "updated",
+      dialogueNodeId: "735202",
+      saved: true,
+    });
+    expect(connection.schoolCamerasByData.get("ActionData2")).toEqual({
+      Keys: ["ERing", "ENino", "EJodie"],
+      Values: [ringCamera, ringCamera, ringCamera],
+    });
+    expect(
+      connection.calls.filter(
+        (call) =>
+          call.action === "reflect.write_object_property" &&
+          call.args.PropertyName === "SchoolMoveCamerasMap",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("rejects invalid role camera copy mappings before writing", async () => {
+    const connection = new FakeStoryboardExportConnection();
+    connection.selectedDialogueNodeId = "735202";
+    connection.schoolCamerasByData.set("ActionData2", {
+      Keys: ["ERing"],
+      Values: [
+        {
+          MoveCameras: [{ CameraMoveType: "EPush", FOV: 48 }],
+        },
+      ],
+    });
+    const baseRequest = {
+      dialogueId: "7352",
+      startId: "735200",
+      dialogueNodeId: "735202",
+      mode: "copy_school_cameras" as const,
+    };
+
+    await expect(
+      inspectDialogueCameraQuickAction(
+        {
+          ...baseRequest,
+          schoolCameraCopies: [
+            { sourceRole: "ERing", targetRole: "ERing" },
+          ],
+        },
+        () => connection,
+      ),
+    ).rejects.toThrow("角色相机来源和目标不能相同");
+    await expect(
+      inspectDialogueCameraQuickAction(
+        {
+          ...baseRequest,
+          schoolCameraCopies: [
+            { sourceRole: "ERing", targetRole: "ENino" },
+            { sourceRole: "ERing", targetRole: "ENino" },
+          ],
+        },
+        () => connection,
+      ),
+    ).rejects.toThrow("角色相机目标 ENino 重复");
+    await expect(
+      inspectDialogueCameraQuickAction(
+        {
+          ...baseRequest,
+          schoolCameraCopies: [
+            { sourceRole: "ENino", targetRole: "EJodie" },
+          ],
+        },
+        () => connection,
+      ),
+    ).rejects.toThrow("来源角色 ENino 尚未配置角色相机");
+    expect(connection.commonWriteCount).toBe(0);
   });
 
   it("writes a default camera directly while still revalidating UE selection", async () => {

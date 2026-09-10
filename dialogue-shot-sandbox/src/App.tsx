@@ -878,6 +878,8 @@ function ShotInspector({
   const cameraQuickActionRef = useRef<NodeCameraQuickActionHandle>(null);
   const [cameraQuickActionSelection, setCameraQuickActionSelection] =
     useState<NodeCameraQuickActionSelection | null>(null);
+  const [cameraQuickActionReviewHost, setCameraQuickActionReviewHost] =
+    useState<HTMLDivElement | null>(null);
   const storyOutlineExpanded = expandedOutlinePrefix === sequence.prefix;
   const activeDialogueRow = activeDialogueId
     ? sequence.rows.find((row) => row.id === activeDialogueId)
@@ -942,7 +944,8 @@ function ShotInspector({
     cameraQuickActionReady &&
     !cameraQuickActionBlocked &&
     !(
-      cameraQuickActionSelection?.mode === "school_cameras" &&
+      (cameraQuickActionSelection?.mode === "school_cameras" ||
+        cameraQuickActionSelection?.mode === "copy_school_cameras") &&
       !cameraQuickActionSelection.changed
     );
   const activeNodeWriteError = tab === "shot" ? "" : exportError;
@@ -1179,6 +1182,7 @@ function ShotInspector({
                 existingConfiguration={configurationNodeConfiguration}
                 configurationLoading={configurationNodeReading}
                 externalConfirmation
+                reviewHost={cameraQuickActionReviewHost}
                 previousDialogueNodeIds={
                   previousConfigurationDialogueNodeIds
                 }
@@ -1750,6 +1754,14 @@ function ShotInspector({
         </OverlayScrollArea>
       )}
 
+      {configurationMode && tab === "shot" && (
+        <div
+          className="node-camera-review-dock"
+          ref={setCameraQuickActionReviewHost}
+          aria-live="polite"
+        />
+      )}
+
       {nodeScopedTools ? (
         <footer className="inspector-footer inspector-footer--export">
           <div>
@@ -1781,8 +1793,10 @@ function ShotInspector({
                         ? `${scopedActionCount} 组动作 · ${scopedViewLineCount} 条视线待写入`
                         : "当前节点未添加动作或视线"
                       : configurationMode
-                        ? cameraQuickActionSelection?.busy === "inspect"
-                          ? `正在检查${cameraQuickActionSelection.label}`
+                        ? cameraQuickActionSelection?.busy === "apply"
+                          ? "正在写入 UE"
+                          : cameraQuickActionSelection?.busy === "inspect"
+                            ? `正在检查${cameraQuickActionSelection.label}`
                           : cameraQuickActionBlocked
                             ? cameraQuickActionBlocked
                             : cameraQuickActionSelection?.ready
@@ -1803,6 +1817,7 @@ function ShotInspector({
                     ? "确认写入上方选中的镜头方案"
                     : "当前尚未生成镜头"
             }
+            aria-busy={nodeWriteBusy}
             disabled={
               nodeWriteBusy ||
               !nodeScopeReady ||
@@ -1834,19 +1849,7 @@ function ShotInspector({
             ) : (
               <Upload size={16} />
             )}
-            {nodeWriteBusy
-              ? cameraQuickActionSelection?.busy === "inspect"
-                ? "正在检查镜头"
-                : "正在写入 UE"
-              : tab === "audio"
-                ? "写入节点音频"
-                : tab === "ue"
-                  ? "写入动作与视线"
-                  : configurationMode
-                    ? cameraQuickActionSelection?.ready
-                      ? "确认写入镜头"
-                      : "选择镜头方案"
-                    : "尚无镜头"}
+            写入节点
           </button>
         </footer>
       ) : (
@@ -2287,6 +2290,9 @@ export default function App() {
     selectedUeShotIndex,
   ]);
 
+  const configurationNodeTabActive =
+    inspectorTab === "shot" || inspectorTab === "audio";
+
   useEffect(() => {
     if (!configurationMode) {
       configurationNodeReadKeysRef.current.clear();
@@ -2296,7 +2302,7 @@ export default function App() {
     if (
       !configurationSelectionReady ||
       !selectedUeDialogueNodeId ||
-      (inspectorTab !== "shot" && inspectorTab !== "audio")
+      !configurationNodeTabActive
     ) {
       setConfigurationNodeReading(false);
       return;
@@ -2309,6 +2315,7 @@ export default function App() {
     }
     configurationNodeReadKeysRef.current.add(cacheKey);
     let active = true;
+    let completed = false;
     setConfigurationNodeReading(true);
     void readExistingDialogueStoryboard({
       dialogueId: sequence.prefix,
@@ -2346,17 +2353,21 @@ export default function App() {
       })
       .finally(() => {
         if (active) {
+          completed = true;
           setConfigurationNodeReading(false);
         }
       });
     return () => {
       active = false;
+      if (!completed) {
+        configurationNodeReadKeysRef.current.delete(cacheKey);
+      }
     };
   }, [
     configurationMode,
     configurationNodeReadRevision,
     configurationSelectionReady,
-    inspectorTab,
+    configurationNodeTabActive,
     selectedUeDialogueNodeId,
     sequence.prefix,
     sequence.startId,

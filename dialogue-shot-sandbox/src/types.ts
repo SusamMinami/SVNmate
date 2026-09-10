@@ -512,6 +512,7 @@ export interface StoryboardExportRequest {
   dialogueIds: string[];
   participantModelIndexes: number[];
   usesBlueprintFormation: boolean;
+  dialogueAssetDirtyPolicy?: "block" | "save_existing";
   shots: StoryboardExportShot[];
   characterActions?: Array<{
     dialogueId: string;
@@ -676,11 +677,19 @@ export interface DialogueContentBatchUpdateResult {
   items: DialogueContentUpdateResult[];
 }
 
+export type DialogueSchoolCameraRole = "ERing" | "ENino" | "EJodie";
+
+export interface DialogueSchoolCameraCopy {
+  sourceRole: DialogueSchoolCameraRole;
+  targetRole: DialogueSchoolCameraRole;
+}
+
 export type DialogueCameraQuickActionMode =
   | "copy_previous"
   | "default"
   | "blend_curve"
-  | "school_cameras";
+  | "school_cameras"
+  | "copy_school_cameras";
 
 export interface DialogueCameraQuickActionRequest {
   dialogueId: string;
@@ -688,6 +697,7 @@ export interface DialogueCameraQuickActionRequest {
   dialogueNodeId: string;
   previousDialogueNodeIds?: string[];
   blendCurveAssetName?: string;
+  schoolCameraCopies?: DialogueSchoolCameraCopy[];
   mode: DialogueCameraQuickActionMode;
 }
 
@@ -715,6 +725,7 @@ export interface DialogueCameraQuickActionPreview {
   existingSchoolCameraKeys: string[];
   addedSchoolCameraKeys: string[];
   desiredSchoolCameraKeys: string[];
+  schoolCameraCopies: DialogueSchoolCameraCopy[];
   existingSchoolCameraCount: number;
   desiredSchoolCameraCount: number;
   changed: boolean;

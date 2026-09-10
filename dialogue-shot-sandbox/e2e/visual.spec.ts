@@ -760,13 +760,14 @@ test("discovers action roles from UE when the configuration window skips Formati
   await linCheActions
     .getByRole("option", { name: "AM_Idle1", exact: true })
     .click();
-  await page.getByRole("button", { name: "写入动作与视线" }).click();
+  await page.getByRole("button", { name: "写入节点" }).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect.poll(() => actionWriteInspections.length).toBe(1);
   await expect.poll(() => actionWriteExports.length).toBe(1);
   expect(actionWriteInspections[0]).toMatchObject({
     dialogueId: "2048",
     startId: "204800",
+    dialogueAssetDirtyPolicy: "save_existing",
     shots: [],
     characterActions: [
       {
@@ -777,6 +778,7 @@ test("discovers action roles from UE when the configuration window skips Formati
     ],
   });
   expect(actionWriteExports[0]).toMatchObject({
+    dialogueAssetDirtyPolicy: "save_existing",
     reviewToken: "d".repeat(64),
   });
   await expect(page.locator(".app-shell")).toHaveAttribute(
@@ -787,7 +789,7 @@ test("discovers action roles from UE when the configuration window skips Formati
     "节点 204801 的动作与视线已写入并保存",
   );
   await expect(
-    page.getByRole("button", { name: "写入动作与视线" }),
+    page.getByRole("button", { name: "写入节点" }),
   ).toBeDisabled();
 });
 
@@ -1603,6 +1605,38 @@ test("keeps configuration mode aligned with the selected UE node", async ({
       : null;
     const addsCurve = request.mode === "blend_curve";
     const addsSchoolCameras = request.mode === "school_cameras";
+    const copiesSchoolCameras =
+      request.mode === "copy_school_cameras";
+    const schoolCameraCopies = Array.isArray(
+      request.schoolCameraCopies,
+    )
+      ? request.schoolCameraCopies as Array<{
+          sourceRole: string;
+          targetRole: string;
+        }>
+      : [];
+    const existingSchoolCameraKeys =
+      request.dialogueNodeId === "204803"
+        ? ["ERing", "EJodie"]
+        : ["ERing"];
+    const addedSchoolCameraKeys = addsSchoolCameras
+      ? ["ERing", "ENino", "EJodie"].filter(
+          (key) => !existingSchoolCameraKeys.includes(key),
+        )
+      : copiesSchoolCameras
+        ? schoolCameraCopies
+            .map(({ targetRole }) => targetRole)
+            .filter((key) => !existingSchoolCameraKeys.includes(key))
+        : [];
+    const desiredSchoolCameraKeys =
+      addsSchoolCameras || copiesSchoolCameras
+        ? Array.from(
+            new Set([
+              ...existingSchoolCameraKeys,
+              ...addedSchoolCameraKeys,
+            ]),
+          )
+        : [];
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -1631,15 +1665,18 @@ test("keeps configuration mode aligned with the selected UE node", async ({
             ? "/Game/Seria/Task/Mod/MainQuest/DialogCurve/trans_6015.trans_6015"
             : "None",
           blendDuration: 0,
-          existingSchoolCameraKeys: addsSchoolCameras ? ["ERing"] : [],
-          addedSchoolCameraKeys: addsSchoolCameras
-            ? ["ENino", "EJodie"]
-            : [],
-          desiredSchoolCameraKeys: addsSchoolCameras
-            ? ["ERing", "ENino", "EJodie"]
-            : [],
-          existingSchoolCameraCount: addsSchoolCameras ? 1 : 0,
-          desiredSchoolCameraCount: addsSchoolCameras ? 3 : 0,
+          existingSchoolCameraKeys:
+            addsSchoolCameras || copiesSchoolCameras
+              ? existingSchoolCameraKeys
+              : [],
+          addedSchoolCameraKeys,
+          desiredSchoolCameraKeys,
+          schoolCameraCopies,
+          existingSchoolCameraCount:
+            addsSchoolCameras || copiesSchoolCameras
+              ? existingSchoolCameraKeys.length
+              : 0,
+          desiredSchoolCameraCount: desiredSchoolCameraKeys.length,
           changed: true,
           blockedReasons: [],
         },
@@ -2066,10 +2103,13 @@ test("keeps configuration mode aligned with the selected UE node", async ({
   const cameraApplyButton = page
     .locator(".inspector-footer--export")
     .locator(".button--primary");
-  await expect(cameraApplyButton).toHaveAccessibleName("确认写入镜头");
+  await expect(cameraApplyButton).toHaveAccessibleName("写入节点");
   await cameraApplyButton.click();
   await cameraApplyRequest;
-  await expect(cameraApplyButton).toContainText("正在写入 UE");
+  await expect(cameraApplyButton).toHaveAttribute("aria-busy", "true");
+  await expect(
+    page.locator(".inspector-footer--export"),
+  ).toContainText("正在写入 UE");
   await expect(ueDataStatus).toHaveAttribute("data-activity", "write");
   await expect(
     ueDataStatus.locator(".workspace-status-light--write"),
@@ -2111,7 +2151,7 @@ test("keeps configuration mode aligned with the selected UE node", async ({
   const cameraInspectCountBeforeSchoolConfirmation =
     cameraInspectRequests.length;
   await page.getByRole("button", { name: "添加角色相机" }).click();
-  await expect(cameraReview).toContainText("确认写入角色相机？");
+  await expect(cameraReview).toContainText("确认补齐角色相机");
   await expect(cameraReview.locator("dl")).toHaveCount(0);
   expect(cameraInspectRequests).toHaveLength(
     cameraInspectCountBeforeSchoolConfirmation,
@@ -2163,6 +2203,70 @@ test("keeps configuration mode aligned with the selected UE node", async ({
     .getByRole("button", { name: "添加默认镜头" })
     .click();
   await expect(page.getByLabel("节点镜头写入确认")).toBeVisible();
+  const cameraReviewDock = page.locator(".node-camera-review-dock");
+  await expect(cameraReviewDock).toBeVisible();
+  await expect(
+    page.locator(".inspector-tab-panel .node-camera-review"),
+  ).toHaveCount(0);
+  expect(
+    await cameraReviewDock.evaluate((dock) => ({
+      followsScrollFrame:
+        dock.previousElementSibling?.classList.contains(
+          "inspector-scroll-frame",
+        ) ?? false,
+      precedesFooter:
+        dock.nextElementSibling?.classList.contains(
+          "inspector-footer--export",
+        ) ?? false,
+    })),
+  ).toEqual({
+    followsScrollFrame: true,
+    precedesFooter: true,
+  });
+  const reviewDockBoundsBeforeScroll =
+    await cameraReviewDock.boundingBox();
+  const cameraFooterBoundsBeforeScroll = await page
+    .locator(".inspector-footer--export")
+    .boundingBox();
+  expect(reviewDockBoundsBeforeScroll).not.toBeNull();
+  expect(cameraFooterBoundsBeforeScroll).not.toBeNull();
+  expect(
+    Math.abs(
+      reviewDockBoundsBeforeScroll!.y +
+        reviewDockBoundsBeforeScroll!.height -
+        cameraFooterBoundsBeforeScroll!.y,
+    ),
+  ).toBeLessThanOrEqual(1);
+  await roleCameraAction.focus();
+  await page.keyboard.press("Tab");
+  await expect(
+    page.getByRole("button", { name: "取消当前镜头方案" }),
+  ).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(cameraApplyButton).toBeFocused();
+  await page
+    .locator(".inspector-tab-panel")
+    .evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+    });
+  const reviewDockBoundsAfterScroll =
+    await cameraReviewDock.boundingBox();
+  const cameraFooterBoundsAfterScroll = await page
+    .locator(".inspector-footer--export")
+    .boundingBox();
+  expect(reviewDockBoundsAfterScroll).toEqual(
+    reviewDockBoundsBeforeScroll,
+  );
+  expect(cameraFooterBoundsAfterScroll).toEqual(
+    cameraFooterBoundsBeforeScroll,
+  );
+  expect(
+    await page.evaluate(
+      () =>
+        document.documentElement.scrollWidth <=
+        document.documentElement.clientWidth,
+    ),
+  ).toBe(true);
   await page.screenshot({
     path: testInfo.outputPath("configuration-camera-quick-actions.png"),
     fullPage: true,
@@ -2171,6 +2275,74 @@ test("keeps configuration mode aligned with the selected UE node", async ({
   await page
     .getByRole("button", { name: "取消当前镜头方案" })
     .click();
+  await expect(cameraReviewDock).toBeHidden();
+  await expect(cameraApplyButton).toBeDisabled();
+  const roleCopyInspectCount = cameraInspectRequests.length;
+  const roleCopyApplyCount = cameraApplyRequests.length;
+  await page.getByRole("button", { name: "添加角色相机" }).click();
+  const ringCameraSource = page.getByRole("button", {
+    name: "Ring 角色相机，选择为复制来源",
+  });
+  const ninoCameraTarget = page.locator(
+    '[data-school-camera-role="ENino"]',
+  );
+  const ninoCameraTargetButton = page.getByRole("button", {
+    name: "Nino 角色相机未配置，可作为覆盖目标",
+  });
+  await expect(ringCameraSource).toHaveAttribute("draggable", "true");
+  await expect(ninoCameraTarget).toContainText("未配置");
+  await ringCameraSource.focus();
+  await page.keyboard.press("Enter");
+  await expect(ringCameraSource).toHaveAttribute("aria-pressed", "true");
+  await ninoCameraTargetButton.focus();
+  await page.keyboard.press("Enter");
+  await expect
+    .poll(() => cameraInspectRequests.length)
+    .toBe(roleCopyInspectCount + 1);
+  await expect(ninoCameraTarget).toHaveClass(/has-copy/);
+  await page
+    .getByRole("button", { name: "取消覆盖 Nino" })
+    .click();
+  await expect(ninoCameraTarget).not.toHaveClass(/has-copy/);
+  const dragInspectCount = cameraInspectRequests.length;
+  await ringCameraSource.dragTo(ninoCameraTarget);
+  await expect
+    .poll(() => cameraInspectRequests.length)
+    .toBe(dragInspectCount + 1);
+  expect(cameraInspectRequests.at(-1)).toMatchObject({
+    dialogueNodeId: "204803",
+    mode: "copy_school_cameras",
+    schoolCameraCopies: [
+      {
+        sourceRole: "ERing",
+        targetRole: "ENino",
+      },
+    ],
+  });
+  expect(cameraApplyRequests).toHaveLength(roleCopyApplyCount);
+  await expect(cameraReview).toContainText("确认角色相机覆盖");
+  await expect(cameraReview).toContainText("Ring → Nino");
+  await expect(ninoCameraTarget).toHaveClass(/has-copy/);
+  await expect(cameraApplyButton).toBeEnabled();
+  await page.screenshot({
+    path: testInfo.outputPath("configuration-school-camera-copy.png"),
+    fullPage: true,
+  });
+  await cameraApplyButton.click();
+  await expect
+    .poll(() => cameraApplyRequests.length)
+    .toBe(roleCopyApplyCount + 1);
+  expect(cameraApplyRequests.at(-1)).toMatchObject({
+    dialogueNodeId: "204803",
+    mode: "copy_school_cameras",
+    schoolCameraCopies: [
+      {
+        sourceRole: "ERing",
+        targetRole: "ENino",
+      },
+    ],
+    reviewToken: "a".repeat(64),
+  });
   await page.getByRole("tab", { name: "音频" }).click();
   await expect(page.getByRole("tab", { name: "音频" })).toHaveAttribute(
     "aria-selected",
@@ -2181,7 +2353,7 @@ test("keeps configuration mode aligned with the selected UE node", async ({
     "A_SFX_Dialog_204803",
   );
   await expect(page.locator(".ue-existing-audio")).toContainText("0.4s");
-  expect(storyboardReadRequests).toBe(4);
+  expect(storyboardReadRequests).toBe(5);
   await expect(page.locator(".inspector-tab-panel:visible")).toHaveCSS(
     "animation-name",
     "none",
@@ -2284,12 +2456,12 @@ test("keeps configuration mode aligned with the selected UE node", async ({
     .getByText("待写入音效建议", { exact: true })
     .waitFor({ state: "detached" });
   await expect(
-    page.getByRole("button", { name: "写入节点音频" }),
+    page.getByRole("button", { name: "写入节点" }),
   ).toBeEnabled();
   await expect(
     page.getByRole("button", { name: "写入本镜音效" }),
   ).toHaveCount(0);
-  await page.getByRole("button", { name: "写入节点音频" }).click();
+  await page.getByRole("button", { name: "写入节点" }).click();
   await expect(appShell).toHaveAttribute(
     "data-configuration-mode",
     "true",
@@ -2300,6 +2472,7 @@ test("keeps configuration mode aligned with the selected UE node", async ({
   expect(nodeWriteInspectRequests[0]).toMatchObject({
     dialogueId: "2048",
     startId: "204800",
+    dialogueAssetDirtyPolicy: "save_existing",
     shots: [],
     characterActions: [],
     soundEffects: [
@@ -2312,6 +2485,7 @@ test("keeps configuration mode aligned with the selected UE node", async ({
     music: [],
   });
   expect(nodeWriteExportRequests[0]).toMatchObject({
+    dialogueAssetDirtyPolicy: "save_existing",
     reviewToken: "c".repeat(64),
     soundEffects: [
       {
@@ -2328,13 +2502,13 @@ test("keeps configuration mode aligned with the selected UE node", async ({
     "节点 204803 的音频已写入并保存",
   );
   await expect(
-    page.getByRole("button", { name: "写入节点音频" }),
+    page.getByRole("button", { name: "写入节点" }),
   ).toBeDisabled();
   await expect(page.getByRole("tab", { name: "音频" })).toHaveAttribute(
     "aria-selected",
     "true",
   );
-  await expect.poll(() => storyboardReadRequests).toBe(5);
+  await expect.poll(() => storyboardReadRequests).toBe(6);
 
   const ueReadsBeforeLocalSwitch = {
     formation: formationReadRequests,
@@ -2421,7 +2595,7 @@ test("keeps configuration mode aligned with the selected UE node", async ({
     "UE 当前选中了 2 个图节点",
   );
   await expect(
-    page.getByRole("button", { name: "写入节点音频" }),
+    page.getByRole("button", { name: "写入节点" }),
   ).toBeDisabled();
 
   await page.getByRole("button", { name: "返回完整窗口" }).click();
@@ -6319,6 +6493,11 @@ test("offers the detected Blueprint formation before designing shots", async ({
   const viewLineEditor = page.locator(".dialogue-view-lines");
   await expect(viewLineEditor).toBeVisible();
   await expect(viewLineEditor).toContainText("保留 1 项点视线");
+  const viewLineToggle = viewLineEditor.locator(
+    ":scope > .character-action-section__toggle",
+  );
+  await expect(viewLineToggle).toHaveAccessibleName("展开角色视线");
+  await viewLineToggle.click();
   const playerViewTarget = viewLineEditor.getByRole("combobox", {
     name: "玩家 的视线目标",
   });
@@ -6360,6 +6539,28 @@ test("offers the detected Blueprint formation before designing shots", async ({
   const hiddenNodeFullViewport = page.viewportSize();
   expect(hiddenNodeFullViewport).not.toBeNull();
   await page.setViewportSize({ width: 310, height: 900 });
+  const hiddenActionSectionToggle = hiddenConfigurationNode.locator(
+    ".character-action-section--actions > .character-action-section__toggle",
+  );
+  const hiddenViewLineEditor =
+    hiddenConfigurationNode.locator(".dialogue-view-lines");
+  const hiddenViewLineSectionToggle = hiddenViewLineEditor.locator(
+    ":scope > .character-action-section__toggle",
+  );
+  await expect(hiddenActionSectionToggle).toHaveAccessibleName(
+    "收起角色动作",
+  );
+  await expect(hiddenActionSectionToggle).toHaveAttribute(
+    "aria-expanded",
+    "true",
+  );
+  await expect(hiddenViewLineSectionToggle).toHaveAccessibleName(
+    "展开角色视线",
+  );
+  await expect(hiddenViewLineSectionToggle).toHaveAttribute(
+    "aria-expanded",
+    "false",
+  );
   const hiddenNodeRolePicker = hiddenConfigurationNode.getByRole("combobox", {
     name: "节点 735015 添加角色",
   });
@@ -6401,19 +6602,25 @@ test("offers the detected Blueprint formation before designing shots", async ({
     .getByRole("option", { name: "AM_Wave", exact: true })
     .click();
   await expect(
-    page.getByRole("button", { name: "写入动作与视线" }),
+    page.getByRole("button", { name: "写入节点" }),
   ).toBeEnabled();
   await page.screenshot({
     path: testInfo.outputPath("configuration-hidden-node-actions.png"),
     fullPage: true,
   });
-  await hiddenNodeGuardActions
-    .getByRole("button", {
-      name: "移除 商会安保 的新增动作",
-    })
-    .click();
-  const hiddenViewLineEditor =
-    hiddenConfigurationNode.locator(".dialogue-view-lines");
+  await hiddenActionSectionToggle.click();
+  await expect(hiddenActionSectionToggle).toHaveAccessibleName(
+    "展开角色动作",
+  );
+  await expect(
+    hiddenConfigurationNode.locator(
+      ".character-action-section--actions .character-action-section__body",
+    ),
+  ).toHaveCount(0);
+  await hiddenViewLineSectionToggle.click();
+  await expect(hiddenViewLineSectionToggle).toHaveAccessibleName(
+    "收起角色视线",
+  );
   await hiddenViewLineEditor
     .getByRole("combobox", { name: "节点 735015 视线观察者" })
     .selectOption("0");
@@ -6427,8 +6634,15 @@ test("offers the detected Blueprint formation before designing shots", async ({
     path: testInfo.outputPath("configuration-view-line-editor.png"),
     fullPage: true,
   });
+  await hiddenActionSectionToggle.click();
+  await expect(hiddenNodeActionPicker).toHaveValue("AM_Wave");
+  await hiddenNodeGuardActions
+    .getByRole("button", {
+      name: "移除 商会安保 的新增动作",
+    })
+    .click();
   const hiddenNodeWriteButton = page.getByRole("button", {
-    name: "写入动作与视线",
+    name: "写入节点",
   });
   await expect(hiddenNodeWriteButton).toBeEnabled();
   formationDirty = false;
@@ -6437,6 +6651,7 @@ test("offers the detected Blueprint formation before designing shots", async ({
     page.locator(".inspector-footer--export"),
   ).toContainText("节点 735015 的动作与视线已写入并保存");
   expect(inspectedExportRequests.at(-1)).toMatchObject({
+    dialogueAssetDirtyPolicy: "save_existing",
     shots: [],
     characterActions: [],
     viewLines: [
@@ -6448,6 +6663,7 @@ test("offers the detected Blueprint formation before designing shots", async ({
     ],
   });
   expect(exportedStoryboardRequest).toMatchObject({
+    dialogueAssetDirtyPolicy: "save_existing",
     viewLines: [
       {
         dialogueId: "735015",
@@ -6478,7 +6694,7 @@ test("offers the detected Blueprint formation before designing shots", async ({
     ),
   ).toHaveLength(1);
   const nodeActionWriteButton = page.getByRole("button", {
-    name: "写入动作与视线",
+    name: "写入节点",
   });
   await expect(nodeActionWriteButton).toBeEnabled();
   await expect(page.locator(".app-shell")).toHaveAttribute(
@@ -6488,7 +6704,7 @@ test("offers the detected Blueprint formation before designing shots", async ({
   await page.getByRole("tab", { name: "音频" }).click();
   await expect(page.locator(".music-recommendation-list")).toHaveCount(0);
   const nodeAudioWriteButton = page.getByRole("button", {
-    name: "写入节点音频",
+    name: "写入节点",
   });
   await expect(nodeAudioWriteButton).toBeDisabled();
   await page.getByRole("button", { name: "返回完整窗口" }).click();
@@ -6536,6 +6752,9 @@ test("offers the detected Blueprint formation before designing shots", async ({
     soundEffects: [],
     music: [],
   });
+  expect(inspectedExportRequests[0]).not.toHaveProperty(
+    "dialogueAssetDirtyPolicy",
+  );
   await exportDialog
     .getByRole("button", { name: "关闭导出预检" })
     .click();
