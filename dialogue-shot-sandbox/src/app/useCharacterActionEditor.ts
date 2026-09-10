@@ -16,6 +16,8 @@ import type {
   DialogueCharacterActionItem,
   DialogueCharacterActionTrack,
   DialogueSequence,
+  DialogueViewLine,
+  DialogueViewLineNode,
   StoryboardExportRequest,
 } from "../types";
 import { readDialogueCharacterActions } from "../ue/client";
@@ -37,8 +39,11 @@ export interface CharacterActionEditorController {
   dialogueAssetPath: string;
   catalogs: BlueprintMontageCatalog[];
   existingTracks: DialogueCharacterActionTrack[];
+  existingViewLineNodes: DialogueViewLineNode[];
   tracks: CharacterActionTrackDraft[];
+  viewLines: DialogueViewLine[];
   exportActions: NonNullable<StoryboardExportRequest["characterActions"]>;
+  exportViewLines: NonNullable<StoryboardExportRequest["viewLines"]>;
   hasChanges: boolean;
   refresh: () => Promise<void>;
   addParticipant: (dialogueId: string, modelIndex: number) => void;
@@ -61,8 +66,20 @@ export interface CharacterActionEditorController {
     sourceIndex: number,
     targetIndex: number,
   ) => void;
+  setViewLine: (
+    dialogueId: string,
+    observerModelIndex: number,
+    targetModelIndex: number,
+  ) => void;
+  removeViewLineChange: (
+    dialogueId: string,
+    observerModelIndex: number,
+  ) => void;
   commitExported: (
     items: NonNullable<StoryboardExportRequest["characterActions"]>,
+  ) => void;
+  commitExportedViewLines: (
+    items: NonNullable<StoryboardExportRequest["viewLines"]>,
   ) => void;
 }
 
@@ -110,6 +127,7 @@ export function useCharacterActionEditor({
       {
         dialogueAssetPath: string;
         tracks: DialogueCharacterActionTrack[];
+        viewLineNodes: DialogueViewLineNode[];
       }
     >(),
   );
@@ -121,8 +139,14 @@ export function useCharacterActionEditor({
   const [ueTracks, setUeTracks] = useState<
     DialogueCharacterActionTrack[]
   >([]);
+  const [existingViewLineNodes, setExistingViewLineNodes] = useState<
+    DialogueViewLineNode[]
+  >([]);
   const [tracksBySignature, setTracksBySignature] = useState<
     Map<string, CharacterActionTrackDraft[]>
+  >(() => new Map());
+  const [viewLinesBySignature, setViewLinesBySignature] = useState<
+    Map<string, DialogueViewLine[]>
   >(() => new Map());
 
   const models = useMemo(
@@ -174,6 +198,10 @@ export function useCharacterActionEditor({
     () => tracksBySignature.get(draftSignature) ?? [],
     [draftSignature, tracksBySignature],
   );
+  const viewLines = useMemo(
+    () => viewLinesBySignature.get(draftSignature) ?? [],
+    [draftSignature, viewLinesBySignature],
+  );
   const setTracks = useCallback(
     (update: SetStateAction<CharacterActionTrackDraft[]>) => {
       setTracksBySignature((current) => {
@@ -186,6 +214,26 @@ export function useCharacterActionEditor({
         const next = new Map(current);
         if (nextTracks.length > 0) {
           next.set(draftSignature, nextTracks);
+        } else {
+          next.delete(draftSignature);
+        }
+        return next;
+      });
+    },
+    [draftSignature],
+  );
+  const setViewLines = useCallback(
+    (update: SetStateAction<DialogueViewLine[]>) => {
+      setViewLinesBySignature((current) => {
+        const currentLines = current.get(draftSignature) ?? [];
+        const nextLines =
+          typeof update === "function" ? update(currentLines) : update;
+        if (nextLines === currentLines) {
+          return current;
+        }
+        const next = new Map(current);
+        if (nextLines.length > 0) {
+          next.set(draftSignature, nextLines);
         } else {
           next.delete(draftSignature);
         }
@@ -237,6 +285,7 @@ export function useCharacterActionEditor({
       const nextCatalogs = includeCatalogs
         ? snapshot.catalogs
         : cachedCatalog.catalogs;
+      const nextViewLineNodes = snapshot.viewLineNodes ?? [];
       if (includeCatalogs) {
         catalogCacheRef.current = {
           signature: catalogSignature,
@@ -247,12 +296,15 @@ export function useCharacterActionEditor({
       trackCacheRef.current.set(readSignature, {
         dialogueAssetPath: snapshot.dialogueAssetPath,
         tracks: snapshot.tracks,
+        viewLineNodes: nextViewLineNodes,
       });
       setDialogueAssetPath(snapshot.dialogueAssetPath);
       setCatalogs(nextCatalogs);
       setUeTracks(snapshot.tracks);
+      setExistingViewLineNodes(nextViewLineNodes);
       if (discardDrafts) {
         setTracks([]);
+        setViewLines([]);
       }
       setStatus(catalogStatus(nextCatalogs));
     } catch (loadError) {
@@ -274,6 +326,7 @@ export function useCharacterActionEditor({
     models,
     sequence.startId,
     setTracks,
+    setViewLines,
     catalogSignature,
     readSignature,
   ]);
@@ -289,6 +342,7 @@ export function useCharacterActionEditor({
     setDialogueAssetPath("");
     setCatalogs([]);
     setUeTracks([]);
+    setExistingViewLineNodes([]);
   }, [catalogSignature]);
 
   useEffect(() => {
@@ -310,8 +364,10 @@ export function useCharacterActionEditor({
       loadedSignatureRef.current = readSignature;
       setDialogueAssetPath(cachedTracks.dialogueAssetPath);
       setUeTracks(cachedTracks.tracks);
+      setExistingViewLineNodes(cachedTracks.viewLineNodes);
     } else {
       setUeTracks([]);
+      setExistingViewLineNodes([]);
     }
   }, [catalogSignature, readSignature]);
 
@@ -336,6 +392,7 @@ export function useCharacterActionEditor({
     setDialogueAssetPath("");
     setCatalogs([]);
     setUeTracks([]);
+    setExistingViewLineNodes([]);
   }, [enabled, releaseWhenDisabled]);
 
   const refresh = useCallback(() => {
@@ -388,7 +445,7 @@ export function useCharacterActionEditor({
                 actions: [{
                   id: nextActionId(dialogueId, modelIndex),
                   montageName: "",
-                  delaySeconds: 0,
+                  delaySeconds: 0.4,
                 }],
               },
             ],
@@ -422,7 +479,7 @@ export function useCharacterActionEditor({
           {
             id: nextActionId(dialogueId, modelIndex),
             montageName: "",
-            delaySeconds: 0,
+            delaySeconds: 0.4,
           },
         ],
       }));
@@ -514,6 +571,52 @@ export function useCharacterActionEditor({
       }),
     [tracks],
   );
+  const exportViewLines = viewLines;
+
+  const setViewLine = useCallback(
+    (
+      dialogueId: string,
+      observerModelIndex: number,
+      targetModelIndex: number,
+    ) => {
+      const existingTarget = existingViewLineNodes
+        .find((node) => node.dialogueId === dialogueId)
+        ?.lines.find(
+          (line) => line.observerModelIndex === observerModelIndex,
+        )?.targetModelIndex;
+      setViewLines((current) => {
+        const withoutObserver = current.filter(
+          (line) =>
+            line.dialogueId !== dialogueId ||
+            line.observerModelIndex !== observerModelIndex,
+        );
+        return existingTarget === targetModelIndex
+          ? withoutObserver
+          : [
+              ...withoutObserver,
+              {
+                dialogueId,
+                observerModelIndex,
+                targetModelIndex,
+              },
+            ];
+      });
+    },
+    [existingViewLineNodes, setViewLines],
+  );
+
+  const removeViewLineChange = useCallback(
+    (dialogueId: string, observerModelIndex: number) => {
+      setViewLines((current) =>
+        current.filter(
+          (line) =>
+            line.dialogueId !== dialogueId ||
+            line.observerModelIndex !== observerModelIndex,
+        ),
+      );
+    },
+    [setViewLines],
+  );
 
   const commitExported = useCallback(
     (items: NonNullable<StoryboardExportRequest["characterActions"]>) => {
@@ -558,11 +661,75 @@ export function useCharacterActionEditor({
         trackCacheRef.current.set(readSignature, {
           dialogueAssetPath,
           tracks: next,
+          viewLineNodes:
+            trackCacheRef.current.get(readSignature)?.viewLineNodes ??
+            existingViewLineNodes,
         });
         return next;
       });
     },
-    [dialogueAssetPath, readSignature, setTracks],
+    [
+      dialogueAssetPath,
+      existingViewLineNodes,
+      readSignature,
+      setTracks,
+    ],
+  );
+
+  const commitExportedViewLines = useCallback(
+    (items: NonNullable<StoryboardExportRequest["viewLines"]>) => {
+      const exportedKeys = new Set(
+        items.map(
+          (item) => `${item.dialogueId}:${item.observerModelIndex}`,
+        ),
+      );
+      setViewLines((current) =>
+        current.filter(
+          (line) =>
+            !exportedKeys.has(
+              `${line.dialogueId}:${line.observerModelIndex}`,
+            ),
+        ),
+      );
+      setExistingViewLineNodes((current) => {
+        const next = current.map((node) => ({
+          ...node,
+          lines: [...node.lines],
+        }));
+        for (const item of items) {
+          let node = next.find(
+            (candidate) => candidate.dialogueId === item.dialogueId,
+          );
+          if (!node) {
+            node = {
+              dialogueId: item.dialogueId,
+              lines: [],
+              preservedComplexLineCount: 0,
+              lockedObserverModelIndexes: [],
+            };
+            next.push(node);
+          }
+          node.lines = [
+            ...node.lines.filter(
+              (line) =>
+                line.observerModelIndex !== item.observerModelIndex,
+            ),
+            { ...item },
+          ].sort(
+            (left, right) =>
+              left.observerModelIndex - right.observerModelIndex,
+          );
+        }
+        trackCacheRef.current.set(readSignature, {
+          dialogueAssetPath,
+          tracks:
+            trackCacheRef.current.get(readSignature)?.tracks ?? ueTracks,
+          viewLineNodes: next,
+        });
+        return next;
+      });
+    },
+    [dialogueAssetPath, readSignature, setViewLines, ueTracks],
   );
 
   return {
@@ -572,9 +739,12 @@ export function useCharacterActionEditor({
     dialogueAssetPath,
     catalogs,
     existingTracks,
+    existingViewLineNodes,
     tracks,
+    viewLines,
     exportActions,
-    hasChanges: exportActions.length > 0,
+    exportViewLines,
+    hasChanges: exportActions.length > 0 || exportViewLines.length > 0,
     refresh,
     addParticipant,
     removeParticipant,
@@ -582,6 +752,9 @@ export function useCharacterActionEditor({
     removeAction,
     updateAction,
     reorderAction,
+    setViewLine,
+    removeViewLineChange,
     commitExported,
+    commitExportedViewLines,
   };
 }

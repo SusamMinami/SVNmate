@@ -1,5 +1,6 @@
 import {
   AlertTriangle,
+  Eye,
   ChevronDown,
   ChevronRight,
   GripVertical,
@@ -7,6 +8,7 @@ import {
   LockKeyhole,
   Plus,
   RefreshCw,
+  RotateCcw,
   Trash2,
 } from "lucide-react";
 import {
@@ -37,6 +39,7 @@ interface CharacterActionEditorProps {
   sequence: DialogueSequence;
   dialogueIds: string[];
   busy: boolean;
+  showViewLines?: boolean;
 }
 
 interface DraggedAction {
@@ -546,6 +549,7 @@ export function CharacterActionEditor({
   sequence,
   dialogueIds,
   busy,
+  showViewLines = false,
 }: CharacterActionEditorProps) {
   const [expandedDialogueId, setExpandedDialogueId] = useState(
     dialogueIds[0] ?? "",
@@ -553,6 +557,10 @@ export function CharacterActionEditor({
   const [pendingModelByDialogue, setPendingModelByDialogue] = useState<
     Record<string, number>
   >({});
+  const [pendingViewObserverByDialogue, setPendingViewObserverByDialogue] =
+    useState<Record<string, number>>({});
+  const [pendingViewTargetByDialogue, setPendingViewTargetByDialogue] =
+    useState<Record<string, number>>({});
   const [draggedAction, setDraggedAction] =
     useState<DraggedAction | null>(null);
   const editingDisabled = busy || controller.loading;
@@ -718,6 +726,60 @@ export function CharacterActionEditor({
             existingTracksByDialogue.get(row.id) ?? [];
           const pendingTracks =
             pendingTracksByDialogue.get(row.id) ?? [];
+          const existingViewLineNode =
+            controller.existingViewLineNodes.find(
+              (node) => node.dialogueId === row.id,
+            );
+          const pendingViewLines = controller.viewLines.filter(
+            (line) => line.dialogueId === row.id,
+          );
+          const effectiveViewLineByObserver = new Map(
+            (existingViewLineNode?.lines ?? []).map((line) => [
+              line.observerModelIndex,
+              line,
+            ]),
+          );
+          for (const line of pendingViewLines) {
+            effectiveViewLineByObserver.set(line.observerModelIndex, line);
+          }
+          const effectiveViewLines = Array.from(
+            effectiveViewLineByObserver.values(),
+          ).sort(
+            (left, right) =>
+              left.observerModelIndex - right.observerModelIndex,
+          );
+          const usedViewObservers = new Set(
+            [
+              ...effectiveViewLines.map(
+                (line) => line.observerModelIndex,
+              ),
+              ...(existingViewLineNode?.lockedObserverModelIndexes ?? []),
+            ],
+          );
+          const availableViewObservers = editableParticipants.filter(
+            (participant) =>
+              !usedViewObservers.has(participant.modelIndex),
+          );
+          const requestedViewObserver =
+            pendingViewObserverByDialogue[row.id] ?? -1;
+          const pendingViewObserver = availableViewObservers.some(
+            (participant) =>
+              participant.modelIndex === requestedViewObserver,
+          )
+            ? requestedViewObserver
+            : -1;
+          const requestedViewTarget =
+            pendingViewTargetByDialogue[row.id] ?? -1;
+          const availableViewTargets = editableParticipants.filter(
+            (participant) =>
+              participant.modelIndex !== pendingViewObserver,
+          );
+          const pendingViewTarget = availableViewTargets.some(
+            (participant) =>
+              participant.modelIndex === requestedViewTarget,
+          )
+            ? requestedViewTarget
+            : -1;
           const modelIndexes = Array.from(
             new Set([
               ...existingTracks.map((track) => track.modelIndex),
@@ -766,7 +828,12 @@ export function CharacterActionEditor({
                 <ChevronRight size={14} />
                 <code>{row.id}</code>
                 <span>{row.content}</span>
-                <small>{actionCount} 项</small>
+                <small>
+                  {actionCount} 动作
+                  {showViewLines
+                    ? ` · ${effectiveViewLines.length} 视线`
+                    : ""}
+                </small>
               </button>
 
               {expanded && (
@@ -1077,6 +1144,209 @@ export function CharacterActionEditor({
                       添加角色
                     </button>
                   </div>
+
+                  {showViewLines && (
+                    <section className="dialogue-view-lines">
+                      <header>
+                        <Eye size={14} />
+                        <strong>角色视线</strong>
+                        <small>
+                          {effectiveViewLines.length} 项
+                          {(existingViewLineNode
+                            ?.preservedComplexLineCount ?? 0) > 0
+                            ? ` · 保留 ${existingViewLineNode!.preservedComplexLineCount} 项点视线`
+                            : ""}
+                        </small>
+                      </header>
+                      {effectiveViewLines.length > 0 && (
+                        <div className="dialogue-view-lines__list">
+                          {effectiveViewLines.map((line) => {
+                            const observer =
+                              editableParticipantByModelIndex.get(
+                                line.observerModelIndex,
+                              ) ??
+                              participantByModelIndex.get(
+                                line.observerModelIndex,
+                              );
+                            const pending = pendingViewLines.some(
+                              (candidate) =>
+                                candidate.observerModelIndex ===
+                                line.observerModelIndex,
+                            );
+                            return (
+                              <div
+                                className={`dialogue-view-line ${
+                                  pending ? "is-pending" : ""
+                                }`}
+                                key={line.observerModelIndex}
+                              >
+                                <span
+                                  className="character-action-track__slot"
+                                  style={{ backgroundColor: observer?.color }}
+                                >
+                                  {line.observerModelIndex}
+                                </span>
+                                <strong>
+                                  {observer?.name ??
+                                    `BP 槽 ${line.observerModelIndex}`}
+                                </strong>
+                                <ChevronRight size={13} />
+                                <select
+                                  aria-label={`${observer?.name ?? `槽位 ${line.observerModelIndex}`} 的视线目标`}
+                                  value={line.targetModelIndex}
+                                  disabled={editingDisabled}
+                                  onChange={(event) =>
+                                    controller.setViewLine(
+                                      row.id,
+                                      line.observerModelIndex,
+                                      Number(event.target.value),
+                                    )
+                                  }
+                                >
+                                  {!editableParticipantByModelIndex.has(
+                                    line.targetModelIndex,
+                                  ) && (
+                                    <option value={line.targetModelIndex}>
+                                      {line.targetModelIndex} 未识别槽位
+                                    </option>
+                                  )}
+                                  {editableParticipants
+                                    .filter(
+                                      (participant) =>
+                                        participant.modelIndex !==
+                                        line.observerModelIndex,
+                                    )
+                                    .map((participant) => (
+                                      <option
+                                        key={participant.instanceId}
+                                        value={participant.modelIndex}
+                                      >
+                                        {participant.modelIndex}{" "}
+                                        {participant.name}
+                                      </option>
+                                    ))}
+                                </select>
+                                <button
+                                  className="icon-button"
+                                  type="button"
+                                  title={
+                                    pending
+                                      ? "撤销本次视线修改"
+                                      : "当前为 UE 已有视线"
+                                  }
+                                  aria-label={
+                                    pending
+                                      ? `撤销 ${observer?.name ?? line.observerModelIndex} 的视线修改`
+                                      : `${observer?.name ?? line.observerModelIndex} 的 UE 已有视线`
+                                  }
+                                  disabled={editingDisabled || !pending}
+                                  onClick={() =>
+                                    controller.removeViewLineChange(
+                                      row.id,
+                                      line.observerModelIndex,
+                                    )
+                                  }
+                                >
+                                  {pending ? (
+                                    <RotateCcw size={13} />
+                                  ) : (
+                                    <LockKeyhole size={12} />
+                                  )}
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                      <div className="dialogue-view-lines__add">
+                        <select
+                          aria-label={`节点 ${row.id} 视线观察者`}
+                          value={pendingViewObserver}
+                          disabled={
+                            editingDisabled ||
+                            availableViewObservers.length === 0
+                          }
+                          onChange={(event) => {
+                            const observer = Number(event.target.value);
+                            setPendingViewObserverByDialogue((current) => ({
+                              ...current,
+                              [row.id]: observer,
+                            }));
+                            setPendingViewTargetByDialogue((current) => ({
+                              ...current,
+                              [row.id]: -1,
+                            }));
+                          }}
+                        >
+                          <option value={-1}>
+                            {availableViewObservers.length === 0
+                              ? "所有角色已配置"
+                              : "谁看"}
+                          </option>
+                          {availableViewObservers.map((participant) => (
+                            <option
+                              key={participant.instanceId}
+                              value={participant.modelIndex}
+                            >
+                              {participant.modelIndex} {participant.name}
+                            </option>
+                          ))}
+                        </select>
+                        <ChevronRight size={13} />
+                        <select
+                          aria-label={`节点 ${row.id} 视线目标`}
+                          value={pendingViewTarget}
+                          disabled={
+                            editingDisabled || pendingViewObserver < 0
+                          }
+                          onChange={(event) =>
+                            setPendingViewTargetByDialogue((current) => ({
+                              ...current,
+                              [row.id]: Number(event.target.value),
+                            }))
+                          }
+                        >
+                          <option value={-1}>看向谁</option>
+                          {availableViewTargets.map((participant) => (
+                            <option
+                              key={participant.instanceId}
+                              value={participant.modelIndex}
+                            >
+                              {participant.modelIndex} {participant.name}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          className="button"
+                          type="button"
+                          title="添加角色视线"
+                          disabled={
+                            editingDisabled ||
+                            pendingViewObserver < 0 ||
+                            pendingViewTarget < 0
+                          }
+                          onClick={() => {
+                            controller.setViewLine(
+                              row.id,
+                              pendingViewObserver,
+                              pendingViewTarget,
+                            );
+                            setPendingViewObserverByDialogue((current) => ({
+                              ...current,
+                              [row.id]: -1,
+                            }));
+                            setPendingViewTargetByDialogue((current) => ({
+                              ...current,
+                              [row.id]: -1,
+                            }));
+                          }}
+                        >
+                          <Plus size={13} />
+                          添加视线
+                        </button>
+                      </div>
+                    </section>
+                  )}
                 </div>
               )}
             </article>

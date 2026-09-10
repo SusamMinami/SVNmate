@@ -131,6 +131,26 @@ class FakeStoryboardExportConnection implements UnrealInvoker {
     ["ActionData2", []],
     ["ActionData3", []],
   ]);
+  readonly viewLinesByData = new Map<string, Record<string, unknown>>([
+    [
+      "ActionData1",
+      { Keys: ["0"], Values: [{ ModelIndex: 1 }] },
+    ],
+    [
+      "ActionData2",
+      {
+        Keys: ["1"],
+        Values: [
+          {
+            DialogViewLineType: "EPoint",
+            ModelIndex: 0,
+            PointLocation: { X: 100, Y: 200, Z: 0 },
+          },
+        ],
+      },
+    ],
+    ["ActionData3", { Keys: [], Values: [] }],
+  ]);
   saveResult = true;
   dirtyPackages: string[] = [];
   normalizeMoveReadback = false;
@@ -219,6 +239,12 @@ class FakeStoryboardExportConnection implements UnrealInvoker {
           structuredClone(args.Value as unknown[]),
         );
       }
+      if (args.PropertyName === "DialogViewLines") {
+        this.viewLinesByData.set(
+          dataName,
+          structuredClone(args.Value as Record<string, unknown>),
+        );
+      }
       if (args.PropertyName === "DialogBlendCameraData") {
         this.blendByData.set(
           dataName,
@@ -299,6 +325,9 @@ class FakeStoryboardExportConnection implements UnrealInvoker {
       }
       if (property === "CharacterBehaviours") {
         return structuredClone(this.behavioursByData.get(dataName));
+      }
+      if (property === "DialogViewLines") {
+        return structuredClone(this.viewLinesByData.get(dataName));
       }
       if (property === "DialogBlendCameraData") {
         return structuredClone(this.blendByData.get(dataName));
@@ -606,6 +635,20 @@ describe("dialogue storyboard export", () => {
           preservedComplexActionCount: 0,
         },
       ],
+      viewLineNodes: [
+        {
+          dialogueId: "735201",
+          lines: [
+            {
+              dialogueId: "735201",
+              observerModelIndex: 0,
+              targetModelIndex: 1,
+            },
+          ],
+          preservedComplexLineCount: 0,
+          lockedObserverModelIndexes: [],
+        },
+      ],
     });
   });
 
@@ -659,6 +702,82 @@ describe("dialogue storyboard export", () => {
           call.args.PropertyName === "Montages",
       ),
     ).toBe(false);
+  });
+
+  it("writes actor view lines while preserving existing map entries", async () => {
+    const connection = new FakeStoryboardExportConnection();
+    const request = exportRequest();
+    request.dialogueIds = [];
+    request.shots = [];
+    request.characterActions = [];
+    request.viewLines = [
+      {
+        dialogueId: "735201",
+        observerModelIndex: 1,
+        targetModelIndex: 0,
+      },
+      {
+        dialogueId: "735202",
+        observerModelIndex: 0,
+        targetModelIndex: 1,
+      },
+    ];
+
+    const preview = await inspectDialogueStoryboardExport(
+      request,
+      () => connection,
+    );
+    expect(preview.changedViewLineCount).toBe(2);
+
+    const result = await exportDialogueStoryboard(
+      {
+        ...request,
+        reviewToken: preview.reviewToken,
+      },
+      () => connection,
+    );
+
+    expect(result).toMatchObject({
+      status: "exported",
+      changedViewLineCount: 2,
+      saved: true,
+    });
+    expect(connection.viewLinesByData.get("ActionData1")).toEqual({
+      Keys: ["0", "1"],
+      Values: [{ ModelIndex: 1 }, { ModelIndex: 0 }],
+    });
+    expect(connection.viewLinesByData.get("ActionData2")).toEqual({
+      Keys: ["1", "0"],
+      Values: [
+        {
+          DialogViewLineType: "EPoint",
+          ModelIndex: 0,
+          PointLocation: { X: 100, Y: 200, Z: 0 },
+        },
+        { ModelIndex: 1 },
+      ],
+    });
+  });
+
+  it("does not overwrite an existing point view line", async () => {
+    const request = exportRequest();
+    request.dialogueIds = [];
+    request.shots = [];
+    request.characterActions = [];
+    request.viewLines = [
+      {
+        dialogueId: "735202",
+        observerModelIndex: 1,
+        targetModelIndex: 0,
+      },
+    ];
+
+    await expect(
+      inspectDialogueStoryboardExport(
+        request,
+        () => new FakeStoryboardExportConnection(),
+      ),
+    ).rejects.toThrow("使用点视线或未知视线类型");
   });
 
   it("discovers Formation character slots when the editor has only local dialogue data", async () => {

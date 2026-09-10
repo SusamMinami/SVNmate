@@ -244,10 +244,24 @@ export interface DialogueCharacterActionTrack {
   preservedComplexActionCount: number;
 }
 
+export interface DialogueViewLine {
+  dialogueId: string;
+  observerModelIndex: number;
+  targetModelIndex: number;
+}
+
+export interface DialogueViewLineNode {
+  dialogueId: string;
+  lines: DialogueViewLine[];
+  preservedComplexLineCount: number;
+  lockedObserverModelIndexes: number[];
+}
+
 export interface DialogueCharacterActionSnapshot {
   dialogueAssetPath: string;
   catalogs: BlueprintMontageCatalog[];
   tracks: DialogueCharacterActionTrack[];
+  viewLineNodes: DialogueViewLineNode[];
 }
 
 export interface DialoguePositionTimelineRow {
@@ -505,6 +519,7 @@ export interface StoryboardExportRequest {
     characterLabel?: string;
     actions: DialogueCharacterActionItem[];
   }>;
+  viewLines?: DialogueViewLine[];
   soundEffects?: Array<{
     dialogueId: string;
     assetName: string;
@@ -611,6 +626,7 @@ export interface DialogueStoryboardExportPreview {
   characterActionBlockedReasons?: StoryboardExportCharacterActionBlockedReason[];
   characterActionCount?: number;
   changedCharacterActionCount?: number;
+  changedViewLineCount?: number;
   soundEffects?: StoryboardExportSoundEffectPreview[];
   music?: StoryboardExportMusicPreview[];
   musicCount?: number;
@@ -625,6 +641,7 @@ export interface DialogueStoryboardExportResult {
   dialogueAssetPath: string;
   changedNodeCount: number;
   changedCharacterActionCount?: number;
+  changedViewLineCount?: number;
   changedSoundEffectCount?: number;
   changedMusicCount?: number;
   saved: boolean;

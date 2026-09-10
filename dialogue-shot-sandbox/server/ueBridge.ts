@@ -435,6 +435,17 @@ const StoryboardExportRequestSchema = z.object({
     .max(200)
     .optional()
     .default([]),
+  viewLines: z
+    .array(
+      z.object({
+        dialogueId: z.string().regex(/^\d+$/),
+        observerModelIndex: z.number().int().nonnegative().max(255),
+        targetModelIndex: z.number().int().nonnegative().max(255),
+      }),
+    )
+    .max(500)
+    .optional()
+    .default([]),
   soundEffects: z
     .array(
       z.object({
@@ -1434,9 +1445,11 @@ interface StoryboardDialogueNodeContext extends DialogueNodeContext {
   existingCameraPosition: string;
   existingMoveCameras: unknown[];
   existingCharacterBehaviours: ReflectedCharacterBehaviourTrack[];
+  existingDialogViewLines: Record<string, unknown>;
 }
 
 interface StoryboardExportNodeChange {
+  dialogueId: string;
   preview: StoryboardExportNodePreview | null;
   characterActionPreviews: StoryboardExportCharacterActionPreview[];
   soundEffectPreview: StoryboardExportSoundEffectPreview | null;
@@ -1448,8 +1461,11 @@ interface StoryboardExportNodeChange {
   desiredMoveCameras: unknown[];
   originalCharacterBehaviours: ReflectedCharacterBehaviourTrack[];
   desiredCharacterBehaviours: ReflectedCharacterBehaviourTrack[];
+  originalDialogViewLines: Record<string, unknown>;
+  desiredDialogViewLines: Record<string, unknown>;
   writeCameraProperties: boolean;
   writeCharacterBehaviours: boolean;
+  writeDialogViewLines: boolean;
   writeSoundEffect: boolean;
   writeMusic: boolean;
   writeCommonProperties: boolean;
@@ -1566,6 +1582,140 @@ function complexCharacterActionCount(
     ? value.CharacterBehaviourItems
     : [];
   return items.filter((item) => !isReadableCharacterActionItem(item)).length;
+}
+
+function reflectedMapEntries(
+  value: Record<string, unknown>,
+  propertyName: string,
+): Array<[string, unknown]> {
+  if ("Keys" in value || "Values" in value) {
+    const keys = reflectedArray(value.Keys ?? [], `${propertyName}.Keys`);
+    const values = reflectedArray(value.Values ?? [], `${propertyName}.Values`);
+    if (keys.length !== values.length) {
+      throw new Error(`UE 节点属性 ${propertyName} 键值数量不一致`);
+    }
+    return keys.map((key, index) => [String(key), values[index]]);
+  }
+  return Object.entries(value);
+}
+
+function configuredDialogueViewLines(
+  dialogueId: string,
+  value: Record<string, unknown>,
+): {
+  lines: DialogueCharacterActionSnapshot["viewLineNodes"][number]["lines"];
+  preservedComplexLineCount: number;
+  lockedObserverModelIndexes: number[];
+} {
+  const lines: DialogueCharacterActionSnapshot["viewLineNodes"][number]["lines"] =
+    [];
+  let preservedComplexLineCount = 0;
+  const lockedObserverModelIndexes: number[] = [];
+  for (const [observerKey, rawLine] of reflectedMapEntries(
+    value,
+    "DialogViewLines",
+  )) {
+    const observerModelIndex = Number(observerKey);
+    if (
+      !Number.isSafeInteger(observerModelIndex) ||
+      observerModelIndex < 0 ||
+      observerModelIndex > 255 ||
+      !rawLine ||
+      typeof rawLine !== "object" ||
+      Array.isArray(rawLine)
+    ) {
+      preservedComplexLineCount += 1;
+      if (
+        Number.isSafeInteger(observerModelIndex) &&
+        observerModelIndex >= 0 &&
+        observerModelIndex <= 255
+      ) {
+        lockedObserverModelIndexes.push(observerModelIndex);
+      }
+      continue;
+    }
+    const line = rawLine as Record<string, unknown>;
+    const lineType = String(line.DialogViewLineType ?? "EActor");
+    const targetModelIndex = Number(line.ModelIndex ?? 0);
+    if (
+      !["", "EActor"].includes(lineType) ||
+      !Number.isSafeInteger(targetModelIndex) ||
+      targetModelIndex < 0 ||
+      targetModelIndex > 255 ||
+      targetModelIndex === observerModelIndex
+    ) {
+      preservedComplexLineCount += 1;
+      lockedObserverModelIndexes.push(observerModelIndex);
+      continue;
+    }
+    lines.push({
+      dialogueId,
+      observerModelIndex,
+      targetModelIndex,
+    });
+  }
+  return {
+    lines,
+    preservedComplexLineCount,
+    lockedObserverModelIndexes,
+  };
+}
+
+function mergeDialogueViewLines(
+  existing: Record<string, unknown>,
+  edits: NonNullable<StoryboardExportRequest["viewLines"]>,
+): Record<string, unknown> {
+  const desired = clonedValue(existing);
+  if ("Keys" in desired || "Values" in desired) {
+    const keys = reflectedArray(desired.Keys ?? [], "DialogViewLines.Keys");
+    const values = reflectedArray(
+      desired.Values ?? [],
+      "DialogViewLines.Values",
+    );
+    if (keys.length !== values.length) {
+      throw new Error("UE 节点属性 DialogViewLines 键值数量不一致");
+    }
+    for (const edit of edits) {
+      const observerKey = String(edit.observerModelIndex);
+      const existingIndex = keys.findIndex(
+        (key) => String(key) === observerKey,
+      );
+      const value = { ModelIndex: edit.targetModelIndex };
+      if (existingIndex >= 0) {
+        values[existingIndex] = value;
+      } else {
+        keys.push(observerKey);
+        values.push(value);
+      }
+    }
+    desired.Keys = keys;
+    desired.Values = values;
+    return desired;
+  }
+  for (const edit of edits) {
+    desired[String(edit.observerModelIndex)] = {
+      ModelIndex: edit.targetModelIndex,
+    };
+  }
+  return desired;
+}
+
+function dialogViewLineMapMismatch(
+  actual: unknown,
+  expected: Record<string, unknown>,
+): string | null {
+  const normalize = (value: unknown) =>
+    reflectedMapEntries(
+      reflectedRecord(value, "DialogViewLines"),
+      "DialogViewLines",
+    )
+      .map(([key, entry]) => [key, entry] as const)
+      .sort(([left], [right]) => left.localeCompare(right));
+  return unrealValueMismatch(
+    normalize(actual),
+    normalize(expected),
+    "DialogViewLines",
+  );
 }
 
 function newCharacterBehaviourItem(
@@ -1855,15 +2005,17 @@ export function buildDefaultDialogueCameraMove(): Record<string, unknown> {
 
 function validateStoryboardCoverage(request: StoryboardExportRequest): void {
   const characterActions = request.characterActions ?? [];
+  const viewLines = request.viewLines ?? [];
   const soundEffects = request.soundEffects ?? [];
   const music = request.music ?? [];
   if (
     request.shots.length === 0 &&
     characterActions.length === 0 &&
+    viewLines.length === 0 &&
     soundEffects.length === 0 &&
     music.length === 0
   ) {
-    throw new Error("至少选择一个镜头、角色动作、音效或音乐");
+    throw new Error("至少选择一个镜头、角色动作、视线、音效或音乐");
   }
   if (
     request.shots.length > 0 &&
@@ -1873,11 +2025,11 @@ function validateStoryboardCoverage(request: StoryboardExportRequest): void {
     throw new Error("镜头导出必须绑定至少两个 UE Blueprint 站位");
   }
   if (
-    characterActions.length > 0 &&
+    (characterActions.length > 0 || viewLines.length > 0) &&
     (!request.usesBlueprintFormation ||
       request.participantModelIndexes.length === 0)
   ) {
-    throw new Error("角色动作导出必须绑定 UE Blueprint 站位");
+    throw new Error("角色动作或视线导出必须绑定 UE Blueprint 站位");
   }
   const actualIds = request.shots.flatMap((shot) => shot.dialogueIds);
   if (
@@ -1920,6 +2072,31 @@ function validateStoryboardCoverage(request: StoryboardExportRequest): void {
   if (invalidCharacterActionModel) {
     throw new Error(
       `角色动作使用了未注册的 BP 模型槽 ${invalidCharacterActionModel.modelIndex}`,
+    );
+  }
+  const viewLineKeys = viewLines.map(
+    (item) => `${item.dialogueId}:${item.observerModelIndex}`,
+  );
+  if (new Set(viewLineKeys).size !== viewLineKeys.length) {
+    throw new Error("同一台词节点中的观察者只能提交一个视线目标");
+  }
+  const invalidViewLineNode = viewLines.find(
+    (item) => !item.dialogueId.startsWith(request.dialogueId),
+  );
+  if (invalidViewLineNode) {
+    throw new Error(
+      `视线节点 ${invalidViewLineNode.dialogueId} 不属于对话 ${request.dialogueId}`,
+    );
+  }
+  const invalidViewLineModel = viewLines.find(
+    (item) =>
+      item.observerModelIndex === item.targetModelIndex ||
+      !participantIndexes.has(item.observerModelIndex) ||
+      !participantIndexes.has(item.targetModelIndex),
+  );
+  if (invalidViewLineModel) {
+    throw new Error(
+      `视线 ${invalidViewLineModel.observerModelIndex} → ${invalidViewLineModel.targetModelIndex} 使用了无效 BP 模型槽`,
     );
   }
   const soundEffectDialogueIds = soundEffects.map(
@@ -2061,6 +2238,7 @@ async function readStoryboardDialogueNodes(
   options: {
     readCamera: boolean;
     readCharacterActions: boolean;
+    readViewLines: boolean;
   },
 ): Promise<StoryboardDialogueNodeContext[]> {
   const dialogueNodes = await readDialogueNodes(
@@ -2079,7 +2257,11 @@ async function readStoryboardDialogueNodes(
       if (options.readCamera && cameraPropertyIndex < 0) {
         throw new Error(`台词节点 ${node.dialogueId} 缺少 CameraPosition 属性`);
       }
-      const [moveCamerasValue, characterBehavioursValue] = await Promise.all([
+      const [
+        moveCamerasValue,
+        characterBehavioursValue,
+        dialogViewLinesValue,
+      ] = await Promise.all([
         options.readCamera
           ? readProperty(connection, node.nodeDataPath, "MoveCameras")
           : Promise.resolve([]),
@@ -2090,6 +2272,9 @@ async function readStoryboardDialogueNodes(
               "CharacterBehaviours",
             )
           : Promise.resolve([]),
+        options.readViewLines
+          ? readProperty(connection, node.nodeDataPath, "DialogViewLines")
+          : Promise.resolve({ Keys: [], Values: [] }),
       ]);
       return {
         ...node,
@@ -2109,6 +2294,10 @@ async function readStoryboardDialogueNodes(
           characterBehavioursValue,
           "CharacterBehaviours",
         ) as ReflectedCharacterBehaviourTrack[],
+        existingDialogViewLines: reflectedRecord(
+          dialogViewLinesValue,
+          "DialogViewLines",
+        ),
       };
     }),
   );
@@ -2407,7 +2596,11 @@ export async function readExistingDialogueStoryboard(
       dialogueAssetPath,
       request.dialogueIds,
       exportedText,
-      { readCamera: true, readCharacterActions: false },
+      {
+        readCamera: true,
+        readCharacterActions: false,
+        readViewLines: false,
+      },
     );
     const exportedSchoolCameraKeys =
       exportedSchoolCameraKeysByDialogueId(exportedText);
@@ -2669,10 +2862,31 @@ export async function readDialogueCharacterActions(
         }),
       )
     ).flat();
+    const viewLineNodes = await Promise.all(
+      nodes.map(async (node) => {
+        const dialogViewLines = reflectedRecord(
+          await readProperty(
+            connection,
+            node.nodeDataPath,
+            "DialogViewLines",
+          ),
+          "DialogViewLines",
+        );
+        const parsed = configuredDialogueViewLines(
+          node.dialogueId,
+          dialogViewLines,
+        );
+        return {
+          dialogueId: node.dialogueId,
+          ...parsed,
+        };
+      }),
+    );
     return {
       dialogueAssetPath,
       catalogs,
       tracks,
+      viewLineNodes,
     };
   } finally {
     connection.close();
@@ -2898,6 +3112,7 @@ async function prepareStoryboardExport(
 ): Promise<PreparedStoryboardExport> {
   validateStoryboardCoverage(request);
   const requestedCharacterActions = request.characterActions ?? [];
+  const requestedViewLines = request.viewLines ?? [];
   const requestedSoundEffects = request.soundEffects ?? [];
   const requestedMusic = request.music ?? [];
   const dialogueAssets = await findDialogueAssetPath(
@@ -2925,7 +3140,9 @@ async function prepareStoryboardExport(
   );
   const exportedDialogue = parseDialogueExport(exportedText);
   const layout =
-    request.shots.length > 0 || requestedCharacterActions.length > 0
+    request.shots.length > 0 ||
+    requestedCharacterActions.length > 0 ||
+    requestedViewLines.length > 0
       ? await readFormationExportLayout(
           connection,
           request.startId,
@@ -2939,6 +3156,7 @@ async function prepareStoryboardExport(
     new Set([
       ...request.dialogueIds,
       ...requestedCharacterActions.map((item) => item.dialogueId),
+      ...requestedViewLines.map((item) => item.dialogueId),
       ...requestedSoundEffects.map((soundEffect) => soundEffect.dialogueId),
       ...requestedMusic.map((music) => music.dialogueId),
     ]),
@@ -2951,6 +3169,7 @@ async function prepareStoryboardExport(
     {
       readCamera: request.shots.length > 0,
       readCharacterActions: requestedCharacterActions.length > 0,
+      readViewLines: requestedViewLines.length > 0,
     },
   );
   const shotByDialogueId = new Map(
@@ -2974,6 +3193,15 @@ async function prepareStoryboardExport(
     items.push({ ...item, characterActionIndex });
     characterActionsByDialogueId.set(item.dialogueId, items);
   });
+  const viewLinesByDialogueId = new Map<
+    string,
+    NonNullable<StoryboardExportRequest["viewLines"]>
+  >();
+  for (const item of requestedViewLines) {
+    const items = viewLinesByDialogueId.get(item.dialogueId) ?? [];
+    items.push(item);
+    viewLinesByDialogueId.set(item.dialogueId, items);
+  }
   const requestedModelClassPaths = new Map<number, string>();
   for (const item of requestedCharacterActions) {
     if (requestedModelClassPaths.has(item.modelIndex)) {
@@ -3049,14 +3277,18 @@ async function prepareStoryboardExport(
     const shotEntry = shotByDialogueId.get(node.dialogueId);
     const characterActionEdits =
       characterActionsByDialogueId.get(node.dialogueId) ?? [];
+    const viewLineEdits =
+      viewLinesByDialogueId.get(node.dialogueId) ?? [];
     const soundEffect = soundEffectByDialogueId.get(node.dialogueId);
     const music = musicByDialogueId.get(node.dialogueId);
     const desiredCommonProperties = clonedValue(node.commonProperties);
     let preview: StoryboardExportNodePreview | null = null;
     let desiredMoveCameras = node.existingMoveCameras;
     let desiredCharacterBehaviours = node.existingCharacterBehaviours;
+    let desiredDialogViewLines = node.existingDialogViewLines;
     let writeCameraProperties = false;
     let writeCharacterBehaviours = false;
+    let writeDialogViewLines = false;
     let writeMoveCameras = false;
     if (shotEntry && layout) {
       const isShotStart = shotEntry.shot.dialogueId === node.dialogueId;
@@ -3147,6 +3379,31 @@ async function prepareStoryboardExport(
         });
       }
     }
+    if (viewLineEdits.length > 0) {
+      const existingViewLines = configuredDialogueViewLines(
+        node.dialogueId,
+        node.existingDialogViewLines,
+      );
+      const blockedEdit = viewLineEdits.find((edit) =>
+        existingViewLines.lockedObserverModelIndexes.includes(
+          edit.observerModelIndex,
+        ),
+      );
+      if (blockedEdit) {
+        throw new Error(
+          `节点 ${node.dialogueId} 的槽 ${blockedEdit.observerModelIndex} 使用点视线或未知视线类型，不能自动覆盖`,
+        );
+      }
+      desiredDialogViewLines = mergeDialogueViewLines(
+        node.existingDialogViewLines,
+        viewLineEdits,
+      );
+      writeDialogViewLines =
+        dialogViewLineMapMismatch(
+          node.existingDialogViewLines,
+          desiredDialogViewLines,
+        ) !== null;
+    }
     let soundEffectPreview: StoryboardExportSoundEffectPreview | null = null;
     let writeSoundEffect = false;
     if (soundEffect) {
@@ -3236,6 +3493,7 @@ async function prepareStoryboardExport(
       };
     }
     return {
+      dialogueId: node.dialogueId,
       preview,
       characterActionPreviews,
       soundEffectPreview,
@@ -3248,8 +3506,11 @@ async function prepareStoryboardExport(
       originalCharacterBehaviours:
         node.existingCharacterBehaviours,
       desiredCharacterBehaviours,
+      originalDialogViewLines: node.existingDialogViewLines,
+      desiredDialogViewLines,
       writeCameraProperties,
       writeCharacterBehaviours,
+      writeDialogViewLines,
       writeSoundEffect,
       writeMusic,
       writeCommonProperties:
@@ -3323,11 +3584,7 @@ async function prepareStoryboardExport(
         formationAssetPath: layout?.assetPath ?? "",
         request,
         nodes: changes.map((change) => ({
-          dialogueId:
-            change.preview?.dialogueId ??
-            change.characterActionPreviews[0]?.dialogueId ??
-            change.soundEffectPreview?.dialogueId ??
-            change.musicPreview?.dialogueId,
+          dialogueId: change.dialogueId,
           originalCommonProperties: change.originalCommonProperties,
           originalMoveCameras: change.originalMoveCameras,
           originalCharacterBehaviours:
@@ -3336,6 +3593,8 @@ async function prepareStoryboardExport(
           desiredMoveCameras: change.desiredMoveCameras,
           desiredCharacterBehaviours:
             change.desiredCharacterBehaviours,
+          originalDialogViewLines: change.originalDialogViewLines,
+          desiredDialogViewLines: change.desiredDialogViewLines,
         })),
       }),
     )
@@ -3344,6 +3603,9 @@ async function prepareStoryboardExport(
     (change) =>
       change.preview &&
       (change.writeCameraProperties || change.writeMoveCameras),
+  );
+  const changedViewLineNodes = changes.filter(
+    (change) => change.writeDialogViewLines,
   );
   const soundEffectPreviews = changes.flatMap((change) =>
     change.soundEffectPreview ? [change.soundEffectPreview] : [],
@@ -3392,6 +3654,7 @@ async function prepareStoryboardExport(
       changedCharacterActionCount: characterActionPreviews.filter(
         (item) => item.action !== "unchanged",
       ).length,
+      changedViewLineCount: changedViewLineNodes.length,
       characterActions: characterActionPreviews,
       characterActionBlockedReasons,
       soundEffects: soundEffectPreviews.sort(
@@ -3443,7 +3706,7 @@ export async function exportDialogueStoryboard(
     const prepared = await prepareStoryboardExport(connection, request);
     if (prepared.preview.reviewToken !== reviewToken) {
       throw new Error(
-        "UE 中的镜头、角色动作、音效或音乐配置已发生变化，请重新检查后再导出",
+        "UE 中的镜头、角色动作、视线、音效或音乐配置已发生变化，请重新检查后再导出",
       );
     }
     if (prepared.preview.blockedReasons.length > 0) {
@@ -3453,7 +3716,8 @@ export async function exportDialogueStoryboard(
       (change) =>
         change.writeCommonProperties ||
         change.writeMoveCameras ||
-        change.writeCharacterBehaviours,
+        change.writeCharacterBehaviours ||
+        change.writeDialogViewLines,
     );
     if (changed.length === 0) {
       return {
@@ -3463,6 +3727,7 @@ export async function exportDialogueStoryboard(
         dialogueAssetPath: prepared.preview.dialogueAssetPath,
         changedNodeCount: 0,
         changedCharacterActionCount: 0,
+        changedViewLineCount: 0,
         changedSoundEffectCount: 0,
         changedMusicCount: 0,
         saved: false,
@@ -3491,6 +3756,13 @@ export async function exportDialogueStoryboard(
             ThisPtr: change.nodeDataPath,
             PropertyName: "CharacterBehaviours",
             Value: change.desiredCharacterBehaviours,
+          });
+        }
+        if (change.writeDialogViewLines) {
+          await connection.invoke("reflect.write_object_property", {
+            ThisPtr: change.nodeDataPath,
+            PropertyName: "DialogViewLines",
+            Value: change.desiredDialogViewLines,
           });
         }
       }
@@ -3550,9 +3822,23 @@ export async function exportDialogueStoryboard(
             mismatches.push(characterBehavioursMismatch);
           }
         }
+        if (change.writeDialogViewLines) {
+          const dialogViewLines = await readProperty(
+            connection,
+            change.nodeDataPath,
+            "DialogViewLines",
+          );
+          const dialogViewLinesMismatch = dialogViewLineMapMismatch(
+            dialogViewLines,
+            change.desiredDialogViewLines,
+          );
+          if (dialogViewLinesMismatch) {
+            mismatches.push(dialogViewLinesMismatch);
+          }
+        }
         if (mismatches.length > 0) {
           throw new Error(
-            `台词节点 ${change.preview?.dialogueId ?? change.characterActionPreviews[0]?.dialogueId ?? change.soundEffectPreview?.dialogueId ?? change.musicPreview?.dialogueId} 写入后的回读结果不一致：${mismatches.join("；")}`,
+            `台词节点 ${change.dialogueId} 写入后的回读结果不一致：${mismatches.join("；")}`,
           );
         }
       }
@@ -3604,6 +3890,19 @@ export async function exportDialogueStoryboard(
           } catch (recoveryError) {
             recoveryFailures.push(
               `${change.nodeDataPath}.CharacterBehaviours 恢复写入失败：${recoveryError instanceof Error ? recoveryError.message : String(recoveryError)}`,
+            );
+          }
+        }
+        if (change.writeDialogViewLines) {
+          try {
+            await connection.invoke("reflect.write_object_property", {
+              ThisPtr: change.nodeDataPath,
+              PropertyName: "DialogViewLines",
+              Value: change.originalDialogViewLines,
+            });
+          } catch (recoveryError) {
+            recoveryFailures.push(
+              `${change.nodeDataPath}.DialogViewLines 恢复写入失败：${recoveryError instanceof Error ? recoveryError.message : String(recoveryError)}`,
             );
           }
         }
@@ -3687,6 +3986,28 @@ export async function exportDialogueStoryboard(
             );
           }
         }
+        if (change.writeDialogViewLines) {
+          try {
+            const restored = await readProperty(
+              connection,
+              change.nodeDataPath,
+              "DialogViewLines",
+            );
+            const mismatch = dialogViewLineMapMismatch(
+              restored,
+              change.originalDialogViewLines,
+            );
+            if (mismatch) {
+              recoveryFailures.push(
+                `${change.nodeDataPath}.DialogViewLines 恢复回读不一致：${mismatch}`,
+              );
+            }
+          } catch (recoveryError) {
+            recoveryFailures.push(
+              `${change.nodeDataPath}.DialogViewLines 恢复回读失败：${recoveryError instanceof Error ? recoveryError.message : String(recoveryError)}`,
+            );
+          }
+        }
       }
       const recoveryMessage =
         recoveryFailures.length > 0
@@ -3704,6 +4025,8 @@ export async function exportDialogueStoryboard(
       changedNodeCount: prepared.preview.changedNodeCount,
       changedCharacterActionCount:
         prepared.preview.changedCharacterActionCount ?? 0,
+      changedViewLineCount:
+        prepared.preview.changedViewLineCount ?? 0,
       changedSoundEffectCount:
         prepared.preview.changedSoundEffectCount,
       changedMusicCount: prepared.preview.changedMusicCount ?? 0,
@@ -3887,7 +4210,11 @@ async function prepareDialogueCameraQuickAction(
     dialogueAssetPath,
     requestedNodeIds,
     exportedText,
-    { readCamera: true, readCharacterActions: false },
+    {
+      readCamera: true,
+      readCharacterActions: false,
+      readViewLines: false,
+    },
   );
   const currentNode = nodes[0];
   const sourceNode = request.mode === "copy_previous"

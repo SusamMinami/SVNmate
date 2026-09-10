@@ -62,7 +62,11 @@ import { DirectorControl } from "./components/DirectorControl";
 import { ExistingAudioConfiguration } from "./components/ExistingAudioConfiguration";
 import { LaunchScreen } from "./components/LaunchScreen";
 import { MissingNpcModelModal } from "./components/MissingNpcModelModal";
-import { NodeCameraQuickActions } from "./components/NodeCameraQuickActions";
+import {
+  NodeCameraQuickActions,
+  type NodeCameraQuickActionHandle,
+  type NodeCameraQuickActionSelection,
+} from "./components/NodeCameraQuickActions";
 import { OverlayScrollArea } from "./components/OverlayScrollArea";
 import { PreviewSchoolEditor } from "./components/PreviewSchoolEditor";
 import { MusicRecommendations } from "./components/MusicRecommendations";
@@ -871,6 +875,9 @@ function ShotInspector({
   >(null);
   const [audioPreview, setAudioPreview] =
     useState<AudioPreviewSession | null>(null);
+  const cameraQuickActionRef = useRef<NodeCameraQuickActionHandle>(null);
+  const [cameraQuickActionSelection, setCameraQuickActionSelection] =
+    useState<NodeCameraQuickActionSelection | null>(null);
   const storyOutlineExpanded = expandedOutlinePrefix === sequence.prefix;
   const activeDialogueRow = activeDialogueId
     ? sequence.rows.find((row) => row.id === activeDialogueId)
@@ -913,14 +920,38 @@ function ShotInspector({
     characterActionEditor.exportActions.filter((item) =>
       editableDialogueIdSet.has(item.dialogueId),
     ).length;
+  const scopedViewLineCount =
+    characterActionEditor.exportViewLines.filter((item) =>
+      editableDialogueIdSet.has(item.dialogueId),
+    ).length;
   const nodeScopedTools = configurationMode || !shot;
   const nodeScopeReady = configurationMode
     ? configurationSelectionReady
     : Boolean(activeDialogueId);
+  const cameraQuickActionReady =
+    configurationMode &&
+    tab === "shot" &&
+    Boolean(cameraQuickActionSelection?.ready);
+  const cameraQuickActionBlocked =
+    cameraQuickActionSelection?.blockedReason ?? "";
+  const cameraQuickActionBusy =
+    cameraQuickActionSelection?.busy !== null &&
+    cameraQuickActionSelection?.busy !== undefined;
+  const nodeWriteBusy = exportBusy || cameraQuickActionBusy;
+  const cameraQuickActionCanWrite =
+    cameraQuickActionReady &&
+    !cameraQuickActionBlocked &&
+    !(
+      cameraQuickActionSelection?.mode === "school_cameras" &&
+      !cameraQuickActionSelection.changed
+    );
+  const activeNodeWriteError = tab === "shot" ? "" : exportError;
   const showNodeWriteResult =
     Boolean(exportResult) &&
     ((tab === "audio" && scopedAudioCount === 0) ||
-      (tab === "ue" && scopedActionCount === 0));
+      (tab === "ue" &&
+        scopedActionCount === 0 &&
+        scopedViewLineCount === 0));
   const slotLabelsBySlot = new Map(
     sequence.participants.map((participant) => [
       participant.slot,
@@ -1141,16 +1172,19 @@ function ShotInspector({
           configurationMode ? (
             configurationDialogueNodeId && (
               <NodeCameraQuickActions
+                ref={cameraQuickActionRef}
                 dialogueId={sequence.prefix}
                 startId={sequence.startId}
                 dialogueNodeId={configurationDialogueNodeId}
                 existingConfiguration={configurationNodeConfiguration}
                 configurationLoading={configurationNodeReading}
+                externalConfirmation
                 previousDialogueNodeIds={
                   previousConfigurationDialogueNodeIds
                 }
                 onApplied={onReloadCurrentNodeConfiguration}
                 onActivityChange={onConfigurationActivityChange}
+                onSelectionChange={setCameraQuickActionSelection}
               />
             )
           ) : shot ? (
@@ -1554,6 +1588,7 @@ function ShotInspector({
               sequence={sequence}
               dialogueIds={editableDialogueIds}
               busy={exportBusy}
+              showViewLines={configurationMode}
             />
             {!configurationMode && (
               <>
@@ -1718,7 +1753,7 @@ function ShotInspector({
       {nodeScopedTools ? (
         <footer className="inspector-footer inspector-footer--export">
           <div>
-            {exportError || !nodeScopeReady ? (
+            {activeNodeWriteError || !nodeScopeReady ? (
               <AlertTriangle size={15} />
             ) : showNodeWriteResult ? (
               <Check size={15} />
@@ -1730,7 +1765,7 @@ function ShotInspector({
               <Camera size={15} />
             )}
             <span>
-              {exportError ||
+              {activeNodeWriteError ||
                 (!nodeScopeReady
                   ? configurationMode
                     ? configurationSelectionMessage
@@ -1742,11 +1777,17 @@ function ShotInspector({
                        ? `${scopedAudioCount} 项当前节点音频待写入`
                       : "当前节点未选择音效或音乐"
                     : tab === "ue"
-                      ? scopedActionCount > 0
-                         ? `${scopedActionCount} 组当前节点动作待写入`
-                        : "当前节点未添加动作"
+                      ? scopedActionCount > 0 || scopedViewLineCount > 0
+                        ? `${scopedActionCount} 组动作 · ${scopedViewLineCount} 条视线待写入`
+                        : "当前节点未添加动作或视线"
                       : configurationMode
-                        ? "镜头配置由上方操作直接写入并保存"
+                        ? cameraQuickActionSelection?.busy === "inspect"
+                          ? `正在检查${cameraQuickActionSelection.label}`
+                          : cameraQuickActionBlocked
+                            ? cameraQuickActionBlocked
+                            : cameraQuickActionSelection?.ready
+                              ? `${cameraQuickActionSelection.label}已选择，等待底栏确认`
+                              : "从上方选择一个镜头方案"
                         : "当前仅有对白文本，尚无镜头可导出")}
             </span>
           </div>
@@ -1757,37 +1798,54 @@ function ShotInspector({
               tab === "audio"
                 ? "直接写入当前节点音效与音乐"
                 : tab === "ue"
-                  ? "直接写入当前节点角色动作"
+                  ? "直接写入当前节点动作与视线"
                   : configurationMode
-                    ? "使用上方镜头快捷操作直接写入"
+                    ? "确认写入上方选中的镜头方案"
                     : "当前尚未生成镜头"
             }
             disabled={
-              exportBusy ||
+              nodeWriteBusy ||
               !nodeScopeReady ||
-              (tab !== "audio" && tab !== "ue") ||
+              (tab !== "audio" &&
+                tab !== "ue" &&
+                !(tab === "shot" && configurationMode)) ||
               (tab === "audio" && scopedAudioCount === 0) ||
-              (tab === "ue" && scopedActionCount === 0)
+              (tab === "ue" &&
+                scopedActionCount === 0 &&
+                scopedViewLineCount === 0) ||
+              (tab === "shot" &&
+                configurationMode &&
+                !cameraQuickActionCanWrite)
             }
-            onClick={
-              tab === "audio" ? onExportNodeAudio : onExportNodeActions
-            }
+            onClick={() => {
+              if (tab === "audio") {
+                onExportNodeAudio();
+              } else if (tab === "ue") {
+                onExportNodeActions();
+              } else if (tab === "shot" && configurationMode) {
+                void cameraQuickActionRef.current?.confirm();
+              }
+            }}
           >
-            {exportBusy ? (
+            {nodeWriteBusy ? (
               <LoaderCircle className="spin" size={16} />
             ) : tab !== "audio" && tab !== "ue" ? (
               <Camera size={16} />
             ) : (
               <Upload size={16} />
             )}
-            {exportBusy
-              ? "正在写入 UE"
+            {nodeWriteBusy
+              ? cameraQuickActionSelection?.busy === "inspect"
+                ? "正在检查镜头"
+                : "正在写入 UE"
               : tab === "audio"
                 ? "写入节点音频"
                 : tab === "ue"
-                  ? "写入节点动作"
+                  ? "写入动作与视线"
                   : configurationMode
-                    ? "镜头直接写入"
+                    ? cameraQuickActionSelection?.ready
+                      ? "确认写入镜头"
+                      : "选择镜头方案"
                     : "尚无镜头"}
           </button>
         </footer>
@@ -2439,10 +2497,12 @@ export default function App() {
     sequence,
     shots,
     characterActions: characterActionEditor.exportActions,
+    viewLines: characterActionEditor.exportViewLines,
     soundEffects,
     musicRecommendations,
     activeShot,
     onCharacterActionsExported: characterActionEditor.commitExported,
+    onViewLinesExported: characterActionEditor.commitExportedViewLines,
     onNodeAudioExported: commitExportedNodeAudio,
   });
   useEffect(() => {

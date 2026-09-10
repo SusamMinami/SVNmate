@@ -24,11 +24,15 @@ interface UseStoryboardExportOptions {
   sequence: DialogueSequence;
   shots: ShotPlan[];
   characterActions: NonNullable<StoryboardExportRequest["characterActions"]>;
+  viewLines: NonNullable<StoryboardExportRequest["viewLines"]>;
   soundEffects: DirectorSoundEffectRecommendation[];
   musicRecommendations: MusicRecommendation[];
   activeShot?: ShotPlan;
   onCharacterActionsExported?: (
     items: NonNullable<StoryboardExportRequest["characterActions"]>,
+  ) => void;
+  onViewLinesExported?: (
+    items: NonNullable<StoryboardExportRequest["viewLines"]>,
   ) => void;
   onNodeAudioExported?: (dialogueIds: string[]) => void;
 }
@@ -180,10 +184,12 @@ export function useStoryboardExport({
   sequence,
   shots,
   characterActions,
+  viewLines,
   soundEffects,
   musicRecommendations,
   activeShot,
   onCharacterActionsExported,
+  onViewLinesExported,
   onNodeAudioExported,
 }: UseStoryboardExportOptions) {
   const [preview, setPreview] =
@@ -211,6 +217,9 @@ export function useStoryboardExport({
       > = characterActions,
       selectedSoundEffects: DirectorSoundEffectRecommendation[] = soundEffects,
       selectedMusic: MusicRecommendation[] = musicRecommendations,
+      selectedViewLines: NonNullable<
+        StoryboardExportRequest["viewLines"]
+      > = [],
     ): StoryboardExportRequest => {
       if (selectedShots.length > 0 && !canExport) {
         throw new Error("当前方案未绑定完整的 UE Blueprint 站位");
@@ -224,11 +233,22 @@ export function useStoryboardExport({
             ? sequence.participants.map((participant) => participant.modelIndex!)
             : Array.from(
                 new Set(
-                  selectedCharacterActions.map((track) => track.modelIndex),
+                  [
+                    ...selectedCharacterActions.map(
+                      (track) => track.modelIndex,
+                    ),
+                    ...selectedViewLines.flatMap((line) => [
+                      line.observerModelIndex,
+                      line.targetModelIndex,
+                    ]),
+                  ],
                 ),
               ),
         usesBlueprintFormation:
-          selectedShots.length > 0 || selectedCharacterActions.length > 0,
+          selectedShots.length > 0 ||
+          selectedCharacterActions.length > 0 ||
+          selectedViewLines.length > 0,
+        viewLines: selectedViewLines.map((line) => ({ ...line })),
         characterActions: selectedCharacterActions.map((track) => {
           const participant = sequence.participants.find(
             (candidate) => candidate.modelIndex === track.modelIndex,
@@ -601,6 +621,12 @@ export function useStoryboardExport({
               activeDialogueIds.has(track.dialogueId),
             )
           : [];
+      const currentViewLines =
+        kind === "actions"
+          ? viewLines.filter((line) =>
+              activeDialogueIds.has(line.dialogueId),
+            )
+          : [];
       const currentSoundEffects =
         kind === "audio"
           ? soundEffects.filter((recommendation) =>
@@ -620,14 +646,19 @@ export function useStoryboardExport({
       ) {
         throw new Error("当前节点没有可写入的音频配置");
       }
-      if (kind === "actions" && currentCharacterActions.length === 0) {
-        throw new Error("当前节点没有可写入的动作配置");
+      if (
+        kind === "actions" &&
+        currentCharacterActions.length === 0 &&
+        currentViewLines.length === 0
+      ) {
+        throw new Error("当前节点没有可写入的动作或视线配置");
       }
       const nextRequest = buildRequest(
         [],
         currentCharacterActions,
         currentSoundEffects,
         currentMusic,
+        currentViewLines,
       );
       setMode(kind === "audio" ? "node-audio" : "node-actions");
       const inspectedPreview =
@@ -642,12 +673,14 @@ export function useStoryboardExport({
       const dialogueIds = Array.from(
         new Set([
           ...currentCharacterActions.map((item) => item.dialogueId),
+          ...currentViewLines.map((item) => item.dialogueId),
           ...currentSoundEffects.map((item) => item.dialogueId),
           ...currentMusic.map((item) => item.dialogueId),
         ]),
       );
       if (kind === "actions") {
         onCharacterActionsExported?.(currentCharacterActions);
+        onViewLinesExported?.(currentViewLines);
       } else {
         onNodeAudioExported?.(dialogueIds);
       }
@@ -655,14 +688,14 @@ export function useStoryboardExport({
       setResult(
         exportResult.status === "unchanged"
           ? `节点 ${nodeLabel} 已是目标配置`
-          : `节点 ${nodeLabel} 的${kind === "audio" ? "音频" : "动作"}已写入并保存`,
+          : `节点 ${nodeLabel} 的${kind === "audio" ? "音频" : "动作与视线"}已写入并保存`,
       );
       return true;
     } catch (exportError) {
       setError(
         exportError instanceof Error
           ? exportError.message
-          : `当前节点${kind === "audio" ? "音频" : "动作"}写入失败`,
+          : `当前节点${kind === "audio" ? "音频" : "动作与视线"}写入失败`,
       );
       return false;
     } finally {
@@ -674,8 +707,10 @@ export function useStoryboardExport({
     characterActions,
     musicRecommendations,
     onCharacterActionsExported,
+    onViewLinesExported,
     onNodeAudioExported,
     soundEffects,
+    viewLines,
   ]);
 
   const close = useCallback(() => {

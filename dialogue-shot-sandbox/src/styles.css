@@ -3105,6 +3105,103 @@ textarea:focus-visible {
   font-size: 9px;
 }
 
+.dialogue-view-lines {
+  padding: 9px 7px;
+  background: #f1f3f0;
+  border-top: 1px solid var(--border);
+}
+
+.dialogue-view-lines > header {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 7px;
+}
+
+.dialogue-view-lines > header svg {
+  color: #3c6877;
+}
+
+.dialogue-view-lines > header strong {
+  font-size: 10px;
+}
+
+.dialogue-view-lines > header small {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dialogue-view-lines__list {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.dialogue-view-line {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 72px) 14px minmax(0, 1fr) 26px;
+  align-items: center;
+  min-height: 32px;
+  gap: 5px;
+}
+
+.dialogue-view-line > strong {
+  overflow: hidden;
+  color: #35414a;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dialogue-view-line > svg {
+  color: var(--text-muted);
+}
+
+.dialogue-view-line select,
+.dialogue-view-lines__add select {
+  width: 100%;
+  min-width: 0;
+  height: 30px;
+  padding: 0 22px 0 7px;
+  color: #2e3942;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 9px;
+}
+
+.dialogue-view-line.is-pending select {
+  border-color: #6c8791;
+  background: #f7fbfc;
+}
+
+.dialogue-view-line .icon-button {
+  width: 26px;
+  height: 26px;
+}
+
+.dialogue-view-lines__add {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 14px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 5px;
+}
+
+.dialogue-view-lines__add > svg {
+  color: var(--text-muted);
+}
+
+.dialogue-view-lines__add .button {
+  min-height: 30px;
+  padding: 0 7px;
+  font-size: 9px;
+  white-space: nowrap;
+}
+
 .director-analysis dl {
   display: grid;
   margin: 0;
@@ -6786,7 +6883,7 @@ textarea:focus-visible {
 
 .npc-registration-table th,
 .npc-registration-table td {
-  padding: 10px;
+  padding: 10px 40px 10px 10px;
   overflow: hidden;
   border-right: 1px solid #e4e7e9;
   border-bottom: 1px solid #e4e7e9;
@@ -10612,6 +10709,19 @@ textarea:focus-visible {
   background: color-mix(in srgb, var(--success) 5%, var(--surface));
 }
 
+.node-camera-command-list > button.is-selected {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--signal) 24%, var(--surface));
+  box-shadow: inset 3px 0 0 var(--signal);
+}
+
+.node-camera-command-list > button.is-selected:hover:not(:disabled),
+.node-camera-command-list > button.is-selected:focus-visible {
+  color: var(--surface);
+  background: var(--ink);
+  box-shadow: inset 3px 0 0 var(--signal);
+}
+
 .node-camera-command-list > button:hover:not(:disabled),
 .node-camera-command-list > button:focus-visible {
   color: var(--surface);
@@ -10695,8 +10805,18 @@ textarea:focus-visible {
 }
 
 .node-camera-review {
+  position: relative;
   margin-top: 10px;
   border: 1px solid var(--border);
+}
+
+.node-camera-review__clear {
+  position: absolute;
+  z-index: 1;
+  top: 7px;
+  right: 7px;
+  width: 26px;
+  height: 26px;
 }
 
 .node-camera-review__confirmation {
@@ -10726,7 +10846,7 @@ textarea:focus-visible {
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr);
   align-items: center;
-  padding: 8px 9px;
+  padding: 8px 40px 8px 9px;
   gap: 7px;
   background: var(--surface-muted);
   border-bottom: 1px solid var(--border);

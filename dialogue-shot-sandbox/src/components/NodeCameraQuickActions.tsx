@@ -9,7 +9,13 @@ import {
   Users,
   X,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+} from "react";
 import type {
   DialogueCameraQuickActionMode,
   DialogueCameraQuickActionPreview,
@@ -28,8 +34,26 @@ interface NodeCameraQuickActionsProps {
   previousDialogueNodeIds?: string[];
   existingConfiguration?: ExistingDialogueNodeConfiguration;
   configurationLoading?: boolean;
+  externalConfirmation?: boolean;
   onApplied?: () => void;
   onActivityChange?: (activity: "idle" | "read" | "write") => void;
+  onSelectionChange?: (
+    selection: NodeCameraQuickActionSelection | null,
+  ) => void;
+}
+
+export interface NodeCameraQuickActionHandle {
+  confirm: () => Promise<void>;
+  clear: () => void;
+}
+
+export interface NodeCameraQuickActionSelection {
+  mode: DialogueCameraQuickActionMode;
+  label: string;
+  ready: boolean;
+  changed: boolean;
+  blockedReason: string;
+  busy: "inspect" | "apply" | null;
 }
 
 function actionLabel(mode: DialogueCameraQuickActionMode): string {
@@ -129,16 +153,21 @@ function defaultCameraConfirmationPreview(
   };
 }
 
-export function NodeCameraQuickActions({
+export const NodeCameraQuickActions = forwardRef<
+  NodeCameraQuickActionHandle,
+  NodeCameraQuickActionsProps
+>(function NodeCameraQuickActions({
   dialogueId,
   startId,
   dialogueNodeId,
   previousDialogueNodeIds = [],
   existingConfiguration,
   configurationLoading = false,
+  externalConfirmation = false,
   onApplied,
   onActivityChange,
-}: NodeCameraQuickActionsProps) {
+  onSelectionChange,
+}, ref) {
   const operationRunRef = useRef(0);
   const [preview, setPreview] =
     useState<DialogueCameraQuickActionPreview | null>(null);
@@ -205,6 +234,21 @@ export function NodeCameraQuickActions({
   }, [dialogueNodeId]);
 
   useEffect(() => {
+    if (!request) {
+      onSelectionChange?.(null);
+      return;
+    }
+    onSelectionChange?.({
+      mode: request.mode,
+      label: actionLabel(request.mode),
+      ready: Boolean(preview),
+      changed: preview?.changed ?? false,
+      blockedReason: preview?.blockedReasons[0] ?? "",
+      busy,
+    });
+  }, [busy, onSelectionChange, preview, request]);
+
+  useEffect(() => {
     onActivityChange?.(
       busy === "apply" ? "write" : busy === "inspect" ? "read" : "idle",
     );
@@ -213,8 +257,9 @@ export function NodeCameraQuickActions({
   useEffect(
     () => () => {
       onActivityChange?.("idle");
+      onSelectionChange?.(null);
     },
-    [onActivityChange],
+    [onActivityChange, onSelectionChange],
   );
 
   async function inspect(mode: DialogueCameraQuickActionMode) {
@@ -313,6 +358,19 @@ export function NodeCameraQuickActions({
     }
   }
 
+  function clear() {
+    operationRunRef.current += 1;
+    setPreview(null);
+    setRequest(null);
+    setBusy(null);
+    setError("");
+  }
+
+  useImperativeHandle(ref, () => ({
+    confirm: apply,
+    clear,
+  }));
+
   return (
     <section className="inspector-section node-camera-quick-actions">
       <div className="section-label">
@@ -327,14 +385,20 @@ export function NodeCameraQuickActions({
           value={blendCurveAssetName}
           disabled={busy !== null}
           maxLength={128}
-          onChange={(event) =>
-            setBlendCurveAssetName(event.target.value)
-          }
+          onChange={(event) => {
+            setBlendCurveAssetName(event.target.value);
+            if (request?.mode === "blend_curve") {
+              clear();
+            }
+          }}
         />
       </label>
 
       <div className="node-camera-command-list">
         <button
+          className={
+            request?.mode === "copy_previous" ? "is-selected" : undefined
+          }
           type="button"
           disabled={previousDialogueNodeIds.length === 0 || busy !== null}
           title={
@@ -361,7 +425,10 @@ export function NodeCameraQuickActions({
           )}
         </button>
         <button
-          className={cameraConfigured ? "is-configured" : undefined}
+          className={[
+            cameraConfigured ? "is-configured" : "",
+            request?.mode === "default" ? "is-selected" : "",
+          ].filter(Boolean).join(" ")}
           type="button"
           disabled={
             busy !== null || configurationLoading || !existingConfiguration
@@ -381,7 +448,10 @@ export function NodeCameraQuickActions({
           <ChevronRight size={15} />
         </button>
         <button
-          className={blendConfigured ? "is-configured" : undefined}
+          className={[
+            blendConfigured ? "is-configured" : "",
+            request?.mode === "blend_curve" ? "is-selected" : "",
+          ].filter(Boolean).join(" ")}
           type="button"
           disabled={busy !== null || !blendCurveAssetName.trim()}
           title="设置 DialogBlendCameraData 为 EBlend 并写入指定 CurveFloat"
@@ -400,7 +470,10 @@ export function NodeCameraQuickActions({
         </button>
         <button
           className={
-            allSchoolCamerasConfigured ? "is-configured" : undefined
+            [
+              allSchoolCamerasConfigured ? "is-configured" : "",
+              request?.mode === "school_cameras" ? "is-selected" : "",
+            ].filter(Boolean).join(" ") || undefined
           }
           type="button"
           disabled={
@@ -444,6 +517,16 @@ export function NodeCameraQuickActions({
           }`}
           aria-label="节点镜头写入确认"
         >
+          <button
+            className="icon-button node-camera-review__clear"
+            type="button"
+            title="取消当前镜头方案"
+            aria-label="取消当前镜头方案"
+            disabled={busy !== null}
+            onClick={clear}
+          >
+            <X size={13} />
+          </button>
           {preview.mode === "school_cameras" ? (
             <div className="node-camera-review__confirmation">
               <Users size={16} />
@@ -536,41 +619,40 @@ export function NodeCameraQuickActions({
               <span>{reason}</span>
             </p>
           ))}
-          <footer>
-            <button
-              className="button"
-              type="button"
-              disabled={busy !== null}
-              onClick={() => {
-                setPreview(null);
-                setRequest(null);
-              }}
-            >
-              <X size={14} />
-              取消
-            </button>
-            <button
-              className="button button--primary"
-              type="button"
-              disabled={
-                busy !== null ||
-                preview.blockedReasons.length > 0 ||
-                (preview.mode === "school_cameras" && !preview.changed)
-              }
-              onClick={() => void apply()}
-            >
-              {busy === "apply" ? (
-                <LoaderCircle className="spin" size={14} />
-              ) : (
-                <Check size={14} />
-              )}
-              {busy === "apply"
-                ? "正在写入"
-                : preview.changed
-                  ? "确认写入"
-                  : "确认无改动"}
-            </button>
-          </footer>
+          {!externalConfirmation && (
+            <footer>
+              <button
+                className="button"
+                type="button"
+                disabled={busy !== null}
+                onClick={clear}
+              >
+                <X size={14} />
+                取消
+              </button>
+              <button
+                className="button button--primary"
+                type="button"
+                disabled={
+                  busy !== null ||
+                  preview.blockedReasons.length > 0 ||
+                  (preview.mode === "school_cameras" && !preview.changed)
+                }
+                onClick={() => void apply()}
+              >
+                {busy === "apply" ? (
+                  <LoaderCircle className="spin" size={14} />
+                ) : (
+                  <Check size={14} />
+                )}
+                {busy === "apply"
+                  ? "正在写入"
+                  : preview.changed
+                    ? "确认写入"
+                    : "确认无改动"}
+              </button>
+            </footer>
+          )}
         </div>
       )}
 
@@ -588,4 +670,4 @@ export function NodeCameraQuickActions({
       )}
     </section>
   );
-}
+});
