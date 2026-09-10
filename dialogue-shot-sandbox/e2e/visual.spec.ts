@@ -1,5 +1,5 @@
 import { mkdir, writeFile } from "node:fs/promises";
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator } from "@playwright/test";
 import { PNG } from "pngjs";
 import { DEFAULT_CHARACTER_BODY } from "../src/director/characterGeometry";
 import { createShotPlan } from "../src/director/shotPlanner";
@@ -87,6 +87,54 @@ function silentWavBuffer(durationMs = 400): Buffer {
   buffer.write("data", 36);
   buffer.writeUInt32LE(dataSize, 40);
   return buffer;
+}
+
+async function expectPickerMenuAutoReveal(
+  scrollPanel: Locator,
+  picker: Locator,
+  menu: Locator,
+) {
+  await picker.evaluate((element) => {
+    const panel = element.closest<HTMLElement>(".inspector-tab-panel");
+    if (!panel) {
+      throw new Error("Action picker is missing its inspector scroll panel");
+    }
+    panel.scrollTop = Math.max(
+      0,
+      panel.scrollTop +
+        element.getBoundingClientRect().bottom -
+        panel.getBoundingClientRect().bottom +
+        4,
+    );
+  });
+  await expect(picker).toBeInViewport();
+  const scrollTopBeforeOpen = await scrollPanel.evaluate(
+    (element) => element.scrollTop,
+  );
+
+  await picker.click();
+  await expect(menu).toBeVisible();
+  await expect
+    .poll(() => scrollPanel.evaluate((element) => element.scrollTop))
+    .toBeGreaterThan(scrollTopBeforeOpen);
+  await expect
+    .poll(async () => {
+      const [panelBounds, menuBounds] = await Promise.all([
+        scrollPanel.boundingBox(),
+        menu.boundingBox(),
+      ]);
+      if (!panelBounds || !menuBounds) {
+        return false;
+      }
+      return (
+        menuBounds.y + menuBounds.height <=
+        panelBounds.y + panelBounds.height - 7
+      );
+    })
+    .toBe(true);
+
+  await picker.press("Escape");
+  await expect(menu).toHaveCount(0);
 }
 
 test.beforeEach(async ({ page }) => {
@@ -5562,7 +5610,7 @@ test("offers the detected Blueprint formation before designing shots", async ({
           catalogs: request.models.map((model) => ({
             ...model,
             status: "loaded",
-            message: "已读取 5 个 Montage",
+            message: "已读取 9 个 Montage",
             actions: [
               {
                 name: "AM_Idle1",
@@ -5583,6 +5631,22 @@ test("offers the detected Blueprint formation before designing shots", async ({
               {
                 name: "AM_Wave",
                 assetPath: `${model.blueprintClassPath}/Animation/AM_Wave`,
+              },
+              {
+                name: "AM_Point",
+                assetPath: `${model.blueprintClassPath}/Animation/AM_Point`,
+              },
+              {
+                name: "AM_Sit",
+                assetPath: `${model.blueprintClassPath}/Animation/AM_Sit`,
+              },
+              {
+                name: "AM_Stand",
+                assetPath: `${model.blueprintClassPath}/Animation/AM_Stand`,
+              },
+              {
+                name: "AM_LookAround",
+                assetPath: `${model.blueprintClassPath}/Animation/AM_LookAround`,
               },
             ],
           })),
@@ -6068,7 +6132,7 @@ test("offers the detected Blueprint formation before designing shots", async ({
     fullPage: true,
   });
   await page.getByRole("tab", { name: "UE" }).click();
-  await expect(page.getByText(/已读取 3 个 BP、15 个动作/)).toBeVisible();
+  await expect(page.getByText(/已读取 3 个 BP、27 个动作/)).toBeVisible();
   const firstActionNode = page.locator(".character-action-node__toggle").first();
   await expect(firstActionNode).toHaveAttribute("aria-expanded", "true");
   await firstActionNode.click();
@@ -6152,6 +6216,23 @@ test("offers the detected Blueprint formation before designing shots", async ({
     .fill("0.6");
   await expect(guardActions.locator(".character-action-row")).toHaveCount(2);
   await expect(guardActions).toContainText("另保留 1 个无 Montage 特殊动作");
+  const actionInspectorPanel = page.locator("#shot-inspector-panel");
+  const actionRolePicker = page.getByRole("combobox", {
+    name: "节点 735001 添加角色",
+  });
+  await actionRolePicker.selectOption("2");
+  await page.getByRole("button", { name: "添加角色" }).click();
+  const backgroundActions = page
+    .locator(".character-action-track")
+    .filter({ hasText: "西维尔" });
+  await expectPickerMenuAutoReveal(
+    actionInspectorPanel,
+    backgroundActions.getByRole("combobox"),
+    backgroundActions.locator(".character-action-picker__menu"),
+  );
+  await backgroundActions
+    .getByRole("button", { name: "移除 西维尔 的新增动作" })
+    .click();
   await guardActions
     .locator(".character-action-row")
     .evaluateAll((rows) => {
@@ -6227,15 +6308,41 @@ test("offers the detected Blueprint formation before designing shots", async ({
   await expect.poll(
     () => characterActionReadRequests.at(-1)?.dialogueIds,
   ).toEqual(["735015"]);
-  await hiddenConfigurationNode
-    .getByRole("combobox", { name: "节点 735015 添加角色" })
-    .selectOption("1");
+  const hiddenNodeFullViewport = page.viewportSize();
+  expect(hiddenNodeFullViewport).not.toBeNull();
+  await page.setViewportSize({ width: 310, height: 900 });
+  const hiddenNodeRolePicker = hiddenConfigurationNode.getByRole("combobox", {
+    name: "节点 735015 添加角色",
+  });
+  await hiddenNodeRolePicker.selectOption("1");
   await hiddenConfigurationNode
     .getByRole("button", { name: "添加角色" })
     .click();
   const hiddenNodeGuardActions = hiddenConfigurationNode
     .locator(".character-action-track")
     .filter({ hasText: "商会安保" });
+  await hiddenNodeRolePicker.selectOption("0");
+  await hiddenConfigurationNode
+    .getByRole("button", { name: "添加角色" })
+    .click();
+  await hiddenNodeRolePicker.selectOption("2");
+  await hiddenConfigurationNode
+    .getByRole("button", { name: "添加角色" })
+    .click();
+  const hiddenNodeBackgroundActions = hiddenConfigurationNode
+    .locator(".character-action-track")
+    .filter({ hasText: "西维尔" });
+  await expectPickerMenuAutoReveal(
+    page.locator("#shot-inspector-panel"),
+    hiddenNodeBackgroundActions.getByRole("combobox"),
+    hiddenNodeBackgroundActions.locator(".character-action-picker__menu"),
+  );
+  await hiddenNodeBackgroundActions
+    .getByRole("button", { name: "移除 西维尔 的新增动作" })
+    .click();
+  await hiddenConfigurationNode
+    .getByRole("button", { name: "移除 玩家 的新增动作" })
+    .click();
   const hiddenNodeActionPicker = hiddenNodeGuardActions
     .locator(".character-action-row")
     .first()
@@ -6247,9 +6354,6 @@ test("offers the detected Blueprint formation before designing shots", async ({
   await expect(
     page.getByRole("button", { name: "写入节点动作" }),
   ).toBeEnabled();
-  const hiddenNodeFullViewport = page.viewportSize();
-  expect(hiddenNodeFullViewport).not.toBeNull();
-  await page.setViewportSize({ width: 310, height: 900 });
   await page.screenshot({
     path: testInfo.outputPath("configuration-hidden-node-actions.png"),
     fullPage: true,
@@ -8368,6 +8472,159 @@ test("separates four-digit registration from six-digit node positioning", async 
     mapMode: "current",
   });
   expect(mapStatusRequests).toBe(0);
+});
+
+test("lists the automatic player slot when importing an NPC into an empty BP", async ({
+  page,
+}, testInfo) => {
+  let applyRequest: Record<string, unknown> | null = null;
+  const actorRef = "PersistentLevel.BP_Added_C_2";
+  await page.route("**/api/ue/selection/read", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          mapAssetPath: "/Game/Test/Maps/PlacedMap",
+          actors: [
+            {
+              actorRef,
+              label: "BP_Added",
+              classPath: "/Game/Test/BP_Added.BP_Added_C",
+              parentClassPath: "/Script/Seria.SeriaNPC",
+              assetKind: "blueprint_actor",
+              assetPath: "/Game/Test/BP_Added.BP_Added",
+              transform: {
+                location: { x: 140, y: 250, z: 300 },
+                rotation: { pitch: 0, yaw: 30, roll: 0 },
+                scale: { x: 1, y: 1, z: 1 },
+              },
+            },
+          ],
+        },
+      }),
+    });
+  });
+  await page.route(
+    "**/api/ue/mission-targets/background-props/inspect",
+    async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          data: {
+            reviewToken: "b".repeat(64),
+            blueprintAssetPath:
+              "/Game/Seria/Task/Mod/Test/BP_735200.BP_735200",
+            mapAssetPath: "/Game/Test/Maps/PlacedMap",
+            rootTransform: {
+              location: { x: 100, y: 200, z: 200 },
+              rotation: { pitch: 0, yaw: 0, roll: 0 },
+            },
+            willCreatePlayerSlot: true,
+            items: [
+              {
+                actorRef,
+                actorLabel: "BP_Added",
+                importMode: "dialogue_npc",
+                assetKind: "blueprint_actor",
+                assetPath: "/Game/Test/BP_Added.BP_Added",
+                componentName: "1",
+                modelIndex: 1,
+                dialogueModelName: "Added",
+                componentClass: "/Script/Engine.ChildActorComponent",
+                assetPropertyName: "ChildActorClass",
+                worldTransform: {
+                  location: { x: 140, y: 250, z: 300 },
+                  rotation: { pitch: 0, yaw: 30, roll: 0 },
+                  scale: { x: 1, y: 1, z: 1 },
+                },
+                relativeTransform: {
+                  location: { x: 40, y: 50, z: 100 },
+                  rotation: { pitch: 0, yaw: 30, roll: 0 },
+                  scale: { x: 1, y: 1, z: 1 },
+                },
+                action: "create",
+                message: "新增对话角色槽 1；DialogModels=Added",
+              },
+            ],
+            blockedReasons: [],
+          },
+        }),
+      });
+    },
+  );
+  await page.route(
+    "**/api/ue/mission-targets/background-props/apply",
+    async (route) => {
+      applyRequest = route.request().postDataJSON();
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          data: {
+            status: "updated",
+            blueprintAssetPath:
+              "/Game/Seria/Task/Mod/Test/BP_735200.BP_735200",
+            createdComponentNames: ["0", "1"],
+            updatedComponentNames: [],
+            dialogueRegistration: {
+              status: "registered",
+              registeredCount: 1,
+            },
+            saved: true,
+          },
+        }),
+      });
+    },
+  );
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "任务目标物" }).click();
+  const workspace = page.getByRole("region", {
+    name: "任务目标物",
+    exact: true,
+  });
+  await workspace.getByLabel("BP 文件名").fill("BP_735200");
+  await workspace.getByRole("button", { name: "读取 UE 选择" }).click();
+
+  const review = workspace.getByRole("dialog", {
+    name: "UE 选择写入 BP",
+  });
+  const playerRow = review
+    .locator(".background-prop-table tbody tr")
+    .filter({ hasText: "BP_Eric" });
+  await expect(playerRow).toContainText("DialogModels：player");
+  await expect(playerRow).toContainText("100.0, 200.0, 300.0");
+  await expect(playerRow).toContainText("新增");
+  await expect(review.getByLabel("固定补建 0 号玩家")).toBeChecked();
+  await expect(review.getByLabel("固定补建 0 号玩家")).toBeDisabled();
+  await expect(
+    review.locator(".background-prop-table tbody tr"),
+  ).toHaveCount(2);
+  await expect(
+    review.getByRole("button", { name: "写入 BP 与对话" }),
+  ).toBeEnabled();
+  await review.screenshot({
+    path: testInfo.outputPath("empty-bp-player-slot-bootstrap.png"),
+  });
+  page.once("dialog", async (confirmation) => {
+    expect(confirmation.message()).toContain("1 个对话 NPC");
+    expect(confirmation.message()).not.toContain("自动补建");
+    await confirmation.accept();
+  });
+  await review.getByRole("button", { name: "写入 BP 与对话" }).click();
+
+  expect(applyRequest).toEqual({
+    blueprintName: "BP_735200",
+    reviewToken: "b".repeat(64),
+    selectedActorRefs: [actorRef],
+    reviewedActorRefs: [actorRef],
+  });
+  await expect(workspace.getByText(/已写入 BP：新增 2 个/)).toBeVisible();
 });
 
 test("offers bidirectional position sync for a registered Blueprint", async ({

@@ -317,6 +317,10 @@ UE 选择审核会区分 SceneObject NPC 与普通背景资源，不新增目标
   Generated Class，使用包装 Actor 的世界 Transform。匹配任务目标物时沿用
   原流程；未匹配时从 BP 当前最大数字槽后按 UE 选择顺序追加，并通过
   `DialogNPCTable` 同步 `DialogModels`。
+- 空 `PositionModeBase` BP 首次写入对话 NPC 时，会在同一审核事务中自动补建
+  `0 = BP_Eric`，NPC 从 `1` 开始编号。0 号玩家作为固定勾选项与 NPC 一起显示
+  在审核列表中。若 BP 已有其他数字槽却缺少 `0`，或现有 `0` 不是玩家，则停止
+  写入并要求先修复布局。
 - SkeletalMeshActor 写为 `SkeletalMeshComponent` 和实际 Skeletal Mesh。
 - StaticMeshActor 写为 `StaticMeshComponent` 和实际 Static Mesh。
 - Cascade Emitter 写为 `ParticleSystemComponent` 和实际 Particle System。

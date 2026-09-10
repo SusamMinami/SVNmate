@@ -831,6 +831,20 @@ function rounded(value: number): number {
   return Object.is(result, -0) ? 0 : result;
 }
 
+function playerBlueprintComponent(): MissionTargetBlueprintComponentPlan {
+  return {
+    componentName: "0",
+    componentClass: CHILD_ACTOR_COMPONENT_CLASS,
+    childActorClass: PLAYER_CLASS,
+    targetId: null,
+    transform: {
+      location: { x: 0, y: 0, z: 100 },
+      rotation: { pitch: 0, yaw: 0, roll: 0 },
+      scale: { x: 1, y: 1, z: 1 },
+    },
+  };
+}
+
 export function buildMissionTargetBlueprintComponents(
   targets: MissionTargetPreviewTarget[],
   anchor = targets[0]?.transform.location,
@@ -838,19 +852,8 @@ export function buildMissionTargetBlueprintComponents(
   if (targets.length === 0 || !anchor) {
     throw new Error("至少选择一个具有模型资源的目标物");
   }
-  const playerTransform: UnrealTransform = {
-    location: { x: 0, y: 0, z: 100 },
-    rotation: { pitch: 0, yaw: 0, roll: 0 },
-    scale: { x: 1, y: 1, z: 1 },
-  };
   const components: MissionTargetBlueprintComponentPlan[] = [
-    {
-      componentName: "0",
-      componentClass: CHILD_ACTOR_COMPONENT_CLASS,
-      childActorClass: PLAYER_CLASS,
-      targetId: null,
-      transform: playerTransform,
-    },
+    playerBlueprintComponent(),
   ];
   targets.forEach((target, index) => {
     components.push({
@@ -899,6 +902,21 @@ function normalizeObjectPath(value: unknown): string {
   const trimmed = unrealReferenceText(value).trim().replaceAll("\\", "/");
   const referencedPath = trimmed.match(/'([^']+)'/)?.[1] ?? trimmed;
   return referencedPath.toLowerCase();
+}
+
+function isPlayerClassPath(value: unknown): boolean {
+  return normalizeObjectPath(value) === normalizeObjectPath(PLAYER_CLASS);
+}
+
+function isPlayerBlueprintComponent(
+  component: BlueprintComponentInfo | null | undefined,
+): boolean {
+  return Boolean(
+    component &&
+      normalizeObjectPath(component.componentClass) ===
+        normalizeObjectPath(CHILD_ACTOR_COMPONENT_CLASS) &&
+      isPlayerClassPath(component.childActorClass),
+  );
 }
 
 function directBlueprintAssetPath(input: string): string | null {
@@ -5071,15 +5089,17 @@ export function buildDialogueModelsForRegistration(
   slots: DialogueModelRegistrationSlot[],
   selectedModelIndexes: ReadonlySet<number>,
 ): { dialogueModels: string[]; unresolvedIndexes: number[] } {
+  const playerSlot = slots.find((slot) => slot.modelIndex === 0);
+  if (!playerSlot || !isPlayerClassPath(playerSlot.modelClassPath)) {
+    throw new Error("DialogModels 写入要求 0 号位为玩家 BP_Eric");
+  }
   const maximumIndex = Math.max(0, ...slots.map((slot) => slot.modelIndex));
   const dialogueModels = Array.from(
     { length: maximumIndex + 1 },
     () => "None",
   );
   const unresolvedIndexes: number[] = [];
-  if (slots.some((slot) => slot.modelIndex === 0)) {
-    dialogueModels[0] = "player";
-  }
+  dialogueModels[0] = "player";
   for (const slot of slots) {
     if (slot.modelIndex === 0 || !selectedModelIndexes.has(slot.modelIndex)) {
       continue;
@@ -5629,20 +5649,19 @@ async function writeDialogueRegistration(
   },
   preserveModels = false,
 ): Promise<DialogueModelRegistrationResult> {
-  const builtModels =
-    buildDialogueModelsForRegistration(
-      context.slots,
-      selectedModelIndexes,
-    );
   const currentModels = context.existingModels.map(
     normalizedDialogueModelName,
   );
-  const dialogueModels = preserveModels || spatial?.preserveModels
-    ? currentModels
-    : builtModels.dialogueModels;
-  const unresolvedIndexes = preserveModels || spatial?.preserveModels
-    ? []
-    : builtModels.unresolvedIndexes;
+  const preserveDialogueModels =
+    preserveModels || spatial?.preserveModels === true;
+  const builtModels = preserveDialogueModels
+    ? { dialogueModels: currentModels, unresolvedIndexes: [] }
+    : buildDialogueModelsForRegistration(
+        context.slots,
+        selectedModelIndexes,
+      );
+  const dialogueModels = builtModels.dialogueModels;
+  const unresolvedIndexes = builtModels.unresolvedIndexes;
   const desiredFormation = blueprintClassPath(blueprintAssetPathValue);
   const modelsUnchanged =
     currentModels.length === dialogueModels.length &&
@@ -6064,9 +6083,7 @@ export async function inspectMissionTargetBlueprint(
     );
     if (
       blueprintState === "populated" &&
-      (!playerSlot ||
-        normalizeObjectPath(playerSlot.childActorClass) !==
-          normalizeObjectPath(PLAYER_CLASS))
+      !isPlayerBlueprintComponent(playerSlot)
     ) {
       throw new Error("BP 的 0 号位不是玩家 BP_Eric");
     }
@@ -6298,11 +6315,7 @@ async function prepareMissionTargetBlueprintSync(
   const playerSlot = numericComponents.find(
     (component) => component.variableName === "0",
   );
-  if (
-    !playerSlot ||
-    normalizeObjectPath(playerSlot.childActorClass) !==
-      normalizeObjectPath(PLAYER_CLASS)
-  ) {
+  if (!isPlayerBlueprintComponent(playerSlot)) {
     throw new Error("BP 的 0 号位不是玩家 BP_Eric");
   }
   if (
@@ -6753,9 +6766,7 @@ export async function registerBlueprintDialogueModels(
     );
     if (
       !request.preserveModels &&
-      (!playerSlot ||
-        normalizeObjectPath(playerSlot.childActorClass) !==
-          normalizeObjectPath(PLAYER_CLASS))
+      !isPlayerBlueprintComponent(playerSlot)
     ) {
       throw new Error("BP 的 0 号位不是玩家 BP_Eric");
     }
@@ -7486,11 +7497,7 @@ export async function appendMissionTargetBlueprint(
     const playerSlot = numericComponents.find(
       (component) => component.variableName === "0",
     );
-    if (
-      !playerSlot ||
-      normalizeObjectPath(playerSlot.childActorClass) !==
-        normalizeObjectPath(PLAYER_CLASS)
-    ) {
+    if (!isPlayerBlueprintComponent(playerSlot)) {
       throw new Error("BP 的 0 号位不是玩家 BP_Eric");
     }
     if (
@@ -8412,6 +8419,7 @@ async function prepareBackgroundPropImport(
       modelClassPath: component.childActorClass,
     }));
   let dialogueContext: DialogueRegistrationContext | null = null;
+  let willCreatePlayerSlot = false;
   const dialogueNpcItems = preparedItems.filter(
     (item) => item.preview.importMode === "dialogue_npc",
   );
@@ -8419,13 +8427,15 @@ async function prepareBackgroundPropImport(
     const playerSlot = numericComponents.find(
       (component) => component.variableName === "0",
     );
+    willCreatePlayerSlot = numericComponents.length === 0;
     if (
-      !playerSlot ||
-      normalizeObjectPath(playerSlot.childActorClass) !==
-        normalizeObjectPath(PLAYER_CLASS)
+      !willCreatePlayerSlot &&
+      !isPlayerBlueprintComponent(playerSlot)
     ) {
       blockedReasons.push(
-        "对话 NPC 写入要求 BP 的 0 号位为玩家 BP_Eric",
+        playerSlot
+          ? "对话 NPC 写入要求 BP 的 0 号位为玩家 BP_Eric"
+          : "BP 已有数字角色槽但缺少 0 号玩家 BP_Eric，请先修复槽位结构",
       );
     }
     const baseDialogueContext = await readDialogueRegistrationContext(
@@ -8435,6 +8445,15 @@ async function prepareBackgroundPropImport(
       dialogueIdOverride,
     );
     const sourceSlots = [
+      ...(willCreatePlayerSlot
+        ? [
+            {
+              modelIndex: 0,
+              targetId: null,
+              modelClassPath: PLAYER_CLASS,
+            },
+          ]
+        : []),
       ...existingSourceSlots,
       ...dialogueNpcItems
         .filter(
@@ -8497,6 +8516,7 @@ async function prepareBackgroundPropImport(
     blueprintAssetPath: resolved.assetPath,
     mapAssetPath,
     rootTransform,
+    willCreatePlayerSlot,
     items: preparedItems.map((item) => item.preview),
     blockedReasons,
   };
@@ -8598,6 +8618,9 @@ export async function applyBackgroundPropImport(
     const selectedDialogueNpcItems = selectedItems.filter(
       (item) => item.preview.importMode === "dialogue_npc",
     );
+    const createPlayerSlot =
+      selectedDialogueNpcItems.length > 0 &&
+      prepared.preview.willCreatePlayerSlot;
     if (selectedDialogueNpcItems.length > 0) {
       if (!prepared.dialogueContext) {
         throw new Error("无法读取对话 NPC 对应的对话注册信息");
@@ -8608,6 +8631,14 @@ export async function applyBackgroundPropImport(
         throw new Error(
           `对话资产 ${dialoguePackagePath} 存在未保存修改，请先在 UE 中保存或撤销`,
         );
+      }
+    }
+    if (createPlayerSlot) {
+      const playerAsset = await connection.invoke("asset.get_asset_by_path", {
+        AssetPath: blueprintAssetPath(PLAYER_CLASS),
+      });
+      if (!hasUnrealObjectReference(playerAsset)) {
+        throw new Error(`玩家模型资产不存在：${PLAYER_CLASS}`);
       }
     }
     changedItems.push(
@@ -8630,8 +8661,15 @@ export async function applyBackgroundPropImport(
       };
     }
     let actualComponents = prepared.blueprint.components;
-    if (changedItems.length > 0) {
+    if (changedItems.length > 0 || createPlayerSlot) {
       mutationStarted = true;
+      if (createPlayerSlot) {
+        await addBlueprintComponent(
+          connection,
+          prepared.resolved.blueprint,
+          playerBlueprintComponent(),
+        );
+      }
       for (const item of changedItems) {
         if (
           item.preview.action === "create" &&
@@ -8682,6 +8720,21 @@ export async function applyBackgroundPropImport(
         connection,
         prepared.blueprint.blueprintClassPath,
       );
+      if (createPlayerSlot) {
+        const expectedPlayer = playerBlueprintComponent();
+        const actualPlayer = actualComponents.find(
+          (component) => component.variableName === "0",
+        );
+        if (
+          !isPlayerBlueprintComponent(actualPlayer) ||
+          blueprintTransformsDiffer(
+            actualPlayer!.transform,
+            expectedPlayer.transform,
+          )
+        ) {
+          throw new Error("自动补建的 0 号玩家 BP_Eric 回读结果不一致");
+        }
+      }
       for (const item of changedItems) {
         const actual = actualComponents.find(
           (component) =>
@@ -8741,14 +8794,18 @@ export async function applyBackgroundPropImport(
       );
     }
     const changed =
+      createPlayerSlot ||
       changedItems.length > 0 ||
       dialogueRegistration?.status === "registered";
     return {
       status: changed ? "updated" : "unchanged",
       blueprintAssetPath: prepared.resolved.assetPath,
-      createdComponentNames: changedItems
-        .filter((item) => item.preview.action === "create")
-        .map((item) => item.preview.componentName),
+      createdComponentNames: [
+        ...(createPlayerSlot ? ["0"] : []),
+        ...changedItems
+          .filter((item) => item.preview.action === "create")
+          .map((item) => item.preview.componentName),
+      ],
       updatedComponentNames: changedItems
         .filter((item) => item.preview.action === "update")
         .map((item) => item.preview.componentName),

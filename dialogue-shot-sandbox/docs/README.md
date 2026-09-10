@@ -29,6 +29,8 @@
 - `performance-2026-09-09.md`：小窗内存、脚本加载、CSV Worker 和 UE TCP
   响应组装的测量结果与后续优先级。
 - `ue-graph-editing-support.md`：UE 对话图创建节点、自动连线、事务和接口建议。
+- `ue-editor-asset-patch-api-requirements.md`：对话图与 LevelSequence 共用的
+  Snapshot/Patch 接口、JSON 协议、UE 实现边界和验收要求。
 
 ## 研究与历史
 

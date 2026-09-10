@@ -6663,6 +6663,14 @@ textarea:focus-visible {
   white-space: nowrap;
 }
 
+.background-prop-table td:nth-child(4) small {
+  display: block;
+  margin-top: 3px;
+  color: var(--text-muted);
+  font-size: 9px;
+  white-space: nowrap;
+}
+
 .background-prop-table td:last-child small {
   display: block;
   max-width: 240px;
@@ -10360,6 +10368,13 @@ textarea:focus-visible {
   overflow-y: auto;
   animation: inspector-panel-in 300ms ease both;
   scrollbar-width: none;
+}
+
+.inspector-tab-panel::after {
+  display: block;
+  height: var(--character-action-menu-scroll-space, 0);
+  content: "";
+  pointer-events: none;
 }
 
 .inspector-tab-panel::-webkit-scrollbar {

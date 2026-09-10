@@ -382,6 +382,26 @@ class NamedPositionModeBackgroundPropConnection extends BackgroundPropConnection
   override readonly blueprintClassPath = `${this.blueprintAssetPath}_C`;
 }
 
+class EmptyPositionModeBackgroundPropConnection extends BackgroundPropConnection {
+  override async invoke(
+    action: string,
+    args: Record<string, unknown>,
+  ): Promise<unknown> {
+    if (
+      action === "reflect.read_object_property" &&
+      args.ThisPtr ===
+        `${this.blueprintClassPath}:SimpleConstructionScript_0` &&
+      args.PropertyName === "AllNodes"
+    ) {
+      this.calls.push({ action, args });
+      return Array.from(this.backgroundComponents.keys()).map(
+        (name) => `SCS_Node_BG_${name}`,
+      );
+    }
+    return super.invoke(action, args);
+  }
+}
+
 class TaskActorBackgroundPropConnection extends NamedPositionModeBackgroundPropConnection {
   override readonly parentClassPath =
     "/Game/Seria/Blueprint/Task/TaskActorBase.TaskActorBase_C";
@@ -1256,6 +1276,131 @@ describe("background prop import", () => {
     expect(expression).toContain("child_preview_class");
     expect(expression).toContain("type(a).static_class()");
     expect(expression).not.toContain("get_super_class");
+  });
+
+  it("auto-initializes an empty PositionMode BP before importing a direct SeriaNPC", async () => {
+    await writeConfigFixture();
+    const connection = new EmptyPositionModeBackgroundPropConnection();
+    connection.commonProperties[0].CurrentBool = true;
+    connection.specialProperties[0].CurrentBool = true;
+    connection.previewLevel = "/Game/Test/Maps/PlacedMap.PlacedMap";
+    connection.dialogueModels = ["player"];
+    connection.dialogNpcNames = ["Added"];
+    connection.dialogNpcPaths = ["/Game/Test/BP_Added.BP_Added_C"];
+    connection.selectedPlacementActors = [
+      {
+        actor_ref: "PersistentLevel.BP_Added_C_2",
+        label: "BP_Added",
+        class_path: "/Game/Test/BP_Added.BP_Added_C",
+        parent_class_path: "/Script/Seria.SeriaNPC",
+        child_preview_class_path: "",
+        location: [140, 250, 300],
+        rotation: [0, 30, 0],
+        scale: [1, 1, 1],
+      },
+    ];
+    const actorRefs = ["PersistentLevel.BP_Added_C_2"];
+
+    const preview = await inspectBackgroundPropImport(
+      { blueprintName: "BP_735200", actorRefs },
+      () => connection,
+    );
+
+    expect(preview).toMatchObject({
+      willCreatePlayerSlot: true,
+      blockedReasons: [],
+      items: [
+        {
+          importMode: "dialogue_npc",
+          componentName: "1",
+          modelIndex: 1,
+          dialogueModelName: "Added",
+          action: "create",
+        },
+      ],
+    });
+
+    const result = await applyBackgroundPropImport(
+      {
+        blueprintName: "BP_735200",
+        reviewToken: preview.reviewToken,
+        selectedActorRefs: actorRefs,
+        reviewedActorRefs: actorRefs,
+      },
+      () => connection,
+    );
+
+    expect(result).toMatchObject({
+      status: "updated",
+      createdComponentNames: ["0", "1"],
+      dialogueRegistration: {
+        dialogueModels: ["player", "Added"],
+        unresolvedIndexes: [],
+      },
+      saved: true,
+    });
+    expect(connection.backgroundComponents.get("0")).toMatchObject({
+      componentClass: "/Script/Engine.ChildActorComponent",
+      assetPath: "/Game/Seria/Characters/Eric/BP_Eric.BP_Eric_C",
+      location: { X: 0, Y: 0, Z: 100 },
+    });
+    expect(connection.backgroundComponents.get("1")).toMatchObject({
+      componentClass: "/Script/Engine.ChildActorComponent",
+      assetPath: "/Game/Test/BP_Added.BP_Added_C",
+      location: { X: 40, Y: 50, Z: 100 },
+      rotation: { Pitch: 0, Yaw: 30, Roll: 0 },
+    });
+    expect(connection.dialogueModels).toEqual(["player", "Added"]);
+
+    const repeatedPreview = await inspectBackgroundPropImport(
+      { blueprintName: "BP_735200", actorRefs },
+      () => connection,
+    );
+    expect(repeatedPreview).toMatchObject({
+      willCreatePlayerSlot: false,
+      blockedReasons: [],
+      items: [{ componentName: "1", action: "unchanged" }],
+    });
+  });
+
+  it("does not auto-repair a populated BP that is missing the player slot", async () => {
+    await writeConfigFixture();
+    const connection = new EmptyPositionModeBackgroundPropConnection();
+    connection.commonProperties[0].CurrentBool = true;
+    connection.specialProperties[0].CurrentBool = true;
+    connection.previewLevel = "/Game/Test/Maps/PlacedMap.PlacedMap";
+    connection.backgroundComponents.set("1", {
+      componentClass: "/Script/Engine.ChildActorComponent",
+      assetPath: "/Game/Test/BP_Guard.BP_Guard_C",
+      location: { X: 0, Y: 0, Z: 100 },
+      rotation: { Pitch: 0, Yaw: 0, Roll: 0 },
+      scale: { X: 1, Y: 1, Z: 1 },
+    });
+    connection.selectedPlacementActors = [
+      {
+        actor_ref: "PersistentLevel.BP_Added_C_2",
+        label: "BP_Added",
+        class_path: "/Game/Test/BP_Added.BP_Added_C",
+        parent_class_path: "/Script/Seria.SeriaNPC",
+        child_preview_class_path: "",
+        location: [140, 250, 300],
+        rotation: [0, 30, 0],
+        scale: [1, 1, 1],
+      },
+    ];
+
+    const preview = await inspectBackgroundPropImport(
+      { blueprintName: "BP_735200" },
+      () => connection,
+    );
+
+    expect(preview.willCreatePlayerSlot).toBe(false);
+    expect(preview.blockedReasons).toContain(
+      "BP 已有数字角色槽但缺少 0 号玩家 BP_Eric，请先修复槽位结构",
+    );
+    expect(
+      connection.calls.some((call) => call.action === "bp.add_component"),
+    ).toBe(false);
   });
 
   it("appends SceneObject NPCs as ordered numeric slots and registers DialogModels", async () => {

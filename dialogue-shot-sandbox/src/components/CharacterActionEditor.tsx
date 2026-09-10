@@ -14,6 +14,7 @@ import {
   useDeferredValue,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -58,11 +59,26 @@ interface MontagePickerProps {
 
 const MAX_VISIBLE_MONTAGES = 8;
 const MONTAGE_OPTION_HEIGHT = 25;
+const MONTAGE_MENU_VIEWPORT_GAP = 8;
 const EMPTY_MONTAGE_ACTIONS: BlueprintMontageAction[] = [];
 const EMPTY_MONTAGE_ACTION_INDEX = new Map<
   string,
   BlueprintMontageAction
 >();
+
+export function scrollTopForRevealedMenu(
+  currentScrollTop: number,
+  maximumScrollTop: number,
+  menuBottom: number,
+  viewportBottom: number,
+  gap = MONTAGE_MENU_VIEWPORT_GAP,
+): number {
+  const overflow = Math.max(0, menuBottom + gap - viewportBottom);
+  return Math.min(
+    Math.max(0, maximumScrollTop),
+    Math.max(0, currentScrollTop + overflow),
+  );
+}
 
 export function matchingMontageActions(
   actions: readonly BlueprintMontageAction[],
@@ -113,6 +129,7 @@ const MontagePicker = memo(function MontagePicker({
   const listboxId = useId();
   const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const listboxRef = useRef<HTMLDivElement>(null);
   const scrollFrameRef = useRef<number | null>(null);
   const committedValueRef = useRef(value);
@@ -146,6 +163,67 @@ const MontagePicker = memo(function MontagePicker({
       listboxRef.current.scrollTop = 0;
     }
   }, [deferredQuery]);
+
+  useLayoutEffect(() => {
+    if (!open) {
+      return;
+    }
+    let scrollViewport: HTMLElement | null = null;
+    const frame = window.requestAnimationFrame(() => {
+      const menu = menuRef.current;
+      const viewport = rootRef.current?.closest<HTMLElement>(
+        ".inspector-tab-panel",
+      );
+      if (!menu || !viewport) {
+        return;
+      }
+      scrollViewport = viewport;
+      const menuBottom = menu.getBoundingClientRect().bottom;
+      const viewportBottom = viewport.getBoundingClientRect().bottom;
+      const requestedScrollTop = scrollTopForRevealedMenu(
+        viewport.scrollTop,
+        Number.MAX_SAFE_INTEGER,
+        menuBottom,
+        viewportBottom,
+      );
+      const maximumScrollTop = viewport.scrollHeight - viewport.clientHeight;
+      const missingScrollSpace = Math.max(
+        0,
+        requestedScrollTop - maximumScrollTop,
+      );
+      if (missingScrollSpace > 0) {
+        viewport.style.setProperty(
+          "--character-action-menu-scroll-space",
+          `${Math.ceil(menu.getBoundingClientRect().height + MONTAGE_MENU_VIEWPORT_GAP)}px`,
+        );
+      } else {
+        viewport.style.removeProperty(
+          "--character-action-menu-scroll-space",
+        );
+      }
+      const nextScrollTop = scrollTopForRevealedMenu(
+        viewport.scrollTop,
+        viewport.scrollHeight - viewport.clientHeight,
+        menuBottom,
+        viewportBottom,
+      );
+      if (nextScrollTop <= viewport.scrollTop + 1) {
+        return;
+      }
+      viewport.scrollTo({
+        top: nextScrollTop,
+        behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
+          ? "auto"
+          : "smooth",
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(frame);
+      scrollViewport?.style.removeProperty(
+        "--character-action-menu-scroll-space",
+      );
+    };
+  }, [filtered.total, open]);
 
   useEffect(
     () => () => {
@@ -365,7 +443,7 @@ const MontagePicker = memo(function MontagePicker({
         </button>
       </div>
       {open && (
-        <div className="character-action-picker__menu">
+        <div className="character-action-picker__menu" ref={menuRef}>
           <div
             ref={listboxRef}
             className="character-action-picker__options"

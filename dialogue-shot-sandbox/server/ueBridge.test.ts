@@ -1436,6 +1436,21 @@ describe("dialogue model registration", () => {
       dialogueModels: ["player", "One_Sit", "None", "None"],
       unresolvedIndexes: [3],
     });
+    expect(() =>
+      buildDialogueModelsForRegistration(slots.slice(1), new Set([1])),
+    ).toThrow("DialogModels 写入要求 0 号位为玩家 BP_Eric");
+    expect(() =>
+      buildDialogueModelsForRegistration(
+        [
+          {
+            ...slots[0],
+            modelClassPath: "/Game/Test/BP_NotPlayer.BP_NotPlayer_C",
+          },
+          ...slots.slice(1),
+        ],
+        new Set([1]),
+      ),
+    ).toThrow("DialogModels 写入要求 0 号位为玩家 BP_Eric");
   });
 
   it("maps an _Npc Blueprint to its unique base DialogNPCTable row name", () => {

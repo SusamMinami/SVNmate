@@ -185,6 +185,11 @@
 - UE 当前选择中的直接 `SeriaNPC` Actor 与 `SceneObject` NPC 使用同一数字槽
   和 `DialogModels` 注册链路；同一个 NPC 模型允许以多个实例写入不同数字槽，
   不得因资产名相同而要求分批导入。只有真正的背景组件继续使用资产名去重。
+- 向空 `PositionModeBase` BP 写入上述对话 NPC 时，审核列表必须把固定勾选的
+  `0 = BP_Eric` 与 `1..N` NPC 一起显示，并在同一事务中自动补建。已有数字槽
+  却缺少 `0`，或 `0` 已存在但不是合法玩家组件时必须阻断，不得自动覆盖人工布局。
+- 所有改写 `DialogModels` 的服务端入口必须在公共写入层再次验证
+  `0 = BP_Eric`；只有明确保留现有模型、仅补空间配置的流程可以跳过。
 - 任务目标物检查到 BP 模型未在 `DialogNPCTable` 登记时，必须先进入补登记
   审核，不得继续静默写入 `None`。Character BP、Anim Class 与 Mesh 从 BP
   默认对象回读，Camera BP 必须自动唯一匹配或由用户明确选择。UE4 的

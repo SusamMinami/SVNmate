@@ -321,6 +321,9 @@ Blueprint 参与相同匹配，同时保留包装对象的位置、旋转和缩�
 直接选中的 `SeriaNPC` Actor 复用同一数字槽和 `DialogModels` 注册管线；同一
 NPC 模型的多个实例会获得不同数字槽，允许重复写入同一个模型名，不再因为资产名
 相同要求分批导入。只有真正的背景组件继续按资产名检查重名。
+空 `PositionModeBase` BP 首次通过该管线写入对话 NPC 时，审核列表会固定显示
+并自动补建 `0 = BP_Eric`，NPC 从 `1` 开始编号；已有数字槽却缺少合法玩家槽
+时仍会阻断，避免自动覆盖人工布局。
 只输入任务节点也可直接读取 UE 当前选择，不要求先填写 BP；匹配结果会逐项显示
 `UE Actor -> 目标物 ID -> NPC`，并在目标物列表中标记“UE 已选”。
 背景审核可将 Blueprint Actor、Skeletal Mesh 或 Static Mesh 直接写入 BP，

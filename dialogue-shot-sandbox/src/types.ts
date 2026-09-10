@@ -851,6 +851,7 @@ export interface BackgroundPropImportPreview {
   blueprintAssetPath: string;
   mapAssetPath: string;
   rootTransform: MissionTargetTransform;
+  willCreatePlayerSlot: boolean;
   items: BackgroundPropPreviewItem[];
   blockedReasons: string[];
 }

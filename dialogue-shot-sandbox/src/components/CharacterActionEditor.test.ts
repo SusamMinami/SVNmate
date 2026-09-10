@@ -3,6 +3,7 @@ import type { BlueprintMontageAction } from "../types";
 import {
   matchingMontageActions,
   montageActionWindow,
+  scrollTopForRevealedMenu,
 } from "./CharacterActionEditor";
 
 const actions: BlueprintMontageAction[] = Array.from(
@@ -42,5 +43,19 @@ describe("montageActionWindow", () => {
     expect(
       matchingMontageActions(actions, "group_2 action_12"),
     ).toEqual([actions[11]]);
+  });
+});
+
+describe("scrollTopForRevealedMenu", () => {
+  it("keeps a fully visible menu in place", () => {
+    expect(scrollTopForRevealedMenu(40, 240, 490, 500)).toBe(40);
+  });
+
+  it("scrolls only by the menu overflow and preserves an eight pixel gap", () => {
+    expect(scrollTopForRevealedMenu(40, 240, 520, 500)).toBe(68);
+  });
+
+  it("clamps the adjustment to the available scroll range", () => {
+    expect(scrollTopForRevealedMenu(190, 200, 560, 500)).toBe(200);
   });
 });

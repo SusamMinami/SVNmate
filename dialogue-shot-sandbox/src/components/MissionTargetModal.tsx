@@ -2674,6 +2674,51 @@ export function MissionTargetModal({
                     </tr>
                   </thead>
                   <tbody>
+                    {backgroundPropPreview.willCreatePlayerSlot &&
+                      selectedDialogueNpcCount > 0 && (
+                        <tr>
+                          <td className="mission-target-select">
+                            <input
+                              type="checkbox"
+                              checked
+                              disabled
+                              readOnly
+                              aria-label="固定补建 0 号玩家"
+                            />
+                          </td>
+                          <td
+                            title="/Game/Seria/Characters/Eric/BP_Eric.BP_Eric_C"
+                          >
+                            <strong>玩家</strong>
+                            <small>BP_Eric</small>
+                          </td>
+                          <td>玩家 BP</td>
+                          <td>
+                            <code>0</code>
+                            <small>DialogModels：player</small>
+                          </td>
+                          <td>
+                            <code>
+                              {[
+                                backgroundPropPreview.rootTransform.location.x,
+                                backgroundPropPreview.rootTransform.location.y,
+                                backgroundPropPreview.rootTransform.location.z +
+                                  100,
+                              ]
+                                .map((value) => value.toFixed(1))
+                                .join(", ")}
+                            </code>
+                          </td>
+                          <td>
+                            <code>1.00, 1.00, 1.00</code>
+                          </td>
+                          <td title="自动补建固定 0 号玩家 BP_Eric">
+                            <span className="dialogue-model-status dialogue-model-status--pending">
+                              新增
+                            </span>
+                          </td>
+                        </tr>
+                      )}
                     {backgroundPropPreview.items.map((item) => {
                       const blocked = item.action === "blocked";
                       return (
