@@ -6,6 +6,8 @@ import {
   Music2,
   Pause,
   Play,
+  Search,
+  X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -38,6 +40,7 @@ interface AudioLibraryBrowserProps {
   dialogueRows: DialogueRow[];
   currentDialogueIds: string[];
   activeDialogueId: string;
+  configurationMode: boolean;
   appliedSoundEffects: DirectorSoundEffectRecommendation[];
   appliedMusic: MusicRecommendation[];
   playbackActive: boolean;
@@ -78,6 +81,7 @@ export function AudioLibraryBrowser({
   dialogueRows,
   currentDialogueIds,
   activeDialogueId,
+  configurationMode,
   appliedSoundEffects,
   appliedMusic,
   playbackActive,
@@ -90,6 +94,7 @@ export function AudioLibraryBrowser({
   const [category, setCategory] = useState<string | null>(null);
   const [targetDialogueId, setTargetDialogueId] =
     useState(activeDialogueId);
+  const [searchQuery, setSearchQuery] = useState("");
   const [playingKey, setPlayingKey] = useState<string | null>(null);
   const [preparingKey, setPreparingKey] = useState<string | null>(null);
   const [auditionedKeys, setAuditionedKeys] = useState<Set<string>>(
@@ -116,16 +121,46 @@ export function AudioLibraryBrowser({
   );
   const categories =
     library === "sound-effect" ? soundCategories : availableMusicCategories;
+  const searchTerms = searchQuery
+    .trim()
+    .toLocaleLowerCase()
+    .split(/\s+/)
+    .filter(Boolean);
+  const searchActive = configurationMode && searchTerms.length > 0;
+  const matchesSearch = (values: Array<string | number | null | undefined>) => {
+    const searchable = values
+      .filter((value) => value !== null && value !== undefined)
+      .join(" ")
+      .toLocaleLowerCase();
+    return searchTerms.every((term) => searchable.includes(term));
+  };
   const soundEffects =
-    library === "sound-effect" && category
-      ? soundEffectCatalog.entries.filter((entry) => entry.category === category)
+    library === "sound-effect" && (category || searchActive)
+      ? soundEffectCatalog.entries.filter(
+          (entry) =>
+            (!category || entry.category === category) &&
+            (!searchActive ||
+              matchesSearch([entry.assetName, entry.description])),
+        )
       : [];
   const music =
-    library === "music" && category
+    library === "music" && (category || searchActive)
       ? musicCatalog.entries.filter((entry) =>
-          category === UNCATEGORIZED_MUSIC
-            ? entry.tags.every((tag) => !tag.trim())
-            : entry.tags.some((tag) => tag.trim() === category),
+          (
+            !category ||
+            (category === UNCATEGORIZED_MUSIC
+              ? entry.tags.every((tag) => !tag.trim())
+              : entry.tags.some((tag) => tag.trim() === category))
+          ) &&
+          (!searchActive ||
+            matchesSearch([
+              entry.name,
+              entry.stateName,
+              entry.stateId,
+              ...entry.tags,
+              entry.notes,
+              entry.analysis?.summary,
+            ])),
         )
       : [];
   const dialogueById = useMemo(
@@ -133,6 +168,9 @@ export function AudioLibraryBrowser({
     [dialogueRows],
   );
   const dialogueScope = currentDialogueIds.join("|");
+  const resolvedTargetDialogueId = configurationMode
+    ? activeDialogueId
+    : targetDialogueId;
 
   useEffect(() => {
     setTargetDialogueId((current) => {
@@ -175,6 +213,7 @@ export function AudioLibraryBrowser({
     stopPlayback(true);
     setPlaybackError("");
     setCategory(null);
+    setSearchQuery("");
     setLibrary((current) => (current === nextLibrary ? null : nextLibrary));
   }
 
@@ -323,23 +362,55 @@ export function AudioLibraryBrowser({
 
         {library && (
           <>
-            <label className="audio-library-browser__target">
-              <span>应用到节点</span>
-              <select
-                aria-label="资料库资源应用节点"
-                value={targetDialogueId}
-                onChange={(event) => setTargetDialogueId(event.target.value)}
-              >
-                {currentDialogueIds.map((dialogueId) => (
-                  <option key={dialogueId} value={dialogueId}>
-                    {dialogueId}
-                    {dialogueById.get(dialogueId)?.content
-                      ? ` · ${dialogueById.get(dialogueId)!.content}`
-                      : ""}
-                  </option>
-                ))}
-              </select>
-            </label>
+            {configurationMode ? (
+              <div className="audio-library-browser__search" role="search">
+                <Search size={14} aria-hidden="true" />
+                <input
+                  type="search"
+                  aria-label={
+                    library === "sound-effect"
+                      ? "搜索音效资料库"
+                      : "搜索音乐资料库"
+                  }
+                  placeholder={
+                    library === "sound-effect"
+                      ? "搜索音效名称或描述"
+                      : "搜索音乐名称、状态或标签"
+                  }
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                />
+                <button
+                  className="icon-button audio-library-browser__search-clear"
+                  type="button"
+                  title="清除搜索"
+                  aria-label="清除资料库搜索"
+                  data-visible={Boolean(searchQuery)}
+                  disabled={!searchQuery}
+                  onClick={() => setSearchQuery("")}
+                >
+                  <X size={13} />
+                </button>
+              </div>
+            ) : (
+              <label className="audio-library-browser__target">
+                <span>应用到节点</span>
+                <select
+                  aria-label="资料库资源应用节点"
+                  value={targetDialogueId}
+                  onChange={(event) => setTargetDialogueId(event.target.value)}
+                >
+                  {currentDialogueIds.map((dialogueId) => (
+                    <option key={dialogueId} value={dialogueId}>
+                      {dialogueId}
+                      {dialogueById.get(dialogueId)?.content
+                        ? ` · ${dialogueById.get(dialogueId)!.content}`
+                        : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
           <div
             className="audio-library-browser__categories"
             role="group"
@@ -362,20 +433,24 @@ export function AudioLibraryBrowser({
         )}
       </div>
 
-      {library === "sound-effect" && category && (
+      {library === "sound-effect" && (category || searchActive) && (
         <div
           className="audio-library-browser__resources"
           role="list"
-          aria-label={`${SOUND_EFFECT_CATEGORY_LABELS[
-            category as keyof typeof SOUND_EFFECT_CATEGORY_LABELS
-          ]}音效`}
+          aria-label={
+            category
+              ? `${SOUND_EFFECT_CATEGORY_LABELS[
+                  category as keyof typeof SOUND_EFFECT_CATEGORY_LABELS
+                ]}音效`
+              : "音效搜索结果"
+          }
         >
           {soundEffects.map((entry) => {
             const key = `sound-effect:${entry.assetName}`;
             const preparing = preparingKey === key;
             const applied = appliedSoundEffects.some(
               (recommendation) =>
-                recommendation.dialogueId === targetDialogueId &&
+                recommendation.dialogueId === resolvedTargetDialogueId &&
                 recommendation.assetName === entry.assetName,
             );
             const auditioned = auditionedKeys.has(key);
@@ -398,20 +473,20 @@ export function AudioLibraryBrowser({
                       type="button"
                       aria-label={
                         applied
-                          ? `取消资料库音效 ${entry.assetName} 在节点 ${targetDialogueId} 的应用`
-                          : `应用资料库音效 ${entry.assetName} 到节点 ${targetDialogueId}`
+                          ? `取消资料库音效 ${entry.assetName} 在节点 ${resolvedTargetDialogueId} 的应用`
+                          : `应用资料库音效 ${entry.assetName} 到节点 ${resolvedTargetDialogueId}`
                       }
                       aria-pressed={applied}
-                      disabled={!targetDialogueId}
+                      disabled={!resolvedTargetDialogueId}
                       title={
-                        targetDialogueId
+                        resolvedTargetDialogueId
                           ? applied
-                            ? `从节点 ${targetDialogueId} 移除`
-                            : `应用到节点 ${targetDialogueId}`
+                            ? `从节点 ${resolvedTargetDialogueId} 移除`
+                            : `应用到节点 ${resolvedTargetDialogueId}`
                           : "当前分镜没有可用对话节点"
                       }
                       onClick={() =>
-                        onApplySoundEffect(entry, targetDialogueId)
+                        onApplySoundEffect(entry, resolvedTargetDialogueId)
                       }
                     >
                       <Check size={14} />
@@ -441,21 +516,34 @@ export function AudioLibraryBrowser({
               </div>
             );
           })}
+          {searchActive && soundEffects.length === 0 && (
+            <p
+              className="audio-library-browser__empty"
+              role="listitem"
+              aria-live="polite"
+            >
+              未找到匹配的音效
+            </p>
+          )}
         </div>
       )}
 
-      {library === "music" && category && (
+      {library === "music" && (category || searchActive) && (
         <div
           className="audio-library-browser__resources"
           role="list"
-          aria-label={`${category === UNCATEGORIZED_MUSIC ? "未分类" : category}音乐`}
+          aria-label={
+            category
+              ? `${category === UNCATEGORIZED_MUSIC ? "未分类" : category}音乐`
+              : "音乐搜索结果"
+          }
         >
           {music.map((entry) => {
             const key = `music:${entry.recordId}`;
             const preparing = preparingKey === key;
             const applied = appliedMusic.some(
               (recommendation) =>
-                recommendation.dialogueId === targetDialogueId &&
+                recommendation.dialogueId === resolvedTargetDialogueId &&
                 recommendation.recordId === entry.recordId,
             );
             const auditioned = auditionedKeys.has(key);
@@ -481,19 +569,21 @@ export function AudioLibraryBrowser({
                       type="button"
                       aria-label={
                         applied
-                          ? `取消资料库音乐 ${entry.name} 在节点 ${targetDialogueId} 的应用`
-                          : `应用资料库音乐 ${entry.name} 到节点 ${targetDialogueId}`
+                          ? `取消资料库音乐 ${entry.name} 在节点 ${resolvedTargetDialogueId} 的应用`
+                          : `应用资料库音乐 ${entry.name} 到节点 ${resolvedTargetDialogueId}`
                       }
                       aria-pressed={applied}
-                      disabled={!targetDialogueId}
+                      disabled={!resolvedTargetDialogueId}
                       title={
-                        targetDialogueId
+                        resolvedTargetDialogueId
                           ? applied
-                            ? `从节点 ${targetDialogueId} 移除`
-                            : `应用到节点 ${targetDialogueId}`
+                            ? `从节点 ${resolvedTargetDialogueId} 移除`
+                            : `应用到节点 ${resolvedTargetDialogueId}`
                           : "当前分镜没有可用对话节点"
                       }
-                      onClick={() => onApplyMusic(entry, targetDialogueId)}
+                      onClick={() =>
+                        onApplyMusic(entry, resolvedTargetDialogueId)
+                      }
                     >
                       <Check size={14} />
                     </button>
@@ -528,6 +618,15 @@ export function AudioLibraryBrowser({
               </div>
             );
           })}
+          {searchActive && music.length === 0 && (
+            <p
+              className="audio-library-browser__empty"
+              role="listitem"
+              aria-live="polite"
+            >
+              未找到匹配的音乐
+            </p>
+          )}
         </div>
       )}
 

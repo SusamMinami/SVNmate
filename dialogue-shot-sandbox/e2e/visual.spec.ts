@@ -529,6 +529,218 @@ test("loads dialogue content before explicitly starting the director", async ({
   expect(beatRequests).toBe(1);
 });
 
+test("discovers action roles from UE when the configuration window skips Formation", async ({
+  page,
+}) => {
+  let actionReadRequest: {
+    startId: string;
+    dialogueIds: string[];
+    models: Array<{
+      modelIndex: number;
+      blueprintClassPath: string;
+    }>;
+  } | null = null;
+  const actionWriteInspections: Array<Record<string, unknown>> = [];
+  const actionWriteExports: Array<Record<string, unknown>> = [];
+  await page.route("**/api/ue/npc-actions/read", async (route) => {
+    actionReadRequest = route.request().postDataJSON();
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          dialogueAssetPath: "/Game/Test/204800.204800",
+          catalogs: [
+            {
+              modelIndex: 0,
+              blueprintClassPath: "/Game/Test/BP_Player.BP_Player_C",
+              characterLabel: "玩家",
+              status: "loaded",
+              message: "已读取 1 个 Montage",
+              actions: [
+                {
+                  name: "AM_Talk",
+                  assetPath: "/Game/Test/Animation/AM_Talk",
+                },
+              ],
+            },
+            {
+              modelIndex: 1,
+              blueprintClassPath: "/Game/Test/BP_LinChe.BP_LinChe_C",
+              characterLabel: "林澈",
+              status: "loaded",
+              message: "已读取 1 个 Montage",
+              actions: [
+                {
+                  name: "AM_Idle1",
+                  assetPath: "/Game/Test/Animation/AM_Idle1",
+                },
+              ],
+            },
+          ],
+          tracks: [],
+        },
+      }),
+    });
+  });
+  await page.route("**/api/ue/storyboard/inspect", async (route) => {
+    const request = route.request().postDataJSON() as {
+      dialogueId: string;
+      startId: string;
+      characterActions: Array<{
+        dialogueId: string;
+        modelIndex: number;
+        characterLabel: string;
+        actions: Array<{
+          montageName: string;
+          delaySeconds: number;
+        }>;
+      }>;
+    };
+    actionWriteInspections.push(request);
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          reviewToken: "d".repeat(64),
+          dialogueId: request.dialogueId,
+          startId: request.startId,
+          dialogueAssetPath: "/Game/Test/204800.204800",
+          formationAssetPath: "/Game/Test/BP_204800.BP_204800",
+          cameraName: "",
+          shotCount: 0,
+          changedNodeCount: 0,
+          overwrittenNodeCount: 0,
+          clearedNodeCount: 0,
+          soundEffectCount: 0,
+          changedSoundEffectCount: 0,
+          replacedSoundEffectCount: 0,
+          invalidShotCount: 0,
+          globalBlockedReasons: [],
+          blockedReasons: [],
+          warnings: [],
+          shots: [],
+          nodes: [],
+          characterActions: request.characterActions.map((item, index) => ({
+            characterActionIndex: index,
+            dialogueId: item.dialogueId,
+            modelIndex: item.modelIndex,
+            characterLabel: item.characterLabel || `BP 槽 ${item.modelIndex}`,
+            existingActions: [],
+            desiredActions: item.actions,
+            preservedComplexActionCount: 0,
+            action: "add",
+          })),
+          characterActionBlockedReasons: [],
+          characterActionCount: request.characterActions.length,
+          changedCharacterActionCount: request.characterActions.length,
+          soundEffects: [],
+          music: [],
+          musicCount: 0,
+          changedMusicCount: 0,
+          replacedMusicCount: 0,
+        },
+      }),
+    });
+  });
+  await page.route("**/api/ue/storyboard/export", async (route) => {
+    const request = route.request().postDataJSON() as {
+      dialogueId: string;
+      startId: string;
+      characterActions: unknown[];
+      reviewToken: string;
+    };
+    actionWriteExports.push(request);
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          status: "exported",
+          dialogueId: request.dialogueId,
+          startId: request.startId,
+          dialogueAssetPath: "/Game/Test/204800.204800",
+          changedNodeCount: 0,
+          changedCharacterActionCount: request.characterActions.length,
+          changedSoundEffectCount: 0,
+          changedMusicCount: 0,
+          saved: true,
+        },
+      }),
+    });
+  });
+
+  await page.goto("/");
+  await page
+    .getByRole("button", { name: "加载对话与已有配置" })
+    .click();
+  await page.getByRole("button", { name: "进入配置小窗" }).click();
+  await expect(page.locator(".app-shell")).toHaveAttribute(
+    "data-configuration-mode",
+    "true",
+  );
+  await page.getByRole("tab", { name: "UE" }).click();
+
+  await expect(page.getByText("已读取 2 个 BP、2 个动作")).toBeVisible();
+  expect(actionReadRequest).toEqual({
+    startId: "204800",
+    dialogueIds: ["204801"],
+    models: [],
+  });
+  const addRole = page.getByRole("combobox", {
+    name: "节点 204801 添加角色",
+  });
+  await expect(addRole).toBeEnabled();
+  await expect(addRole).toContainText("0 玩家");
+  await expect(addRole).toContainText("1 林澈");
+  await expect(addRole).not.toContainText("没有可添加的角色");
+  await addRole.selectOption("1");
+  await page.getByRole("button", { name: "添加角色" }).click();
+  const linCheActions = page
+    .locator(".character-action-track")
+    .filter({ hasText: "林澈" });
+  const actionPicker = linCheActions
+    .locator(".character-action-row")
+    .getByRole("combobox");
+  await actionPicker.fill("Idle");
+  await linCheActions
+    .getByRole("option", { name: "AM_Idle1", exact: true })
+    .click();
+  await page.getByRole("button", { name: "写入节点动作" }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect.poll(() => actionWriteInspections.length).toBe(1);
+  await expect.poll(() => actionWriteExports.length).toBe(1);
+  expect(actionWriteInspections[0]).toMatchObject({
+    dialogueId: "2048",
+    startId: "204800",
+    shots: [],
+    characterActions: [
+      {
+        dialogueId: "204801",
+        modelIndex: 1,
+        actions: [{ montageName: "AM_Idle1", delaySeconds: 0 }],
+      },
+    ],
+  });
+  expect(actionWriteExports[0]).toMatchObject({
+    reviewToken: "d".repeat(64),
+  });
+  await expect(page.locator(".app-shell")).toHaveAttribute(
+    "data-configuration-mode",
+    "true",
+  );
+  await expect(page.locator(".inspector-footer--export")).toContainText(
+    "节点 204801 的动作已写入并保存",
+  );
+  await expect(
+    page.getByRole("button", { name: "写入节点动作" }),
+  ).toBeDisabled();
+});
+
 test("loads existing UE cameras without starting a director", async ({
   page,
 }, testInfo) => {
@@ -1258,6 +1470,8 @@ test("keeps configuration mode aligned with the selected UE node", async ({
   const cameraApplyRequests: Array<Record<string, unknown>> = [];
   const previewSchoolInspectRequests: Array<Record<string, unknown>> = [];
   const previewSchoolApplyRequests: Array<Record<string, unknown>> = [];
+  const nodeWriteInspectRequests: Array<Record<string, unknown>> = [];
+  const nodeWriteExportRequests: Array<Record<string, unknown>> = [];
   let cameraApplyResponseDelayMs = 0;
   let formationReadRequests = 0;
   let storyboardReadRequests = 0;
@@ -1443,6 +1657,105 @@ test("keeps configuration mode aligned with the selected UE node", async ({
       });
     },
   );
+  await page.route("**/api/ue/storyboard/inspect", async (route) => {
+    const request = route.request().postDataJSON() as {
+      dialogueId: string;
+      startId: string;
+      soundEffects: Array<{
+        dialogueId: string;
+        assetName: string;
+        delaySeconds: number;
+      }>;
+      music: Array<{
+        dialogueId: string;
+        stateId: number;
+        stateName: string;
+        musicName: string;
+      }>;
+      characterActions: unknown[];
+      shots: unknown[];
+    };
+    nodeWriteInspectRequests.push(request);
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          reviewToken: "c".repeat(64),
+          dialogueId: request.dialogueId,
+          startId: request.startId,
+          dialogueAssetPath: "/Game/Test/204800.204800",
+          formationAssetPath: "",
+          cameraName: "",
+          shotCount: 0,
+          changedNodeCount: 0,
+          overwrittenNodeCount: 0,
+          clearedNodeCount: 0,
+          soundEffectCount: request.soundEffects.length,
+          changedSoundEffectCount: request.soundEffects.length,
+          replacedSoundEffectCount: 0,
+          invalidShotCount: 0,
+          globalBlockedReasons: [],
+          blockedReasons: [],
+          warnings: [],
+          shots: [],
+          nodes: [],
+          characterActions: [],
+          characterActionBlockedReasons: [],
+          characterActionCount: 0,
+          changedCharacterActionCount: 0,
+          soundEffects: request.soundEffects.map((item, index) => ({
+            soundEffectIndex: index,
+            ...item,
+            resolvedAssetPath: `/Game/Audio/${item.assetName}.${item.assetName}`,
+            existingAssetPath: "",
+            existingDelaySeconds: 0,
+            action: "add",
+          })),
+          music: request.music.map((item, index) => ({
+            musicIndex: index,
+            ...item,
+            existingStateId: 0,
+            action: "add",
+          })),
+          musicCount: request.music.length,
+          changedMusicCount: request.music.length,
+          replacedMusicCount: 0,
+        },
+      }),
+    });
+  });
+  await page.route("**/api/ue/storyboard/export", async (route) => {
+    const request = route.request().postDataJSON() as {
+      dialogueId: string;
+      startId: string;
+      soundEffects: unknown[];
+      music: unknown[];
+      characterActions: unknown[];
+      shots: unknown[];
+      reviewToken: string;
+    };
+    nodeWriteExportRequests.push(request);
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          status: "exported",
+          dialogueId: request.dialogueId,
+          startId: request.startId,
+          dialogueAssetPath: "/Game/Test/204800.204800",
+          changedNodeCount: 0,
+          changedCharacterActionCount: request.characterActions.length,
+          changedSoundEffectCount: request.soundEffects.length,
+          changedMusicCount: request.music.length,
+          saved: true,
+        },
+      }),
+    });
+  });
   await page.exposeFunction(
     "__recordConfigurationWindowMode",
     (
@@ -1894,7 +2207,20 @@ test("keeps configuration mode aligned with the selected UE node", async ({
   });
   await expect(
     audioLibrary.getByRole("combobox", { name: "资料库资源应用节点" }),
-  ).toHaveValue("204803");
+  ).toHaveCount(0);
+  const librarySearch = audioLibrary.getByRole("searchbox", {
+    name: "搜索音效资料库",
+  });
+  await expect(librarySearch).toBeVisible();
+  await librarySearch.fill("不存在的音效");
+  await expect(audioLibrary.getByText("未找到匹配的音效")).toBeVisible();
+  await audioLibrary
+    .getByRole("button", { name: "清除资料库搜索" })
+    .click();
+  await expect(librarySearch).toHaveValue("");
+  await librarySearch.fill("金属敲击");
+  await expect(resourceList.getByRole("listitem")).toHaveCount(1);
+  await expect(resourceList).toContainText("A_SFX_Dialog_516301");
   const compactApplySoundEffect = resourceList.getByRole("button", {
     name: "应用资料库音效 A_SFX_Dialog_516301 到节点 204803",
   });
@@ -1906,44 +2232,56 @@ test("keeps configuration mode aligned with the selected UE node", async ({
     .click();
   await expect(compactApplySoundEffect).toBeVisible();
   await compactApplySoundEffect.click();
-  const appliedSoundEffectNode = page.getByRole("combobox", {
-    name: "音效 A_SFX_Dialog_516301 的对话节点",
-  });
-  await expect(appliedSoundEffectNode).toHaveValue("204803");
   await page
-    .getByRole("spinbutton", {
-      name: "音效 A_SFX_Dialog_516301 的延迟",
-    })
-    .fill("0.4");
+    .getByText("待写入音效建议", { exact: true })
+    .waitFor({ state: "detached" });
   await expect(
-    page.getByRole("button", { name: "导出节点音频" }),
+    page.getByRole("button", { name: "写入节点音频" }),
   ).toBeEnabled();
-  await page.getByRole("button", { name: "写入本镜音效" }).click();
-  await expect(appShell).toHaveAttribute(
-    "data-configuration-mode",
-    "false",
-  );
-  const nodeAudioDialog = page.getByRole("dialog", {
-    name: "导出当前节点音频",
-  });
-  await expect(nodeAudioDialog).toBeVisible();
   await expect(
-    nodeAudioDialog.getByRole("checkbox", {
-      name: "选择音效 A_SFX_Dialog_516301",
-    }),
-  ).toBeChecked();
-  await expect(nodeAudioDialog.getByText("镜头数据")).toHaveCount(0);
-  await nodeAudioDialog.getByRole("button", { name: "关闭" }).click();
-  await page.setViewportSize(fullViewportSize!);
-  await page.getByRole("button", { name: "进入配置小窗" }).click();
+    page.getByRole("button", { name: "写入本镜音效" }),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "写入节点音频" }).click();
   await expect(appShell).toHaveAttribute(
     "data-configuration-mode",
     "true",
   );
-  await page.setViewportSize({
-    width: Math.round(fullPanelBounds!.width),
-    height: Math.round(fullPanelBounds!.height + fullHeaderBounds!.height),
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect.poll(() => nodeWriteInspectRequests.length).toBe(1);
+  await expect.poll(() => nodeWriteExportRequests.length).toBe(1);
+  expect(nodeWriteInspectRequests[0]).toMatchObject({
+    dialogueId: "2048",
+    startId: "204800",
+    shots: [],
+    characterActions: [],
+    soundEffects: [
+      {
+        dialogueId: "204803",
+        assetName: "A_SFX_Dialog_516301",
+        delaySeconds: 0,
+      },
+    ],
+    music: [],
   });
+  expect(nodeWriteExportRequests[0]).toMatchObject({
+    reviewToken: "c".repeat(64),
+    soundEffects: [
+      {
+        dialogueId: "204803",
+        assetName: "A_SFX_Dialog_516301",
+      },
+    ],
+  });
+  await expect(appShell).toHaveAttribute(
+    "data-configuration-mode",
+    "true",
+  );
+  await expect(page.locator(".inspector-footer--export")).toContainText(
+    "节点 204803 的音频已写入并保存",
+  );
+  await expect(
+    page.getByRole("button", { name: "写入节点音频" }),
+  ).toBeDisabled();
   await expect(page.getByRole("tab", { name: "音频" })).toHaveAttribute(
     "aria-selected",
     "true",
@@ -2035,11 +2373,11 @@ test("keeps configuration mode aligned with the selected UE node", async ({
     "UE 当前选中了 2 个图节点",
   );
   await expect(
-    page.getByRole("button", { name: "导出节点音频" }),
+    page.getByRole("button", { name: "写入节点音频" }),
   ).toBeDisabled();
 
   await page.getByRole("button", { name: "返回完整窗口" }).click();
-  await expect.poll(() => requestedWindowModes.length).toBe(4);
+  await expect.poll(() => requestedWindowModes.length).toBe(2);
   expect(requestedWindowModes.at(-1)).toEqual({
     enabled: false,
     contentSize: undefined,
@@ -2454,6 +2792,9 @@ test("shows local content while TRAE works and applies the completed plan direct
   await audioLibrary
     .getByRole("button", { name: /音效资料库/ })
     .click();
+  await expect(
+    audioLibrary.getByRole("combobox", { name: "资料库资源应用节点" }),
+  ).toBeVisible();
   await expect(
     audioLibrary.getByRole("group", { name: "音效分类" }),
   ).toBeVisible();
@@ -5904,7 +6245,7 @@ test("offers the detected Blueprint formation before designing shots", async ({
     .getByRole("option", { name: "AM_Wave", exact: true })
     .click();
   await expect(
-    page.getByRole("button", { name: "导出节点动作" }),
+    page.getByRole("button", { name: "写入节点动作" }),
   ).toBeEnabled();
   const hiddenNodeFullViewport = page.viewportSize();
   expect(hiddenNodeFullViewport).not.toBeNull();
@@ -5924,34 +6265,20 @@ test("offers the detected Blueprint formation before designing shots", async ({
     "UE NODE 735001",
     { timeout: 10_000 },
   );
-  const nodeActionExportButton = page.getByRole("button", {
-    name: "导出节点动作",
+  const nodeActionWriteButton = page.getByRole("button", {
+    name: "写入节点动作",
   });
-  await expect(nodeActionExportButton).toBeEnabled();
-  await nodeActionExportButton.click();
-  await expect(page.locator(".app-shell")).toHaveAttribute(
-    "data-configuration-mode",
-    "false",
-  );
-  const nodeActionDialog = page.getByRole("dialog", {
-    name: "导出当前节点动作",
-  });
-  await expect(nodeActionDialog).toBeVisible();
-  await expect(nodeActionDialog.getByText("商会安保")).toBeVisible();
-  await expect(nodeActionDialog).toContainText("735001");
-  await expect(nodeActionDialog.getByText("镜头数据")).toHaveCount(0);
-  await nodeActionDialog.getByRole("button", { name: "关闭" }).click();
-  await page.getByRole("button", { name: "进入配置小窗" }).click();
+  await expect(nodeActionWriteButton).toBeEnabled();
   await expect(page.locator(".app-shell")).toHaveAttribute(
     "data-configuration-mode",
     "true",
   );
   await page.getByRole("tab", { name: "音频" }).click();
   await expect(page.locator(".music-recommendation-list")).toHaveCount(0);
-  const nodeAudioExportButton = page.getByRole("button", {
-    name: "导出节点音频",
+  const nodeAudioWriteButton = page.getByRole("button", {
+    name: "写入节点音频",
   });
-  await expect(nodeAudioExportButton).toBeDisabled();
+  await expect(nodeAudioWriteButton).toBeDisabled();
   await page.getByRole("button", { name: "返回完整窗口" }).click();
   await expect(page.locator(".app-shell")).toHaveAttribute(
     "data-configuration-mode",

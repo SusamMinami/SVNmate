@@ -755,6 +755,7 @@ interface ShotInspectorProps {
   canExport: boolean;
   exportBusy: boolean;
   exportError: string;
+  exportResult: string;
   exportButtonLabel: string;
   exportUnavailableReason: string;
   backgroundGenerationActive: boolean;
@@ -837,6 +838,7 @@ function ShotInspector({
   canExport,
   exportBusy,
   exportError,
+  exportResult,
   exportButtonLabel,
   exportUnavailableReason,
   backgroundGenerationActive,
@@ -912,6 +914,10 @@ function ShotInspector({
   const nodeScopeReady = configurationMode
     ? configurationSelectionReady
     : Boolean(activeDialogueId);
+  const showNodeWriteResult =
+    Boolean(exportResult) &&
+    ((tab === "audio" && scopedAudioCount === 0) ||
+      (tab === "ue" && scopedActionCount === 0));
   const slotLabelsBySlot = new Map(
     sequence.participants.map((participant) => [
       participant.slot,
@@ -1640,26 +1646,29 @@ function ShotInspector({
               loading={configurationMode && configurationNodeReading}
               musicCatalog={musicCatalog}
             />
-            <SoundEffectRecommendations
-              recommendations={soundEffects}
-              dialogueRows={sequence.rows}
-              currentDialogueIds={editableDialogueIds}
-              busy={exportBusy}
-              playbackActive={
-                audioPreview?.owner === "sound-effect-recommendations"
-              }
-              onPlaybackStart={(label) =>
-                setAudioPreview({
-                  owner: "sound-effect-recommendations",
-                  label,
-                })
-              }
-              onPlaybackStop={() =>
-                releaseAudioPreview("sound-effect-recommendations")
-              }
-              onWrite={onExportSoundEffects}
-              onChange={onChangeSoundEffect}
-            />
+            {!configurationMode && (
+              <SoundEffectRecommendations
+                recommendations={soundEffects}
+                dialogueRows={sequence.rows}
+                currentDialogueIds={editableDialogueIds}
+                busy={exportBusy}
+                showWriteAction={!nodeScopedTools}
+                playbackActive={
+                  audioPreview?.owner === "sound-effect-recommendations"
+                }
+                onPlaybackStart={(label) =>
+                  setAudioPreview({
+                    owner: "sound-effect-recommendations",
+                    label,
+                  })
+                }
+                onPlaybackStop={() =>
+                  releaseAudioPreview("sound-effect-recommendations")
+                }
+                onWrite={onExportSoundEffects}
+                onChange={onChangeSoundEffect}
+              />
+            )}
             <MusicRecommendations
               recommendations={
                 configurationMode && !configurationNodeConfiguration
@@ -1687,6 +1696,7 @@ function ShotInspector({
               dialogueRows={sequence.rows}
               currentDialogueIds={editableDialogueIds}
               activeDialogueId={activeDialogueId}
+              configurationMode={configurationMode}
               appliedSoundEffects={soundEffects}
               appliedMusic={musicRecommendations}
               playbackActive={audioPreview?.owner === "audio-library"}
@@ -1707,6 +1717,8 @@ function ShotInspector({
           <div>
             {exportError || !nodeScopeReady ? (
               <AlertTriangle size={15} />
+            ) : showNodeWriteResult ? (
+              <Check size={15} />
             ) : tab === "audio" ? (
               <AudioLines size={15} />
             ) : tab === "ue" ? (
@@ -1720,13 +1732,15 @@ function ShotInspector({
                   ? configurationMode
                     ? configurationSelectionMessage
                     : "未选择对白节点"
+                  : showNodeWriteResult
+                    ? exportResult
                   : tab === "audio"
                     ? scopedAudioCount > 0
-                      ? `${scopedAudioCount} 项当前节点音频待导出`
+                       ? `${scopedAudioCount} 项当前节点音频待写入`
                       : "当前节点未选择音效或音乐"
                     : tab === "ue"
                       ? scopedActionCount > 0
-                        ? `${scopedActionCount} 组当前节点动作待导出`
+                         ? `${scopedActionCount} 组当前节点动作待写入`
                         : "当前节点未添加动作"
                       : configurationMode
                         ? "镜头配置由上方操作直接写入并保存"
@@ -1738,9 +1752,9 @@ function ShotInspector({
             type="button"
             title={
               tab === "audio"
-                ? "预检并导出当前节点音效与音乐"
+                ? "直接写入当前节点音效与音乐"
                 : tab === "ue"
-                  ? "预检并导出当前节点角色动作"
+                  ? "直接写入当前节点角色动作"
                   : configurationMode
                     ? "使用上方镜头快捷操作直接写入"
                     : "当前尚未生成镜头"
@@ -1764,11 +1778,11 @@ function ShotInspector({
               <Upload size={16} />
             )}
             {exportBusy
-              ? "正在检查 UE"
+              ? "正在写入 UE"
               : tab === "audio"
-                ? "导出节点音频"
+                ? "写入节点音频"
                 : tab === "ue"
-                  ? "导出节点动作"
+                  ? "写入节点动作"
                   : configurationMode
                     ? "镜头直接写入"
                     : "尚无镜头"}
@@ -2380,6 +2394,21 @@ export default function App() {
     musicOverridesByDialogueId,
     sequence.rows,
   ]);
+  const commitExportedNodeAudio = useCallback((dialogueIds: string[]) => {
+    const exportedDialogueIds = new Set(dialogueIds);
+    setSoundEffects((current) =>
+      current.filter(
+        (item) => !exportedDialogueIds.has(item.dialogueId),
+      ),
+    );
+    setMusicOverridesByDialogueId((current) => {
+      const next = new Map(current);
+      for (const dialogueId of exportedDialogueIds) {
+        next.set(dialogueId, null);
+      }
+      return next;
+    });
+  }, []);
   const {
     preview: storyboardExportPreview,
     request: storyboardExportRequest,
@@ -2399,6 +2428,7 @@ export default function App() {
     previewAll: previewAllStoryboardExport,
     refresh: refreshStoryboardExportPreview,
     confirm: confirmStoryboardExport,
+    writeCurrentNode: writeStoryboardCurrentNode,
     close: closeStoryboardExport,
   } = useStoryboardExport({
     sequence,
@@ -2408,7 +2438,17 @@ export default function App() {
     musicRecommendations,
     activeShot,
     onCharacterActionsExported: characterActionEditor.commitExported,
+    onNodeAudioExported: commitExportedNodeAudio,
   });
+  useEffect(() => {
+    if (configurationMode) {
+      closeStoryboardExport();
+    }
+  }, [
+    closeStoryboardExport,
+    configurationMode,
+    selectedUeDialogueNodeId,
+  ]);
   const activeDialogueId =
     configurationMode &&
     configurationSelectionReady &&
@@ -4357,7 +4397,16 @@ export default function App() {
     }
     const dialogueScope = [dialogueNodeId];
     if (configurationMode) {
-      await changeConfigurationMode(false);
+      setConfigurationCameraActivity("write");
+      try {
+        const written = await writeStoryboardCurrentNode(kind, dialogueScope);
+        if (written) {
+          reloadCurrentNodeConfiguration();
+        }
+      } finally {
+        setConfigurationCameraActivity("idle");
+      }
+      return;
     }
     if (kind === "audio") {
       await previewCurrentNodeAudio(dialogueScope);
@@ -5829,6 +5878,7 @@ export default function App() {
                   configurationModeBusy
                 }
                 exportError={storyboardExportError}
+                exportResult={storyboardExportResult}
                 exportButtonLabel={storyboardExportButtonLabel}
                 exportUnavailableReason={
                   configurationMode && !configurationSelectionReady

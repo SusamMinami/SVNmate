@@ -30,6 +30,7 @@ interface UseStoryboardExportOptions {
   onCharacterActionsExported?: (
     items: NonNullable<StoryboardExportRequest["characterActions"]>,
   ) => void;
+  onNodeAudioExported?: (dialogueIds: string[]) => void;
 }
 
 export interface StoryboardExportAvailability {
@@ -183,6 +184,7 @@ export function useStoryboardExport({
   musicRecommendations,
   activeShot,
   onCharacterActionsExported,
+  onNodeAudioExported,
 }: UseStoryboardExportOptions) {
   const [preview, setPreview] =
     useState<DialogueStoryboardExportPreview | null>(null);
@@ -581,6 +583,101 @@ export function useStoryboardExport({
     [onCharacterActionsExported, preview, request],
   );
 
+  const writeCurrentNode = useCallback(async (
+    kind: "audio" | "actions",
+    dialogueScope: readonly string[],
+  ): Promise<boolean> => {
+    setBusy(true);
+    setBusyLabel("正在核对并写入");
+    setError("");
+    setResult("");
+    setPreview(null);
+    setRequest(null);
+    try {
+      const activeDialogueIds = new Set(dialogueScope);
+      const currentCharacterActions =
+        kind === "actions"
+          ? characterActions.filter((track) =>
+              activeDialogueIds.has(track.dialogueId),
+            )
+          : [];
+      const currentSoundEffects =
+        kind === "audio"
+          ? soundEffects.filter((recommendation) =>
+              activeDialogueIds.has(recommendation.dialogueId),
+            )
+          : [];
+      const currentMusic =
+        kind === "audio"
+          ? musicRecommendations.filter((recommendation) =>
+              activeDialogueIds.has(recommendation.dialogueId),
+            )
+          : [];
+      if (
+        kind === "audio" &&
+        currentSoundEffects.length === 0 &&
+        currentMusic.length === 0
+      ) {
+        throw new Error("当前节点没有可写入的音频配置");
+      }
+      if (kind === "actions" && currentCharacterActions.length === 0) {
+        throw new Error("当前节点没有可写入的动作配置");
+      }
+      const nextRequest = buildRequest(
+        [],
+        currentCharacterActions,
+        currentSoundEffects,
+        currentMusic,
+      );
+      setMode(kind === "audio" ? "node-audio" : "node-actions");
+      const inspectedPreview =
+        await inspectDialogueStoryboardExport(nextRequest);
+      if (inspectedPreview.blockedReasons.length > 0) {
+        throw new Error(inspectedPreview.blockedReasons.join("；"));
+      }
+      const exportResult = await exportDialogueStoryboard(
+        nextRequest,
+        inspectedPreview.reviewToken,
+      );
+      const dialogueIds = Array.from(
+        new Set([
+          ...currentCharacterActions.map((item) => item.dialogueId),
+          ...currentSoundEffects.map((item) => item.dialogueId),
+          ...currentMusic.map((item) => item.dialogueId),
+        ]),
+      );
+      if (kind === "actions") {
+        onCharacterActionsExported?.(currentCharacterActions);
+      } else {
+        onNodeAudioExported?.(dialogueIds);
+      }
+      const nodeLabel = dialogueIds.join("、") || dialogueScope.join("、");
+      setResult(
+        exportResult.status === "unchanged"
+          ? `节点 ${nodeLabel} 已是目标配置`
+          : `节点 ${nodeLabel} 的${kind === "audio" ? "音频" : "动作"}已写入并保存`,
+      );
+      return true;
+    } catch (exportError) {
+      setError(
+        exportError instanceof Error
+          ? exportError.message
+          : `当前节点${kind === "audio" ? "音频" : "动作"}写入失败`,
+      );
+      return false;
+    } finally {
+      setBusy(false);
+      setBusyLabel("");
+    }
+  }, [
+    buildRequest,
+    characterActions,
+    musicRecommendations,
+    onCharacterActionsExported,
+    onNodeAudioExported,
+    soundEffects,
+  ]);
+
   const close = useCallback(() => {
     setPreview(null);
     setRequest(null);
@@ -609,6 +706,7 @@ export function useStoryboardExport({
     previewAll,
     refresh,
     confirm,
+    writeCurrentNode,
     close,
   };
 }

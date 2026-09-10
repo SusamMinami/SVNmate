@@ -18,6 +18,7 @@ interface SoundEffectRecommendationsProps {
   dialogueRows: DialogueRow[];
   currentDialogueIds: string[];
   busy: boolean;
+  showWriteAction?: boolean;
   playbackActive: boolean;
   onPlaybackStart: (label: string) => void;
   onPlaybackStop: () => void;
@@ -63,6 +64,7 @@ export function SoundEffectRecommendations({
   dialogueRows,
   currentDialogueIds,
   busy,
+  showWriteAction = true,
   playbackActive,
   onPlaybackStart,
   onPlaybackStop,
@@ -228,7 +230,7 @@ export function SoundEffectRecommendations({
       <div className="section-label sound-effect-analysis__header">
         <span>待写入音效建议</span>
         <small>{currentRecommendations.length} 项</small>
-        {currentRecommendations.length > 0 && (
+        {showWriteAction && currentRecommendations.length > 0 && (
           <button
             className="button button--primary"
             type="button"

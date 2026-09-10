@@ -168,22 +168,6 @@ export function useCharacterActionEditor({
   const load = useCallback(async (discardDrafts: boolean) => {
     const requestRun = ++requestRunRef.current;
     loadedSignatureRef.current = readSignature;
-    if (models.length === 0) {
-      setCatalogs([]);
-      setUeTracks([]);
-      setDialogueAssetPath("");
-      setError("");
-      const localActionCount = localTracks.reduce(
-        (total, track) => total + track.actions.length,
-        0,
-      );
-      setStatus(
-        localActionCount > 0
-          ? `已从对话文件读取 ${localActionCount} 项动作；规则占位下现有动作只读`
-          : "当前方案没有可读取动作的 BP 模型槽",
-      );
-      return;
-    }
     setLoading(true);
     setError("");
     setStatus("正在读取 UE 角色动作...");
@@ -231,7 +215,6 @@ export function useCharacterActionEditor({
       }
     }
   }, [
-    localTracks,
     dialogueIds,
     models,
     sequence.startId,
