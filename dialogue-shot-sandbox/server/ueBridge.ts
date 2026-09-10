@@ -361,6 +361,7 @@ const DialogueCharacterActionReadRequestSchema = z.object({
       }),
     )
     .max(64),
+  includeCatalogs: z.boolean().optional().default(true),
 });
 
 const StoryboardExportRequestSchema = z.object({
@@ -482,7 +483,10 @@ const DialogueCameraQuickActionRequestSchema = z.object({
   dialogueId: z.string().regex(/^\d{4}$/),
   startId: z.string().regex(/^\d{4,}$/),
   dialogueNodeId: z.string().regex(/^\d+$/),
-  previousDialogueNodeId: z.string().regex(/^\d+$/).optional(),
+  previousDialogueNodeIds: z
+    .array(z.string().regex(/^\d+$/))
+    .max(500)
+    .optional(),
   blendCurveAssetName: z
     .string()
     .trim()
@@ -845,6 +849,20 @@ function playerBlueprintComponent(): MissionTargetBlueprintComponentPlan {
   };
 }
 
+function cameraBlueprintComponent(): MissionTargetBlueprintComponentPlan {
+  return {
+    componentName: "c1",
+    componentClass: CAMERA_COMPONENT_CLASS,
+    childActorClass: "",
+    targetId: null,
+    transform: {
+      location: { x: 0, y: 0, z: 99 },
+      rotation: { pitch: 0, yaw: -90, roll: 0 },
+      scale: { x: 1, y: 1, z: 1 },
+    },
+  };
+}
+
 export function buildMissionTargetBlueprintComponents(
   targets: MissionTargetPreviewTarget[],
   anchor = targets[0]?.transform.location,
@@ -872,17 +890,7 @@ export function buildMissionTargetBlueprintComponents(
       },
     });
   });
-  components.push({
-    componentName: "c1",
-    componentClass: CAMERA_COMPONENT_CLASS,
-    childActorClass: "",
-    targetId: null,
-    transform: {
-      location: { x: 0, y: 0, z: 99 },
-      rotation: { pitch: 0, yaw: -90, roll: 0 },
-      scale: { x: 1, y: 1, z: 1 },
-    },
-  });
+  components.push(cameraBlueprintComponent());
   return components;
 }
 
@@ -916,6 +924,16 @@ function isPlayerBlueprintComponent(
       normalizeObjectPath(component.componentClass) ===
         normalizeObjectPath(CHILD_ACTOR_COMPONENT_CLASS) &&
       isPlayerClassPath(component.childActorClass),
+  );
+}
+
+function isCameraBlueprintComponent(
+  component: BlueprintComponentInfo | null | undefined,
+): boolean {
+  return Boolean(
+    component &&
+      normalizeObjectPath(component.componentClass) ===
+        normalizeObjectPath(CAMERA_COMPONENT_CLASS),
   );
 }
 
@@ -2575,40 +2593,46 @@ export async function readDialogueCharacterActions(
         uniqueModelsByPath.set(normalizedPath, model);
       }
     }
-    const loadedCatalogs = await Promise.all(
-      Array.from(uniqueModelsByPath.values()).map((model) =>
-        readBlueprintMontageCatalog(
-          connection,
-          model.modelIndex,
-          model.blueprintClassPath,
-        ),
-      ),
-    );
+    const loadedCatalogs = request.includeCatalogs
+      ? await Promise.all(
+          Array.from(uniqueModelsByPath.values()).map((model) =>
+            readBlueprintMontageCatalog(
+              connection,
+              model.modelIndex,
+              model.blueprintClassPath,
+            ),
+          ),
+        )
+      : [];
     const catalogByPath = new Map<
       string,
       Omit<BlueprintMontageCatalog, "modelIndex">
     >();
-    for (const [normalizedPath, model] of uniqueModelsByPath) {
-      const loaded = loadedCatalogs.find(
-        (catalog) => catalog.modelIndex === model.modelIndex,
-      )!;
-      const { modelIndex: _modelIndex, ...sharedCatalog } = loaded;
-      catalogByPath.set(normalizedPath, sharedCatalog);
-    }
-    const catalogs = models.map((model) => {
-      const normalizedPath = model.blueprintClassPath.toLowerCase();
-      const catalog = catalogByPath.get(normalizedPath);
-      if (!catalog) {
-        throw new Error(`无法读取角色 BP 动作：${model.blueprintClassPath}`);
+    if (request.includeCatalogs) {
+      for (const [normalizedPath, model] of uniqueModelsByPath) {
+        const loaded = loadedCatalogs.find(
+          (catalog) => catalog.modelIndex === model.modelIndex,
+        )!;
+        const { modelIndex: _modelIndex, ...sharedCatalog } = loaded;
+        catalogByPath.set(normalizedPath, sharedCatalog);
       }
-      return {
-        modelIndex: model.modelIndex,
-        ...catalog,
-        characterLabel:
-          exportedDialogue.dialogueModels[model.modelIndex] ||
-          assetNameFromPath(model.blueprintClassPath),
-      };
-    });
+    }
+    const catalogs = request.includeCatalogs
+      ? models.map((model) => {
+          const normalizedPath = model.blueprintClassPath.toLowerCase();
+          const catalog = catalogByPath.get(normalizedPath);
+          if (!catalog) {
+            throw new Error(`无法读取角色 BP 动作：${model.blueprintClassPath}`);
+          }
+          return {
+            modelIndex: model.modelIndex,
+            ...catalog,
+            characterLabel:
+              exportedDialogue.dialogueModels[model.modelIndex] ||
+              assetNameFromPath(model.blueprintClassPath),
+          };
+        })
+      : [];
     const requestedModelIndexes = new Set(
       models.map((model) => model.modelIndex),
     );
@@ -3815,16 +3839,17 @@ async function prepareDialogueCameraQuickAction(
   if (
     !request.startId.startsWith(request.dialogueId) ||
     !request.dialogueNodeId.startsWith(request.dialogueId) ||
-    (request.previousDialogueNodeId &&
-      !request.previousDialogueNodeId.startsWith(request.dialogueId))
+    request.previousDialogueNodeIds?.some(
+      (dialogueNodeId) => !dialogueNodeId.startsWith(request.dialogueId),
+    )
   ) {
     throw new Error("镜头快捷操作中的节点不属于当前四位数对话 ID");
   }
   if (
     request.mode === "copy_previous" &&
-    !request.previousDialogueNodeId
+    !request.previousDialogueNodeIds?.length
   ) {
-    throw new Error("当前节点没有可用的上一对话节点");
+    throw new Error("当前节点之前没有可查找的对话节点");
   }
   const dialogueAssets = await findDialogueAssetPath(
     connection,
@@ -3853,8 +3878,8 @@ async function prepareDialogueCameraQuickAction(
   const requestedNodeIds = [
     request.dialogueNodeId,
     ...(request.mode === "copy_previous" &&
-    request.previousDialogueNodeId
-      ? [request.previousDialogueNodeId]
+    request.previousDialogueNodeIds
+      ? request.previousDialogueNodeIds
       : []),
   ];
   const nodes = await readStoryboardDialogueNodes(
@@ -3865,15 +3890,18 @@ async function prepareDialogueCameraQuickAction(
     { readCamera: true, readCharacterActions: false },
   );
   const currentNode = nodes[0];
-  const sourceNode =
-    request.mode === "copy_previous" ? nodes[1] : null;
-  if (
-    sourceNode &&
-    !sourceNode.existingCameraPosition.trim() &&
-    sourceNode.existingMoveCameras.length === 0
-  ) {
+  const sourceNode = request.mode === "copy_previous"
+    ? nodes
+        .slice(1)
+        .find(
+          (node) =>
+            Boolean(node.existingCameraPosition.trim()) ||
+            node.existingMoveCameras.length > 0,
+        ) ?? null
+    : null;
+  if (request.mode === "copy_previous" && !sourceNode) {
     throw new Error(
-      `上一节点 ${sourceNode.dialogueId} 没有相机数据，请改用“添加默认镜头”`,
+      "当前节点之前没有配置相机参数的节点，请改用“添加默认镜头”",
     );
   }
 
@@ -4132,7 +4160,11 @@ export async function applyDialogueCameraQuickAction(
       connection,
       request,
     );
-    if (!reviewToken && request.mode !== "school_cameras") {
+    if (
+      !reviewToken &&
+      request.mode !== "school_cameras" &&
+      request.mode !== "default"
+    ) {
       throw new Error("镜头快捷操作缺少审核令牌，请重新检查后再写入");
     }
     if (reviewToken && prepared.preview.reviewToken !== reviewToken) {
@@ -7867,16 +7899,31 @@ function parseLevelActors(
     ) {
       throw new Error(`${errorMessage}：第 ${index + 1} 项无效`);
     }
-    const actorClassPath = String(actor.class_path);
-    const childPreviewClassPath = String(
-      actor.child_preview_class_path ?? "",
-    );
-    const classPath =
-      childPreviewClassPath.startsWith("/Game/") &&
-      childPreviewClassPath.endsWith("_C")
-        ? childPreviewClassPath
-        : actorClassPath;
-    const sceneObjectNpc = classPath === childPreviewClassPath;
+    const actorClassPath = objectReferencePath(
+      unrealReferenceText(actor.class_path),
+    ).replaceAll("\\", "/");
+    const childPreviewReference = objectReferencePath(
+      unrealReferenceText(actor.child_preview_class_path ?? ""),
+    ).replaceAll("\\", "/");
+    const childPreviewClassPath = childPreviewReference.startsWith("/Game/")
+      ? childPreviewReference.endsWith("_C")
+        ? childPreviewReference
+        : blueprintClassPath(blueprintAssetPath(childPreviewReference))
+      : "";
+    const parentClassPath = objectReferencePath(
+      unrealReferenceText(actor.parent_class_path ?? ""),
+    ).replaceAll("\\", "/");
+    const sceneObjectWrapper =
+      assetNameFromPath(actorClassPath).replace(/_C$/i, "").toLowerCase() ===
+        "bp_npc_preview" ||
+      parentClassPath.toLowerCase() ===
+        "/script/seriagrapheditor.npcdefaultactor";
+    const sceneObjectNpc = sceneObjectWrapper && Boolean(childPreviewClassPath);
+    const unresolvedSceneObjectNpc =
+      sceneObjectWrapper && !childPreviewClassPath;
+    const classPath = sceneObjectNpc
+      ? childPreviewClassPath
+      : actorClassPath;
     const label =
       sceneObjectNpc && actor.child_preview_label
         ? String(actor.child_preview_label)
@@ -7902,10 +7949,13 @@ function parseLevelActors(
       actorRef: String(actor.actor_ref),
       label,
       classPath,
-      ...(actor.parent_class_path
-        ? { parentClassPath: String(actor.parent_class_path) }
+      ...(parentClassPath
+        ? { parentClassPath }
         : {}),
       ...(sceneObjectNpc ? { sceneObjectNpc: true } : {}),
+      ...(unresolvedSceneObjectNpc
+        ? { unresolvedSceneObjectNpc: true }
+        : {}),
       assetKind,
       assetPath: blueprintActor
         ? blueprintAssetPath(classPath)
@@ -7936,7 +7986,7 @@ function parseLevelActors(
 
 const LEVEL_ACTOR_JSON_FIELDS =
   "{'actor_ref': a.get_path_name(), 'label': a.get_actor_label(), 'class_path': a.get_class().get_path_name(), 'parent_class_path': (type(a).static_class().get_path_name() if hasattr(type(a), 'static_class') else ''), " +
-  "'child_preview_class_path': (getattr(a, 'child_preview_class', None).get_path_name() if getattr(a, 'child_preview_class', None) else ''), " +
+  "'child_preview_class_path': (getattr(a, 'child_preview_class', None).get_path_name() if getattr(a, 'child_preview_class', None) else (a.get_child_preview_actor().get_class().get_path_name() if hasattr(a, 'get_child_preview_actor') and a.get_child_preview_actor() else '')), " +
   "'child_preview_label': (a.get_child_preview_actor().get_actor_label() if hasattr(a, 'get_child_preview_actor') and a.get_child_preview_actor() else ''), " +
   "'skeletal_mesh_path': (a.get_component_by_class(unreal.SkeletalMeshComponent).get_editor_property('skeletal_mesh').get_path_name() if a.get_component_by_class(unreal.SkeletalMeshComponent) and a.get_component_by_class(unreal.SkeletalMeshComponent).get_editor_property('skeletal_mesh') else ''), " +
   "'static_mesh_path': (a.get_component_by_class(unreal.StaticMeshComponent).get_editor_property('static_mesh').get_path_name() if a.get_component_by_class(unreal.StaticMeshComponent) and a.get_component_by_class(unreal.StaticMeshComponent).get_editor_property('static_mesh') else ''), " +
@@ -8346,7 +8396,11 @@ async function prepareBackgroundPropImport(
         importMode === "dialogue_npc"
           ? `新增对话角色槽 ${componentName}`
           : "新增背景组件";
-      if (
+      if (actor.unresolvedSceneObjectNpc) {
+        action = "blocked";
+        message =
+          "无法读取 SceneObject NPC 的真实 Child Preview Class，请确认预览子 Actor 已生成后重新读取";
+      } else if (
         normalizeObjectPath(actor.classPath) ===
         normalizeObjectPath(blueprint.blueprintClassPath)
       ) {
@@ -8420,6 +8474,7 @@ async function prepareBackgroundPropImport(
     }));
   let dialogueContext: DialogueRegistrationContext | null = null;
   let willCreatePlayerSlot = false;
+  let willCreateCameraSlot = false;
   const dialogueNpcItems = preparedItems.filter(
     (item) => item.preview.importMode === "dialogue_npc",
   );
@@ -8428,6 +8483,10 @@ async function prepareBackgroundPropImport(
       (component) => component.variableName === "0",
     );
     willCreatePlayerSlot = numericComponents.length === 0;
+    const cameraSlot = blueprint.components.find(
+      (component) => component.variableName.toLowerCase() === "c1",
+    );
+    willCreateCameraSlot = willCreatePlayerSlot && !cameraSlot;
     if (
       !willCreatePlayerSlot &&
       !isPlayerBlueprintComponent(playerSlot)
@@ -8436,6 +8495,15 @@ async function prepareBackgroundPropImport(
         playerSlot
           ? "对话 NPC 写入要求 BP 的 0 号位为玩家 BP_Eric"
           : "BP 已有数字角色槽但缺少 0 号玩家 BP_Eric，请先修复槽位结构",
+      );
+    }
+    if (
+      willCreatePlayerSlot &&
+      cameraSlot &&
+      !isCameraBlueprintComponent(cameraSlot)
+    ) {
+      blockedReasons.push(
+        "BP 的 c1 组件不是 CameraComponent，请先修复摄像机槽位",
       );
     }
     const baseDialogueContext = await readDialogueRegistrationContext(
@@ -8495,6 +8563,7 @@ async function prepareBackgroundPropImport(
   for (const item of preparedItems) {
     if (
       item.preview.importMode === "dialogue_npc" ||
+      item.preview.action === "blocked" ||
       !item.preview.componentName
     ) {
       continue;
@@ -8517,6 +8586,7 @@ async function prepareBackgroundPropImport(
     mapAssetPath,
     rootTransform,
     willCreatePlayerSlot,
+    willCreateCameraSlot,
     items: preparedItems.map((item) => item.preview),
     blockedReasons,
   };
@@ -8621,6 +8691,9 @@ export async function applyBackgroundPropImport(
     const createPlayerSlot =
       selectedDialogueNpcItems.length > 0 &&
       prepared.preview.willCreatePlayerSlot;
+    const createCameraSlot =
+      selectedDialogueNpcItems.length > 0 &&
+      prepared.preview.willCreateCameraSlot;
     if (selectedDialogueNpcItems.length > 0) {
       if (!prepared.dialogueContext) {
         throw new Error("无法读取对话 NPC 对应的对话注册信息");
@@ -8661,7 +8734,11 @@ export async function applyBackgroundPropImport(
       };
     }
     let actualComponents = prepared.blueprint.components;
-    if (changedItems.length > 0 || createPlayerSlot) {
+    if (
+      changedItems.length > 0 ||
+      createPlayerSlot ||
+      createCameraSlot
+    ) {
       mutationStarted = true;
       if (createPlayerSlot) {
         await addBlueprintComponent(
@@ -8709,6 +8786,13 @@ export async function applyBackgroundPropImport(
           true,
         );
       }
+      if (createCameraSlot) {
+        await addBlueprintComponent(
+          connection,
+          prepared.resolved.blueprint,
+          cameraBlueprintComponent(),
+        );
+      }
       const compileResult = await connection.invoke("bp.compile_blueprint", {
         Bp: prepared.resolved.blueprint,
       });
@@ -8733,6 +8817,21 @@ export async function applyBackgroundPropImport(
           )
         ) {
           throw new Error("自动补建的 0 号玩家 BP_Eric 回读结果不一致");
+        }
+      }
+      if (createCameraSlot) {
+        const expectedCamera = cameraBlueprintComponent();
+        const actualCamera = actualComponents.find(
+          (component) => component.variableName.toLowerCase() === "c1",
+        );
+        if (
+          !isCameraBlueprintComponent(actualCamera) ||
+          blueprintTransformsDiffer(
+            actualCamera!.transform,
+            expectedCamera.transform,
+          )
+        ) {
+          throw new Error("自动补建的 c1 摄像机组件回读结果不一致");
         }
       }
       for (const item of changedItems) {
@@ -8795,6 +8894,7 @@ export async function applyBackgroundPropImport(
     }
     const changed =
       createPlayerSlot ||
+      createCameraSlot ||
       changedItems.length > 0 ||
       dialogueRegistration?.status === "registered";
     return {
@@ -8805,6 +8905,7 @@ export async function applyBackgroundPropImport(
         ...changedItems
           .filter((item) => item.preview.action === "create")
           .map((item) => item.preview.componentName),
+        ...(createCameraSlot ? ["c1"] : []),
       ],
       updatedComponentNames: changedItems
         .filter((item) => item.preview.action === "update")

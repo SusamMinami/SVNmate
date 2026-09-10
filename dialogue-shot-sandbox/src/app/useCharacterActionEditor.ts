@@ -70,6 +70,21 @@ function trackKey(dialogueId: string, modelIndex: number): string {
   return `${dialogueId}:${modelIndex}`;
 }
 
+function catalogStatus(catalogs: BlueprintMontageCatalog[]): string {
+  const loadedCatalogs = catalogs.filter(
+    (catalog) => catalog.status === "loaded",
+  );
+  const unavailableCatalogs = catalogs.length - loadedCatalogs.length;
+  return `已读取 ${loadedCatalogs.length} 个 BP、${loadedCatalogs.reduce(
+    (total, catalog) => total + catalog.actions.length,
+    0,
+  )} 个动作${
+    unavailableCatalogs > 0
+      ? `；${unavailableCatalogs} 个 BP 不可用`
+      : ""
+  }`;
+}
+
 export function useCharacterActionEditor({
   sequence,
   dialogueIds,
@@ -84,6 +99,20 @@ export function useCharacterActionEditor({
   const actionIdRef = useRef(0);
   const requestRunRef = useRef(0);
   const loadedSignatureRef = useRef("");
+  const catalogCacheRef = useRef<{
+    signature: string;
+    dialogueAssetPath: string;
+    catalogs: BlueprintMontageCatalog[];
+  } | null>(null);
+  const trackCacheRef = useRef(
+    new Map<
+      string,
+      {
+        dialogueAssetPath: string;
+        tracks: DialogueCharacterActionTrack[];
+      }
+    >(),
+  );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
@@ -125,14 +154,21 @@ export function useCharacterActionEditor({
       }),
     [models, sequence.rows, sequence.startId],
   );
-  const readSignature = useMemo(
+  const catalogSignature = useMemo(
     () =>
       JSON.stringify({
         startId: sequence.startId,
-        dialogueIds,
         models,
       }),
-    [dialogueIds, models, sequence.startId],
+    [models, sequence.startId],
+  );
+  const readSignature = useMemo(
+    () =>
+      JSON.stringify({
+        catalogSignature,
+        dialogueIds,
+      }),
+    [catalogSignature, dialogueIds],
   );
   const tracks = useMemo(
     () => tracksBySignature.get(draftSignature) ?? [],
@@ -165,42 +201,60 @@ export function useCharacterActionEditor({
     [],
   );
 
-  const load = useCallback(async (discardDrafts: boolean) => {
+  const load = useCallback(async (
+    discardDrafts: boolean,
+    refreshCatalogs = false,
+  ) => {
     const requestRun = ++requestRunRef.current;
     loadedSignatureRef.current = readSignature;
     setLoading(true);
     setError("");
-    setStatus("正在读取 UE 角色动作...");
+    const cachedCatalog =
+      catalogCacheRef.current?.signature === catalogSignature
+        ? catalogCacheRef.current
+        : null;
+    const includeCatalogs = refreshCatalogs || !cachedCatalog;
+    setStatus(
+      includeCatalogs
+        ? "正在读取 UE 角色动作..."
+        : "正在读取当前节点动作...",
+    );
     try {
       const snapshot = await readDialogueCharacterActions({
         startId: sequence.startId,
         dialogueIds,
-        models,
+        models: includeCatalogs
+          ? models
+          : cachedCatalog.catalogs.map((catalog) => ({
+              modelIndex: catalog.modelIndex,
+              blueprintClassPath: catalog.blueprintClassPath,
+            })),
+        includeCatalogs,
       });
       if (requestRun !== requestRunRef.current) {
         return;
       }
+      const nextCatalogs = includeCatalogs
+        ? snapshot.catalogs
+        : cachedCatalog.catalogs;
+      if (includeCatalogs) {
+        catalogCacheRef.current = {
+          signature: catalogSignature,
+          dialogueAssetPath: snapshot.dialogueAssetPath,
+          catalogs: snapshot.catalogs,
+        };
+      }
+      trackCacheRef.current.set(readSignature, {
+        dialogueAssetPath: snapshot.dialogueAssetPath,
+        tracks: snapshot.tracks,
+      });
       setDialogueAssetPath(snapshot.dialogueAssetPath);
-      setCatalogs(snapshot.catalogs);
+      setCatalogs(nextCatalogs);
       setUeTracks(snapshot.tracks);
       if (discardDrafts) {
         setTracks([]);
       }
-      const loadedCatalogs = snapshot.catalogs.filter(
-        (catalog) => catalog.status === "loaded",
-      );
-      const unavailableCatalogs =
-        snapshot.catalogs.length - loadedCatalogs.length;
-      setStatus(
-        `已读取 ${loadedCatalogs.length} 个 BP、${loadedCatalogs.reduce(
-          (total, catalog) => total + catalog.actions.length,
-          0,
-        )} 个动作${
-          unavailableCatalogs > 0
-            ? `；${unavailableCatalogs} 个 BP 不可用`
-            : ""
-        }`,
-      );
+      setStatus(catalogStatus(nextCatalogs));
     } catch (loadError) {
       if (requestRun !== requestRunRef.current) {
         return;
@@ -209,6 +263,7 @@ export function useCharacterActionEditor({
         loadError instanceof Error ? loadError.message : "无法读取 UE 角色动作",
       );
       setStatus("");
+      loadedSignatureRef.current = "";
     } finally {
       if (requestRun === requestRunRef.current) {
         setLoading(false);
@@ -219,19 +274,46 @@ export function useCharacterActionEditor({
     models,
     sequence.startId,
     setTracks,
+    catalogSignature,
     readSignature,
   ]);
 
   useEffect(() => {
     requestRunRef.current += 1;
     loadedSignatureRef.current = "";
+    catalogCacheRef.current = null;
+    trackCacheRef.current.clear();
     setLoading(false);
     setError("");
     setStatus("");
     setDialogueAssetPath("");
     setCatalogs([]);
     setUeTracks([]);
-  }, [readSignature]);
+  }, [catalogSignature]);
+
+  useEffect(() => {
+    requestRunRef.current += 1;
+    loadedSignatureRef.current = "";
+    setLoading(false);
+    setError("");
+    const cachedCatalog =
+      catalogCacheRef.current?.signature === catalogSignature
+        ? catalogCacheRef.current
+        : null;
+    const cachedTracks = trackCacheRef.current.get(readSignature);
+    if (cachedCatalog) {
+      setDialogueAssetPath(cachedCatalog.dialogueAssetPath);
+      setCatalogs(cachedCatalog.catalogs);
+      setStatus(catalogStatus(cachedCatalog.catalogs));
+    }
+    if (cachedTracks) {
+      loadedSignatureRef.current = readSignature;
+      setDialogueAssetPath(cachedTracks.dialogueAssetPath);
+      setUeTracks(cachedTracks.tracks);
+    } else {
+      setUeTracks([]);
+    }
+  }, [catalogSignature, readSignature]);
 
   useEffect(() => {
     if (!enabled || loadedSignatureRef.current === readSignature) {
@@ -246,6 +328,8 @@ export function useCharacterActionEditor({
     }
     requestRunRef.current += 1;
     loadedSignatureRef.current = "";
+    catalogCacheRef.current = null;
+    trackCacheRef.current.clear();
     setLoading(false);
     setError("");
     setStatus("");
@@ -254,7 +338,12 @@ export function useCharacterActionEditor({
     setUeTracks([]);
   }, [enabled, releaseWhenDisabled]);
 
-  const refresh = useCallback(() => load(true), [load]);
+  const refresh = useCallback(() => {
+    catalogCacheRef.current = null;
+    trackCacheRef.current.clear();
+    loadedSignatureRef.current = "";
+    return load(true, true);
+  }, [load]);
 
   const catalogByModelIndex = useMemo(
     () => new Map(catalogs.map((catalog) => [catalog.modelIndex, catalog])),
@@ -466,10 +555,14 @@ export function useCharacterActionEditor({
             });
           }
         }
+        trackCacheRef.current.set(readSignature, {
+          dialogueAssetPath,
+          tracks: next,
+        });
         return next;
       });
     },
-    [setTracks],
+    [dialogueAssetPath, readSignature, setTracks],
   );
 
   return {

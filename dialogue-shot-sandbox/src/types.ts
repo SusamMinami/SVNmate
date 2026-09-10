@@ -669,7 +669,7 @@ export interface DialogueCameraQuickActionRequest {
   dialogueId: string;
   startId: string;
   dialogueNodeId: string;
-  previousDialogueNodeId?: string;
+  previousDialogueNodeIds?: string[];
   blendCurveAssetName?: string;
   mode: DialogueCameraQuickActionMode;
 }
@@ -807,6 +807,7 @@ export interface SelectedLevelActor {
   classPath: string;
   parentClassPath?: string;
   sceneObjectNpc?: boolean;
+  unresolvedSceneObjectNpc?: boolean;
   assetKind?:
     | "blueprint_actor"
     | "skeletal_mesh"
@@ -852,6 +853,7 @@ export interface BackgroundPropImportPreview {
   mapAssetPath: string;
   rootTransform: MissionTargetTransform;
   willCreatePlayerSlot: boolean;
+  willCreateCameraSlot: boolean;
   items: BackgroundPropPreviewItem[];
   blockedReasons: string[];
 }

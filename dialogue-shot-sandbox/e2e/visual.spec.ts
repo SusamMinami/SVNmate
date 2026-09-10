@@ -583,6 +583,7 @@ test("discovers action roles from UE when the configuration window skips Formati
   let actionReadRequest: {
     startId: string;
     dialogueIds: string[];
+    includeCatalogs: boolean;
     models: Array<{
       modelIndex: number;
       blueprintClassPath: string;
@@ -738,6 +739,7 @@ test("discovers action roles from UE when the configuration window skips Formati
     startId: "204800",
     dialogueIds: ["204801"],
     models: [],
+    includeCatalogs: true,
   });
   const addRole = page.getByRole("combobox", {
     name: "节点 204801 添加角色",
@@ -1591,6 +1593,14 @@ test("keeps configuration mode aligned with the selected UE node", async ({
     const request = route.request().postDataJSON() as Record<string, unknown>;
     cameraInspectRequests.push(request);
     const copiesPrevious = request.mode === "copy_previous";
+    const previousDialogueNodeIds = Array.isArray(
+      request.previousDialogueNodeIds,
+    )
+      ? request.previousDialogueNodeIds.map(String)
+      : [];
+    const sourceDialogueNodeId = copiesPrevious
+      ? previousDialogueNodeIds.at(-1) ?? null
+      : null;
     const addsCurve = request.mode === "blend_curve";
     const addsSchoolCameras = request.mode === "school_cameras";
     await route.fulfill({
@@ -1605,17 +1615,15 @@ test("keeps configuration mode aligned with the selected UE node", async ({
           dialogueNodeId: request.dialogueNodeId,
           dialogueAssetPath: "/Game/Test/204800.204800",
           mode: request.mode,
-          sourceDialogueNodeId: copiesPrevious
-            ? request.previousDialogueNodeId
-            : null,
+          sourceDialogueNodeId,
           existingCameraPosition: "",
-          desiredCameraPosition: copiesPrevious ? "c2" : "c1",
+          desiredCameraPosition: "c1",
           existingMoveCount: 0,
           desiredMoveCount: 1,
           cameraMoveType: "EPush",
-          velocity: copiesPrevious ? 3 : 1,
+          velocity: 1,
           blendOutTime: 1,
-          fov: copiesPrevious ? 55 : 62,
+          fov: 62,
           existingBlendCameraType: "ECutShot",
           desiredBlendCameraType: addsCurve ? "EBlend" : "ECutShot",
           existingBlendCurve: "None",
@@ -2046,12 +2054,7 @@ test("keeps configuration mode aligned with the selected UE node", async ({
   await expect(cameraReview).toContainText(
     "EPush · 速度 1 · Blend Out 1 · FOV 62",
   );
-  expect(cameraInspectRequests[0]).toEqual({
-    dialogueId: "2048",
-    startId: "204800",
-    dialogueNodeId: "204801",
-    mode: "default",
-  });
+  expect(cameraInspectRequests).toHaveLength(0);
   cameraApplyResponseDelayMs = 600;
   const cameraApplyRequest = page.waitForRequest(
     "**/api/ue/dialogue/camera/apply",
@@ -2101,12 +2104,12 @@ test("keeps configuration mode aligned with the selected UE node", async ({
   expect(cameraApplyRequests[0]).toMatchObject({
     dialogueNodeId: "204801",
     mode: "default",
-    reviewToken: "a".repeat(64),
   });
+  expect(cameraApplyRequests[0]).not.toHaveProperty("reviewToken");
   await page.getByRole("button", { name: "添加镜头曲线" }).click();
   await expect(cameraReview).toContainText("EBlend");
   await expect(cameraReview).toContainText("trans_6015.trans_6015");
-  expect(cameraInspectRequests[1]).toMatchObject({
+  expect(cameraInspectRequests[0]).toMatchObject({
     dialogueNodeId: "204801",
     blendCurveAssetName: "trans_6015",
     mode: "blend_curve",
@@ -2140,11 +2143,11 @@ test("keeps configuration mode aligned with the selected UE node", async ({
     .getByRole("button", { name: "使用上一相机参数" })
     .click();
   await expect(page.getByLabel("节点镜头写入确认")).toContainText(
-    "节点 204802",
+    "节点 204801",
   );
-  expect(cameraInspectRequests[2]).toMatchObject({
+  expect(cameraInspectRequests[1]).toMatchObject({
     dialogueNodeId: "204803",
-    previousDialogueNodeId: "204802",
+    previousDialogueNodeIds: ["204802", "204801"],
     mode: "copy_previous",
   });
   await page.getByRole("button", { name: "取消" }).click();
@@ -5375,6 +5378,7 @@ test("offers the detected Blueprint formation before designing shots", async ({
   let formationRequests = 0;
   const characterActionReadRequests: Array<{
     dialogueIds: string[];
+    includeCatalogs: boolean;
     models: Array<{
       modelIndex: number;
       blueprintClassPath: string;
@@ -5593,6 +5597,7 @@ test("offers the detected Blueprint formation before designing shots", async ({
   await page.route("**/api/ue/npc-actions/read", async (route) => {
     const request = route.request().postDataJSON() as {
       dialogueIds: string[];
+      includeCatalogs: boolean;
       models: Array<{
         modelIndex: number;
         blueprintClassPath: string;
@@ -5607,11 +5612,14 @@ test("offers the detected Blueprint formation before designing shots", async ({
         data: {
           dialogueAssetPath:
             "/Game/Seria/Task/dialoggraph/Test/735000.735000",
-          catalogs: request.models.map((model) => ({
-            ...model,
-            status: "loaded",
-            message: "已读取 9 个 Montage",
-            actions: [
+          catalogs:
+            request.includeCatalogs === false
+              ? []
+              : request.models.map((model) => ({
+                  ...model,
+                  status: "loaded",
+                  message: "已读取 9 个 Montage",
+                  actions: [
               {
                 name: "AM_Idle1",
                 assetPath: `${model.blueprintClassPath}/Animation/AM_Idle1`,
@@ -5648,8 +5656,8 @@ test("offers the detected Blueprint formation before designing shots", async ({
                 name: "AM_LookAround",
                 assetPath: `${model.blueprintClassPath}/Animation/AM_LookAround`,
               },
-            ],
-          })),
+                  ],
+                })),
           tracks: [
             {
               dialogueId: "735001",
@@ -6308,6 +6316,8 @@ test("offers the detected Blueprint formation before designing shots", async ({
   await expect.poll(
     () => characterActionReadRequests.at(-1)?.dialogueIds,
   ).toEqual(["735015"]);
+  expect(characterActionReadRequests.at(-1)?.includeCatalogs).toBe(false);
+  expect(characterActionReadRequests.at(-1)?.models).toHaveLength(3);
   const hiddenNodeFullViewport = page.viewportSize();
   expect(hiddenNodeFullViewport).not.toBeNull();
   await page.setViewportSize({ width: 310, height: 900 });
@@ -6364,11 +6374,22 @@ test("offers the detected Blueprint formation before designing shots", async ({
       name: "移除 商会安保 的新增动作",
     })
     .click();
+  const actionReadCountBeforeCachedReturn =
+    characterActionReadRequests.length;
   selectedDialogueNodeId = "735001";
   await expect(page.locator(".inspector-header")).toContainText(
     "UE NODE 735001",
     { timeout: 10_000 },
   );
+  await page.waitForTimeout(1_500);
+  expect(characterActionReadRequests).toHaveLength(
+    actionReadCountBeforeCachedReturn,
+  );
+  expect(
+    characterActionReadRequests.filter(
+      (request) => request.includeCatalogs,
+    ),
+  ).toHaveLength(1);
   const nodeActionWriteButton = page.getByRole("button", {
     name: "写入节点动作",
   });
@@ -8524,6 +8545,7 @@ test("lists the automatic player slot when importing an NPC into an empty BP", a
               rotation: { pitch: 0, yaw: 0, roll: 0 },
             },
             willCreatePlayerSlot: true,
+            willCreateCameraSlot: true,
             items: [
               {
                 actorRef,
@@ -8569,7 +8591,7 @@ test("lists the automatic player slot when importing an NPC into an empty BP", a
             status: "updated",
             blueprintAssetPath:
               "/Game/Seria/Task/Mod/Test/BP_735200.BP_735200",
-            createdComponentNames: ["0", "1"],
+            createdComponentNames: ["0", "1", "c1"],
             updatedComponentNames: [],
             dialogueRegistration: {
               status: "registered",
@@ -8602,9 +8624,16 @@ test("lists the automatic player slot when importing an NPC into an empty BP", a
   await expect(playerRow).toContainText("新增");
   await expect(review.getByLabel("固定补建 0 号玩家")).toBeChecked();
   await expect(review.getByLabel("固定补建 0 号玩家")).toBeDisabled();
+  const cameraRow = review
+    .locator(".background-prop-table tbody tr")
+    .filter({ hasText: "CameraComponent" });
+  await expect(cameraRow).toContainText("c1");
+  await expect(cameraRow).toContainText("100.0, 200.0, 299.0");
+  await expect(review.getByLabel("固定补建 c1 摄像机")).toBeChecked();
+  await expect(review.getByLabel("固定补建 c1 摄像机")).toBeDisabled();
   await expect(
     review.locator(".background-prop-table tbody tr"),
-  ).toHaveCount(2);
+  ).toHaveCount(3);
   await expect(
     review.getByRole("button", { name: "写入 BP 与对话" }),
   ).toBeEnabled();
@@ -8624,7 +8653,7 @@ test("lists the automatic player slot when importing an NPC into an empty BP", a
     selectedActorRefs: [actorRef],
     reviewedActorRefs: [actorRef],
   });
-  await expect(workspace.getByText(/已写入 BP：新增 2 个/)).toBeVisible();
+  await expect(workspace.getByText(/已写入 BP：新增 3 个/)).toBeVisible();
 });
 
 test("offers bidirectional position sync for a registered Blueprint", async ({

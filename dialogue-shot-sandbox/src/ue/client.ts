@@ -407,6 +407,7 @@ export function readDialogueCharacterActions(request: {
     modelIndex: number;
     blueprintClassPath: string;
   }>;
+  includeCatalogs?: boolean;
 }): Promise<DialogueCharacterActionSnapshot> {
   return postUe("/api/ue/npc-actions/read", request);
 }

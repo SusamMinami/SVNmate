@@ -1239,7 +1239,7 @@ describe("background prop import", () => {
           "/Game/Seria/Editor/SeriaLevelGraphActor/BP_Npc_Preview.BP_Npc_Preview_C",
         parent_class_path: "/Script/SeriaGraphEditor.NpcDefaultActor",
         child_preview_class_path:
-          "/Game/Seria/NPC/N116_Finance_Male/BP_N116_Finance_Male.BP_N116_Finance_Male_C",
+          "BlueprintGeneratedClass'/Game/Seria/NPC/N116_Finance_Male/BP_N116_Finance_Male.BP_N116_Finance_Male_C'",
         child_preview_label: "BP_N116_Finance_Male",
         skeletal_mesh_path: "",
         static_mesh_path: "",
@@ -1258,6 +1258,7 @@ describe("background prop import", () => {
         classPath:
           "/Game/Seria/NPC/N116_Finance_Male/BP_N116_Finance_Male.BP_N116_Finance_Male_C",
         parentClassPath: "/Script/SeriaGraphEditor.NpcDefaultActor",
+        sceneObjectNpc: true,
         assetKind: "blueprint_actor",
         assetPath:
           "/Game/Seria/NPC/N116_Finance_Male/BP_N116_Finance_Male.BP_N116_Finance_Male",
@@ -1274,8 +1275,70 @@ describe("background prop import", () => {
       )?.args.Expression,
     );
     expect(expression).toContain("child_preview_class");
+    expect(expression).toContain(
+      "get_child_preview_actor().get_class().get_path_name()",
+    );
     expect(expression).toContain("type(a).static_class()");
     expect(expression).not.toContain("get_super_class");
+  });
+
+  it("preserves the real error when a SceneObject preview class cannot be resolved", async () => {
+    const connection = new BackgroundPropConnection();
+    connection.selectedPlacementActors = [
+      {
+        actor_ref: "PersistentLevel.SceneObject20",
+        label: "SceneObject20",
+        class_path:
+          "/Game/Seria/Editor/SeriaLevelGraphActor/BP_Npc_Preview.BP_Npc_Preview_C",
+        parent_class_path: "/Script/SeriaGraphEditor.NpcDefaultActor",
+        child_preview_class_path: "",
+        child_preview_label: "",
+        location: [140, 250, 300],
+        rotation: [0, 30, 0],
+        scale: [1, 1, 1],
+      },
+      {
+        actor_ref: "PersistentLevel.SceneObject21",
+        label: "SceneObject21",
+        class_path:
+          "/Game/Seria/Editor/SeriaLevelGraphActor/BP_Npc_Preview.BP_Npc_Preview_C",
+        parent_class_path: "/Script/SeriaGraphEditor.NpcDefaultActor",
+        child_preview_class_path: "",
+        child_preview_label: "",
+        location: [180, 290, 310],
+        rotation: [0, -30, 0],
+        scale: [1, 1, 1],
+      },
+    ];
+
+    const preview = await inspectBackgroundPropImport(
+      { blueprintName: "BP_735200" },
+      () => connection,
+    );
+
+    expect(preview.items).toEqual([
+      expect.objectContaining({
+        actorLabel: "SceneObject20",
+        componentName: "BP_Npc_Preview",
+        action: "blocked",
+        message: expect.stringContaining(
+          "无法读取 SceneObject NPC 的真实 Child Preview Class",
+        ),
+      }),
+      expect.objectContaining({
+        actorLabel: "SceneObject21",
+        componentName: "BP_Npc_Preview",
+        action: "blocked",
+        message: expect.stringContaining(
+          "无法读取 SceneObject NPC 的真实 Child Preview Class",
+        ),
+      }),
+    ]);
+    expect(
+      preview.items.some((item) =>
+        item.message.includes("多个同名资产"),
+      ),
+    ).toBe(false);
   });
 
   it("auto-initializes an empty PositionMode BP before importing a direct SeriaNPC", async () => {
@@ -1308,6 +1371,7 @@ describe("background prop import", () => {
 
     expect(preview).toMatchObject({
       willCreatePlayerSlot: true,
+      willCreateCameraSlot: true,
       blockedReasons: [],
       items: [
         {
@@ -1332,7 +1396,7 @@ describe("background prop import", () => {
 
     expect(result).toMatchObject({
       status: "updated",
-      createdComponentNames: ["0", "1"],
+      createdComponentNames: ["0", "1", "c1"],
       dialogueRegistration: {
         dialogueModels: ["player", "Added"],
         unresolvedIndexes: [],
@@ -1350,6 +1414,12 @@ describe("background prop import", () => {
       location: { X: 40, Y: 50, Z: 100 },
       rotation: { Pitch: 0, Yaw: 30, Roll: 0 },
     });
+    expect(connection.backgroundComponents.get("c1")).toMatchObject({
+      componentClass: "/Script/Engine.CameraComponent",
+      assetPath: "",
+      location: { X: 0, Y: 0, Z: 99 },
+      rotation: { Pitch: 0, Yaw: -90, Roll: 0 },
+    });
     expect(connection.dialogueModels).toEqual(["player", "Added"]);
 
     const repeatedPreview = await inspectBackgroundPropImport(
@@ -1358,6 +1428,7 @@ describe("background prop import", () => {
     );
     expect(repeatedPreview).toMatchObject({
       willCreatePlayerSlot: false,
+      willCreateCameraSlot: false,
       blockedReasons: [],
       items: [{ componentName: "1", action: "unchanged" }],
     });

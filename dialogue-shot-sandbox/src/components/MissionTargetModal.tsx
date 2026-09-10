@@ -2795,6 +2795,49 @@ export function MissionTargetModal({
                         </tr>
                       );
                     })}
+                    {backgroundPropPreview.willCreateCameraSlot &&
+                      selectedDialogueNpcCount > 0 && (
+                        <tr>
+                          <td className="mission-target-select">
+                            <input
+                              type="checkbox"
+                              checked
+                              disabled
+                              readOnly
+                              aria-label="固定补建 c1 摄像机"
+                            />
+                          </td>
+                          <td title="/Script/Engine.CameraComponent">
+                            <strong>摄像机</strong>
+                            <small>CameraComponent</small>
+                          </td>
+                          <td>摄像机</td>
+                          <td>
+                            <code>c1</code>
+                            <small>Formation Camera</small>
+                          </td>
+                          <td>
+                            <code>
+                              {[
+                                backgroundPropPreview.rootTransform.location.x,
+                                backgroundPropPreview.rootTransform.location.y,
+                                backgroundPropPreview.rootTransform.location.z +
+                                  99,
+                              ]
+                                .map((value) => value.toFixed(1))
+                                .join(", ")}
+                            </code>
+                          </td>
+                          <td>
+                            <code>1.00, 1.00, 1.00</code>
+                          </td>
+                          <td title="自动补建固定 c1 摄像机组件">
+                            <span className="dialogue-model-status dialogue-model-status--pending">
+                              新增
+                            </span>
+                          </td>
+                        </tr>
+                      )}
                   </tbody>
                 </table>
               </div>

@@ -25,7 +25,7 @@ interface NodeCameraQuickActionsProps {
   dialogueId: string;
   startId: string;
   dialogueNodeId: string;
-  previousDialogueNodeId?: string;
+  previousDialogueNodeIds?: string[];
   existingConfiguration?: ExistingDialogueNodeConfiguration;
   configurationLoading?: boolean;
   onApplied?: () => void;
@@ -93,11 +93,47 @@ function schoolCameraConfirmationPreview(
   };
 }
 
+function defaultCameraConfirmationPreview(
+  request: DialogueCameraQuickActionRequest,
+  configuration: ExistingDialogueNodeConfiguration,
+): DialogueCameraQuickActionPreview {
+  const existingKeys = Array.from(new Set(configuration.schoolCameraKeys));
+  return {
+    reviewToken: "",
+    dialogueId: request.dialogueId,
+    startId: request.startId,
+    dialogueNodeId: request.dialogueNodeId,
+    dialogueAssetPath: "",
+    mode: "default",
+    sourceDialogueNodeId: null,
+    existingCameraPosition: configuration.cameraPosition,
+    desiredCameraPosition: "c1",
+    existingMoveCount: configuration.moveCameraCount,
+    desiredMoveCount: 1,
+    cameraMoveType: "EPush",
+    velocity: 1,
+    blendOutTime: 1,
+    fov: 62,
+    existingBlendCameraType: configuration.blendCameraType,
+    desiredBlendCameraType: configuration.blendCameraType,
+    existingBlendCurve: configuration.blendCurve,
+    desiredBlendCurve: configuration.blendCurve,
+    blendDuration: configuration.blendDuration,
+    existingSchoolCameraKeys: existingKeys,
+    addedSchoolCameraKeys: [],
+    desiredSchoolCameraKeys: existingKeys,
+    existingSchoolCameraCount: configuration.schoolCameraCount,
+    desiredSchoolCameraCount: configuration.schoolCameraCount,
+    changed: true,
+    blockedReasons: [],
+  };
+}
+
 export function NodeCameraQuickActions({
   dialogueId,
   startId,
   dialogueNodeId,
-  previousDialogueNodeId,
+  previousDialogueNodeIds = [],
   existingConfiguration,
   configurationLoading = false,
   onApplied,
@@ -187,8 +223,8 @@ export function NodeCameraQuickActions({
       dialogueId,
       startId,
       dialogueNodeId,
-      ...(mode === "copy_previous" && previousDialogueNodeId
-        ? { previousDialogueNodeId }
+      ...(mode === "copy_previous" && previousDialogueNodeIds.length > 0
+        ? { previousDialogueNodeIds }
         : {}),
       ...(mode === "blend_curve"
         ? { blendCurveAssetName: blendCurveAssetName.trim() }
@@ -201,6 +237,13 @@ export function NodeCameraQuickActions({
       setRequest(nextRequest);
       setPreview(
         schoolCameraConfirmationPreview(nextRequest, existingConfiguration),
+      );
+      return;
+    }
+    if (mode === "default" && existingConfiguration) {
+      setRequest(nextRequest);
+      setPreview(
+        defaultCameraConfirmationPreview(nextRequest, existingConfiguration),
       );
       return;
     }
@@ -293,11 +336,11 @@ export function NodeCameraQuickActions({
       <div className="node-camera-command-list">
         <button
           type="button"
-          disabled={!previousDialogueNodeId || busy !== null}
+          disabled={previousDialogueNodeIds.length === 0 || busy !== null}
           title={
-            previousDialogueNodeId
-              ? `复制节点 ${previousDialogueNodeId} 的 CameraPosition 与 MoveCameras`
-              : "当前节点没有上一对话节点"
+            previousDialogueNodeIds.length > 0
+              ? "向前查找最近一个已配置节点，复制其 CameraPosition 与 MoveCameras"
+              : "当前节点之前没有对话节点"
           }
           onClick={() => void inspect("copy_previous")}
         >
@@ -305,9 +348,9 @@ export function NodeCameraQuickActions({
           <span>
             <strong>使用上一相机参数</strong>
             <small>
-              {previousDialogueNodeId
-                ? `复制节点 ${previousDialogueNodeId} 的完整参数`
-                : "当前节点没有上一节点"}
+              {previousDialogueNodeIds.length > 0
+                ? "自动查找最近的已配置节点"
+                : "当前节点之前没有节点"}
             </small>
           </span>
           {busy === "inspect" &&
@@ -320,8 +363,14 @@ export function NodeCameraQuickActions({
         <button
           className={cameraConfigured ? "is-configured" : undefined}
           type="button"
-          disabled={busy !== null}
-          title="写入 c1、EPush、速度 1、Blend Out 1、FOV 62"
+          disabled={
+            busy !== null || configurationLoading || !existingConfiguration
+          }
+          title={
+            configurationLoading || !existingConfiguration
+              ? "等待读取当前节点镜头配置"
+              : "确认后写入 c1、EPush、速度 1、Blend Out 1、FOV 62"
+          }
           onClick={() => void inspect("default")}
         >
           <Camera size={16} />
@@ -329,11 +378,7 @@ export function NodeCameraQuickActions({
             <strong>添加默认镜头</strong>
             <small>{cameraSummary}</small>
           </span>
-          {busy === "inspect" && request?.mode === "default" ? (
-            <LoaderCircle className="spin" size={15} />
-          ) : (
-            <ChevronRight size={15} />
-          )}
+          <ChevronRight size={15} />
         </button>
         <button
           className={blendConfigured ? "is-configured" : undefined}

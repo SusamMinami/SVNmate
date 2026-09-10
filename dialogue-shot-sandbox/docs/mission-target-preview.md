@@ -143,10 +143,11 @@ ID（例如 `7352`）时，会自动展开为 `BP_735200` 后搜索，并且只�
    UE 选择，即可复用现有模型/NPC 匹配和目标物表写入流程。
 
 任务目标物中的“读取 UE 选择”还支持把未匹配的对话 NPC 直接写入已有
-PositionMode BP。`SceneObject` 包装 Actor 从 `child_preview_class` 读取真实
-NPC 类；直接 `SeriaNPC` Actor 根据原生父类识别。两者都复用现有数字槽分配、
-BP 编译回读和 `DialogModels` 注册管线。同一 NPC 模型的多个关卡实例获得不同
-数字槽，允许重复使用同一个模型名；只有真正的背景组件继续按资产名阻止重名。
+PositionMode BP。`SceneObject` 包装 Actor 优先从 `child_preview_class` 读取
+真实 NPC 类，缺失时回退到已生成 Child Preview Actor 的 Class；直接
+`SeriaNPC` Actor 根据原生父类识别。两者都复用现有数字槽分配、BP 编译回读和
+`DialogModels` 注册管线。同一 NPC 模型的多个关卡实例获得不同数字槽，允许重复
+使用同一个模型名；只有真正的背景组件继续按资产名阻止重名。
 
 写入前会从 `BP_<对话ID>` 提取对话 ID，在
 `/Game/Seria/Task/dialoggraph` 中搜索同名 DialogGraph，并通过 UE 导出的
@@ -313,14 +314,14 @@ BP 输入框右侧的检查按钮会读取 BP、对应数字槽位、同名 Dial
 UE 选择审核会区分 SceneObject NPC 与普通背景资源，不新增目标物：
 
 - Blueprint Actor 写为 `ChildActorComponent` 和对应 Generated Class。
-- 关卡图生成的 `SceneObject` NPC 从 `child_preview_class` 解析实际 NPC
-  Generated Class，使用包装 Actor 的世界 Transform。匹配任务目标物时沿用
-  原流程；未匹配时从 BP 当前最大数字槽后按 UE 选择顺序追加，并通过
-  `DialogNPCTable` 同步 `DialogModels`。
+- 关卡图生成的 `SceneObject` NPC 从 `child_preview_class` 或已生成 Child
+  Preview Actor 解析实际 NPC Generated Class，使用包装 Actor 的世界 Transform。
+  匹配任务目标物时沿用原流程；未匹配时从 BP 当前最大数字槽后按 UE 选择顺序
+  追加，并通过 `DialogNPCTable` 同步 `DialogModels`。
 - 空 `PositionModeBase` BP 首次写入对话 NPC 时，会在同一审核事务中自动补建
-  `0 = BP_Eric`，NPC 从 `1` 开始编号。0 号玩家作为固定勾选项与 NPC 一起显示
-  在审核列表中。若 BP 已有其他数字槽却缺少 `0`，或现有 `0` 不是玩家，则停止
-  写入并要求先修复布局。
+  `0 = BP_Eric` 和 `c1 = CameraComponent`，NPC 从 `1` 开始编号。玩家与摄像机
+  作为固定勾选项和 NPC 一起显示。若 BP 已有其他数字槽却缺少 `0`，或保留名
+  组件类型错误，则停止写入并要求先修复布局。
 - SkeletalMeshActor 写为 `SkeletalMeshComponent` 和实际 Skeletal Mesh。
 - StaticMeshActor 写为 `StaticMeshComponent` 和实际 Static Mesh。
 - Cascade Emitter 写为 `ParticleSystemComponent` 和实际 Particle System。

@@ -140,8 +140,9 @@ Formation BP 只提供坐标中心和角色站位，不是读取镜头的前置�
 
 配置小窗的镜头页只处理 UE 当前唯一选中的对话节点，提供四种独立操作：
 
-1. “使用上一相机参数”完整复制上一对话节点的 `CameraPosition` 和
-   `MoveCameras`；上一节点没有任何相机数据时阻止执行。
+1. “使用上一相机参数”从当前节点向前查找最近一个具有相机数据的对话节点，
+   完整复制其 `CameraPosition` 和 `MoveCameras`；中间没有相机数据的节点跳过，
+   全部候选均为空时才阻止执行。
 2. “添加默认镜头”写入 `CameraPosition=c1`，并创建一个
    `CameraMoveType=EPush` 的 `MoveCameras[0]`，其中
    `PushCameraArg.Velocity=1`、`PushCameraArg.BlendOutTime=1`、
@@ -154,9 +155,9 @@ Formation BP 只提供坐标中心和角色站位，不是读取镜头的前置�
    `SchoolMoveCamerasMap` 已有键值，并补齐 `ERing`、`ENino`、`EJodie`
    中尚未配置的角色。反射接口未返回枚举键时，从资产导出文本恢复键名。
 
-前三项快捷操作先读取并展示当前值与目标值，确认时重新预检审核令牌。“添加
-角色相机”直接依据已回读配置生成紧凑确认，不重复发起预检请求；提交后由服务端
-重新读取真实节点配置。所有操作都会复核 UE 当前仍选中同一节点，并按需写入
+“添加默认镜头”和“添加角色相机”直接依据已回读配置生成确认，不重复发起预检；
+提交后由服务端重新读取真实节点配置。“使用上一相机参数”和“添加镜头曲线”
+仍先读取真实来源或资产并生成审核令牌。所有操作都会复核 UE 当前仍选中同一节点，并按需写入
 `CommonDialogGraphProperties`、`MoveCameras`、`DialogBlendCameraData`
 或 `SchoolMoveCamerasMap`，逐项回读一致后只保存一次对话资产；用户已确认的
 资产现有修改随本次操作统一保存，任一步骤失败都恢复本轮涉及的原值。写入成功后

@@ -888,11 +888,14 @@ function ShotInspector({
         (row) => row.id === configurationDialogueNodeId,
       )
     : -1;
-  const previousConfigurationDialogueNodeId =
+  const previousConfigurationDialogueNodeIds =
     configurationDialogueRowIndex > 0 &&
     configurationDialogueRow?.rowNumber !== -1
-      ? sequence.rows[configurationDialogueRowIndex - 1].id
-      : undefined;
+      ? sequence.rows
+          .slice(0, configurationDialogueRowIndex)
+          .reverse()
+          .map((row) => row.id)
+      : [];
   const editableDialogueIds = configurationMode
     ? configurationSelectionReady && configurationDialogueNodeId
       ? [configurationDialogueNodeId]
@@ -1143,8 +1146,8 @@ function ShotInspector({
                 dialogueNodeId={configurationDialogueNodeId}
                 existingConfiguration={configurationNodeConfiguration}
                 configurationLoading={configurationNodeReading}
-                previousDialogueNodeId={
-                  previousConfigurationDialogueNodeId
+                previousDialogueNodeIds={
+                  previousConfigurationDialogueNodeIds
                 }
                 onApplied={onReloadCurrentNodeConfiguration}
                 onActivityChange={onConfigurationActivityChange}
@@ -2116,10 +2119,13 @@ export default function App() {
         (row) => row.id === selectedUeDialogueNodeId,
       )
     : -1;
-  const previousSelectedUeDialogueNodeId =
+  const previousSelectedUeDialogueNodeIds =
     selectedUeDialogueRowIndex > 0
-      ? sequence.rows[selectedUeDialogueRowIndex - 1].id
-      : undefined;
+      ? sequence.rows
+          .slice(0, selectedUeDialogueRowIndex)
+          .reverse()
+          .map((row) => row.id)
+      : [];
   const selectedUeNodeConfiguration = selectedUeDialogueNodeId
     ? existingNodeConfigurations.find(
         (configuration) =>
@@ -2315,8 +2321,7 @@ export default function App() {
       (configurationMode
         ? configurationSelectionReady
         : sequence.rows.length > 0 && Boolean(selectedDialogueId)),
-    releaseWhenDisabled:
-      configurationMode || activeWorkspace !== "storyboard",
+    releaseWhenDisabled: activeWorkspace !== "storyboard",
   });
   const configurationDataActivity =
     configurationCameraActivity === "write"
@@ -5990,8 +5995,8 @@ export default function App() {
                     startId={sequence.startId}
                     dialogueNodeId={selectedUeDialogueNodeId}
                     configurationLoading={configurationNodeReading}
-                    previousDialogueNodeId={
-                      previousSelectedUeDialogueNodeId
+                    previousDialogueNodeIds={
+                      previousSelectedUeDialogueNodeIds
                     }
                     onApplied={reloadCurrentNodeConfiguration}
                     onActivityChange={setConfigurationCameraActivity}

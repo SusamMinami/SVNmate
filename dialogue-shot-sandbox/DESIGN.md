@@ -405,10 +405,11 @@ Excel 源表从 `<doc>\xlsdir` 推导。两个根目录分别显示就绪状态�
   镜头页不复用完整窗口的构图说明，也不设置独立已有配置区。CameraPosition、
   MoveCameras 与 FOV 归“添加默认镜头”，Blend 归“添加镜头曲线”，角色相机
   归“添加角色相机”；已有配置用绿色表达，角色相机只将已有角色名标绿。
-- “使用上一相机参数”复制上一对话节点的 `CameraPosition` 与完整
-  `MoveCameras`；“添加默认镜头”写入 `c1 / EPush / Velocity 1 /
-  BlendOutTime 1 / FOV 62`。两项操作都必须先显示当前值与目标值，再经用户
-  确认、回读和保存；脏资产、审核令牌失效或回读不一致时不得写入。
+- “使用上一相机参数”从当前节点向前查找最近一个已配置节点，复制其
+  `CameraPosition` 与完整 `MoveCameras`，中间空节点不阻断；“添加默认镜头”
+  写入 `c1 / EPush / Velocity 1 / BlendOutTime 1 / FOV 62`。默认镜头基于
+  已回读当前节点配置直接生成确认，提交时再由服务端复核并写入，不额外预检；
+  最近相机仍先读取真实来源并生成审核令牌。所有写入均需回读和保存。
 - “添加镜头曲线”默认使用 `trans_6015`，允许只编辑资产名，并写入
   `DialogBlendCameraData` 的 `EBlend` 与完整 CurveFloat 路径，Duration
   保留当前值。“添加角色相机”保留 `SchoolMoveCamerasMap` 已有键值，只将

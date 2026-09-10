@@ -609,6 +609,58 @@ describe("dialogue storyboard export", () => {
     });
   });
 
+  it("reads node actions without reloading cached BP Montage catalogs", async () => {
+    const connection = new FakeStoryboardExportConnection();
+    connection.behavioursByData.set("ActionData1", [
+      {
+        CharacterBehaviourItems: [
+          {
+            StartTime: 0.25,
+            MontageName: "AM_Wave",
+            CharacterBehaviourType: "ENone",
+          },
+        ],
+        bStop: false,
+      },
+    ]);
+
+    const result = await readDialogueCharacterActions(
+      {
+        startId: "735200",
+        dialogueIds: ["735201"],
+        models: [
+          {
+            modelIndex: 0,
+            blueprintClassPath: "/Game/Test/BP_Player.BP_Player_C",
+          },
+        ],
+        includeCatalogs: false,
+      },
+      () => connection,
+    );
+
+    expect(result.catalogs).toEqual([]);
+    expect(result.tracks).toEqual([
+      expect.objectContaining({
+        dialogueId: "735201",
+        modelIndex: 0,
+        actions: [
+          expect.objectContaining({
+            montageName: "AM_Wave",
+            delaySeconds: 0.25,
+          }),
+        ],
+      }),
+    ]);
+    expect(
+      connection.calls.some(
+        (call) =>
+          call.action === "reflect.read_object_property" &&
+          call.args.PropertyName === "Montages",
+      ),
+    ).toBe(false);
+  });
+
   it("discovers Formation character slots when the editor has only local dialogue data", async () => {
     const connection = new FakeStoryboardExportConnection();
 
@@ -1329,7 +1381,7 @@ describe("dialogue camera quick actions", () => {
       dialogueId: "7352",
       startId: "735200",
       dialogueNodeId: "735201",
-      previousDialogueNodeId: "735202",
+      previousDialogueNodeIds: ["735202"],
       mode: "copy_previous" as const,
     };
     const preview = await inspectDialogueCameraQuickAction(
@@ -1353,6 +1405,28 @@ describe("dialogue camera quick actions", () => {
     expect(connection.movesByData.get("ActionData1")).toEqual([
       { CameraMoveType: "EPush", FOV: 90 },
     ]);
+  });
+
+  it("copies the nearest earlier node that actually has camera data", async () => {
+    const connection = new FakeStoryboardExportConnection();
+    const preview = await inspectDialogueCameraQuickAction(
+      {
+        dialogueId: "7352",
+        startId: "735200",
+        dialogueNodeId: "735203",
+        previousDialogueNodeIds: ["735201", "735202"],
+        mode: "copy_previous",
+      },
+      () => connection,
+    );
+
+    expect(preview).toMatchObject({
+      dialogueNodeId: "735203",
+      sourceDialogueNodeId: "735202",
+      desiredCameraPosition: "c2",
+      cameraMoveType: "EPush",
+      fov: 90,
+    });
   });
 
   it("adds the default blend curve while preserving duration", async () => {
@@ -1501,7 +1575,7 @@ describe("dialogue camera quick actions", () => {
     });
   });
 
-  it("still requires a review token for non-role-camera shortcuts", async () => {
+  it("writes a default camera directly while still revalidating UE selection", async () => {
     const connection = new FakeStoryboardExportConnection();
     connection.selectedDialogueNodeId = "735201";
 
@@ -1515,8 +1589,12 @@ describe("dialogue camera quick actions", () => {
         },
         () => connection,
       ),
-    ).rejects.toThrow("缺少审核令牌");
-    expect(connection.commonWriteCount).toBe(0);
+    ).resolves.toMatchObject({
+      status: "updated",
+      dialogueNodeId: "735201",
+      saved: true,
+    });
+    expect(connection.commonWriteCount).toBeGreaterThan(0);
   });
 
   it("invalidates the write when UE selection changes after preview", async () => {
@@ -1550,12 +1628,12 @@ describe("dialogue camera quick actions", () => {
           dialogueId: "7352",
           startId: "735200",
           dialogueNodeId: "735202",
-          previousDialogueNodeId: "735201",
+          previousDialogueNodeIds: ["735201"],
           mode: "copy_previous",
         },
         () => emptyPrevious,
       ),
-    ).rejects.toThrow("没有相机数据");
+    ).rejects.toThrow("没有配置相机参数的节点");
 
     const failedSave = new FakeStoryboardExportConnection();
     const request = {
