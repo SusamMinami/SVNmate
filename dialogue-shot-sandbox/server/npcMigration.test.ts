@@ -407,13 +407,13 @@ describe("NPC migration server workflow", () => {
           {
             asset_path:
               "/Game/Seria/NPC/N28/Animation/AM_Impact.AM_Impact",
-            slot_name: "DefaultSlot",
+            slot_name: "IdleSlot",
             source_asset_name: "A_N28_Impact",
           },
           {
             asset_path:
               "/Game/Seria/NPC/N28/Animation/AM_Interact.AM_Interact",
-            slot_name: "DefaultSlot",
+            slot_name: "IdleSlot",
             source_asset_name: "A_N28_Interact",
           },
         ],
@@ -465,8 +465,10 @@ describe("NPC migration server workflow", () => {
     expect(scripts[1]).toContain("capsule_radius");
     expect(scripts[1]).toContain("assign_property_path");
     expect(scripts[1]).toContain("AnimMontageFactory");
+    expect(scripts[1]).toContain(
+      "make_npc_montage_by_anim_sequence",
+    );
     expect(scripts[1]).toContain("IdleSlot");
-    expect(scripts[1]).toContain("DefaultSlot");
     expect(scripts[1]).toContain("BlendSpaceFactory1D");
     expect(scripts[1]).toContain("duplicate_asset");
     expect(scripts[1]).toContain("ObjectIterator");

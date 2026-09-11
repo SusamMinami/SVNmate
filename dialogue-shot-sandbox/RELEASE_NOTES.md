@@ -34,9 +34,11 @@
   导入 Body 与 Face；独立面部补充仍用于只处理 Face 或调整曲线/Montage 选项。
 - Face 处理会保留既有 Montage 的 Slot，并可识别位于子目录中的同名 Montage，
   避免被原生辅助接口改回 `DefaultSlot`。
-- 设置新增多目录 NPC 动作库；读取 NPC 后可自动定位唯一动作目录并生成清单。
+- 设置新增多目录 NPC 动作库；读取 NPC 后自动选择匹配动作最完整、最新的目录并生成清单。
 - 除 Look、Walk、Lean、IdleStand 等状态机素材外，Body 动作会创建
-  `AM_<Action>` Montage；既有 Montage 继续复用原 Slot。
+  `AM_<Action>` Montage；转身使用 `TurnSlot`，其余新建项使用 `IdleSlot`。
+- 新建 Montage 优先调用 Seria 原生逐资产接口，并在保存后回读源动作和 Slot；
+  既有 Montage 继续复用原 Slot。
 - 清单新增最近修改时间、排序、批量选择和自动审核状态；处理子模块右上角只保留
   “返回模块选择”，减少误操作。
 

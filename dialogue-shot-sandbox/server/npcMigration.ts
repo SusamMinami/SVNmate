@@ -136,15 +136,30 @@ function pythonExpression(script: string): string {
   );
 }
 
+function readableUnrealError(
+  error: unknown,
+  fallback: string,
+): Error {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  const matches = Array.from(
+    message.matchAll(/(?:RuntimeError|Exception):\s*([^\r\n]+)/g),
+  );
+  return new Error(matches.at(-1)?.[1]?.trim() || message || fallback);
+}
+
 async function invokePythonJson(
   connection: UnrealInvoker,
   script: string,
   errorMessage: string,
 ): Promise<unknown> {
-  const value = await connection.invoke("script.eval_python_expression", {
-    Expression: pythonExpression(script),
-  }, { timeoutMs: 180_000 });
-  return parsePythonJson(value, errorMessage);
+  try {
+    const value = await connection.invoke("script.eval_python_expression", {
+      Expression: pythonExpression(script),
+    }, { timeoutMs: 180_000 });
+    return parsePythonJson(value, errorMessage);
+  } catch (error) {
+    throw readableUnrealError(error, errorMessage);
+  }
 }
 
 function assetPathsFromSearch(value: unknown): string[] {
@@ -223,6 +238,16 @@ def resolve_class(path):
         return loaded
     asset = unreal.load_asset(path)
     return asset.generated_class() if asset and hasattr(asset, 'generated_class') else None
+
+def seria_montage_creator():
+    helper = getattr(
+        unreal, 'SeriaAssetHelperBlueprintFunctionLibrary', None
+    )
+    creator = (
+        getattr(helper, 'make_npc_montage_by_anim_sequence', None)
+        if helper else None
+    )
+    return creator if callable(creator) else None
 
 def actor_components(actor):
     components = []
@@ -797,6 +822,7 @@ turn_curve = unreal.load_asset(${JSON.stringify(request.turnCurveAssetPath ?? ""
 estimate = capsule_estimate(mesh) if mesh else None
 montage_automation_available = False
 try:
+    native_montage_creator = seria_montage_creator()
     factory_supported = False
     if hasattr(unreal, 'AnimMontageFactory'):
         test_factory = unreal.AnimMontageFactory()
@@ -819,8 +845,11 @@ try:
         test_slot.set_editor_property('slot_name', unreal.Name('TurnSlot'))
         test_slot.set_editor_property('anim_track', test_track)
     montage_automation_available = (
-        hasattr(unreal, 'AnimMontageFactory')
-        and (factory_supported or struct_supported)
+        bool(native_montage_creator)
+        or (
+            hasattr(unreal, 'AnimMontageFactory')
+            and (factory_supported or struct_supported)
+        )
     )
 except Exception:
     montage_automation_available = False
@@ -928,7 +957,9 @@ _result = {
     request.plan.montages.length > 0 &&
     !montageAutomationAvailable
   ) {
-    blockedReasons.push("当前 UE Python 环境不支持自动创建 Montage");
+    blockedReasons.push(
+      "当前 UE 缺少 Seria Montage 创建接口，且 Python 工厂不可用",
+    );
   }
   const templateAnimationAssetsRaw =
     (raw.template_animation_assets as Record<string, unknown> | undefined) ??
@@ -1344,24 +1375,35 @@ if ${request.bindTurnCurve === false ? "False" : "True"}:
         raise RuntimeError('转头曲线写入后的回读结果不一致')
     written_turn_curve_property = turn_property
 created_montages = []
+native_montage_creator = seria_montage_creator()
 def create_montage(spec):
     sequence = unreal.load_asset(animation_root + '/' + spec['source_asset_name'])
     if not sequence or not isinstance(sequence, unreal.AnimSequence):
         raise RuntimeError('Montage 源动作不存在：' + spec['source_asset_name'])
-    factory = unreal.AnimMontageFactory()
-    factory_configured = False
-    try:
-        factory.set_editor_property('target_skeleton', skeleton)
-        factory.set_editor_property('source_animation', sequence)
-        factory_configured = True
-    except Exception:
-        pass
-    montage = asset_tools.create_asset(
-        spec['montage_name'],
-        animation_root,
-        unreal.AnimMontage,
-        factory
-    )
+    montage_path = animation_root + '/' + spec['montage_name']
+    montage = None
+    if native_montage_creator:
+        try:
+            native_montage_creator(
+                ${JSON.stringify(`A_${request.plan.npcName}_`)},
+                sequence
+            )
+        except Exception as error:
+            raise RuntimeError('Seria 原生 Montage 创建失败：' + str(error))
+        montage = unreal.load_asset(montage_path)
+    else:
+        factory = unreal.AnimMontageFactory()
+        try:
+            factory.set_editor_property('target_skeleton', skeleton)
+            factory.set_editor_property('source_animation', sequence)
+        except Exception:
+            pass
+        montage = asset_tools.create_asset(
+            spec['montage_name'],
+            animation_root,
+            unreal.AnimMontage,
+            factory
+        )
     if not montage:
         raise RuntimeError('创建 Montage 失败：' + spec['montage_name'])
     actual_tracks = []
@@ -1546,7 +1588,7 @@ _result = {
     const manualChecks = [
       "打开 NPC BP，确认胶囊体与 Mesh 贴合，并检查角色正面方向",
       "抽查转头曲线引用与转头表现",
-      "抽查 Idle/Turn Montage 的源动作、名称和 IdleSlot/TurnSlot",
+      "抽查动作 Montage 的源动作、名称和 IdleSlot/TurnSlot",
       request.plan.configureStandardAbp
         ? "检查 Look 混合空间三个采样点，并运行 ABP 状态机预览"
         : "配置 Look 混合空间与 ABP 状态机图表",

@@ -4639,8 +4639,8 @@ test("manually syncs the sound and music catalogs from settings", async ({
   await expect(setup.getByText("端侧导演模型已就绪")).toBeVisible();
   await expect(setup.getByText("NPC 动作库")).toBeVisible();
   await expect(
-    setup.getByText("D:\\NPC\\AnimationLibrary"),
-  ).toBeVisible();
+    setup.getByRole("combobox", { name: "NPC 动作库目录" }),
+  ).toHaveValue("D:\\NPC\\AnimationLibrary");
   const updateNotes = setup.locator(".setup-update__notes");
   await updateNotes.getByText("查看本次更新内容").click();
   await expect(updateNotes).toContainText("音效与音乐");
@@ -4659,7 +4659,9 @@ test("manually syncs the sound and music catalogs from settings", async ({
       .filter({ hasText: label })
       .first();
   for (const [leftLabel, rightLabel] of [
+    ["应用运行时", "NPC 动作库"],
     ["res 实时数据", "doc 配置文档"],
+    ["飞书数据", "端侧导演模型"],
     ["音效资料库", "音乐资料库"],
     ["TRAE", "分镜 MCP"],
   ]) {
@@ -4668,6 +4670,8 @@ test("manually syncs the sound and music catalogs from settings", async ({
       statusItem(rightLabel).boundingBox(),
     ]);
     expect(leftBox?.y).toBe(rightBox?.y);
+    expect(Math.abs((leftBox?.height ?? 0) - (rightBox?.height ?? 0)))
+      .toBeLessThanOrEqual(1);
   }
   await expect(setup.getByText("98 项 · 内置版本")).toBeVisible();
   await setup

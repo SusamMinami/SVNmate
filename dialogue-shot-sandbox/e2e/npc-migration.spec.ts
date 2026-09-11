@@ -309,7 +309,7 @@ test("sorts action supplements by source modification time", async ({
                 montageAssetPath:
                   "/Game/Seria/NPC/N28/Animation/AM_Wave",
                 montageState: "create",
-                montageSlotName: "DefaultSlot",
+                montageSlotName: "IdleSlot",
                 copyFaceCurves: false,
                 makeMontage: false,
                 state: "new",
@@ -353,7 +353,10 @@ test("sorts action supplements by source modification time", async ({
       resolveNpcAnimationDirectory: async () => ({
         directoryPath: "D:/FBX/N28/Animation",
         matchedFileCount: 2,
-        candidateDirectories: ["D:/FBX/N28/Animation"],
+        candidateDirectories: [
+          "D:/FBX/N28/Animation",
+          "D:/FBX/Archive/N28/Animation",
+        ],
       }),
     } as unknown as NonNullable<Window["shotSandboxDesktop"]>;
   });
@@ -365,14 +368,23 @@ test("sorts action supplements by source modification time", async ({
     page.getByRole("textbox", { name: "动作 FBX 目录" }),
   ).toHaveValue("D:/FBX/N28/Animation");
   await expect(
-    page.getByText("已自动匹配动作目录 · 2 个 Body FBX"),
+    page.getByText(
+      "动作库已自动匹配 · 2 个 Body FBX · 已从 2 个候选中选择最佳目录",
+    ),
   ).toBeVisible();
+  await expect(
+    page.getByRole("textbox", { name: "动作 FBX 目录" }),
+  ).toHaveAttribute("readonly", "");
+  await expect(page.getByText("动作库自动匹配")).toBeVisible();
 
   const actionNames = page.locator(
     ".npc-supplement-row__action > strong",
   );
   await expect(actionNames).toHaveText(["Wave", "Idle"]);
   await expect(page.getByText("新增 Face", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("AM_Wave · IdleSlot", { exact: true }),
+  ).toBeVisible();
   await page.getByLabel("动作排序").selectOption("modified-asc");
   await expect(actionNames).toHaveText(["Idle", "Wave"]);
 

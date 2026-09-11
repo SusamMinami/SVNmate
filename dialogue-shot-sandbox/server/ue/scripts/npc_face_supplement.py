@@ -87,6 +87,27 @@ def _restore_reviewed_montage_slots(snapshots):
     return restored_paths
 
 
+def _set_new_montage_slot(montage, slot_name):
+    tracks = list(montage.get_editor_property("slot_anim_tracks"))
+    if not tracks:
+        raise RuntimeError(
+            "Generated Montage has no animation track: "
+            + montage.get_path_name()
+        )
+    tracks[0].set_editor_property("slot_name", unreal.Name(slot_name))
+    montage.set_editor_property("slot_anim_tracks", tracks)
+    _save_asset(montage, "Generated Montage")
+    actual_tracks = list(montage.get_editor_property("slot_anim_tracks"))
+    if (
+        not actual_tracks
+        or str(actual_tracks[0].get_editor_property("slot_name")) != slot_name
+    ):
+        raise RuntimeError(
+            "Generated Montage slot readback mismatch: "
+            + montage.get_path_name()
+        )
+
+
 def _validate_request(request):
     required = [
         "target_project_file",
@@ -286,13 +307,20 @@ def run_face_supplement(request):
         if item.get("make_montage"):
             montage_path = item["montage_asset_path"]
             if item["montage_state"] == "create":
-                helper.make_npc_montage_by_anim_sequence(
-                    request["remove_prefix"], body_animation
-                )
+                try:
+                    helper.make_npc_montage_by_anim_sequence(
+                        request["remove_prefix"], body_animation
+                    )
+                except Exception as error:
+                    raise RuntimeError(
+                        "Seria native Montage creation failed: " + str(error)
+                    )
                 montage = _require_asset(
                     montage_path, "AnimMontage", "Generated Montage"
                 )
-                _save_asset(montage, "Generated Montage")
+                _set_new_montage_slot(
+                    montage, item.get("montage_slot_name") or "IdleSlot"
+                )
                 created_montage_paths.append(montage.get_path_name())
             else:
                 montage = _require_asset(

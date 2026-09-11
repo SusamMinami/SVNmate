@@ -246,13 +246,15 @@
   审核令牌，不要求用户再次点击生成清单。动作模式需自动配对同目录树中严格同名
   加 `_Face` 后缀的 FBX，并在同一次提交中先写 Body 再写 Face，不为自动配对项
   重建 Montage。设置可维护多个 NPC 动作库根目录；读取 NPC 后按
-  `A_<NPC名>_` 唯一匹配动作目录，多个候选不得自动猜测。除 Look、Walk、Lean
-  和 IdleStand 等状态机素材外，Body 动作应创建 `AM_<Action>` Montage；
-  Idle/Turn 使用专用 Slot，通用新 Montage 使用 DefaultSlot，既有 Montage
-  必须复用并保留原 Slot。面部补充必须使用 Face Skeleton、锁定根骨骼并匹配
+  `A_<NPC名>_` 匹配动作目录；多个候选按 Body FBX 数量优先、最新修改时间次优
+  自动选择最佳目录，手动选择仅作为未命中或用户主动更换时的兜底。除 Look、
+  Walk、Lean 和 IdleStand 等状态机素材外，Body 动作应创建 `AM_<Action>` Montage；
+  转身使用 TurnSlot，其余新建 Montage 使用 IdleSlot，既有 Montage 必须复用并
+  保留原 Slot。面部补充必须使用 Face Skeleton、锁定根骨骼并匹配
   同名 Body 动作；清单需分别审核曲线复制和 Montage 生成。执行时直接调用
-  `SeriaAssetHelperBlueprintFunctionLibrary` 的逐资产 Python 接口并回读，
-  不加载或生成 `BP_FaceConfigHelper` 关卡实例。
+  `SeriaAssetHelperBlueprintFunctionLibrary` 的逐资产 Python 接口创建 Montage
+  和处理 Face，并回读源动作与 Slot；仅在原生 Montage 接口不可用时回退 Python
+  工厂，不加载或生成 `BP_FaceConfigHelper` 关卡实例。
 - 已包含数字站位槽的 BP 按自身槽位注册到对话，不依赖目标物表；0 号玩家必须
   显示、计入角色总数并固定写为 `player`。
 - 已有 BP 与任务目标物同时加载时，现有数字槽位置顶、锁定并保留；用户勾选的

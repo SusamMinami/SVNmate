@@ -231,6 +231,8 @@ describe("NPC supplement server workflow", () => {
       "copy_face_anim_sequence_morph_targets_curve",
     );
     expect(expression).toContain("make_npc_montage_by_anim_sequence");
+    expect(expression).toContain("_set_new_montage_slot");
+    expect(expression).toMatch(/montage_slot_name.{0,10}IdleSlot/);
     expect(expression).toContain("_restore_reviewed_montage_slots");
     expect(expression).not.toContain("open_editor_for_assets");
     expect(expression).not.toContain(
@@ -317,7 +319,13 @@ describe("NPC supplement server workflow", () => {
       /make_montage.{0,10}false/,
     );
     expect(String(connection.calls[0].args.Expression)).toMatch(
-      /montage_slot_name.{0,10}DefaultSlot/,
+      /montage_slot_name.{0,10}IdleSlot/,
+    );
+    expect(String(connection.calls[0].args.Expression)).toContain(
+      "make_npc_montage_by_anim_sequence",
+    );
+    expect(String(connection.calls[0].args.Expression)).toContain(
+      "Montage 插槽回读不一致",
     );
     expect(connection.closed).toBe(true);
   });
@@ -347,5 +355,38 @@ describe("NPC supplement server workflow", () => {
       ),
     ).rejects.toThrow("增补清单已变化");
     expect(connection.calls).toHaveLength(0);
+  });
+
+  it("removes the Python traceback from execution errors", async () => {
+    const root = await temporaryDirectory();
+    const contentDirectory = join(root, "res", "Content");
+    const sourceDirectory = join(root, "Animation");
+    await mkdir(contentDirectory, { recursive: true });
+    await mkdir(sourceDirectory, { recursive: true });
+    await writeFile(
+      join(sourceDirectory, "A_N28_Wave.fbx"),
+      "body animation",
+    );
+    const plan = await inspectNpcSupplementPlan({
+      kind: "actions",
+      target: target(contentDirectory),
+      sourceDirectory,
+    });
+    const connection: UnrealInvoker = {
+      connect: async () => undefined,
+      invoke: async () => {
+        throw new Error(
+          'Traceback (most recent call last):\n  File "<string>", line 41\nRuntimeError: Seria 原生 Montage 创建失败',
+        );
+      },
+      close: () => undefined,
+    };
+
+    await expect(
+      applyNpcSupplement(
+        { plan, reviewToken: plan.reviewToken },
+        () => connection,
+      ),
+    ).rejects.toThrow(/^Seria 原生 Montage 创建失败$/);
   });
 });

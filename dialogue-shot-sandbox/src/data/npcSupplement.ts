@@ -107,10 +107,14 @@ export function buildNpcSupplementPlan(
       request.kind === "face" && actionName
         ? `${request.target.animationPackagePath}/${npcPrefix}${actionName}`
         : "";
-    const bodyMontage =
-      request.kind === "actions"
-        ? buildNpcMontagePlans(request.target.npcName, [sourceFile]).montages[0]
-        : undefined;
+    const montageSourceFile =
+      request.kind === "face"
+        ? sourceFile.replace(/_Face(?=\.fbx$)/i, "")
+        : sourceFile;
+    const bodyMontage = buildNpcMontagePlans(
+      request.target.npcName,
+      [montageSourceFile],
+    ).montages[0];
     const configuredFaceOptions = faceOptions.get(normalizedSourceFile);
     const copyFaceCurves =
       request.kind === "face"
@@ -125,7 +129,7 @@ export function buildNpcSupplementPlan(
     const montageName =
       request.kind === "face"
         ? makeMontage && actionName
-          ? `AM_${actionName}`
+          ? bodyMontage?.montageName ?? `AM_${actionName}`
           : ""
         : bodyMontage?.montageName ?? "";
     const expectedMontageAssetPath = montageName

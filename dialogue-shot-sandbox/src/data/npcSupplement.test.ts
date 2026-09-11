@@ -72,6 +72,7 @@ describe("NPC supplement planning", () => {
         state: "update",
         montageName: "AM_Idle1",
         montageState: "create",
+        montageSlotName: "IdleSlot",
         makeMontage: true,
         pairedFace: {
           sourceAssetName: "A_N28_Idle_Face",
@@ -130,6 +131,7 @@ describe("NPC supplement planning", () => {
         actionName: "Talk",
         bodyAssetPath: "/Game/Seria/NPC/N28/Animation/A_N28_Talk",
         montageName: "AM_Talk",
+        montageSlotName: "IdleSlot",
         copyFaceCurves: true,
         makeMontage: true,
         state: "new",

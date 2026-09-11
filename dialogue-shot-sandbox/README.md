@@ -93,8 +93,8 @@
 - 保持 `/Game` 包路径迁移 Mesh、Skeleton、材质、贴图和物理资产，不覆盖同名文件。
 - 以目标 Skeleton 导入 Body/Face 动作，并为 Face 动作锁定根骨骼。
 - 创建 NPC BP/ABP，按 Mesh 包围盒估算胶囊体并绑定转头曲线。
-- 为可播放动作创建 Montage；Idle/Turn 写入专用 Slot，其他动作写入
-  `DefaultSlot`。
+- 为可播放动作创建 Montage；转身写入 `TurnSlot`，其他动作写入
+  `IdleSlot`。
 - 使用 `ABP_N16_Villager_Male_A` 或 `ABP_N18_Villager_Female_A`
   标准模板配置状态机。
 - 创建 `BS_<NPC>_Look`，复制模板轴和采样位置，替换 LookD/F/U、
@@ -110,9 +110,10 @@
 `BP_FaceConfigHelper` 关卡实例。
 
 桌面版设置可添加多个 NPC 动作库根目录。读取 NPC 后会按
-`A_<NPC名>_*.fbx` 自动定位唯一的动作目录并生成清单；存在多个候选时保留手动
-选择。除 Look、Walk、Lean、IdleStand 等状态机素材外，导入动作会创建
-`AM_<Action>` Montage；既有 Montage 复用原 Slot。
+`A_<NPC名>_*.fbx` 自动匹配并生成清单；存在多个候选时选择动作最完整、最新的
+目录。除 Look、Walk、Lean、IdleStand 等状态机素材外，导入动作会创建
+`AM_<Action>` Montage；转身进入 `TurnSlot`，其他动作进入 `IdleSlot`。创建时
+优先调用项目 Seria 原生接口，既有 Montage 复用原 Slot。
 
 写入完成后仍需在 UE 中检查角色正面、胶囊体贴合、状态机播放效果、
 Look 三个采样点、面部曲线/Montage 输出和后处理动画蓝图。完整规则、命名和阻断条件见

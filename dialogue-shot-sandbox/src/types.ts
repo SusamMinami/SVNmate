@@ -1047,7 +1047,7 @@ export interface NpcMigrationMontagePlan {
   sourceFile: string;
   sourceAssetName: string;
   montageName: string;
-  slotName: "IdleSlot" | "TurnSlot" | "DefaultSlot";
+  slotName: "IdleSlot" | "TurnSlot";
 }
 
 export type NpcMigrationStandardAbpTemplate = "male" | "female";
@@ -1207,7 +1207,7 @@ export interface NpcSupplementPlanItem {
   montageName: string;
   montageAssetPath: string;
   montageState: "none" | "create" | "reuse";
-  montageSlotName: "IdleSlot" | "TurnSlot" | "DefaultSlot" | "";
+  montageSlotName: "IdleSlot" | "TurnSlot" | "";
   copyFaceCurves: boolean;
   makeMontage: boolean;
   state: NpcSupplementItemState;

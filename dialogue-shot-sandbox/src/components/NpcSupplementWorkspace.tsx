@@ -36,6 +36,7 @@ interface NpcSupplementWorkspaceProps {
 
 type BusyAction = "target" | "plan" | "apply" | null;
 type SupplementSort = "modified-desc" | "modified-asc" | "name-asc";
+type SourceOrigin = "library" | "manual" | null;
 
 const sourceTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
   month: "2-digit",
@@ -79,6 +80,7 @@ export function NpcSupplementWorkspace({
 }: NpcSupplementWorkspaceProps) {
   const [target, setTarget] = useState<NpcSupplementTarget | null>(null);
   const [sourceDirectory, setSourceDirectory] = useState("");
+  const [sourceOrigin, setSourceOrigin] = useState<SourceOrigin>(null);
   const [plan, setPlan] = useState<NpcSupplementPlan | null>(null);
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
   const [faceOptions, setFaceOptions] = useState<
@@ -278,6 +280,8 @@ export function NpcSupplementWorkspace({
       setReviewedSelectionKey("");
       setReviewSyncing(false);
       setResult(null);
+      setSourceDirectory("");
+      setSourceOrigin(null);
       const resolver =
         window.shotSandboxDesktop?.resolveNpcAnimationDirectory;
       if (!resolver) {
@@ -287,6 +291,7 @@ export function NpcSupplementWorkspace({
       const resolution = await resolver(next.npcName);
       if (resolution.directoryPath) {
         setSourceDirectory(resolution.directoryPath);
+        setSourceOrigin("library");
         const nextPlan = await inspectNpcSupplementPlan({
           kind,
           target: next,
@@ -295,16 +300,16 @@ export function NpcSupplementWorkspace({
         acceptPlan(
           nextPlan,
           nextPlan.blockedReasons.length > 0
-            ? `已自动匹配动作目录 · 存在 ${nextPlan.blockedReasons.length} 个阻断项`
-            : `已自动匹配动作目录 · ${resolution.matchedFileCount} 个 Body FBX`,
-        );
-      } else if (resolution.candidateDirectories.length > 1) {
-        setStatus(
-          `已读取 ${next.npcName}；动作库中找到 ${resolution.candidateDirectories.length} 个候选目录，请手动选择`,
+            ? `动作库已自动匹配 · 存在 ${nextPlan.blockedReasons.length} 个阻断项`
+            : `动作库已自动匹配 · ${resolution.matchedFileCount} 个 Body FBX${
+                resolution.candidateDirectories.length > 1
+                  ? ` · 已从 ${resolution.candidateDirectories.length} 个候选中选择最佳目录`
+                  : ""
+              }`,
         );
       } else {
         setStatus(
-          `已读取 ${next.npcName}；动作库中未找到对应目录`,
+          `已读取 ${next.npcName}；动作库未匹配到对应 FBX，可手动选择目录`,
         );
       }
     } catch (readError) {
@@ -326,6 +331,7 @@ export function NpcSupplementWorkspace({
       return;
     }
     setSourceDirectory(selected);
+    setSourceOrigin("manual");
     setPlan(null);
     setSelectedFiles(new Set());
     setFaceOptions(new Map());
@@ -546,15 +552,22 @@ export function NpcSupplementWorkspace({
               <FolderOpen size={18} />
               <div>
                 <strong>动作来源</strong>
-                <small>FBX DIRECTORY</small>
+                <small>
+                  {sourceOrigin === "library"
+                    ? "动作库自动匹配"
+                    : "FBX DIRECTORY"}
+                </small>
               </div>
             </header>
             <div className="npc-supplement-directory">
               <input
                 aria-label="动作 FBX 目录"
                 value={sourceDirectory}
+                readOnly={sourceOrigin === "library"}
+                title={sourceDirectory}
                 onChange={(event) => {
                   setSourceDirectory(event.target.value);
+                  setSourceOrigin("manual");
                   setPlan(null);
                   setSelectedFiles(new Set());
                   setFaceOptions(new Map());
@@ -570,8 +583,16 @@ export function NpcSupplementWorkspace({
                 className="icon-button"
                 type="button"
                 onClick={() => void chooseDirectory()}
-                title="选择动作 FBX 目录"
-                aria-label="选择动作 FBX 目录"
+                title={
+                  sourceOrigin === "library"
+                    ? "更换自动匹配的动作目录"
+                    : "选择动作 FBX 目录"
+                }
+                aria-label={
+                  sourceOrigin === "library"
+                    ? "更换动作 FBX 目录"
+                    : "选择动作 FBX 目录"
+                }
               >
                 <FolderOpen size={16} />
               </button>

@@ -6244,7 +6244,7 @@ export default function App() {
           aria-label="动画语音工作区"
         >
           <Suspense fallback={<ToolWorkspaceLoading />}>
-            <LazyAnimationVoiceWorkspace />
+            <LazyAnimationVoiceWorkspace active={activeWorkspace === "animation"} />
           </Suspense>
         </section>
       )}

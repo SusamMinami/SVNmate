@@ -27,11 +27,13 @@
 
 ## NPC 动作补充
 
-- 设置可维护多个 NPC 动作库根目录；读取 NPC 后自动定位唯一的动作目录。
+- 设置可维护多个 NPC 动作库根目录；读取 NPC 后自动选择匹配动作最完整、最新的目录。
 - 动作模式自动配对同名 `_Face` FBX，一次完成 Body 与 Face 导入；Face 处理
   保留既有 Montage Slot。
-- 普通可播放动作会创建 `AM_<Action>` Montage，Idle/Turn 使用专用 Slot，
-  其他动作使用 `DefaultSlot`；状态机素材只导入。
+- 普通可播放动作会创建 `AM_<Action>` Montage，转身使用 `TurnSlot`，
+  其余动作使用 `IdleSlot`；状态机素材只导入。
+- 新建 Montage 优先使用 Seria 原生逐资产接口，并在保存后回读源动作与 Slot，
+  不再依赖部分 UE4 环境未暴露的 `AnimMontageFactory`。
 - 清单支持按修改时间或名称排序、批量选择，并在选择变化后自动刷新审核令牌。
 - 可从 NPC BP、Body Skeletal Mesh 或可唯一匹配 Body Mesh 的 Skeleton 读取目标。
 

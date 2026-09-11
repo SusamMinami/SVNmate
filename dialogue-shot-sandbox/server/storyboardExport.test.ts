@@ -10,6 +10,7 @@ import {
   inspectDialogueCameraQuickAction,
   inspectDialogueStoryboardExport,
   readDialogueCharacterActions,
+  readDialogueCameraPresets,
   readExistingDialogueStoryboard,
   updateDialogueContent,
   updateDialogueContents,
@@ -386,6 +387,126 @@ class FakeStoryboardExportConnection implements UnrealInvoker {
     this.closed = true;
   }
 }
+
+class FakePresetCameraConnection extends FakeStoryboardExportConnection {
+  presetSnapshot = {
+    formationActorPath: "/Temp/Preview:PersistentLevel.BP_735200_C",
+    formationClassPath: `${this.formationAssetPath}_C`,
+    roles: [{
+      modelIndex: 0,
+      label: "Player",
+      actorPath: "/Temp/Preview:PersistentLevel.Role0",
+      cameraClassPath: "/Game/Test/Camera.Camera_C",
+      cameras: [{
+        name: "3", label: "3 | +25 deg", componentPath: "/Temp/Preview:PersistentLevel.Role0.3",
+        local: { position: { X: 130, Y: 25, Z: 160 }, rotation: { Pitch: -5, Yaw: 160, Roll: 0 } },
+        world: { position: { X: 5100, Y: 130, Z: 160 }, rotation: { Pitch: -5, Yaw: -110, Roll: 0 } },
+      }],
+    }],
+  };
+
+  override async invoke(action: string, args: Record<string, unknown>): Promise<unknown> {
+    if (action === "script.eval_python_expression" && String(args.Expression).includes("formats =")) {
+      this.calls.push({ action, args });
+      return { bSuccess: true, Result: `'${JSON.stringify(this.presetSnapshot)}'` };
+    }
+    return super.invoke(action, args);
+  }
+}
+
+describe("preset camera quick action transaction", () => {
+  const baseRequest = { dialogueId: "7352", startId: "735200", dialogueNodeId: "735201" };
+  async function presetRequest(connection: FakePresetCameraConnection) {
+    const snapshot = await readDialogueCameraPresets(baseRequest, () => connection);
+    return {
+      ...baseRequest, mode: "preset_camera" as const,
+      presetCamera: { modelIndex: 0, cameraName: "3", fingerprint: snapshot.fingerprint },
+    };
+  }
+  const writes = (connection: FakeStoryboardExportConnection) =>
+    connection.calls.filter((call) => call.action === "reflect.write_object_property");
+
+  it("preserves lens, timing, blend curves and school overrides while saving only the selected node", async () => {
+    const connection = new FakePresetCameraConnection();
+    const defaults = buildDefaultDialogueCameraMove();
+    const original = {
+      ...defaults, FOV: 49,
+      PushCameraArg: { ...defaults.PushCameraArg as object, Velocity: 7, BlendOutTime: 2.5, bWaitOptionShow: true },
+    };
+    connection.movesByData.set("ActionData1", [original]);
+    const school = { Keys: ["ERing"], Values: [{ MoveCameras: [defaults] }] };
+    const blend = { DialogBlendCameraType: "EBlend", BlendCurve: "/Game/Test/Curve.Curve", Duration: 3 };
+    connection.schoolCamerasByData.set("ActionData1", school);
+    connection.blendByData.set("ActionData1", blend);
+    const request = await presetRequest(connection);
+    const preview = await inspectDialogueCameraQuickAction(request, () => connection);
+    expect(preview).toMatchObject({
+      fov: 49, velocity: 7, blendOutTime: 2.5, blendDuration: 3,
+      desiredMoveCount: 1, desiredCameraPosition: "c1",
+      presetCamera: { cameraName: "3", relative: true },
+    });
+    expect(writes(connection)).toHaveLength(0);
+    await applyDialogueCameraQuickAction({ ...request, reviewToken: preview.reviewToken }, () => connection);
+    const pose = connection.presetSnapshot.roles[0].cameras[0].local;
+    expect(connection.movesByData.get("ActionData1")).toEqual([{
+      ...original,
+      PushCameraArg: {
+        ...original.PushCameraArg, StartPoint: pose.position, EndPoint: pose.position,
+        StartRotation: pose.rotation, EndRotation: pose.rotation,
+      },
+    }]);
+    expect(connection.blendByData.get("ActionData1")).toEqual(blend);
+    expect(connection.schoolCamerasByData.get("ActionData1")).toEqual(school);
+    expect(writes(connection).map((call) => call.args.PropertyName))
+      .toEqual(["CommonDialogGraphProperties", "MoveCameras"]);
+    expect(connection.movesByData.get("ActionData2")).toEqual([{ CameraMoveType: "EPush", FOV: 90 }]);
+    expect(connection.calls.filter((call) => call.action === "asset.save_asset")).toHaveLength(1);
+  });
+
+  it("uses default FOV 62 and BlendOut 1 for an empty node", async () => {
+    const connection = new FakePresetCameraConnection();
+    const preview = await inspectDialogueCameraQuickAction(await presetRequest(connection), () => connection);
+    expect(preview).toMatchObject({ fov: 62, velocity: 1, blendOutTime: 1, desiredMoveCount: 1 });
+    expect(writes(connection)).toHaveLength(0);
+  });
+
+  it.each(["position", "configuration", "selection", "token"])("rejects changed %s before any write", async (change) => {
+    const connection = new FakePresetCameraConnection();
+    const request = await presetRequest(connection);
+    const preview = await inspectDialogueCameraQuickAction(request, () => connection);
+    if (change === "position") connection.presetSnapshot.roles[0].cameras[0].local.position.X += 20;
+    if (change === "configuration") connection.movesByData.set("ActionData1", [{ ...buildDefaultDialogueCameraMove(), FOV: 42 }]);
+    if (change === "selection") connection.selectedDialogueNodeId = "735202";
+    await expect(applyDialogueCameraQuickAction({
+      ...request, ...(change !== "token" ? { reviewToken: preview.reviewToken } : {}),
+    }, () => connection)).rejects.toThrow(change === "token" ? "审核令牌" : "变化");
+    expect(writes(connection)).toHaveLength(0);
+  });
+
+  it("rolls back camera data when save fails without touching other properties", async () => {
+    const connection = new FakePresetCameraConnection();
+    const before = structuredClone(connection.commonByData.get("ActionData1"));
+    const request = await presetRequest(connection);
+    const preview = await inspectDialogueCameraQuickAction(request, () => connection);
+    connection.saveResult = false;
+    await expect(applyDialogueCameraQuickAction({
+      ...request, reviewToken: preview.reviewToken,
+    }, () => connection)).rejects.toThrow("保存失败");
+    expect(connection.movesByData.get("ActionData1")).toEqual([]);
+    expect(connection.commonByData.get("ActionData1")).toEqual(before);
+    expect(writes(connection).every((call) =>
+      ["CommonDialogGraphProperties", "MoveCameras"].includes(String(call.args.PropertyName)))).toBe(true);
+  });
+
+  it("rejects 00 and cross-dialogue requests before connecting", async () => {
+    const connection = new FakePresetCameraConnection();
+    await expect(readDialogueCameraPresets({ ...baseRequest, dialogueNodeId: "735200" }, () => connection))
+      .rejects.toThrow("普通对白");
+    await expect(readDialogueCameraPresets({ ...baseRequest, dialogueNodeId: "204801" }, () => connection))
+      .rejects.toThrow("普通对白");
+    expect(connection.connected).toBe(false);
+  });
+});
 
 function exportRequest(
   cameraMovement: StoryboardExportRequest["shots"][number]["cameraMovement"] =

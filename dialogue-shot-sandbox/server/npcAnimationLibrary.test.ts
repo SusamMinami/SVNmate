@@ -1,4 +1,10 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import {
+  mkdtemp,
+  mkdir,
+  rm,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
@@ -53,20 +59,43 @@ describe("NPC animation library", () => {
     });
   });
 
-  it("does not guess when multiple directories contain the same NPC", async () => {
+  it("selects the most complete directory when multiple directories match", async () => {
     const root = await temporaryDirectory();
     const current = join(root, "Current", "N28");
     const legacy = join(root, "Legacy", "N28");
     await mkdir(current, { recursive: true });
     await mkdir(legacy, { recursive: true });
     await writeFile(join(current, "A_N28_Idle.fbx"), "body");
+    await writeFile(join(current, "A_N28_Talk.fbx"), "body");
     await writeFile(join(legacy, "A_N28_Wave.fbx"), "body");
 
     await expect(
       resolveNpcAnimationDirectory("N28", [root]),
     ).resolves.toEqual({
-      directoryPath: "",
-      matchedFileCount: 0,
+      directoryPath: current,
+      matchedFileCount: 2,
+      candidateDirectories: [current, legacy],
+    });
+  });
+
+  it("uses the newest matching source when candidate counts are tied", async () => {
+    const root = await temporaryDirectory();
+    const current = join(root, "Current", "N28");
+    const legacy = join(root, "Legacy", "N28");
+    const currentFile = join(current, "A_N28_Idle.fbx");
+    const legacyFile = join(legacy, "A_N28_Idle.fbx");
+    await mkdir(current, { recursive: true });
+    await mkdir(legacy, { recursive: true });
+    await writeFile(currentFile, "current");
+    await writeFile(legacyFile, "legacy");
+    await utimes(currentFile, new Date(2_000), new Date(2_000));
+    await utimes(legacyFile, new Date(1_000), new Date(1_000));
+
+    await expect(
+      resolveNpcAnimationDirectory("N28", [root]),
+    ).resolves.toEqual({
+      directoryPath: current,
+      matchedFileCount: 1,
       candidateDirectories: [current, legacy],
     });
   });

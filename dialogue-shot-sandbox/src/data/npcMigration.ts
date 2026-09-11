@@ -116,7 +116,7 @@ export function buildNpcMontagePlans(
       montage = {
         kind: "action",
         montageName: `AM_${actionName}`,
-        slotName: "DefaultSlot",
+        slotName: "IdleSlot",
       };
     }
     return montage
@@ -409,7 +409,7 @@ export function buildNpcMigrationPlan(
     automaticStep(
       "montages",
       "创建动作 Montage",
-      `${montages.length} 个 Montage，按语义写入 IdleSlot / TurnSlot / DefaultSlot`,
+      `${montages.length} 个 Montage，按语义写入 IdleSlot / TurnSlot`,
       duplicateNames.length > 0,
     ),
     {

@@ -93,3 +93,31 @@
 .animation-voice__footer .primary-button { background: var(--signal); color: var(--ink); }
 .animation-voice__empty { padding: 32px 20px; color: var(--text-muted); overflow-wrap: anywhere; }
 .animation-voice__detail > .animation-voice__empty { flex: 1; }
+
+.animation-speech { border-bottom: 1px solid var(--border); padding-bottom: 12px; }
+.animation-speech h3 { display: inline-flex; align-items: center; gap: 8px; }
+.animation-speech__status { color: var(--text-muted); font-size: 11px; overflow-wrap: anywhere; }
+.animation-speech__source { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; }
+.animation-speech__source label { display: flex; flex: 1 1 250px; min-width: 0; align-items: center; gap: 8px; }
+.animation-speech select { min-width: 0; flex: 1; width: 100%; height: 30px; font: inherit; border: 1px solid var(--border); border-radius: 2px; background: var(--surface); color: var(--ink); padding: 3px 6px; }
+.animation-speech__audio { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 12px 0; }
+.animation-speech audio { width: 310px; height: 34px; max-width: 100%; }
+.animation-speech__audio span { color: var(--text-muted); font-size: 11px; }
+.animation-speech__timing, .animation-speech__actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin: 12px 0; }
+.animation-speech__timing label { display: flex; align-items: center; gap: 6px; }
+.animation-speech__timing input[type="number"] { width: 86px; }
+.animation-speech__actions > div { display: flex; }
+.animation-speech__actions button[aria-pressed="true"] { background: var(--ink); color: var(--surface); }
+.animation-speech__actions > button:last-child { margin-left: auto; }
+.animation-speech__reference { margin: 12px 0; }
+.animation-speech__reference summary { cursor: pointer; }
+.animation-speech__reference > div { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+.animation-speech__reference > div > span { flex: 1; overflow-wrap: anywhere; }
+.animation-speech__result table { table-layout: fixed; border-collapse: collapse; width: 100%; font-size: 11px; margin-bottom: 10px; }
+.animation-speech__result th, .animation-speech__result td { padding: 7px 4px; text-align: left; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.animation-speech__result th:first-child { width: 26px; }
+.animation-speech__result th:nth-child(3) { width: 130px; }
+.animation-speech__result th:nth-child(4) { width: 160px; }
+.animation-speech__result th:last-child { width: 38px; }
+.animation-speech__result td small { display: block; color: var(--text-muted); margin-bottom: 4px; }
+.animation-speech__result td span { display: block; }

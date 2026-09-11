@@ -24,6 +24,7 @@ interface FaceSupplementApplyItem {
   makeMontage: boolean;
   montageAssetPath: string;
   montageState: "none" | "create" | "reuse";
+  montageSlotName: "IdleSlot" | "TurnSlot" | "";
 }
 
 const SupplementTargetSchema = z.object({
@@ -108,17 +109,32 @@ function pythonExpression(script: string): string {
   );
 }
 
+function readableUnrealError(
+  error: unknown,
+  fallback: string,
+): Error {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  const matches = Array.from(
+    message.matchAll(/(?:RuntimeError|Exception):\s*([^\r\n]+)/g),
+  );
+  return new Error(matches.at(-1)?.[1]?.trim() || message || fallback);
+}
+
 async function invokePythonJson(
   connection: UnrealInvoker,
   script: string,
   errorMessage: string,
 ): Promise<unknown> {
-  const value = await connection.invoke(
-    "script.eval_python_expression",
-    { Expression: pythonExpression(script) },
-    { timeoutMs: 180_000 },
-  );
-  return parsePythonJson(value, errorMessage);
+  try {
+    const value = await connection.invoke(
+      "script.eval_python_expression",
+      { Expression: pythonExpression(script) },
+      { timeoutMs: 180_000 },
+    );
+    return parsePythonJson(value, errorMessage);
+  } catch (error) {
+    throw readableUnrealError(error, errorMessage);
+  }
 }
 
 async function connectUnreal(connection: UnrealInvoker): Promise<void> {
@@ -564,6 +580,7 @@ async function applyNpcFaceSupplement(
       make_montage: item.makeMontage,
       montage_asset_path: packagePath(item.montageAssetPath),
       montage_state: item.montageState,
+      montage_slot_name: item.montageSlotName,
     })),
   };
   const script = [
@@ -670,6 +687,7 @@ export async function applyNpcSupplement(
           makeMontage: false,
           montageAssetPath: "",
           montageState: "none",
+          montageSlotName: "",
         },
       ];
     },
@@ -698,6 +716,11 @@ if current_project != expected_project:
 body_skeleton = unreal.load_asset(${JSON.stringify(plan.target.skeletonAssetPath)})
 if not body_skeleton:
     raise RuntimeError('目标 Skeleton 不存在')
+montage_helper = getattr(unreal, 'SeriaAssetHelperBlueprintFunctionLibrary', None)
+native_montage_creator = (
+    getattr(montage_helper, 'make_npc_montage_by_anim_sequence', None)
+    if montage_helper else None
+)
 
 items = ${JSON.stringify(
       selectedItems.map((item) => ({
@@ -730,13 +753,14 @@ for item in items:
     if item['montage_state'] != 'none' and item['montage_asset_path'] in dirty_packages:
         raise RuntimeError('目标 Montage 尚未保存：' + item['montage_asset_path'])
 if any(item['montage_state'] == 'create' for item in items):
-    if not all([
+    fallback_supported = all([
         hasattr(unreal, 'AnimMontageFactory'),
         hasattr(unreal, 'AnimSegment'),
         hasattr(unreal, 'AnimTrack'),
         hasattr(unreal, 'SlotAnimationTrack'),
-    ]):
-        raise RuntimeError('当前 UE Python 环境不支持自动创建 Montage')
+    ])
+    if not callable(native_montage_creator) and not fallback_supported:
+        raise RuntimeError('当前 UE 缺少 Seria Montage 创建接口，且 Python 工厂不可用')
 
 destination = ${JSON.stringify(plan.target.animationPackagePath)}
 asset_library.make_directory(destination)
@@ -772,18 +796,31 @@ for item in items:
 created_montages = []
 def create_montage(item):
     sequence = unreal.load_asset(item['target_asset_path'])
-    factory = unreal.AnimMontageFactory()
-    try:
-        factory.set_editor_property('target_skeleton', body_skeleton)
-        factory.set_editor_property('source_animation', sequence)
-    except Exception:
-        pass
-    montage = asset_tools.create_asset(
-        item['montage_name'],
-        ${JSON.stringify(plan.target.animationPackagePath)},
-        unreal.AnimMontage,
-        factory
-    )
+    if not sequence or sequence.get_class().get_name() != 'AnimSequence':
+        raise RuntimeError('Montage 源动作不存在：' + item['source_asset_name'])
+    montage = None
+    if callable(native_montage_creator):
+        try:
+            native_montage_creator(
+                ${JSON.stringify(plan.npcPrefix)},
+                sequence
+            )
+        except Exception as error:
+            raise RuntimeError('Seria 原生 Montage 创建失败：' + str(error))
+        montage = unreal.load_asset(item['montage_asset_path'])
+    else:
+        factory = unreal.AnimMontageFactory()
+        try:
+            factory.set_editor_property('target_skeleton', body_skeleton)
+            factory.set_editor_property('source_animation', sequence)
+        except Exception:
+            pass
+        montage = asset_tools.create_asset(
+            item['montage_name'],
+            ${JSON.stringify(plan.target.animationPackagePath)},
+            unreal.AnimMontage,
+            factory
+        )
     if not montage:
         raise RuntimeError('创建 Montage 失败：' + item['montage_name'])
     tracks = []
@@ -791,7 +828,7 @@ def create_montage(item):
         tracks = list(montage.get_editor_property('slot_anim_tracks'))
     except Exception:
         pass
-    slot_name = item['montage_slot_name'] or 'DefaultSlot'
+    slot_name = item['montage_slot_name'] or 'IdleSlot'
     if tracks:
         tracks[0].set_editor_property('slot_name', unreal.Name(slot_name))
         montage.set_editor_property('slot_anim_tracks', tracks)
@@ -810,6 +847,15 @@ def create_montage(item):
         montage.set_editor_property('slot_anim_tracks', [slot_track])
     if not asset_library.save_loaded_asset(montage):
         raise RuntimeError('Montage 保存失败：' + item['montage_name'])
+    actual_tracks = list(montage.get_editor_property('slot_anim_tracks'))
+    if not actual_tracks or str(actual_tracks[0].get_editor_property('slot_name')) != slot_name:
+        raise RuntimeError('Montage 插槽回读不一致：' + item['montage_name'])
+    actual_segments = actual_tracks[0].get_editor_property('anim_track').get_editor_property('anim_segments')
+    if len(actual_segments) != 1:
+        raise RuntimeError('Montage 动作轨道回读不一致：' + item['montage_name'])
+    actual_sequence = actual_segments[0].get_editor_property('anim_reference')
+    if not actual_sequence or actual_sequence.get_path_name() != sequence.get_path_name():
+        raise RuntimeError('Montage 源动作回读不一致：' + item['montage_name'])
     created_montages.append(montage.get_path_name())
 
 for item in items:
@@ -863,7 +909,7 @@ _result = {
       processedBodyAssetPaths: [],
       manualChecks: [
         "抽查新增或更新动作的 Skeleton、帧率和 Root Motion",
-        "检查新建 Montage 的源动作与 IdleSlot、TurnSlot 或 DefaultSlot",
+        "检查新建 Montage 的源动作与 IdleSlot 或 TurnSlot",
         "保存并编译引用这些动作的 NPC BP / ABP",
       ],
     };

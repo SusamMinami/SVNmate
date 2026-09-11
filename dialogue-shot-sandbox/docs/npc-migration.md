@@ -87,7 +87,7 @@ C++ 代码。原来的 MakeTable 由镜头沙盒审核清单替代，Out 由逐�
 | 锁定 Face 动作根骨骼 | Face 动作导入 | 自动 |
 | 执行 `BP_FaceConfigHelper` | 原生 Seria 面部处理 | 面部补充自动，逐项审核后写入并回读 |
 | 创建 `ABP_XXX` | 动画蓝图配置 | 自动继承男性或女性标准模板并绑定 Skeleton |
-| 创建动作 Montage 与插槽 | Montage 配置 | Idle/Turn 写入专用 Slot，其他可播放动作写入 `DefaultSlot` |
+| 创建动作 Montage 与插槽 | Montage 配置 | 转身写入 `TurnSlot`，其他可播放动作写入 `IdleSlot` |
 | 配置状态机 | 标准 ABP 模板 | 自动继承模板图表并覆盖目标动作 |
 | 配置 Look 混合空间 | Look 配置 | 自动复制模板轴与采样位置并替换 LookD/F/U |
 | 编译和保存 | 最终化 | 自动编译保存 + 人工终检 |
@@ -136,15 +136,19 @@ Montage 按动作语义处理：
 - `TurnL` / `TurnLeft90` → `AM_TurnLeft90`
 - `TurnR` / `TurnRight90` → `AM_TurnRight90`
 - `TurnLeft180` / `TurnRight180` → 对应 180° Montage
-- 其他可播放动作 → `AM_<Action>`，新建时使用 `DefaultSlot`
+- 其他可播放动作 → `AM_<Action>`，新建时使用 `IdleSlot`
 
 `LookD/F/U`、`Walk`、`BackLean`、`FrontLean` 和 `IdleStand*` 属于混合空间、
 状态机或移动素材，只导入 AnimSequence，不创建 Montage。目标目录树中已有同名
 Montage 时直接复用并保留原 Slot，不因 Body 或 Face 重导入而覆盖。
+新建 Montage 优先调用项目原生
+`make_npc_montage_by_anim_sequence`，随后按上述规则写入并回读 Slot；仅当原生
+接口不可用时才尝试 UE Python 工厂兼容路径。
 
 桌面版设置允许维护多个“NPC 动作库”根目录。读取 NPC 目标后，工具会递归查找
-文件名以 `A_<NPC名>_` 开头的 Body FBX；唯一匹配到目录时自动填入并生成清单。
-若多个目录都包含该 NPC，则不猜测版本，保留候选提示并允许手动选择。
+文件名以 `A_<NPC名>_` 开头的 Body FBX，并自动填入目录、生成清单。多个目录
+都包含该 NPC 时，优先选择 Body FBX 数量最多的目录；数量相同则选择最近有源
+文件更新的目录。未命中或用户需要覆盖自动结果时，仍可手动更换目录。
 
 ## 标准 ABP 与 Look
 

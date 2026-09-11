@@ -1,13 +1,16 @@
-import { AudioLines, Check, FileSearch, Plus, RefreshCw, Square, Trash2, X } from "lucide-react";
+import { Check, FileSearch, Plus, RefreshCw, Square, Trash2, X } from "lucide-react";
 import { useState } from "react";
 import { useAnimationVoice } from "../app/useAnimationVoice";
+import { useAnimationSpeech } from "../app/useAnimationSpeech";
+import { AnimationSpeechPanel } from "./AnimationSpeechPanel";
 import "./animationVoice.css";
 
-export function AnimationVoiceWorkspace() {
+export function AnimationVoiceWorkspace({ active = true }: { active?: boolean }) {
   const vm = useAnimationVoice();
   const [query, setQuery] = useState("");
   const [tab, setTab] = useState<"subtitles" | "configuration">("subtitles");
   const current = vm.snapshot;
+  const speech = useAnimationSpeech(current, vm.rows, active);
   const disabled = Boolean(vm.busy);
   const assets = vm.catalog.filter((a) => a.path.toLowerCase().includes(query.toLowerCase()));
   const time = (value: number | null) => value === null ? "无界" : `${value.toFixed(3)}s`;
@@ -55,6 +58,15 @@ export function AnimationVoiceWorkspace() {
           </div>
           <div className="animation-voice__scroll">
             {current.warnings.map((w) => <p key={w} className="animation-voice__warning">{w}</p>)}
+            <div hidden={tab !== "subtitles"}>
+              <AnimationSpeechPanel speech={speech} snapshot={current} disabled={disabled} active={active && tab === "subtitles"}
+                onAdopt={() => {
+                  try {
+                    const rows = speech.adoptedRows();
+                    vm.invalidate(); vm.setRows(rows); speech.update({ adopted: true, error: "" });
+                  } catch (e) { speech.update({ error: e instanceof Error ? e.message : String(e) }); }
+                }} />
+            </div>
             {tab === "subtitles" ? <>
               <div className="animation-voice__section-title"><h3>字幕段</h3>
                 <button type="button" disabled={disabled} title="添加字幕段" aria-label="添加字幕段" onClick={() => {
@@ -75,7 +87,10 @@ export function AnimationVoiceWorkspace() {
                     <td><input type="checkbox" aria-label={`选择字幕 ${index + 1}`} checked={row.selected} disabled={disabled}
                       onChange={(e) => { vm.invalidate(); vm.setRows(vm.rows.map((r) => r.key === row.key ? { ...r, selected: e.target.checked } : r)); }} /></td>
                     <td><input aria-label={`字幕 ${index + 1} ID`} value={row.dialogueId} disabled={disabled} onChange={(e) => update("dialogueId", e.target.value)} /></td>
-                    <td><small>{voice?.name || (row.sectionPath ? "UE 已有字幕" : "新增字幕")}</small><span>{voice?.text || "配音表未匹配"}</span></td>
+                    <td><small>{voice?.name || (row.sectionPath ? "UE 已有字幕" : "新增字幕")}{row.timeSource ? ` · ${row.timeSource}` : ""}</small>
+                      <span>{voice?.text || row.speechText || "配音表未匹配"}</span>
+                      {row.speechText && !voice && <small className="animation-voice__warning">待填写有效配音 ID；识别文字不写入配音表</small>}
+                    </td>
                     <td><input type="number" step="0.001" aria-label={`字幕 ${index + 1} 开始`} value={row.start} disabled={disabled} onChange={(e) => update("start", e.target.value)} /></td>
                     <td><input type="number" step="0.001" aria-label={`字幕 ${index + 1} 结束`} value={row.end} disabled={disabled} onChange={(e) => update("end", e.target.value)} /></td>
                     <td>{row.start && row.end ? `${(Number(row.end) - Number(row.start)).toFixed(3)}s` : "待定"}</td>
@@ -85,7 +100,6 @@ export function AnimationVoiceWorkspace() {
                 })}</tbody>
               </table>
               {!vm.rows.length && <p className="animation-voice__empty">尚无字幕段或匹配的配音表台词</p>}
-              <p className="animation-voice__model"><AudioLines size={15} />语音对齐模型未接入 · 当前时间来源：UE 配置 / 人工编辑</p>
             </> : <>
               {current.tracks.map((track) => <details className="animation-voice__track" key={track.path}>
                 <summary>{track.name} <small>{track.className} · {track.sections.length} 段{track.binding ? ` · ${track.binding}` : ""}</small></summary>

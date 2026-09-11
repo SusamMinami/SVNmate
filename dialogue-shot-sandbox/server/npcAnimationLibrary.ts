@@ -1,4 +1,4 @@
-import { readdir } from "node:fs/promises";
+import { readdir, stat } from "node:fs/promises";
 import { extname, resolve } from "node:path";
 
 export interface NpcAnimationDirectoryResolution {
@@ -37,7 +37,10 @@ export async function resolveNpcAnimationDirectory(
     };
   }
   const bodyPrefix = `a_${normalizedNpcName.toLowerCase()}_`;
-  const matches = new Map<string, { path: string; count: number }>();
+  const matches = new Map<
+    string,
+    { path: string; count: number; latestModifiedTimeMs: number }
+  >();
 
   const visit = async (directory: string): Promise<void> => {
     let entries;
@@ -62,9 +65,17 @@ export async function resolveNpcAnimationDirectory(
       }
       const key = directory.toLowerCase();
       const current = matches.get(key);
+      const modifiedTimeMs = await stat(path).then(
+        (value) => value.mtimeMs,
+        () => 0,
+      );
       matches.set(key, {
         path: directory,
         count: (current?.count ?? 0) + 1,
+        latestModifiedTimeMs: Math.max(
+          current?.latestModifiedTimeMs ?? 0,
+          modifiedTimeMs,
+        ),
       });
     }
   };
@@ -76,12 +87,13 @@ export async function resolveNpcAnimationDirectory(
   const candidates = Array.from(matches.values()).sort(
     (left, right) =>
       right.count - left.count ||
+      right.latestModifiedTimeMs - left.latestModifiedTimeMs ||
       left.path.localeCompare(right.path, "en", { sensitivity: "base" }),
   );
+  const selected = candidates[0];
   return {
-    directoryPath: candidates.length === 1 ? candidates[0].path : "",
-    matchedFileCount:
-      candidates.length === 1 ? candidates[0].count : 0,
+    directoryPath: selected?.path ?? "",
+    matchedFileCount: selected?.count ?? 0,
     candidateDirectories: candidates.map((candidate) => candidate.path),
   };
 }

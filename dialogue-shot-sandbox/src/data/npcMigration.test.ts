@@ -125,7 +125,7 @@ describe("NPC migration planning", () => {
       { montageName: "AM_TurnLeft90", slotName: "TurnSlot" },
       { montageName: "AM_TurnRight90", slotName: "TurnSlot" },
       { montageName: "AM_TurnLeft180", slotName: "TurnSlot" },
-      { montageName: "AM_Wave", slotName: "DefaultSlot" },
+      { montageName: "AM_Wave", slotName: "IdleSlot" },
     ]);
   });
 

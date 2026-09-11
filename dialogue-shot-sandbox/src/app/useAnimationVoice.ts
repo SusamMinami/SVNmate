@@ -11,6 +11,8 @@ export interface SubtitleRow {
   start: string;
   end: string;
   selected: boolean;
+  speechText?: string;
+  timeSource?: string;
 }
 export async function animationRequest<T>(action: string, body: unknown): Promise<T> {
   const response = await fetch(`/api/ue/animation-voice/${action}`, {

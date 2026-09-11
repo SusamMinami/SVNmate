@@ -164,6 +164,8 @@ export function DesktopSetupModal({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [uePort, setUePort] = useState(String(initialStatus.ueMcpPort));
+  const [selectedNpcAnimationDirectory, setSelectedNpcAnimationDirectory] =
+    useState(initialStatus.npcAnimationDirectories?.[0] ?? "");
   const [soundEffectCatalog, setSoundEffectCatalog] = useState(
     initialSoundEffectCatalog,
   );
@@ -182,6 +184,11 @@ export function DesktopSetupModal({
     Boolean(larkStatus?.authorized) && baseMissingScopes.length === 0;
   const docsReady =
     Boolean(larkStatus?.authorized) && docsMissingScopes.length === 0;
+  const npcAnimationDirectories = status.npcAnimationDirectories ?? [];
+  const activeNpcAnimationDirectory =
+    npcAnimationDirectories.includes(selectedNpcAnimationDirectory)
+      ? selectedNpcAnimationDirectory
+      : npcAnimationDirectories[0] ?? "";
 
   useEffect(() => {
     if (!desktop) {
@@ -382,7 +389,14 @@ export function DesktopSetupModal({
     try {
       const nextStatus = await desktop.addNpcAnimationDirectory();
       if (nextStatus) {
+        const previousDirectories = new Set(npcAnimationDirectories);
+        const addedDirectory = nextStatus.npcAnimationDirectories.find(
+          (directory) => !previousDirectories.has(directory),
+        );
         setStatus(nextStatus);
+        setSelectedNpcAnimationDirectory(
+          addedDirectory ?? activeNpcAnimationDirectory,
+        );
       }
     } catch (directoryError) {
       setError(
@@ -402,8 +416,11 @@ export function DesktopSetupModal({
     setBusy(true);
     setError("");
     try {
-      setStatus(
-        await desktop.removeNpcAnimationDirectory(directoryPath),
+      const nextStatus =
+        await desktop.removeNpcAnimationDirectory(directoryPath);
+      setStatus(nextStatus);
+      setSelectedNpcAnimationDirectory(
+        nextStatus.npcAnimationDirectories[0] ?? "",
       );
     } catch (directoryError) {
       setError(
@@ -442,12 +459,77 @@ export function DesktopSetupModal({
 
         <div className="desktop-setup-modal__body">
           <section className="setup-status-list" aria-label="环境检查">
-            <div className="setup-status-item--wide">
+            <div>
               <Check size={17} />
               <span>
                 <strong>应用运行时</strong>
                 <small>已内置，无需安装 Node.js 或 npm</small>
               </span>
+            </div>
+            <div
+              className={
+                npcAnimationDirectories.length > 0
+                  ? "setup-directory-collection"
+                  : "setup-directory-collection is-warning"
+              }
+            >
+              {npcAnimationDirectories.length > 0 ? (
+                <FolderCog size={17} />
+              ) : (
+                <CircleAlert size={17} />
+              )}
+              <div className="setup-status-copy">
+                <strong>NPC 动作库</strong>
+                {npcAnimationDirectories.length > 0 ? (
+                  <select
+                    className="setup-directory-select"
+                    aria-label="NPC 动作库目录"
+                    value={activeNpcAnimationDirectory}
+                    title={activeNpcAnimationDirectory}
+                    onChange={(event) =>
+                      setSelectedNpcAnimationDirectory(event.target.value)
+                    }
+                  >
+                    {npcAnimationDirectories.map((directory) => (
+                      <option key={directory} value={directory}>
+                        {directory}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <small>添加根目录后自动匹配 NPC 动作</small>
+                )}
+              </div>
+              <div className="setup-directory-actions">
+                {activeNpcAnimationDirectory && (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() =>
+                      void removeNpcAnimationDirectory(
+                        activeNpcAnimationDirectory,
+                      )
+                    }
+                    title={`移除 ${activeNpcAnimationDirectory}`}
+                    aria-label="移除当前 NPC 动作库目录"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void addNpcAnimationDirectory()}
+                  title="添加 NPC 动作库根目录"
+                  aria-label="添加 NPC 动作库根目录"
+                >
+                  {busy ? (
+                    <LoaderCircle className="spin" size={14} />
+                  ) : (
+                    <FolderOpen size={14} />
+                  )}
+                </button>
+              </div>
             </div>
             <div
               className={
@@ -521,62 +603,9 @@ export function DesktopSetupModal({
               </button>
             </div>
             <div
-              className={`setup-status-item--wide setup-directory-collection ${
-                (status.npcAnimationDirectories?.length ?? 0) > 0
-                  ? ""
-                  : "is-warning"
-              }`}
-            >
-              {(status.npcAnimationDirectories?.length ?? 0) > 0 ? (
-                <FolderCog size={17} />
-              ) : (
-                <CircleAlert size={17} />
-              )}
-              <div className="setup-status-copy">
-                <strong>NPC 动作库</strong>
-                <small>
-                  {(status.npcAnimationDirectories?.length ?? 0) > 0
-                    ? `${status.npcAnimationDirectories.length} 个根目录，用于自动匹配 NPC 动作`
-                    : "添加动作合集根目录，读取 NPC 后自动查找对应 FBX"}
-                </small>
-                {(status.npcAnimationDirectories?.length ?? 0) > 0 && (
-                  <div className="setup-directory-collection__list">
-                    {status.npcAnimationDirectories.map((directory) => (
-                      <div key={directory}>
-                        <code title={directory}>{directory}</code>
-                        <button
-                          type="button"
-                          disabled={busy}
-                          onClick={() =>
-                            void removeNpcAnimationDirectory(directory)
-                          }
-                          title={`移除 ${directory}`}
-                          aria-label={`移除 NPC 动作库目录 ${directory}`}
-                        >
-                          <Trash2 size={13} />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void addNpcAnimationDirectory()}
-              >
-                {busy ? (
-                  <LoaderCircle className="spin" size={14} />
-                ) : (
-                  <FolderOpen size={14} />
-                )}
-                添加
-              </button>
-            </div>
-            <div
-              className={`setup-status-item--wide ${
+              className={
                 larkReady ? "" : "is-warning"
-              }`}
+              }
             >
               {larkLoading ? (
                 <LoaderCircle className="spin" size={17} />
@@ -613,6 +642,93 @@ export function DesktopSetupModal({
                 )}
                 {larkReady ? "刷新" : "登录"}
               </button>
+            </div>
+            <div
+              className={`setup-model ${
+                advisorModel.state === "ready" ? "" : "is-warning"
+              }`}
+            >
+              {advisorModel.state === "checking" ||
+              advisorModel.state === "downloading" ? (
+                <LoaderCircle className="spin" size={17} />
+              ) : advisorModel.state === "ready" ? (
+                <Cpu size={17} />
+              ) : (
+                <CircleAlert size={17} />
+              )}
+              <span
+                title={
+                  advisorModel.modelDirectory
+                    ? `${advisorModel.message}；模型目录：${advisorModel.modelDirectory}`
+                    : advisorModel.message
+                }
+              >
+                <strong>端侧导演模型</strong>
+                <small aria-live="polite">
+                  {advisorModel.model} · {advisorModel.message}
+                  {advisorModel.state !== "ready" &&
+                    advisorModel.state !== "downloading" &&
+                    "；基础规则导演仍可使用"}
+                </small>
+                {advisorModel.state === "downloading" && (
+                  <progress
+                    className="setup-model__progress"
+                    max={100}
+                    value={advisorModel.percent ?? 0}
+                    aria-label="端侧导演模型下载进度"
+                  >
+                    {advisorModel.percent ?? 0}%
+                  </progress>
+                )}
+              </span>
+              <div className="setup-model__actions">
+                <button
+                  type="button"
+                  title="选择 Ollama 模型目录"
+                  aria-label="选择 Ollama 模型目录"
+                  disabled={busy || advisorModel.state === "downloading"}
+                  onClick={() => void chooseAdvisorModelDirectory()}
+                >
+                  <FolderOpen size={14} />
+                </button>
+                {advisorModel.state !== "ready" &&
+                  advisorModel.state !== "checking" && (
+                    <button
+                      type="button"
+                      disabled={advisorModel.state === "downloading"}
+                      onClick={() => {
+                        if (
+                          advisorModel.state === "missing_runtime" ||
+                          (advisorModel.state === "error" &&
+                            !advisorModel.runtimeAvailable)
+                        ) {
+                          void desktop?.openOllamaDownload();
+                          return;
+                        }
+                        void downloadAdvisorModel();
+                      }}
+                    >
+                      {advisorModel.state === "downloading" ? (
+                        <LoaderCircle className="spin" size={14} />
+                      ) : advisorModel.state === "missing_runtime" ||
+                        (advisorModel.state === "error" &&
+                          !advisorModel.runtimeAvailable) ? (
+                        <ExternalLink size={14} />
+                      ) : (
+                        <Download size={14} />
+                      )}
+                      {advisorModel.state === "downloading"
+                        ? `${advisorModel.percent ?? 0}%`
+                        : advisorModel.state === "missing_runtime" ||
+                            (advisorModel.state === "error" &&
+                              !advisorModel.runtimeAvailable)
+                          ? "安装 Ollama"
+                          : advisorModel.state === "error"
+                            ? "重试"
+                            : "下载模型"}
+                    </button>
+                  )}
+              </div>
             </div>
             <div className={docsReady ? "" : "is-warning"}>
               {soundEffectCatalogBusy ? (
@@ -743,96 +859,6 @@ export function DesktopSetupModal({
                       : "尚未生成桌面版集成配置"}
                 </small>
               </span>
-            </div>
-            <div
-              className={`setup-status-item--wide setup-model ${
-                advisorModel.state === "ready" ? "" : "is-warning"
-              }`}
-            >
-              {advisorModel.state === "checking" ||
-              advisorModel.state === "downloading" ? (
-                <LoaderCircle className="spin" size={17} />
-              ) : advisorModel.state === "ready" ? (
-                <Cpu size={17} />
-              ) : (
-                <CircleAlert size={17} />
-              )}
-              <span>
-                <strong>端侧导演模型</strong>
-                <small aria-live="polite">
-                  {advisorModel.message}
-                  {advisorModel.state !== "ready" &&
-                    advisorModel.state !== "downloading" &&
-                    "；不下载也可使用基础规则导演"}
-                </small>
-                <small>
-                  {advisorModel.model} · 约 3.3 GB · 模型权重按需下载
-                </small>
-                {advisorModel.modelDirectory && (
-                  <small title={advisorModel.modelDirectory}>
-                    模型目录：{advisorModel.modelDirectory}
-                  </small>
-                )}
-                {advisorModel.state === "downloading" && (
-                  <progress
-                    className="setup-model__progress"
-                    max={100}
-                    value={advisorModel.percent ?? 0}
-                    aria-label="端侧导演模型下载进度"
-                  >
-                    {advisorModel.percent ?? 0}%
-                  </progress>
-                )}
-              </span>
-              <div className="setup-model__actions">
-                <button
-                  type="button"
-                  title="选择 Ollama 模型目录"
-                  aria-label="选择 Ollama 模型目录"
-                  disabled={busy || advisorModel.state === "downloading"}
-                  onClick={() => void chooseAdvisorModelDirectory()}
-                >
-                  <FolderOpen size={14} />
-                  模型目录
-                </button>
-                {advisorModel.state !== "ready" &&
-                  advisorModel.state !== "checking" && (
-                  <button
-                    type="button"
-                    disabled={advisorModel.state === "downloading"}
-                    onClick={() => {
-                      if (
-                        advisorModel.state === "missing_runtime" ||
-                        (advisorModel.state === "error" &&
-                          !advisorModel.runtimeAvailable)
-                      ) {
-                        void desktop?.openOllamaDownload();
-                        return;
-                      }
-                      void downloadAdvisorModel();
-                    }}
-                  >
-                    {advisorModel.state === "downloading" ? (
-                      <LoaderCircle className="spin" size={14} />
-                    ) : advisorModel.state === "missing_runtime" ||
-                      (advisorModel.state === "error" &&
-                        !advisorModel.runtimeAvailable) ? (
-                      <ExternalLink size={14} />
-                    ) : (
-                      <Download size={14} />
-                    )}
-                    {advisorModel.state === "downloading"
-                      ? `${advisorModel.percent ?? 0}%`
-                      : advisorModel.state === "missing_runtime" ||
-                          (advisorModel.state === "error" &&
-                            !advisorModel.runtimeAvailable)
-                        ? "安装 Ollama"
-                        : advisorModel.state === "error"
-                          ? "重试"
-                          : "下载模型"}
-                  </button>
-                  )}
-              </div>
             </div>
             <div
               className={`setup-status-item--wide ${
