@@ -216,6 +216,11 @@ const LazyNpcMigrationWorkspace = lazy(() =>
     default: module.NpcMigrationWorkspace,
   })),
 );
+const LazyAnimationVoiceWorkspace = lazy(() =>
+  import("./components/AnimationVoiceWorkspace").then((module) => ({
+    default: module.AnimationVoiceWorkspace,
+  })),
+);
 const LazyNpcRegistrationModal = lazy(() =>
   import("./components/NpcRegistrationModal").then((module) => ({
     default: module.NpcRegistrationModal,
@@ -1593,6 +1598,7 @@ function ShotInspector({
               dialogueIds={editableDialogueIds}
               busy={exportBusy}
               showViewLines={configurationMode}
+              singleNodeMode={configurationMode}
             />
             {!configurationMode && (
               <>
@@ -1999,7 +2005,7 @@ export default function App() {
     closeToolWorkspace,
   } = useWorkspaceNavigation();
   const [loadedToolWorkspaces, setLoadedToolWorkspaces] = useState<
-    Set<"npc" | "migration" | "targets">
+    Set<"npc" | "migration" | "targets" | "animation">
   >(() => new Set());
   useEffect(() => {
     if (activeWorkspace === "storyboard") {
@@ -5025,6 +5031,16 @@ export default function App() {
             <PackageOpen size={19} />
             <span>NPC 迁移</span>
           </button>
+          <button
+            className={`app-rail__button ${activeWorkspace === "animation" ? "is-active" : ""}`}
+            type="button"
+            aria-current={activeWorkspace === "animation" ? "page" : undefined}
+            title="动画语音"
+            onClick={() => switchWorkspace("animation")}
+          >
+            <AudioLines size={19} />
+            <span>动画语音</span>
+          </button>
         </div>
         <div className="app-rail__tools app-rail__tools--bottom">
           <button
@@ -5069,6 +5085,8 @@ export default function App() {
               <UserRoundPlus size={18} />
             ) : activeWorkspace === "migration" ? (
               <PackageOpen size={18} />
+            ) : activeWorkspace === "animation" ? (
+              <AudioLines size={18} />
             ) : (
               <MapPinned size={18} />
             )}
@@ -5081,6 +5099,8 @@ export default function App() {
                   ? "注册 NPC"
                   : activeWorkspace === "migration"
                     ? "NPC 迁移"
+                    : activeWorkspace === "animation"
+                      ? "动画语音"
                     : "任务目标物"}
             </h1>
             <p>
@@ -5090,6 +5110,8 @@ export default function App() {
                   ? "UE SELECTION REGISTRATION"
                   : activeWorkspace === "migration"
                     ? "ASSET MIGRATION & BLUEPRINT"
+                    : activeWorkspace === "animation"
+                      ? "SEQUENCE & VOICE"
                     : "MISSION TARGET & BLUEPRINT"}
             </p>
           </div>
@@ -6207,6 +6229,22 @@ export default function App() {
               database={database}
               onClose={closeToolWorkspace}
             />
+          </Suspense>
+        </section>
+      )}
+
+      {!configurationMode &&
+        (loadedToolWorkspaces.has("animation") || activeWorkspace === "animation" || outgoingWorkspace === "animation") && (
+        <section
+          className="tool-workspace"
+          data-workspace-state={activeWorkspace === "animation" ? outgoingWorkspace ? "entering" : "active" : outgoingWorkspace === "animation" ? "exiting" : "inactive"}
+          hidden={activeWorkspace !== "animation" && outgoingWorkspace !== "animation"}
+          aria-hidden={activeWorkspace !== "animation" || undefined}
+          inert={activeWorkspace !== "animation" || undefined}
+          aria-label="动画语音工作区"
+        >
+          <Suspense fallback={<ToolWorkspaceLoading />}>
+            <LazyAnimationVoiceWorkspace />
           </Suspense>
         </section>
       )}

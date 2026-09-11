@@ -684,9 +684,35 @@ export interface DialogueSchoolCameraCopy {
   targetRole: DialogueSchoolCameraRole;
 }
 
+export interface DialogueCameraPresetPose {
+  position: { X: number; Y: number; Z: number };
+  rotation: { Pitch: number; Yaw: number; Roll: number };
+}
+
+export interface DialogueCameraPresetSnapshot {
+  dialogueNodeId: string;
+  fingerprint: string;
+  formationActorPath: string;
+  formationClassPath: string;
+  roles: Array<{
+    modelIndex: number;
+    label: string;
+    actorPath: string;
+    cameraClassPath: string;
+    cameras: Array<{
+      name: string;
+      label: string;
+      componentPath: string;
+      local: DialogueCameraPresetPose;
+      world: DialogueCameraPresetPose;
+    }>;
+  }>;
+}
+
 export type DialogueCameraQuickActionMode =
   | "copy_previous"
   | "default"
+  | "preset_camera"
   | "blend_curve"
   | "school_cameras"
   | "copy_school_cameras";
@@ -698,6 +724,11 @@ export interface DialogueCameraQuickActionRequest {
   previousDialogueNodeIds?: string[];
   blendCurveAssetName?: string;
   schoolCameraCopies?: DialogueSchoolCameraCopy[];
+  presetCamera?: {
+    modelIndex: number;
+    cameraName: string;
+    fingerprint: string;
+  };
   mode: DialogueCameraQuickActionMode;
 }
 
@@ -730,6 +761,12 @@ export interface DialogueCameraQuickActionPreview {
   desiredSchoolCameraCount: number;
   changed: boolean;
   blockedReasons: string[];
+  presetCamera?: {
+    roleLabel: string;
+    cameraName: string;
+    pose: DialogueCameraPresetPose;
+    relative: boolean;
+  };
 }
 
 export interface DialogueCameraQuickActionResult {
@@ -1002,14 +1039,15 @@ export type NpcMigrationMontageKind =
   | "turn_left_90"
   | "turn_right_90"
   | "turn_left_180"
-  | "turn_right_180";
+  | "turn_right_180"
+  | "action";
 
 export interface NpcMigrationMontagePlan {
   kind: NpcMigrationMontageKind;
   sourceFile: string;
   sourceAssetName: string;
   montageName: string;
-  slotName: "IdleSlot" | "TurnSlot";
+  slotName: "IdleSlot" | "TurnSlot" | "DefaultSlot";
 }
 
 export type NpcMigrationStandardAbpTemplate = "male" | "female";
@@ -1134,7 +1172,7 @@ export interface NpcSupplementTarget {
   targetContentDirectory: string;
   selectedAssetPath: string;
   selectedAssetName: string;
-  selectedAssetType: "Blueprint" | "SkeletalMesh";
+  selectedAssetType: "Blueprint" | "SkeletalMesh" | "Skeleton";
   npcName: string;
   skeletalMeshAssetPath: string;
   skeletonAssetPath: string;
@@ -1149,20 +1187,33 @@ export interface NpcSupplementTarget {
 
 export type NpcSupplementItemState = "new" | "update" | "blocked";
 
+export interface NpcSupplementFacePair {
+  sourceFile: string;
+  sourceAssetName: string;
+  sourceModifiedTimeMs: number;
+  targetAssetPath: string;
+  state: NpcSupplementItemState;
+  copyFaceCurves: boolean;
+  blockedReason: string;
+}
+
 export interface NpcSupplementPlanItem {
   sourceFile: string;
   sourceAssetName: string;
+  sourceModifiedTimeMs: number;
   actionName: string;
   targetAssetPath: string;
   bodyAssetPath: string;
   montageName: string;
   montageAssetPath: string;
   montageState: "none" | "create" | "reuse";
+  montageSlotName: "IdleSlot" | "TurnSlot" | "DefaultSlot" | "";
   copyFaceCurves: boolean;
   makeMontage: boolean;
   state: NpcSupplementItemState;
   included: boolean;
   blockedReason: string;
+  pairedFace: NpcSupplementFacePair | null;
 }
 
 export interface NpcSupplementPlan {

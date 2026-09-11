@@ -1,0 +1,19 @@
+{
+  "FileVersion": 3,
+  "Version": 1,
+  "VersionName": "0.1.0-experimental",
+  "FriendlyName": "Local Dialogue Schema Probe",
+  "Description": "Experimental read-only inspection of loaded Seria dialogue graphs.",
+  "Category": "Editor",
+  "EnabledByDefault": false,
+  "CanContainContent": false,
+  "IsBetaVersion": true,
+  "Modules": [
+    {
+      "Name": "LocalDialogueProbe",
+      "Type": "Editor",
+      "LoadingPhase": "PostEngineInit",
+      "WhitelistPlatforms": ["Win64"]
+    }
+  ]
+}

@@ -75,6 +75,7 @@ import {
 } from "./configRepository";
 import { updateMissionTargetTransforms } from "./excelRegistration";
 import { readCharacterBodies } from "./ue/characterBody";
+import { captureDialogueCameraPresets, cameraMoveFromPreset } from "./ue/cameraPresets";
 import {
   readSelectedDialogueNodesFromConnection,
 } from "./ue/dialogueSelection";
@@ -538,9 +539,15 @@ const DialogueCameraQuickActionRequestSchema = z.object({
     .max(128)
     .optional(),
   schoolCameraCopies: DialogueSchoolCameraCopiesSchema.optional(),
+  presetCamera: z.object({
+    modelIndex: z.number().int().min(0).max(127),
+    cameraName: z.string().regex(/^\d{1,6}$/),
+    fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+  }).optional(),
   mode: z.enum([
     "copy_previous",
     "default",
+    "preset_camera",
     "blend_curve",
     "school_cameras",
     "copy_school_cameras",
@@ -4323,6 +4330,12 @@ async function prepareDialogueCameraQuickAction(
   ) {
     throw new Error("镜头快捷操作中的节点不属于当前四位数对话 ID");
   }
+  if (request.mode === "preset_camera" && (!request.presetCamera || request.dialogueNodeId.endsWith("00"))) {
+    throw new Error("请选择普通对白节点的角色和预设机位");
+  }
+  if (request.mode !== "preset_camera" && request.presetCamera) {
+    throw new Error("预设机位仅适用于预设相机模式");
+  }
   if (
     request.mode === "copy_previous" &&
     !request.previousDialogueNodeIds?.length
@@ -4434,6 +4447,7 @@ async function prepareDialogueCameraQuickAction(
     originalSchoolMoveCamerasMap,
   );
   let addedSchoolCameraKeys: string[] = [];
+  let presetPreview: DialogueCameraQuickActionPreview["presetCamera"];
 
   if (request.mode === "copy_previous" && sourceNode) {
     desiredCameraPosition = sourceNode.existingCameraPosition;
@@ -4450,6 +4464,33 @@ async function prepareDialogueCameraQuickAction(
     );
     desiredCameraPosition = layout.cameraName;
     desiredMoveCameras = [buildDefaultDialogueCameraMove()];
+  } else if (request.mode === "preset_camera" && request.presetCamera) {
+    await assertCameraPresetSelection(connection, request.dialogueNodeId);
+    const exportedDialogue = parseDialogueExport(exportedText);
+    const snapshot = await captureDialogueCameraPresets(
+      connection, exportedDialogue.formationClassPath ?? "", request.dialogueNodeId,
+    );
+    if (snapshot.fingerprint !== request.presetCamera.fingerprint) {
+      throw new Error("UE 预览站位或预设机位已变化，请重新读取并选择");
+    }
+    const role = snapshot.roles.find((item) => item.modelIndex === request.presetCamera!.modelIndex);
+    const camera = role?.cameras.find((item) => item.name === request.presetCamera!.cameraName);
+    if (!camera || !role) throw new Error("选中的角色或预设机位已不存在");
+    desiredMoveCameras = cameraMoveFromPreset(
+      currentNode.existingMoveCameras, buildDefaultDialogueCameraMove(), camera,
+    );
+    const layout = await readFormationExportLayout(
+      connection, request.startId, exportedDialogue.formationClassPath ?? "", [], true, false,
+    );
+    desiredCameraPosition = layout.cameraName;
+    const push = (desiredMoveCameras[0] as Record<string, unknown>).PushCameraArg as Record<string, unknown>;
+    presetPreview = {
+      roleLabel: `${role.modelIndex} · ${role.label}`,
+      cameraName: camera.name,
+      relative: push.bRelative === true,
+      pose: push.bRelative ? camera.local : camera.world,
+    };
+    await assertCameraPresetSelection(connection, request.dialogueNodeId);
   } else if (request.mode === "blend_curve") {
     const curveName =
       request.blendCurveAssetName ?? DEFAULT_DIALOGUE_BLEND_CURVE_NAME;
@@ -4623,6 +4664,7 @@ async function prepareDialogueCameraQuickAction(
         reflectedSchoolCameraKeys(desiredSchoolMoveCamerasMap).length,
       changed,
       blockedReasons: [],
+      ...(presetPreview ? { presetCamera: presetPreview } : {}),
     },
     dialogueAsset: String(dialogueAsset),
     nodeDataPath: currentNode.nodeDataPath,
@@ -4635,6 +4677,44 @@ async function prepareDialogueCameraQuickAction(
     originalSchoolMoveCamerasMap,
     desiredSchoolMoveCamerasMap,
   };
+}
+
+async function assertCameraPresetSelection(connection: UnrealInvoker, dialogueNodeId: string) {
+  const { nodes } = await readSelectedDialogueNodesFromConnection(connection);
+  if (nodes.length !== 1 || nodes[0].dialogueNodeId !== dialogueNodeId) {
+    throw new Error("UE 当前选中节点已变化，请重新选择目标节点并读取预设");
+  }
+}
+
+export async function readDialogueCameraPresets(
+  rawRequest: unknown,
+  connectionFactory: () => UnrealInvoker = () => new UnrealMcpConnection(),
+) {
+  const request = z.object({
+    dialogueId: z.string().regex(/^\d{4}$/),
+    startId: z.string().regex(/^\d{6}$/),
+    dialogueNodeId: z.string().regex(/^\d{6}$/),
+  }).parse(rawRequest);
+  if (!request.startId.startsWith(request.dialogueId) ||
+      !request.dialogueNodeId.startsWith(request.dialogueId) ||
+      request.dialogueNodeId.endsWith("00")) {
+    throw new Error("请选择当前对话的普通对白节点");
+  }
+  const connection = connectionFactory();
+  try {
+    await connectUnreal(connection);
+    await assertCameraPresetSelection(connection, request.dialogueNodeId);
+    const paths = await findDialogueAssetPath(connection, request.startId);
+    if (paths.length !== 1) throw new Error("无法唯一确定当前对话资产");
+    const exported = parseDialogueExport(await exportAssetText(connection, paths[0]));
+    const snapshot = await captureDialogueCameraPresets(
+      connection, exported.formationClassPath ?? "", request.dialogueNodeId,
+    );
+    await assertCameraPresetSelection(connection, request.dialogueNodeId);
+    return snapshot;
+  } finally {
+    connection.close();
+  }
 }
 
 export async function inspectDialogueCameraQuickAction(

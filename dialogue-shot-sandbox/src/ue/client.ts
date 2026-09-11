@@ -439,6 +439,12 @@ export function exportDialogueStoryboard(
   );
 }
 
+export function readDialogueCameraPresets(
+  request: Pick<DialogueCameraQuickActionRequest, "dialogueId" | "startId" | "dialogueNodeId">,
+): Promise<import("../types").DialogueCameraPresetSnapshot> {
+  return postUe("/api/ue/dialogue/camera/presets", request, false);
+}
+
 export function inspectDialogueCameraQuickAction(
   request: DialogueCameraQuickActionRequest,
 ): Promise<DialogueCameraQuickActionPreview> {

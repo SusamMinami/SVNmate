@@ -29,6 +29,18 @@ contextBridge.exposeInMainWorld("shotSandboxDesktop", {
   chooseNpcMigrationDirectory: (
     kind: "target-content" | "animations",
   ) => ipcRenderer.invoke("desktop:choose-npc-migration-directory", kind),
+  addNpcAnimationDirectory: () =>
+    ipcRenderer.invoke("desktop:add-npc-animation-directory"),
+  removeNpcAnimationDirectory: (directoryPath: string) =>
+    ipcRenderer.invoke(
+      "desktop:remove-npc-animation-directory",
+      directoryPath,
+    ),
+  resolveNpcAnimationDirectory: (npcName: string) =>
+    ipcRenderer.invoke(
+      "desktop:resolve-npc-animation-directory",
+      npcName,
+    ),
   setLiveResDirectory: (directoryPath: string) =>
     ipcRenderer.invoke("desktop:set-live-data-directory", directoryPath),
   setConfigDocDirectory: (directoryPath: string) =>

@@ -47,6 +47,7 @@ function actionNameFor(
 export function buildNpcSupplementPlan(
   request: NpcSupplementPlanRequest,
   animationFiles: readonly string[],
+  sourceModifiedTimes: ReadonlyMap<string, number> = new Map(),
 ): Omit<NpcSupplementPlan, "reviewToken"> {
   const sourceDirectory = normalizePath(request.sourceDirectory);
   const npcPrefix = expectedPrefix(request.target.npcName);
@@ -65,14 +66,28 @@ export function buildNpcSupplementPlan(
       option,
     ]),
   );
-  const sourceFiles = [...animationFiles]
+  const allFbxFiles = [...animationFiles]
     .filter((file) => /\.fbx$/i.test(file))
-    .filter((file) =>
-      request.kind === "face" ? /_Face\.fbx$/i.test(file) : !/_Face\.fbx$/i.test(file),
-    )
     .sort((left, right) =>
       left.localeCompare(right, "en", { sensitivity: "base" }),
     );
+  const sourceFiles = allFbxFiles
+    .filter((file) =>
+      request.kind === "face" ? /_Face\.fbx$/i.test(file) : !/_Face\.fbx$/i.test(file),
+    );
+  const faceFilesByBodyAssetName = new Map<string, string[]>();
+  if (request.kind === "actions") {
+    for (const faceFile of allFbxFiles.filter((file) =>
+      /_Face\.fbx$/i.test(file),
+    )) {
+      const bodyAssetName = fileStem(faceFile).replace(/_Face$/i, "");
+      const key = bodyAssetName.toLowerCase();
+      faceFilesByBodyAssetName.set(key, [
+        ...(faceFilesByBodyAssetName.get(key) ?? []),
+        faceFile,
+      ]);
+    }
+  }
 
   const items: NpcSupplementPlanItem[] = sourceFiles.map((sourceFile) => {
     const normalizedSourceFile = normalizePath(sourceFile);
@@ -113,10 +128,79 @@ export function buildNpcSupplementPlan(
           ? `AM_${actionName}`
           : ""
         : bodyMontage?.montageName ?? "";
-    const montageAssetPath = montageName
+    const expectedMontageAssetPath = montageName
       ? `${request.target.animationPackagePath}/${montageName}`
       : "";
+    const matchingMontageAssetPaths = montageName
+      ? request.target.existingAssetPaths
+          .filter(
+            (assetPath) =>
+              assetPath.split(/[/.]/).at(-1)?.toLowerCase() ===
+              montageName.toLowerCase(),
+          )
+          .map((assetPath) => assetPath.split(".", 1)[0])
+      : [];
+    const montageAssetPath =
+      matchingMontageAssetPaths.length === 1
+        ? matchingMontageAssetPaths[0]
+        : expectedMontageAssetPath;
+    const montageState = !montageName
+      ? "none"
+      : matchingMontageAssetPaths.length === 1 ||
+          existingAssets.has(packagePath(expectedMontageAssetPath))
+        ? "reuse"
+        : "create";
+    const montageBlockedReason =
+      matchingMontageAssetPaths.length > 1
+        ? `找到多个同名 Montage：${montageName}`
+        : "";
     const existingTarget = existingAssets.has(packagePath(targetAssetPath));
+    const pairedFaceCandidates =
+      request.kind === "actions"
+        ? faceFilesByBodyAssetName.get(sourceAssetName.toLowerCase()) ?? []
+        : [];
+    let pairedFace: NpcSupplementPlanItem["pairedFace"] = null;
+    let pairedFaceBlockedReason = "";
+    if (pairedFaceCandidates.length > 1) {
+      pairedFaceBlockedReason =
+        `找到多个同名 Face FBX：${sourceAssetName}_Face`;
+    } else if (pairedFaceCandidates.length === 1) {
+      const pairedFaceSourceFile = pairedFaceCandidates[0];
+      const pairedFaceSourceAssetName = fileStem(pairedFaceSourceFile);
+      const pairedFaceTargetAssetPath =
+        `${request.target.animationPackagePath}/Face/${pairedFaceSourceAssetName}`;
+      const existingPairedFace = existingAssets.has(
+        packagePath(pairedFaceTargetAssetPath),
+      );
+      if (
+        !request.target.faceSkeletalMeshAssetPath ||
+        !request.target.faceSkeletonAssetPath
+      ) {
+        pairedFaceBlockedReason =
+          "找到同名 Face FBX，但目标 NPC 缺少 Face Skeletal Mesh 或 Face Skeleton";
+      } else if (
+        existingPairedFace &&
+        dirtyPackages.has(packagePath(pairedFaceTargetAssetPath))
+      ) {
+        pairedFaceBlockedReason = "配对的 Face 动作在 UE 中尚未保存";
+      }
+      pairedFace = {
+        sourceFile: normalizePath(pairedFaceSourceFile),
+        sourceAssetName: pairedFaceSourceAssetName,
+        sourceModifiedTimeMs:
+          sourceModifiedTimes.get(normalizePath(pairedFaceSourceFile)) ??
+          sourceModifiedTimes.get(pairedFaceSourceFile) ??
+          0,
+        targetAssetPath: pairedFaceTargetAssetPath,
+        state: pairedFaceBlockedReason
+          ? "blocked"
+          : existingPairedFace
+            ? "update"
+            : "new",
+        copyFaceCurves: defaultCopyFaceCurves(actionName),
+        blockedReason: pairedFaceBlockedReason,
+      };
+    }
     let blockedReason = "";
     if (!hasExpectedPrefix) {
       blockedReason = `文件名必须以 ${npcPrefix} 开头`;
@@ -126,20 +210,26 @@ export function buildNpcSupplementPlan(
       blockedReason = `缺少同名 Body 动作 ${npcPrefix}${actionName}`;
     } else if (existingTarget && dirtyPackages.has(packagePath(targetAssetPath))) {
       blockedReason = "目标动作在 UE 中尚未保存";
+    } else if (montageBlockedReason) {
+      blockedReason = montageBlockedReason;
+    } else if (pairedFaceBlockedReason) {
+      blockedReason = pairedFaceBlockedReason;
     }
     return {
       sourceFile: normalizedSourceFile,
       sourceAssetName,
+      sourceModifiedTimeMs:
+        sourceModifiedTimes.get(normalizedSourceFile) ??
+        sourceModifiedTimes.get(sourceFile) ??
+        0,
       actionName,
       targetAssetPath,
       bodyAssetPath,
       montageName,
       montageAssetPath,
-      montageState: !montageName
-        ? "none"
-        : existingAssets.has(packagePath(montageAssetPath))
-          ? "reuse"
-          : "create",
+      montageState,
+      montageSlotName:
+        montageState === "create" ? bodyMontage?.slotName ?? "" : "",
       copyFaceCurves,
       makeMontage,
       state: blockedReason ? "blocked" : existingTarget ? "update" : "new",
@@ -147,6 +237,7 @@ export function buildNpcSupplementPlan(
         !blockedReason &&
         (included ? included.has(normalizedSourceFile) : true),
       blockedReason,
+      pairedFace,
     };
   });
 
@@ -186,6 +277,9 @@ export function buildNpcSupplementPlan(
     );
   }
 
+  const pairedFaceCount = items.filter(
+    (item) => item.pairedFace && item.pairedFace.state !== "blocked",
+  ).length;
   const warnings =
     request.kind === "face"
       ? [
@@ -194,7 +288,12 @@ export function buildNpcSupplementPlan(
         ]
       : [
           "同名动作会按已审核清单重新导入并覆盖，未保存资产会阻断",
-          "新识别到的 Idle / Turn 动作会创建 Montage；既有 Montage 会继续引用更新后的动作",
+          "可播放动作会创建 Montage；状态机素材只导入，既有 Montage 保留原 Slot",
+          ...(pairedFaceCount > 0
+            ? [
+                `已自动匹配 ${pairedFaceCount} 个同名 _Face FBX，将在 Body 导入后连续处理且不重建 Montage`,
+              ]
+            : []),
         ];
   const selectedBlocked = selectedItems.filter(
     (item) => item.state === "blocked",

@@ -108,7 +108,7 @@ describe("NPC migration planning", () => {
     expect(inferStandardAbpTemplate("N99_Robot")).toBe("female");
   });
 
-  it("maps documented Idle and Turn actions to montage names and slots", () => {
+  it("maps playable actions to montage names and semantic slots", () => {
     expect(
       buildNpcMontagePlans("N28_Citizen_Male_C", [
         "D:/Anim/A_N28_Citizen_Male_C_Idle.fbx",
@@ -117,6 +117,7 @@ describe("NPC migration planning", () => {
         "D:/Anim/A_N28_Citizen_Male_C_TurnRight90.fbx",
         "D:/Anim/A_N28_Citizen_Male_C_TurnLeft180.fbx",
         "D:/Anim/A_N28_Citizen_Male_C_Walk.fbx",
+        "D:/Anim/A_N28_Citizen_Male_C_Wave.fbx",
       ]).montages,
     ).toMatchObject([
       { montageName: "AM_Idle1", slotName: "IdleSlot" },
@@ -124,6 +125,7 @@ describe("NPC migration planning", () => {
       { montageName: "AM_TurnLeft90", slotName: "TurnSlot" },
       { montageName: "AM_TurnRight90", slotName: "TurnSlot" },
       { montageName: "AM_TurnLeft180", slotName: "TurnSlot" },
+      { montageName: "AM_Wave", slotName: "DefaultSlot" },
     ]);
   });
 

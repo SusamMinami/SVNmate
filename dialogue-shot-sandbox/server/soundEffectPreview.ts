@@ -84,7 +84,7 @@ function runtimeRoot(): string {
   return process.env.STORYBOARD_PROJECT_ROOT || process.cwd();
 }
 
-function configuredWwiseRoot(): string {
+export function configuredWwiseRoot(): string {
   if (process.env.STORYBOARD_WWISE_WINDOWS_DIR) {
     return resolve(process.env.STORYBOARD_WWISE_WINDOWS_DIR);
   }
@@ -99,7 +99,7 @@ function configuredWwiseRoot(): string {
   );
 }
 
-function configuredVgmstreamPath(): string {
+export function configuredVgmstreamPath(): string {
   if (process.env.VGMSTREAM_CLI_PATH) {
     return resolve(process.env.VGMSTREAM_CLI_PATH);
   }

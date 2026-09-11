@@ -43,6 +43,10 @@ import {
   normalizeConfigCsvDirectory,
   normalizeLiveCsvDirectory,
 } from "../server/configDirectory";
+import {
+  normalizeNpcAnimationDirectories,
+  resolveNpcAnimationDirectory,
+} from "../server/npcAnimationLibrary";
 import { inspectUnrealMcpConnection } from "../server/ueBridge";
 import { routeUeRequest } from "../server/ue/routes";
 import {
@@ -89,6 +93,7 @@ interface DesktopState {
   liveResDirectory: string;
   configDocDirectory: string;
   advisorModelDirectory: string;
+  npcAnimationDirectories: string[];
 }
 
 interface UpdateSnapshot {
@@ -205,6 +210,9 @@ async function readDesktopState(): Promise<DesktopState> {
         typeof parsed.advisorModelDirectory === "string"
           ? parsed.advisorModelDirectory.trim()
           : "",
+      npcAnimationDirectories: normalizeNpcAnimationDirectories(
+        parsed.npcAnimationDirectories,
+      ),
     };
   } catch {
     return {
@@ -213,6 +221,7 @@ async function readDesktopState(): Promise<DesktopState> {
       liveResDirectory: "",
       configDocDirectory: "",
       advisorModelDirectory: "",
+      npcAnimationDirectories: [],
     };
   }
 }
@@ -378,6 +387,7 @@ async function setupStatus() {
     configCsvDirectory,
     missionTargetTablePath,
     advisorModelDirectory: configuredModelDirectory(),
+    npcAnimationDirectories: state.npcAnimationDirectories,
     ueConnected: ueConnection.connected,
     ueMcpHost: ueConnection.host,
     ueMcpPort: ueConnection.port,
@@ -524,6 +534,35 @@ async function setAdvisorModelDirectory(directoryPath: unknown) {
   return inspectRuleAdvisorModel({
     bundledExecutable: bundledRuleAdvisorExecutable(),
   });
+}
+
+async function addNpcAnimationDirectory(directoryPath: unknown) {
+  const state = await readDesktopState();
+  const selectedDirectory = String(directoryPath ?? "").trim();
+  if (!selectedDirectory || !(await pathExists(selectedDirectory))) {
+    throw new Error("NPC 动作文件夹不存在");
+  }
+  await writeDesktopState({
+    ...state,
+    npcAnimationDirectories: normalizeNpcAnimationDirectories([
+      ...state.npcAnimationDirectories,
+      selectedDirectory,
+    ]),
+  });
+  return setupStatus();
+}
+
+async function removeNpcAnimationDirectory(directoryPath: unknown) {
+  const state = await readDesktopState();
+  const removedDirectory = resolve(String(directoryPath ?? "").trim());
+  await writeDesktopState({
+    ...state,
+    npcAnimationDirectories: state.npcAnimationDirectories.filter(
+      (directory) =>
+        resolve(directory).toLowerCase() !== removedDirectory.toLowerCase(),
+    ),
+  });
+  return setupStatus();
 }
 
 function animateWindowBounds(
@@ -817,6 +856,34 @@ function registerDesktopIpc(): void {
         properties: ["openDirectory"],
       });
       return result.canceled ? null : result.filePaths[0] ?? null;
+    },
+  );
+  ipcMain.handle(
+    "desktop:add-npc-animation-directory",
+    async () => {
+      const result = await dialog.showOpenDialog(mainWindow!, {
+        title: "添加 NPC 动作库根目录",
+        properties: ["openDirectory"],
+      });
+      const selectedDirectory = result.filePaths[0];
+      return result.canceled || !selectedDirectory
+        ? null
+        : addNpcAnimationDirectory(selectedDirectory);
+    },
+  );
+  ipcMain.handle(
+    "desktop:remove-npc-animation-directory",
+    (_event, directoryPath: unknown) =>
+      removeNpcAnimationDirectory(directoryPath),
+  );
+  ipcMain.handle(
+    "desktop:resolve-npc-animation-directory",
+    async (_event, npcName: unknown) => {
+      const state = await readDesktopState();
+      return resolveNpcAnimationDirectory(
+        String(npcName ?? ""),
+        state.npcAnimationDirectories,
+      );
     },
   );
   ipcMain.handle(

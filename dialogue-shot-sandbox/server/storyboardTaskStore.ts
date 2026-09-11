@@ -59,6 +59,11 @@ export interface StoryboardQueueItem {
   updatedAt: string;
 }
 
+export interface StoryboardTaskSnapshot {
+  tasks: StoryboardQueueItem[];
+  stats: Record<StoryboardTaskStatus, number>;
+}
+
 const PROCESSING_LEASE_MS = 5 * 60_000;
 const TASK_LOCK_TIMEOUT_MS = 5_000;
 const TASK_LOCK_STALE_MS = 30_000;
@@ -975,36 +980,64 @@ export async function expireAbandonedProcessingTasks(
   leaseMs = PROCESSING_LEASE_MS,
   now = Date.now(),
 ): Promise<void> {
+  await refreshExpiredProcessingTasks(tasks, leaseMs, now);
+}
+
+async function refreshExpiredProcessingTasks(
+  tasks: StoryboardTask[],
+  leaseMs = PROCESSING_LEASE_MS,
+  now = Date.now(),
+): Promise<StoryboardTask[]> {
   const expired = tasks.filter((task) =>
     processingLeaseExpired(task, leaseMs, now),
   );
+  const refreshed = new Map<string, StoryboardTask | null>();
   await Promise.all(
     expired.map((task) =>
       withTaskLock(task.requestId, async () => {
         const current = await getStoryboardTask(task.requestId);
-        if (!current || !processingLeaseExpired(current, leaseMs, now)) {
-          return;
+        if (current && processingLeaseExpired(current, leaseMs, now)) {
+          await markStoryboardTaskCancelled(
+            current,
+            "TRAE 处理心跳已中断，任务已自动结束",
+          );
         }
-        await markStoryboardTaskCancelled(
-          current,
-          "TRAE 处理心跳已中断，任务已自动结束",
-        );
+        refreshed.set(task.requestId, current);
       }),
     ),
   );
+  return tasks.flatMap((task) => {
+    const current = refreshed.has(task.requestId)
+      ? refreshed.get(task.requestId)
+      : task;
+    return current ? [current] : [];
+  });
+}
+
+export async function readStoryboardTaskSnapshot(): Promise<StoryboardTaskSnapshot> {
+  // Queue and counters share one observation; only expired leases need a locked reread.
+  const tasks = await refreshExpiredProcessingTasks(await readAllTasks());
+  const stats: StoryboardTaskSnapshot["stats"] = {
+    pending: 0,
+    processing: 0,
+    completed: 0,
+    failed: 0,
+    cancelled: 0,
+  };
+  for (const task of tasks) stats[task.status] += 1;
+  return {
+    tasks: tasks
+      .filter((task) => task.status === "pending" || task.status === "processing")
+      .sort(compareQueueOrder)
+      .map(queueItem),
+    stats,
+  };
 }
 
 export async function listActiveStoryboardTasks(): Promise<
   StoryboardQueueItem[]
 > {
-  const tasks = await readAllTasks();
-  await expireAbandonedProcessingTasks(tasks);
-  return (await readAllTasks())
-    .filter(
-      (task) => task.status === "pending" || task.status === "processing",
-    )
-    .sort(compareQueueOrder)
-    .map(queueItem);
+  return (await readStoryboardTaskSnapshot()).tasks;
 }
 
 export async function listPendingStoryboardTasks(): Promise<
@@ -1063,24 +1096,6 @@ export async function deletePendingStoryboardTask(
   });
 }
 
-export async function storyboardTaskStats(): Promise<{
-  pending: number;
-  processing: number;
-  completed: number;
-  failed: number;
-  cancelled: number;
-}> {
-  const tasks = await readAllTasks();
-  await expireAbandonedProcessingTasks(tasks);
-  const stats = {
-    pending: 0,
-    processing: 0,
-    completed: 0,
-    failed: 0,
-    cancelled: 0,
-  };
-  for (const task of await readAllTasks()) {
-    stats[task.status] += 1;
-  }
-  return stats;
+export async function storyboardTaskStats(): Promise<StoryboardTaskSnapshot["stats"]> {
+  return (await readStoryboardTaskSnapshot()).stats;
 }

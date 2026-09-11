@@ -108,6 +108,16 @@ export function buildNpcMontagePlans(
         montageName: "AM_TurnRight180",
         slotName: "TurnSlot",
       };
+    } else if (
+      !/^(?:look[dfu]|walk|backlean|frontlean|idlestand\d*)$/.test(
+        normalized,
+      )
+    ) {
+      montage = {
+        kind: "action",
+        montageName: `AM_${actionName}`,
+        slotName: "DefaultSlot",
+      };
     }
     return montage
       ? [{ ...montage, sourceFile, sourceAssetName }]
@@ -312,7 +322,7 @@ export function buildNpcMigrationPlan(
   }
   if (montages.length === 0) {
     warnings.push(
-      "未识别到 Idle 或 Turn 动作，不会自动创建 Montage",
+      "目录中只有状态机或混合空间素材，不会自动创建 Montage",
     );
   }
   warnings.push("胶囊体将按 Mesh 包围盒估算，完成后仍需在蓝图视口确认");
@@ -398,8 +408,8 @@ export function buildNpcMigrationPlan(
     ),
     automaticStep(
       "montages",
-      "创建 Idle / Turn Montage",
-      `${montages.length} 个 Montage，自动写入 IdleSlot / TurnSlot`,
+      "创建动作 Montage",
+      `${montages.length} 个 Montage，按语义写入 IdleSlot / TurnSlot / DefaultSlot`,
       duplicateNames.length > 0,
     ),
     {

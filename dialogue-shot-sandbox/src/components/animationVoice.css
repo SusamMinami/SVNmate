@@ -1,0 +1,95 @@
+.animation-voice {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  color: var(--ink);
+  background: var(--paper);
+  font-size: 12px;
+  letter-spacing: 0;
+}
+.animation-voice button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 5px 9px;
+  background: var(--surface);
+  color: var(--ink);
+}
+.animation-voice button:hover:not(:disabled) { background: var(--ink); color: var(--surface); }
+.animation-voice button:disabled { opacity: .5; cursor: not-allowed; }
+.animation-voice :focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+.animation-voice input:not([type="checkbox"]) {
+  min-width: 0;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 4px 7px;
+  color: var(--ink);
+  background: var(--surface);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+}
+.animation-voice input[type="checkbox"] { accent-color: var(--ink); width: 14px; height: 14px; }
+.animation-voice__toolbar { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+.animation-voice__root { display: flex; align-items: center; gap: 12px; flex: 1; }
+.animation-voice__root input { flex: 1; }
+.animation-voice__body { display: grid; grid-template-columns: minmax(220px, 25%) minmax(0, 1fr); flex: 1; min-height: 0; }
+.animation-voice__catalog { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--border); }
+.animation-voice__catalog > input { margin: 12px; }
+.animation-voice__asset-list { overflow: auto; flex: 1; }
+.animation-voice__asset-list button { display: flex; flex-direction: column; align-items: flex-start; width: 100%; min-height: 56px; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; text-align: left; padding: 10px 14px; }
+.animation-voice__asset-list button[aria-pressed="true"] { background: var(--surface-muted); box-shadow: inset 3px 0 var(--signal); }
+.animation-voice__asset-list button span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.animation-voice__asset-list small { color: var(--text-muted); font-size: 11px; }
+.animation-voice__asset-list button:hover:not(:disabled) small { color: var(--surface); }
+.animation-voice__detail { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--surface); }
+.animation-voice__identity { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 16px; }
+.animation-voice__identity > div { min-width: 0; }
+.animation-voice h2 { font-size: 18px; margin: 0 0 6px; overflow-wrap: anywhere; }
+.animation-voice h3 { font-size: 14px; margin: 16px 0 10px; }
+.animation-voice__identity span { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.animation-voice__tabs { display: flex; gap: 8px; padding: 0 16px 10px; border-bottom: 1px solid var(--border); }
+.animation-voice__tabs button[aria-selected="true"] { background: var(--ink); color: var(--surface); }
+.animation-voice__scroll { overflow: auto; flex: 1; min-height: 0; padding: 0 16px 16px; }
+.animation-voice__section-title { display: flex; align-items: center; justify-content: space-between; margin: 10px 0; }
+.animation-voice__section-title h3 { margin: 0; }
+.animation-voice__subtitles { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 11px; }
+.animation-voice__subtitles th { position: sticky; top: 0; background: var(--paper); text-align: left; height: 34px; z-index: 1; }
+.animation-voice__subtitles td, .animation-voice__subtitles th { padding: 6px 4px; border-bottom: 1px solid var(--border); }
+.animation-voice__subtitles th:first-child { width: 26px; }
+.animation-voice__subtitles th:nth-child(2) { width: 92px; }
+.animation-voice__subtitles th:nth-child(4), .animation-voice__subtitles th:nth-child(5) { width: 92px; }
+.animation-voice__subtitles th:nth-child(6) { width: 64px; }
+.animation-voice__subtitles th:last-child { width: 38px; }
+.animation-voice__subtitles input:not([type="checkbox"]) { width: 100%; }
+.animation-voice__subtitles td span, .animation-voice__subtitles td small { display: block; overflow-wrap: anywhere; }
+.animation-voice__subtitles small { color: var(--text-muted); margin-bottom: 3px; }
+.animation-voice__subtitles tr[data-selected="true"] { background: var(--paper); }
+.animation-voice__model { display: flex; align-items: center; gap: 8px; color: var(--text-muted); margin: 16px 0; }
+.animation-voice__skip { border-top: 1px solid var(--border); margin-top: 20px; }
+.animation-voice__controls { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin: 10px 0; }
+.animation-voice__controls label { display: inline-flex; align-items: center; gap: 6px; }
+.animation-voice__controls input[type="number"] { width: 110px; }
+.animation-voice__warning { color: var(--warning); overflow-wrap: anywhere; }
+.animation-voice__error { color: var(--danger); white-space: pre-wrap; overflow-wrap: anywhere; }
+.animation-voice__track { border-bottom: 1px solid var(--border); padding: 12px 0; }
+.animation-voice__track summary { cursor: pointer; overflow-wrap: anywhere; }
+.animation-voice__track small { color: var(--text-muted); margin-left: 8px; }
+.animation-voice__track > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 10px 0 0 16px; overflow-wrap: anywhere; }
+.animation-voice code { font-size: 11px; overflow-wrap: anywhere; }
+.animation-voice__track code { grid-column: 1 / -1; }
+.animation-voice__event { display: grid; gap: 6px; }
+.animation-voice__review { flex-shrink: 0; max-height: 180px; overflow: auto; padding: 12px 16px; border-top: 1px solid var(--border); background: var(--paper); }
+.animation-voice__review ul { margin: 8px 0 0; padding-left: 20px; }
+.animation-voice__review li { margin: 5px 0; }
+.animation-voice__footer { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border); flex-shrink: 0; }
+.animation-voice__footer > div { flex: 1; min-width: 0; max-height: 90px; overflow: auto; }
+.animation-voice__footer button { flex-shrink: 0; }
+.animation-voice__footer .primary-button { background: var(--signal); color: var(--ink); }
+.animation-voice__empty { padding: 32px 20px; color: var(--text-muted); overflow-wrap: anywhere; }
+.animation-voice__detail > .animation-voice__empty { flex: 1; }

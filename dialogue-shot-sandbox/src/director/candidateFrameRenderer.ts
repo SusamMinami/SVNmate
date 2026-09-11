@@ -5,7 +5,6 @@ import {
 } from "./characterGeometry";
 import type {
   DialogueParticipant,
-  ParticipantSlot,
   ShotPlan,
 } from "../types";
 import type { RuleCameraCandidateSet } from "./shotCandidateGenerator";
@@ -152,93 +151,107 @@ function drawFrameOverlay(
   }
 }
 
-function renderFrame(
-  participants: DialogueParticipant[],
-  shot: ShotPlan,
-  shotIndex: number,
-): HTMLCanvasElement {
+function createFrameRenderer(participants: DialogueParticipant[]) {
   const canvas = document.createElement("canvas");
   canvas.width = FRAME_WIDTH;
   canvas.height = FRAME_HEIGHT;
+  const output = document.createElement("canvas");
+  output.width = FRAME_WIDTH;
+  output.height = FRAME_HEIGHT;
+  const scene = new THREE.Scene();
   const renderer = new THREE.WebGLRenderer({
     canvas,
     antialias: true,
     preserveDrawingBuffer: true,
   });
-  renderer.setSize(FRAME_WIDTH, FRAME_HEIGHT, false);
-  renderer.setPixelRatio(1);
-  renderer.outputColorSpace = THREE.SRGBColorSpace;
 
-  const scene = new THREE.Scene();
-  scene.background = new THREE.Color("#cfd5da");
-  scene.fog = new THREE.Fog("#cfd5da", 8, 17);
-  scene.add(new THREE.AmbientLight("#ffffff", 1.3));
-  const keyLight = new THREE.DirectionalLight("#ffffff", 2.4);
-  keyLight.position.set(3, 7, 5);
-  scene.add(keyLight);
-  const fillLight = new THREE.DirectionalLight("#9bc7ff", 0.8);
-  fillLight.position.set(-4, 3, -2);
-  scene.add(fillLight);
-
-  const floor = new THREE.Mesh(
-    new THREE.PlaneGeometry(16, 12),
-    new THREE.MeshStandardMaterial({ color: "#dfe3e7" }),
-  );
-  floor.rotation.x = -Math.PI / 2;
-  scene.add(floor);
-  const grid = new THREE.GridHelper(16, 32, "#8b949f", "#aeb6bf");
-  grid.position.y = 0.002;
-  scene.add(grid);
-
-  const presentParticipants = participants.filter(
-    (participant) =>
-      participant.entryIndex <= shot.dialogueEndIndex &&
-      (participant.exitIndex === null ||
-        participant.exitIndex >= shot.dialogueEndIndex),
-  );
-  for (const participant of presentParticipants) {
-    addCharacter(
-      scene,
-      participant,
-      shot.facingOverrides[participant.slot],
-    );
+  function dispose() {
+    const geometries = new Set<THREE.BufferGeometry>();
+    const materials = new Set<THREE.Material>();
+    scene.traverse((object) => {
+      if (!(object instanceof THREE.Mesh || object instanceof THREE.LineSegments)) return;
+      geometries.add(object.geometry);
+      for (const material of Array.isArray(object.material)
+        ? object.material
+        : [object.material]) {
+        materials.add(material);
+      }
+    });
+    geometries.forEach((geometry) => geometry.dispose());
+    materials.forEach((material) => material.dispose());
+    scene.clear();
+    renderer.dispose();
+    renderer.forceContextLoss();
+    canvas.width = canvas.height = output.width = output.height = 0;
   }
 
-  const camera = new THREE.PerspectiveCamera(
-    42,
-    FRAME_WIDTH / FRAME_HEIGHT,
-    0.1,
-    100,
-  );
-  camera.position.set(...shot.cameraPosition);
-  camera.setFocalLength(shot.focalLength);
-  camera.lookAt(new THREE.Vector3(...shot.cameraTarget));
-  camera.rotateZ(THREE.MathUtils.degToRad(shot.cameraRollDegrees));
-  camera.updateMatrixWorld();
-  renderer.render(scene, camera);
+  try {
+    renderer.setSize(FRAME_WIDTH, FRAME_HEIGHT, false);
+    renderer.setPixelRatio(1);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
 
-  const output = document.createElement("canvas");
-  output.width = FRAME_WIDTH;
-  output.height = FRAME_HEIGHT;
-  drawFrameOverlay(
-    output,
-    canvas,
-    camera,
-    shot,
-    presentParticipants,
-    shotIndex,
-  );
-  scene.traverse((object) => {
-    if (!(object instanceof THREE.Mesh)) return;
-    object.geometry.dispose();
-    const materials = Array.isArray(object.material)
-      ? object.material
-      : [object.material];
-    materials.forEach((material) => material.dispose());
-  });
-  renderer.dispose();
-  renderer.forceContextLoss();
-  return output;
+    scene.background = new THREE.Color("#cfd5da");
+    scene.fog = new THREE.Fog("#cfd5da", 8, 17);
+    scene.add(new THREE.AmbientLight("#ffffff", 1.3));
+    const keyLight = new THREE.DirectionalLight("#ffffff", 2.4);
+    keyLight.position.set(3, 7, 5);
+    scene.add(keyLight);
+    const fillLight = new THREE.DirectionalLight("#9bc7ff", 0.8);
+    fillLight.position.set(-4, 3, -2);
+    scene.add(fillLight);
+
+    const floor = new THREE.Mesh(
+      new THREE.PlaneGeometry(16, 12),
+      new THREE.MeshStandardMaterial({ color: "#dfe3e7" }),
+    );
+    floor.rotation.x = -Math.PI / 2;
+    scene.add(floor);
+    const grid = new THREE.GridHelper(16, 32, "#8b949f", "#aeb6bf");
+    grid.position.y = 0.002;
+    scene.add(grid);
+
+    const characters = participants.map((participant) => ({
+      participant,
+      root: addCharacter(scene, participant, undefined),
+    }));
+
+    const camera = new THREE.PerspectiveCamera(
+      42,
+      FRAME_WIDTH / FRAME_HEIGHT,
+      0.1,
+      100,
+    );
+    const target = new THREE.Vector3();
+    return {
+      render(shot: ShotPlan, shotIndex: number): string {
+        const presentParticipants: DialogueParticipant[] = [];
+        for (const { participant, root } of characters) {
+          root.visible =
+            participant.entryIndex <= shot.dialogueEndIndex &&
+            (participant.exitIndex === null ||
+              participant.exitIndex >= shot.dialogueEndIndex);
+          const facing = shot.facingOverrides[participant.slot] ?? participant.facingTarget;
+          root.rotation.y = Math.atan2(
+            facing[0] - participant.position[0],
+            facing[2] - participant.position[2],
+          );
+          if (root.visible) presentParticipants.push(participant);
+        }
+        camera.position.set(...shot.cameraPosition);
+        camera.setFocalLength(shot.focalLength);
+        camera.lookAt(target.set(...shot.cameraTarget));
+        camera.rotateZ(THREE.MathUtils.degToRad(shot.cameraRollDegrees));
+        camera.updateMatrixWorld();
+        renderer.render(scene, camera);
+        drawFrameOverlay(output, canvas, camera, shot, presentParticipants, shotIndex);
+        return output.toDataURL("image/jpeg", 0.78);
+      },
+      dispose,
+    };
+  } catch (error) {
+    dispose();
+    throw error;
+  }
 }
 
 export function renderRuleCandidateFrames(
@@ -249,56 +262,61 @@ export function renderRuleCandidateFrames(
     return null;
   }
   const frames: RuleCandidateFrame[] = [];
-  for (const candidateSet of candidateSets) {
-    const shotFrames = candidateSet.candidates.flatMap((candidate) => {
-      try {
-        const { shot } = candidate;
-        return [
-          {
-            candidate_id: candidate.candidateId,
-            candidate_label: candidate.label,
-            shot_index: candidate.shotIndex,
-            dialogue_ids: [...candidateSet.dialogueIds],
-            is_baseline: candidate.isBaseline,
-            legal: candidate.legal,
-            camera: {
-              position: [...shot.cameraPosition] as [
-                number,
-                number,
-                number,
-              ],
-              target: [...shot.cameraTarget] as [
-                number,
-                number,
-                number,
-              ],
-              focal_length: shot.focalLength,
-              shot_size: shot.projection.measuredShotSize,
-              coverage: shot.projection.coverage,
-              visual_anchor: shot.projection.visualAnchor,
-              headroom: shot.projection.headroom,
-              look_room: shot.projection.lookRoom,
-              projection_issues: shot.projection.issues
-                ?.filter((issue) => issue.severity !== "info")
-                .map((issue) => issue.message) ?? [],
+  if (candidateSets.length === 0) return { candidate_frames: frames };
+  let frameRenderer: ReturnType<typeof createFrameRenderer> | undefined;
+  try {
+    frameRenderer = createFrameRenderer(participants);
+    for (const candidateSet of candidateSets) {
+      const shotFrames = candidateSet.candidates.flatMap((candidate) => {
+        try {
+          const { shot } = candidate;
+          return [
+            {
+              candidate_id: candidate.candidateId,
+              candidate_label: candidate.label,
+              shot_index: candidate.shotIndex,
+              dialogue_ids: [...candidateSet.dialogueIds],
+              is_baseline: candidate.isBaseline,
+              legal: candidate.legal,
+              camera: {
+                position: [...shot.cameraPosition] as [
+                  number,
+                  number,
+                  number,
+                ],
+                target: [...shot.cameraTarget] as [
+                  number,
+                  number,
+                  number,
+                ],
+                focal_length: shot.focalLength,
+                shot_size: shot.projection.measuredShotSize,
+                coverage: shot.projection.coverage,
+                visual_anchor: shot.projection.visualAnchor,
+                headroom: shot.projection.headroom,
+                look_room: shot.projection.lookRoom,
+                projection_issues: shot.projection.issues
+                  ?.filter((issue) => issue.severity !== "info")
+                  .map((issue) => issue.message) ?? [],
+              },
+              image_data_url: frameRenderer!.render(shot, candidate.shotIndex),
             },
-            image_data_url: renderFrame(
-              participants,
-              shot,
-              candidate.shotIndex,
-            ).toDataURL("image/jpeg", 0.78),
-          },
-        ];
-      } catch {
-        return [];
+          ];
+        } catch {
+          return [];
+        }
+      });
+      if (shotFrames.length === 0) {
+        return null;
       }
-    });
-    if (shotFrames.length === 0) {
-      return null;
+      frames.push(...shotFrames);
     }
-    frames.push(...shotFrames);
+    return {
+      candidate_frames: frames,
+    };
+  } catch {
+    return null;
+  } finally {
+    frameRenderer?.dispose();
   }
-  return {
-    candidate_frames: frames,
-  };
 }

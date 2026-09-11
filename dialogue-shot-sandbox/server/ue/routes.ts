@@ -33,6 +33,15 @@ export async function routeUeRequest(
   if (!url.pathname.startsWith("/api/ue/")) {
     return false;
   }
+  if (request.method === "GET" && url.pathname === "/api/ue/animation-voice/audio-file") {
+    try {
+      const { path } = await services.getAnimationSpeechAudio({ token: url.searchParams.get("token") });
+      await streamAudioFile(request, response, path, basename(path));
+    } catch (error) {
+      sendJson(response, 400, { ok: false, error: { message: error instanceof Error ? error.message : "语音试听失败" } });
+    }
+    return true;
+  }
   if (
     request.method === "GET" &&
     url.pathname === "/api/ue/sound-effects/preview-file"
@@ -108,6 +117,46 @@ export async function routeUeRequest(
       return true;
     }
     const body = (await readJson(request)) as Record<string, unknown>;
+    if (url.pathname === "/api/ue/animation-voice/speech-status") {
+      sendJson(response, 200, { ok: true, data: await services.animationSpeechStatus() });
+      return true;
+    }
+    if (url.pathname === "/api/ue/animation-voice/speech-media") {
+      sendJson(response, 200, { ok: true, data: await services.listAnimationSpeechMedia(body) });
+      return true;
+    }
+    if (url.pathname === "/api/ue/animation-voice/speech-audio") {
+      sendJson(response, 200, { ok: true, data: await services.prepareAnimationSpeechAudio(body) });
+      return true;
+    }
+    if (url.pathname === "/api/ue/animation-voice/speech-start") {
+      sendJson(response, 200, { ok: true, data: await services.startAnimationSpeech(body) });
+      return true;
+    }
+    if (url.pathname === "/api/ue/animation-voice/speech-job") {
+      sendJson(response, 200, { ok: true, data: await services.getAnimationSpeechJob(body) });
+      return true;
+    }
+    if (url.pathname === "/api/ue/animation-voice/speech-cancel") {
+      sendJson(response, 200, { ok: true, data: await services.cancelAnimationSpeech(body) });
+      return true;
+    }
+    if (url.pathname === "/api/ue/animation-voice/catalog") {
+      sendJson(response, 200, { ok: true, data: await services.listAnimationSequences(body) });
+      return true;
+    }
+    if (url.pathname === "/api/ue/animation-voice/scan") {
+      sendJson(response, 200, { ok: true, data: await services.scanAnimationSequence(body) });
+      return true;
+    }
+    if (url.pathname === "/api/ue/animation-voice/review") {
+      sendJson(response, 200, { ok: true, data: await services.reviewAnimationSequence(body) });
+      return true;
+    }
+    if (url.pathname === "/api/ue/animation-voice/apply") {
+      sendJson(response, 200, { ok: true, data: await services.applyAnimationSequence(body) });
+      return true;
+    }
     if (url.pathname === "/api/ue/scene/read") {
       sendJson(response, 200, { ok: true, data: await services.readSceneReference(body) });
       return true;
@@ -184,6 +233,13 @@ export async function routeUeRequest(
       sendJson(response, 200, {
         ok: true,
         data: await services.inspectDialogueCameraQuickAction(body),
+      });
+      return true;
+    }
+    if (url.pathname === "/api/ue/dialogue/camera/presets") {
+      sendJson(response, 200, {
+        ok: true,
+        data: await services.readDialogueCameraPresets(body),
       });
       return true;
     }

@@ -2780,6 +2780,10 @@ textarea:focus-visible {
   border-top: 1px solid #e2e4df;
 }
 
+.character-action-node[data-single-node="true"] > .character-action-node__body {
+  border-top: 0;
+}
+
 .character-action-section + .character-action-section {
   border-top: 1px solid var(--border);
 }
@@ -7447,6 +7451,11 @@ textarea:focus-visible {
   min-width: 0;
 }
 
+.setup-status-copy {
+  display: grid;
+  min-width: 0;
+}
+
 .setup-status-list strong {
   color: var(--text);
   font-size: 11px;
@@ -7476,6 +7485,43 @@ textarea:focus-visible {
 .setup-status-list button:disabled {
   cursor: not-allowed;
   opacity: 0.48;
+}
+
+.setup-status-list > .setup-directory-collection {
+  align-items: start;
+  min-height: 66px;
+}
+
+.setup-directory-collection__list {
+  display: grid;
+  max-height: 96px;
+  margin-top: 6px;
+  overflow-y: auto;
+  border-top: 1px solid var(--border);
+}
+
+.setup-directory-collection__list > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 26px;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  border-bottom: 1px solid var(--border);
+}
+
+.setup-directory-collection__list code {
+  overflow: hidden;
+  color: var(--text-muted);
+  font: 9px/1.3 "Cascadia Code", Consolas, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.setup-directory-collection__list button {
+  width: 24px;
+  height: 24px;
+  justify-content: center;
+  padding: 0;
 }
 
 .setup-status-list > .setup-model {
@@ -9742,6 +9788,15 @@ textarea:focus-visible {
   color: #8d401f;
 }
 
+.npc-migration-review-list.is-syncing {
+  color: #315d70;
+  background: #edf6f9;
+}
+
+.npc-migration-review-list.is-syncing p {
+  color: #315d70;
+}
+
 .npc-migration-montage-list {
   padding: 11px 14px;
   background: #ffffff;
@@ -9894,7 +9949,7 @@ textarea:focus-visible {
 }
 
 .npc-supplement-setup section > header > div,
-.npc-supplement-list > header > div:first-child,
+.npc-supplement-list-heading,
 .npc-supplement-review > header > div {
   display: grid;
   min-width: 0;
@@ -9984,11 +10039,70 @@ textarea:focus-visible {
   z-index: 2;
   top: 0;
   justify-content: space-between;
+  gap: 12px;
+}
+
+.npc-supplement-list-header-main {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 12px;
 }
 
 .npc-supplement-list-actions {
   display: flex;
+  flex: 0 0 auto;
   gap: 5px;
+}
+
+.npc-supplement-list-action {
+  display: inline-flex;
+  height: 28px;
+  align-items: center;
+  gap: 4px;
+  padding: 0 7px;
+  color: #4f524d;
+  background: #ffffff;
+  border: 1px solid #c8cac4;
+  border-radius: 2px;
+  font: 600 9px/1 "Segoe UI", "Microsoft YaHei UI", sans-serif;
+  cursor: pointer;
+}
+
+.npc-supplement-list-action:hover:not(:disabled) {
+  color: #ffffff;
+  background: #383838;
+  border-color: #383838;
+}
+
+.npc-supplement-list-action:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.npc-supplement-list-action:focus-visible,
+.npc-supplement-sort select:focus-visible {
+  outline: 2px solid rgba(255, 250, 0, 0.72);
+  outline-offset: 1px;
+}
+
+.npc-supplement-sort {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  color: #686b65;
+}
+
+.npc-supplement-sort select {
+  height: 28px;
+  min-width: 90px;
+  padding: 0 22px 0 7px;
+  color: #363834;
+  background: #ffffff;
+  border: 1px solid #c8cac4;
+  border-radius: 2px;
+  font: 600 9px/1 "Segoe UI", "Microsoft YaHei UI", sans-serif;
 }
 
 .npc-supplement-table {
@@ -9998,7 +10112,9 @@ textarea:focus-visible {
 .npc-supplement-table__head,
 .npc-supplement-row {
   display: grid;
-  grid-template-columns: 28px minmax(140px, 1fr) 58px minmax(110px, 0.8fr);
+  grid-template-columns:
+    28px minmax(110px, 1fr) 54px minmax(64px, 0.55fr)
+    minmax(76px, 0.7fr);
   align-items: center;
   gap: 7px;
   min-width: 0;
@@ -10027,11 +10143,15 @@ textarea:focus-visible {
 .npc-supplement-row {
   min-height: 52px;
   padding: 7px 12px;
-  cursor: pointer;
+  cursor: default;
 }
 
 .npc-supplement-row:hover {
   background: #f7f7f3;
+}
+
+.npc-supplement-row.is-selected {
+  background: #f1f5f2;
 }
 
 .npc-supplement-row.is-blocked {
@@ -10047,7 +10167,12 @@ textarea:focus-visible {
   accent-color: var(--ink);
 }
 
-.npc-supplement-row > span {
+.npc-supplement-row__check {
+  display: grid;
+  place-items: center;
+}
+
+.npc-supplement-row__action {
   display: grid;
   min-width: 0;
   gap: 3px;
@@ -10067,7 +10192,27 @@ textarea:focus-visible {
 
 .npc-supplement-row small {
   color: #777a74;
-  font: 8px/1 "Cascadia Code", Consolas, monospace;
+  font: 9px/1.2 "Cascadia Code", Consolas, monospace;
+}
+
+.npc-supplement-source-meta {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+}
+
+.npc-supplement-source-meta > span {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.npc-supplement-source-meta time {
+  flex: 0 0 auto;
+  color: #52615a;
+  font-variant-numeric: tabular-nums;
 }
 
 .npc-supplement-row em {
@@ -10096,6 +10241,18 @@ textarea:focus-visible {
 .npc-supplement-row code {
   color: #686b65;
   font-size: 8px;
+}
+
+.npc-supplement-face-pair[data-state="new"] {
+  color: #256548;
+}
+
+.npc-supplement-face-pair[data-state="update"] {
+  color: #315d70;
+}
+
+.npc-supplement-face-pair[data-state="blocked"] {
+  color: #8d401f;
 }
 
 .npc-supplement-operation {
@@ -10631,6 +10788,50 @@ textarea:focus-visible {
 .node-camera-command-list {
   display: grid;
   border: 1px solid var(--border);
+}
+
+.node-camera-preset-picker {
+  min-width: 0;
+  padding: 8px;
+  background: var(--paper);
+  border-block: 1px solid var(--border);
+}
+
+.node-camera-preset-picker__fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 28px;
+  align-items: end;
+  gap: 6px;
+}
+
+.node-camera-preset-picker label {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+  font-size: 11px;
+}
+
+.node-camera-preset-picker select {
+  width: 100%;
+  min-width: 0;
+  height: 30px;
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  color: var(--ink);
+  background: var(--surface);
+  font: inherit;
+}
+
+.node-camera-preset-picker .icon-button {
+  width: 28px;
+  height: 30px;
+}
+
+.node-camera-preset-picker p {
+  margin: 6px 0 0;
+  font-size: 11px;
+  overflow-wrap: anywhere;
 }
 
 .node-camera-curve-field {

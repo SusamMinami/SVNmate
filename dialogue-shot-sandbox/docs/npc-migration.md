@@ -2,7 +2,7 @@
 
 > 文档状态：现行专题规范
 >
-> 最近核对：2026-09-09，对应镜头沙盘 `0.24.4`。当前工作区包含“全新 NPC”、
+> 最近核对：2026-09-11，对应镜头沙盘 `0.24.6`。当前工作区包含“全新 NPC”、
 > “动作补充与修改”和“面部补充”三个入口。
 
 ## 结论
@@ -20,8 +20,9 @@ NPC 迁移可以自动化，但不能安全地压缩成一次无审核的写入�
 3. 策划 UE：校验迁移后的 Mesh、Skeleton、`NPCBase` 和
    `SeriaNPCAnimInstance`。
 4. 自动配置：导入 Body / Face FBX，Face 动作锁定根骨骼，创建并绑定 BP 与
-   ABP，按 Mesh 包围盒估算胶囊体，绑定转头曲线，生成 Idle/Turn Montage
-   及插槽，并通过标准模板配置状态机和 Look 混合空间，最后编译、保存并回读。
+   ABP，按 Mesh 包围盒估算胶囊体，绑定转头曲线，为可播放动作生成 Montage
+   及语义插槽，并通过标准模板配置状态机和 Look 混合空间，最后编译、保存并
+   回读。
 5. 人工复核：胶囊体与 Mesh 的视觉贴合、角色正面、ABP 状态机运行效果、
    Look 三个采样点、面部曲线/Montage 输出和后处理动画蓝图。
 
@@ -30,20 +31,25 @@ NPC 迁移可以自动化，但不能安全地压缩成一次无审核的写入�
 进入 NPC 迁移工作区后先选择本次任务：
 
 1. **全新 NPC**：保留原有的美术 UE 扫描、文件迁移和策划 UE 完整配置流程。
-2. **动作补充与修改**：读取策划 UE 中已有的 NPC BP 或 Body Skeletal Mesh，
-   只导入本次勾选的 Body FBX。同名资产按“更新”审核，新资产按“新增”审核；
-   新的 Idle / Turn 动作按既有规则创建 Montage。
+2. **动作补充与修改**：读取策划 UE 中已有的 NPC BP、Body Skeletal Mesh 或
+   Body Skeleton，只导入本次勾选的 Body FBX。同名资产按“更新”审核，新资产
+   按“新增”审核；符合规则的可播放动作会创建 Montage。若同一来源
+   目录树内存在严格同名加 `_Face` 后缀的 FBX，则自动配对并在 Body 导入后使用
+   Face Skeleton 连续导入、锁根和复制曲线，不再要求分两次执行。选择 Skeleton
+   时只在唯一匹配到引用它的非 Face Skeletal Mesh 后继续。
 3. **面部补充**：读取已有 NPC、Body Skeleton、Face Skeletal Mesh 与
    Face Skeleton，只处理以 `_Face` 结尾且能找到同名 Body 动作的 FBX。
 
 动作和面部增补不再执行美术 UE 依赖扫描、跨工程文件复制、NPC BP/ABP 创建、
-胶囊体和状态机配置。清单勾选变化后必须重新生成审核令牌，才允许写入 UE。
+胶囊体和状态机配置。清单勾选变化后由工具自动刷新审核令牌，无需再次点击生成
+清单；同步完成前写入按钮保持禁用。
 
 ## 单独面部补充
 
 根据《NPC表情配置自动化工具》文档，独立面部补充采用以下流程：
 
-1. 在策划 UE 内容浏览器中选择已有 NPC BP 或 Body Skeletal Mesh。
+1. 在策划 UE 内容浏览器中选择已有 NPC BP、Body Skeletal Mesh 或 Body
+   Skeleton。
 2. 工具从 Body Mesh 推导 NPC 名称与 `Animation` 目录，并在 NPC 资产目录中
    唯一匹配 `SK_<NPC>_Face` 及其 Face Skeleton。
 3. 扫描用户选择的 FBX 目录，只保留
@@ -58,7 +64,9 @@ NPC 迁移可以自动化，但不能安全地压缩成一次无审核的写入�
    `copy_face_anim_sequence_morph_targets_curve` 复制 Morph Target 曲线；
    `make_npc_montage_by_anim_sequence` 生成需要的 Montage。
 7. 写入后重新使用 `get_face_anim_sequence` 校验 Body / Face 配对，并回读、
-   保存 Body AnimSequence、Face AnimSequence 和新建 Montage。
+   保存 Body AnimSequence、Face AnimSequence 和新建 Montage。处理既有
+   Montage 前后会快照并回读 Slot 名称，如原生接口发生改写则恢复原值，禁止把
+   人工配置的插槽降级为 `DefaultSlot`。
 
 `BP_FaceConfigHelper` 本身不再参与独立面部补充。运行时反射确认
 `SeriaAssetHelperBlueprintFunctionLibrary` 及以上三个逐资产函数均可由
@@ -79,7 +87,7 @@ C++ 代码。原来的 MakeTable 由镜头沙盒审核清单替代，Out 由逐�
 | 锁定 Face 动作根骨骼 | Face 动作导入 | 自动 |
 | 执行 `BP_FaceConfigHelper` | 原生 Seria 面部处理 | 面部补充自动，逐项审核后写入并回读 |
 | 创建 `ABP_XXX` | 动画蓝图配置 | 自动继承男性或女性标准模板并绑定 Skeleton |
-| 创建 Idle/Turn Montage 与插槽 | Montage 配置 | 自动按命名规则创建并写入 `IdleSlot` / `TurnSlot` |
+| 创建动作 Montage 与插槽 | Montage 配置 | Idle/Turn 写入专用 Slot，其他可播放动作写入 `DefaultSlot` |
 | 配置状态机 | 标准 ABP 模板 | 自动继承模板图表并覆盖目标动作 |
 | 配置 Look 混合空间 | Look 配置 | 自动复制模板轴与采样位置并替换 LookD/F/U |
 | 编译和保存 | 最终化 | 自动编译保存 + 人工终检 |
@@ -122,14 +130,21 @@ Interact 替换为当前 NPC 资产。这样不依赖编辑器剪贴板，并能
 
 修改 NPC 名称会同步更新 BP 与 ABP 名称，后两者不可独立改写。
 
-Montage 只处理文档中定义明确的动作：
+Montage 按动作语义处理：
 
 - `Idle` / `Idle1` / `Idle2` → `AM_Idle1` / `AM_Idle2`
 - `TurnL` / `TurnLeft90` → `AM_TurnLeft90`
 - `TurnR` / `TurnRight90` → `AM_TurnRight90`
 - `TurnLeft180` / `TurnRight180` → 对应 180° Montage
+- 其他可播放动作 → `AM_<Action>`，新建时使用 `DefaultSlot`
 
-其他动作仍正常导入，但不会被猜测为 Montage。
+`LookD/F/U`、`Walk`、`BackLean`、`FrontLean` 和 `IdleStand*` 属于混合空间、
+状态机或移动素材，只导入 AnimSequence，不创建 Montage。目标目录树中已有同名
+Montage 时直接复用并保留原 Slot，不因 Body 或 Face 重导入而覆盖。
+
+桌面版设置允许维护多个“NPC 动作库”根目录。读取 NPC 目标后，工具会递归查找
+文件名以 `A_<NPC名>_` 开头的 Body FBX；唯一匹配到目录时自动填入并生成清单。
+若多个目录都包含该 NPC，则不猜测版本，保留候选提示并允许手动选择。
 
 ## 标准 ABP 与 Look
 

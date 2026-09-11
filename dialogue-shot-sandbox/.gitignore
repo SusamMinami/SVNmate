@@ -5,6 +5,7 @@ release/
 artifacts/
 test-results/
 playwright-report/
+.impeccable/
 .lark-auth/
 .storyboard-data/
 

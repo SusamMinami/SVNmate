@@ -347,7 +347,7 @@ export function NpcMigrationWorkspace({
               </span>
               <span>
                 <strong>动作补充与修改</strong>
-                <small>BODY ACTIONS</small>
+                <small>BODY + AUTO FACE</small>
               </span>
               <em>02</em>
             </button>
@@ -376,7 +376,6 @@ export function NpcMigrationWorkspace({
       <NpcSupplementWorkspace
         kind={mode}
         onBack={() => setMode(null)}
-        onClose={onClose}
       />
     );
   }
@@ -407,20 +406,10 @@ export function NpcMigrationWorkspace({
           type="button"
           disabled={busy !== null}
           onClick={() => setMode(null)}
-          title="重新选择处理类型"
-          aria-label="重新选择处理类型"
+          title="返回模块选择"
+          aria-label="返回模块选择"
         >
           <LayoutGrid size={17} />
-        </button>
-        <button
-          className="icon-button workspace-floating-back"
-          type="button"
-          disabled={busy !== null}
-          onClick={onClose}
-          title="返回分镜工作台"
-          aria-label="返回分镜工作台"
-        >
-          <ArrowLeft size={17} />
         </button>
       </div>
 

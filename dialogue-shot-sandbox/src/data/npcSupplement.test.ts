@@ -47,28 +47,76 @@ function request(
 
 describe("NPC supplement planning", () => {
   it("classifies new and updated body actions and plans standard montages", () => {
-    const plan = buildNpcSupplementPlan(request("actions"), [
-      "D:/FBX/N28/Animation/A_N28_Idle.fbx",
-      "D:/FBX/N28/Animation/A_N28_TurnL.fbx",
-      "D:/FBX/N28/Animation/Face/A_N28_Talk_Face.fbx",
-    ]);
+    const plan = buildNpcSupplementPlan(
+      request("actions"),
+      [
+        "D:/FBX/N28/Animation/A_N28_Idle.fbx",
+        "D:/FBX/N28/Animation/A_N28_TurnL.fbx",
+        "D:/FBX/N28/Animation/Face/A_N28_Idle_Face.fbx",
+      ],
+      new Map([
+        ["D:/FBX/N28/Animation/A_N28_Idle.fbx", 1_725_900_000_000],
+        ["D:/FBX/N28/Animation/A_N28_TurnL.fbx", 1_725_800_000_000],
+        [
+          "D:/FBX/N28/Animation/Face/A_N28_Idle_Face.fbx",
+          1_725_900_100_000,
+        ],
+      ]),
+    );
 
     expect(plan.canApply).toBe(true);
     expect(plan.items).toMatchObject([
       {
         actionName: "Idle",
+        sourceModifiedTimeMs: 1_725_900_000_000,
         state: "update",
         montageName: "AM_Idle1",
         montageState: "create",
         makeMontage: true,
+        pairedFace: {
+          sourceAssetName: "A_N28_Idle_Face",
+          sourceModifiedTimeMs: 1_725_900_100_000,
+          state: "new",
+          copyFaceCurves: true,
+        },
       },
       {
         actionName: "TurnL",
+        sourceModifiedTimeMs: 1_725_800_000_000,
         state: "new",
         montageName: "AM_TurnLeft90",
         montageState: "create",
       },
     ]);
+    expect(plan.warnings).toContain(
+      "已自动匹配 1 个同名 _Face FBX，将在 Body 导入后连续处理且不重建 Montage",
+    );
+  });
+
+  it("blocks an automatic face pair when the target has no face skeleton", () => {
+    const plan = buildNpcSupplementPlan(
+      request("actions", {
+        target: target({
+          faceSkeletalMeshAssetPath: "",
+          faceSkeletonAssetPath: "",
+        }),
+      }),
+      [
+        "D:/FBX/N28/Animation/A_N28_Wave.fbx",
+        "D:/FBX/N28/Animation/A_N28_Wave_Face.fbx",
+      ],
+    );
+
+    expect(plan.items[0]).toMatchObject({
+      actionName: "Wave",
+      state: "blocked",
+      included: false,
+      pairedFace: {
+        sourceAssetName: "A_N28_Wave_Face",
+        state: "blocked",
+      },
+    });
+    expect(plan.items[0].blockedReason).toContain("缺少 Face Skeletal Mesh");
   });
 
   it("matches face actions to body actions and blocks missing pairs", () => {
@@ -132,6 +180,27 @@ describe("NPC supplement planning", () => {
       { action: "Talk", curves: true, montage: true },
       { action: "TurnL", curves: true, montage: false },
     ]);
+  });
+
+  it("reuses a same-named Montage outside the animation root", () => {
+    const plan = buildNpcSupplementPlan(
+      request("face", {
+        target: target({
+          existingAssetPaths: [
+            "/Game/Seria/NPC/N28/Animation/A_N28_Talk.A_N28_Talk",
+            "/Game/Seria/NPC/N28/Animation/Montages/AM_Talk.AM_Talk",
+          ],
+        }),
+      }),
+      ["D:/FBX/N28/Animation/Face/A_N28_Talk_Face.fbx"],
+    );
+
+    expect(plan.items[0]).toMatchObject({
+      montageName: "AM_Talk",
+      montageAssetPath:
+        "/Game/Seria/NPC/N28/Animation/Montages/AM_Talk",
+      montageState: "reuse",
+    });
   });
 
   it("requires a refreshed review after the included set changes", () => {

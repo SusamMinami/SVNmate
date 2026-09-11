@@ -37,6 +37,56 @@ def _save_asset(asset, label):
         raise RuntimeError("Failed to save " + label + ": " + asset.get_path_name())
 
 
+def _capture_reviewed_montage_slots(items, asset_library):
+    snapshots = {}
+    for item in items:
+        if not item.get("make_montage"):
+            continue
+        montage_path = _package_path(item.get("montage_asset_path", ""))
+        if not montage_path or not asset_library.does_asset_exist(montage_path):
+            continue
+        montage = _require_asset(
+            montage_path, "AnimMontage", "Existing Montage"
+        )
+        tracks = list(montage.get_editor_property("slot_anim_tracks"))
+        snapshots[montage_path] = [
+            str(track.get_editor_property("slot_name")) for track in tracks
+        ]
+    return snapshots
+
+
+def _restore_reviewed_montage_slots(snapshots):
+    restored_paths = []
+    for montage_path, expected_names in snapshots.items():
+        montage = _require_asset(
+            montage_path, "AnimMontage", "Existing Montage"
+        )
+        tracks = list(montage.get_editor_property("slot_anim_tracks"))
+        if len(tracks) != len(expected_names):
+            raise RuntimeError(
+                "Existing Montage slot track count changed: " + montage_path
+            )
+        actual_names = [
+            str(track.get_editor_property("slot_name")) for track in tracks
+        ]
+        if actual_names == expected_names:
+            continue
+        for track, slot_name in zip(tracks, expected_names):
+            track.set_editor_property("slot_name", unreal.Name(slot_name))
+        montage.set_editor_property("slot_anim_tracks", tracks)
+        _save_asset(montage, "Existing Montage")
+        verified_names = [
+            str(track.get_editor_property("slot_name"))
+            for track in montage.get_editor_property("slot_anim_tracks")
+        ]
+        if verified_names != expected_names:
+            raise RuntimeError(
+                "Failed to restore Existing Montage slots: " + montage_path
+            )
+        restored_paths.append(montage.get_path_name())
+    return restored_paths
+
+
 def _validate_request(request):
     required = [
         "target_project_file",
@@ -77,11 +127,12 @@ def run_face_supplement(request):
         raise RuntimeError(
             "SeriaAssetHelperBlueprintFunctionLibrary is not exposed to Python"
         )
-    for function_name in [
-        "get_face_anim_sequence",
-        "copy_face_anim_sequence_morph_targets_curve",
-        "make_npc_montage_by_anim_sequence",
-    ]:
+    required_functions = ["get_face_anim_sequence"]
+    if any(item.get("copy_face_curves") for item in request["items"]):
+        required_functions.append("copy_face_anim_sequence_morph_targets_curve")
+    if any(item.get("make_montage") for item in request["items"]):
+        required_functions.append("make_npc_montage_by_anim_sequence")
+    for function_name in required_functions:
         if not callable(getattr(helper, function_name, None)):
             raise RuntimeError(
                 "Required Seria Python function is unavailable: " + function_name
@@ -147,13 +198,12 @@ def run_face_supplement(request):
             "validated_item_count": len(request["items"]),
             "face_skeletal_mesh_asset_path": face_mesh.get_path_name(),
             "face_skeleton_asset_path": face_skeleton.get_path_name(),
-            "native_functions": [
-                "get_face_anim_sequence",
-                "copy_face_anim_sequence_morph_targets_curve",
-                "make_npc_montage_by_anim_sequence",
-            ],
+            "native_functions": required_functions,
         }
 
+    montage_slot_snapshots = _capture_reviewed_montage_slots(
+        request["items"], asset_library
+    )
     destination = request["animation_package_path"] + "/Face"
     asset_library.make_directory(destination)
     imported_paths = []
@@ -252,6 +302,9 @@ def run_face_supplement(request):
 
         processed_body_paths.append(body_animation.get_path_name())
 
+    restored_montage_slot_paths = _restore_reviewed_montage_slots(
+        montage_slot_snapshots
+    )
     return {
         "imported_asset_paths": imported_paths,
         "locked_root_asset_paths": locked_paths,
@@ -259,6 +312,7 @@ def run_face_supplement(request):
         "processed_body_asset_paths": processed_body_paths,
         "created_montage_asset_paths": created_montage_paths,
         "reused_montage_asset_paths": reused_montage_paths,
+        "restored_montage_slot_paths": restored_montage_slot_paths,
         "pair_readback": pair_readback,
     }
 

@@ -19,9 +19,8 @@ import {
   deletePendingStoryboardTask,
   expireAbandonedProcessingTasks,
   getStoryboardTask,
-  listActiveStoryboardTasks,
+  readStoryboardTaskSnapshot,
   reorderPendingStoryboardTasks,
-  storyboardTaskStats,
 } from "./storyboardTaskStore";
 import {
   findExactSharedStoryboard,
@@ -181,11 +180,10 @@ async function isMcpConfigured(): Promise<boolean> {
 }
 
 async function collaborationStatus() {
-  const tasks = await listActiveStoryboardTasks();
-  const [configured, presence, stats] = await Promise.all([
+  const [configured, presence, { tasks, stats }] = await Promise.all([
     isMcpConfigured(),
     getStoryboardMcpPresence(),
-    storyboardTaskStats(),
+    readStoryboardTaskSnapshot(),
   ]);
   return {
     configured,

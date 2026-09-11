@@ -14,12 +14,24 @@ import {
   type UnrealInvoker,
 } from "./ue/transport";
 
+interface FaceSupplementApplyItem {
+  sourceFile: string;
+  sourceAssetName: string;
+  targetAssetPath: string;
+  bodyAssetPath: string;
+  state: "new" | "update" | "blocked";
+  copyFaceCurves: boolean;
+  makeMontage: boolean;
+  montageAssetPath: string;
+  montageState: "none" | "create" | "reuse";
+}
+
 const SupplementTargetSchema = z.object({
   targetProjectFile: z.string().min(1),
   targetContentDirectory: z.string().min(1),
   selectedAssetPath: z.string().startsWith("/Game/"),
   selectedAssetName: z.string().min(1),
-  selectedAssetType: z.enum(["Blueprint", "SkeletalMesh"]),
+  selectedAssetType: z.enum(["Blueprint", "SkeletalMesh", "Skeleton"]),
   npcName: z.string().regex(/^[A-Za-z0-9_]+$/),
   skeletalMeshAssetPath: z.string().startsWith("/Game/"),
   skeletonAssetPath: z.string().startsWith("/Game/"),
@@ -182,22 +194,50 @@ function normalizedDiskPath(value: string): string {
   return resolve(value.trim()).replace(/[\\/]+$/, "").toLowerCase();
 }
 
+function normalizedSourcePath(value: string): string {
+  return resolve(value).replaceAll("\\", "/");
+}
+
 function assertSourceFiles(
   plan: NpcSupplementPlan,
 ): Promise<void[]> {
   const sourceRoot = resolve(plan.sourceDirectory);
   return Promise.all(
-    plan.items.filter((item) => item.included).map(async (item) => {
-      const sourceFile = resolve(item.sourceFile);
+    plan.items
+      .filter((item) => item.included)
+      .flatMap((item) => [
+        {
+          sourceFile: item.sourceFile,
+          sourceModifiedTimeMs: item.sourceModifiedTimeMs,
+        },
+        ...(item.pairedFace
+          ? [
+              {
+                sourceFile: item.pairedFace.sourceFile,
+                sourceModifiedTimeMs:
+                  item.pairedFace.sourceModifiedTimeMs,
+              },
+            ]
+          : []),
+      ])
+      .map(async (source) => {
+      const sourceFile = resolve(source.sourceFile);
       const sourceRelative = relative(sourceRoot, sourceFile);
       if (
         sourceRelative.startsWith(`..${sep}`) ||
         sourceRelative === ".." ||
         extname(sourceFile).toLowerCase() !== ".fbx"
       ) {
-        throw new Error(`动作文件超出已审核目录：${item.sourceFile}`);
+        throw new Error(`动作文件超出已审核目录：${source.sourceFile}`);
       }
       await access(sourceFile);
+      const sourceStat = await stat(sourceFile);
+      if (
+        source.sourceModifiedTimeMs > 0 &&
+        Math.trunc(sourceStat.mtimeMs) !== source.sourceModifiedTimeMs
+      ) {
+        throw new Error(`动作文件在审核后发生变化：${source.sourceFile}`);
+      }
     }),
   );
 }
@@ -220,38 +260,128 @@ def actor_components(actor):
         except Exception:
             return []
 
+def blueprint_generated_class(blueprint):
+    asset_path = blueprint.get_path_name()
+    package_path = asset_path.split('.', 1)[0]
+    for path in [asset_path, package_path]:
+        try:
+            generated = unreal.EditorAssetLibrary.load_blueprint_class(path)
+            if generated:
+                return generated
+        except Exception:
+            pass
+    try:
+        generated = blueprint.generated_class()
+        if generated:
+            return generated
+    except Exception:
+        pass
+    try:
+        generated = blueprint.get_editor_property('generated_class')
+        if generated:
+            return generated
+    except Exception:
+        pass
+    try:
+        return unreal.load_class(None, asset_path + '_C')
+    except Exception:
+        return None
+
+def asset_data_class_name(asset_data):
+    try:
+        return str(asset_data.get_editor_property('asset_class'))
+    except Exception:
+        try:
+            class_path = asset_data.get_editor_property('asset_class_path')
+            return str(class_path.get_editor_property('asset_name'))
+        except Exception:
+            return ''
+
+def body_meshes_for_skeleton(skeleton):
+    skeleton_path = skeleton.get_path_name()
+    skeleton_package = skeleton.get_outermost().get_path_name()
+    search_root = skeleton_package.rsplit('/', 1)[0]
+    registry = unreal.AssetRegistryHelpers.get_asset_registry()
+    candidates = []
+    for asset_data in registry.get_assets_by_path(
+        unreal.Name(search_root),
+        recursive=True
+    ):
+        if asset_data_class_name(asset_data) != 'SkeletalMesh':
+            continue
+        candidate = asset_data.get_asset()
+        if not candidate or 'face' in candidate.get_name().lower():
+            continue
+        try:
+            candidate_skeleton = candidate.get_editor_property('skeleton')
+        except Exception:
+            candidate_skeleton = None
+        if candidate_skeleton and candidate_skeleton.get_path_name() == skeleton_path:
+            candidates.append(candidate)
+    skeleton_name = skeleton.get_name()
+    expected_suffix = skeleton_name
+    for prefix in ['SKEL_', 'Skeleton_']:
+        if skeleton_name.lower().startswith(prefix.lower()):
+            expected_suffix = skeleton_name[len(prefix):]
+            break
+    expected_name = ('SK_' + expected_suffix).lower()
+    exact = [
+        candidate for candidate in candidates
+        if candidate.get_name().lower() == expected_name
+    ]
+    if len(exact) == 1:
+        return exact[0], ''
+    same_directory = [
+        candidate for candidate in candidates
+        if candidate.get_outermost().get_path_name().rsplit('/', 1)[0] == search_root
+    ]
+    if len(same_directory) == 1:
+        return same_directory[0], ''
+    if len(candidates) == 1:
+        return candidates[0], ''
+    if len(candidates) > 1:
+        return None, '当前 Skeleton 关联多个 Body Skeletal Mesh，请直接选择目标 NPC BP 或 Body Skeletal Mesh'
+    return None, '无法找到引用当前 Skeleton 的 Body Skeletal Mesh'
+
 selected_assets = list(unreal.EditorUtilityLibrary.get_selected_assets())
 if len(selected_assets) != 1:
-    _result = {'error': '请在策划 UE 内容浏览器中只选择一个 NPC BP 或 Body Skeletal Mesh'}
+    _result = {'error': '请在策划 UE 内容浏览器中只选择一个 NPC BP、Body Skeletal Mesh 或 Skeleton'}
 else:
     selected = selected_assets[0]
     selected_type = selected.get_class().get_name()
     body_mesh = None
     component_face_meshes = []
+    selection_error = ''
     if selected_type == 'SkeletalMesh':
         if 'face' not in selected.get_name().lower():
             body_mesh = selected
     elif selected_type == 'Blueprint':
-        cdo = unreal.get_default_object(selected.generated_class())
-        for component in actor_components(cdo):
-            if not isinstance(component, unreal.SkeletalMeshComponent):
-                continue
-            try:
-                candidate = component.get_editor_property('skeletal_mesh')
-            except Exception:
-                candidate = None
-            if not candidate:
-                continue
-            looks_like_face = (
-                'face' in component.get_name().lower()
-                or 'face' in candidate.get_name().lower()
-            )
-            if looks_like_face:
-                component_face_meshes.append(candidate)
-            elif body_mesh is None:
-                body_mesh = candidate
-    if selected_type not in ['SkeletalMesh', 'Blueprint']:
-        _result = {'error': '当前选择必须是 NPC BP 或 Body Skeletal Mesh'}
+        generated_class = blueprint_generated_class(selected)
+        if generated_class:
+            cdo = unreal.get_default_object(generated_class)
+            for component in actor_components(cdo):
+                if not isinstance(component, unreal.SkeletalMeshComponent):
+                    continue
+                try:
+                    candidate = component.get_editor_property('skeletal_mesh')
+                except Exception:
+                    candidate = None
+                if not candidate:
+                    continue
+                looks_like_face = (
+                    'face' in component.get_name().lower()
+                    or 'face' in candidate.get_name().lower()
+                )
+                if looks_like_face:
+                    component_face_meshes.append(candidate)
+                elif body_mesh is None:
+                    body_mesh = candidate
+    elif selected_type == 'Skeleton':
+        body_mesh, selection_error = body_meshes_for_skeleton(selected)
+    if selected_type not in ['SkeletalMesh', 'Blueprint', 'Skeleton']:
+        _result = {'error': '当前选择必须是 NPC BP、Body Skeletal Mesh 或 Skeleton'}
+    elif selection_error:
+        _result = {'error': selection_error}
     elif not body_mesh:
         _result = {'error': '无法从当前选择中确定 Body Skeletal Mesh'}
     else:
@@ -349,7 +479,9 @@ else:
       selectedAssetType:
         raw.selected_asset_type === "Blueprint"
           ? "Blueprint"
-          : "SkeletalMesh",
+          : raw.selected_asset_type === "Skeleton"
+            ? "Skeleton"
+            : "SkeletalMesh",
       npcName: String(raw.npc_name ?? ""),
       skeletalMeshAssetPath: String(raw.skeletal_mesh_asset_path ?? ""),
       skeletonAssetPath: String(raw.skeleton_asset_path ?? ""),
@@ -388,12 +520,21 @@ export async function inspectNpcSupplementPlan(
   ) as NpcSupplementPlanRequest;
   const sourceDirectory = resolve(request.sourceDirectory);
   const animationFiles = await listFbxFiles(sourceDirectory);
+  const sourceModifiedTimes = new Map(
+    await Promise.all(
+      animationFiles.map(async (file) => [
+        normalizedSourcePath(file),
+        Math.trunc((await stat(file)).mtimeMs),
+      ] as const),
+    ),
+  );
   const planWithoutToken = buildNpcSupplementPlan(
     {
       ...request,
       sourceDirectory,
     },
     animationFiles,
+    sourceModifiedTimes,
   );
   const plan = { ...planWithoutToken, reviewToken: "" };
   plan.reviewToken = reviewTokenFor(plan);
@@ -402,7 +543,7 @@ export async function inspectNpcSupplementPlan(
 
 async function applyNpcFaceSupplement(
   plan: NpcSupplementPlan,
-  selectedItems: NpcSupplementPlan["items"],
+  selectedItems: readonly FaceSupplementApplyItem[],
   connection: UnrealInvoker,
 ): Promise<NpcSupplementApplyResult> {
   const source = await readFile(faceSupplementScriptPath(), "utf8");
@@ -508,6 +649,31 @@ export async function applyNpcSupplement(
   if (selectedItems.length === 0) {
     throw new Error("没有已审核的待处理动作");
   }
+  const pairedFaceItems: FaceSupplementApplyItem[] = selectedItems.flatMap(
+    (item) => {
+      if (!item.pairedFace) {
+        return [];
+      }
+      if (item.pairedFace.state === "blocked") {
+        throw new Error(
+          `配对的 Face 动作存在阻断项：${item.pairedFace.sourceAssetName}`,
+        );
+      }
+      return [
+        {
+          sourceFile: item.pairedFace.sourceFile,
+          sourceAssetName: item.pairedFace.sourceAssetName,
+          targetAssetPath: item.pairedFace.targetAssetPath,
+          bodyAssetPath: item.targetAssetPath,
+          state: item.pairedFace.state,
+          copyFaceCurves: item.pairedFace.copyFaceCurves,
+          makeMontage: false,
+          montageAssetPath: "",
+          montageState: "none",
+        },
+      ];
+    },
+  );
 
   const connection = connectionFactory();
   await connectUnreal(connection);
@@ -542,6 +708,7 @@ items = ${JSON.stringify(
         montage_name: item.montageName,
         montage_asset_path: packagePath(item.montageAssetPath),
         montage_state: item.montageState,
+        montage_slot_name: item.montageSlotName,
       })),
     )}
 dirty_packages = set(
@@ -558,6 +725,10 @@ for item in items:
         raise RuntimeError('目标动作尚未保存：' + item['target_asset_path'])
     if item['montage_state'] == 'create' and asset_library.does_asset_exist(item['montage_asset_path']):
         raise RuntimeError('目标 Montage 在审核后出现，请重新检查：' + item['montage_asset_path'])
+    if item['montage_state'] == 'reuse' and not asset_library.does_asset_exist(item['montage_asset_path']):
+        raise RuntimeError('待复用 Montage 在审核后消失，请重新检查：' + item['montage_asset_path'])
+    if item['montage_state'] != 'none' and item['montage_asset_path'] in dirty_packages:
+        raise RuntimeError('目标 Montage 尚未保存：' + item['montage_asset_path'])
 if any(item['montage_state'] == 'create' for item in items):
     if not all([
         hasattr(unreal, 'AnimMontageFactory'),
@@ -620,7 +791,7 @@ def create_montage(item):
         tracks = list(montage.get_editor_property('slot_anim_tracks'))
     except Exception:
         pass
-    slot_name = 'IdleSlot' if item['montage_name'].lower().startswith('am_idle') else 'TurnSlot'
+    slot_name = item['montage_slot_name'] or 'DefaultSlot'
     if tracks:
         tracks[0].set_editor_property('slot_name', unreal.Name(slot_name))
         montage.set_editor_property('slot_anim_tracks', tracks)
@@ -679,19 +850,49 @@ _result = {
     ) {
       throw new Error("Montage 创建数量与审核清单不一致");
     }
-    return {
+    const bodyResult: NpcSupplementApplyResult = {
       status: "configured",
       kind: "actions",
       importedAssetPaths,
       createdMontageAssetPaths,
-      reusedMontageAssetPaths: [],
+      reusedMontageAssetPaths: selectedItems
+        .filter((item) => item.montageState === "reuse")
+        .map((item) => item.montageAssetPath),
       lockedRootAssetPaths: [],
       curveCopiedBodyAssetPaths: [],
       processedBodyAssetPaths: [],
       manualChecks: [
         "抽查新增或更新动作的 Skeleton、帧率和 Root Motion",
-        "检查新建 Idle / Turn Montage 的源动作与插槽",
+        "检查新建 Montage 的源动作与 IdleSlot、TurnSlot 或 DefaultSlot",
         "保存并编译引用这些动作的 NPC BP / ABP",
+      ],
+    };
+    if (pairedFaceItems.length === 0) {
+      return bodyResult;
+    }
+    const faceResult = await applyNpcFaceSupplement(
+      plan,
+      pairedFaceItems,
+      connection,
+    );
+    return {
+      ...bodyResult,
+      importedAssetPaths: [
+        ...bodyResult.importedAssetPaths,
+        ...faceResult.importedAssetPaths,
+      ],
+      createdMontageAssetPaths: [
+        ...bodyResult.createdMontageAssetPaths,
+        ...faceResult.createdMontageAssetPaths,
+      ],
+      reusedMontageAssetPaths: faceResult.reusedMontageAssetPaths,
+      lockedRootAssetPaths: faceResult.lockedRootAssetPaths,
+      curveCopiedBodyAssetPaths:
+        faceResult.curveCopiedBodyAssetPaths,
+      processedBodyAssetPaths: faceResult.processedBodyAssetPaths,
+      manualChecks: [
+        ...bodyResult.manualChecks,
+        "抽查自动配对 Face 动作的根骨锁定、Morph Target 曲线和播放结果",
       ],
     };
   } finally {

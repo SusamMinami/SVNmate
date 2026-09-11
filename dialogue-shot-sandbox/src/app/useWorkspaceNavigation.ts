@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-export type WorkspaceView = "storyboard" | "npc" | "migration" | "targets";
+export type WorkspaceView = "storyboard" | "npc" | "migration" | "targets" | "animation";
 export type WorkspaceDirection = "up" | "down";
 
 const WORKSPACE_ORDER: Record<WorkspaceView, number> = {
@@ -8,6 +8,7 @@ const WORKSPACE_ORDER: Record<WorkspaceView, number> = {
   npc: 1,
   targets: 2,
   migration: 3,
+  animation: 4,
 };
 const WORKSPACE_TRANSITION_MS = 480;
 

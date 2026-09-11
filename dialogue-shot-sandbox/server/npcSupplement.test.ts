@@ -18,8 +18,14 @@ class FakeSupplementConnection implements UnrealInvoker {
     args: Record<string, unknown>;
   }> = [];
   closed = false;
+  private responseIndex = 0;
+  private readonly payloads: Record<string, unknown>[];
 
-  constructor(private readonly payload: Record<string, unknown>) {}
+  constructor(
+    payload: Record<string, unknown> | Record<string, unknown>[],
+  ) {
+    this.payloads = Array.isArray(payload) ? payload : [payload];
+  }
 
   async connect(): Promise<void> {}
 
@@ -29,9 +35,14 @@ class FakeSupplementConnection implements UnrealInvoker {
   ): Promise<unknown> {
     this.calls.push({ action, args });
     if (action === "script.eval_python_expression") {
+      const payload =
+        this.payloads[
+          Math.min(this.responseIndex, this.payloads.length - 1)
+        ] ?? {};
+      this.responseIndex += 1;
       return {
         bSuccess: true,
-        Result: `'${JSON.stringify(this.payload)}'`,
+        Result: `'${JSON.stringify(payload)}'`,
       };
     }
     return true;
@@ -123,6 +134,48 @@ describe("NPC supplement server workflow", () => {
     expect(String(connection.calls[0].args.Expression)).toContain(
       "get_selected_assets",
     );
+    expect(String(connection.calls[0].args.Expression)).toContain(
+      "load_blueprint_class",
+    );
+    expect(String(connection.calls[0].args.Expression)).not.toContain(
+      "selected.generated_class()",
+    );
+    expect(String(connection.calls[0].args.Expression)).toContain(
+      "body_meshes_for_skeleton",
+    );
+    expect(connection.closed).toBe(true);
+  });
+
+  it("accepts a Skeleton as the selected supplement target", async () => {
+    const connection = new FakeSupplementConnection({
+      target_project_file: "D:/Seria/res/res.uproject",
+      target_content_directory: "D:/Seria/res/Content",
+      selected_asset_path:
+        "/Game/Seria/NPC/N28/SKEL_N28.SKEL_N28",
+      selected_asset_name: "SKEL_N28",
+      selected_asset_type: "Skeleton",
+      npc_name: "N28",
+      skeletal_mesh_asset_path:
+        "/Game/Seria/NPC/N28/SK_N28.SK_N28",
+      skeleton_asset_path:
+        "/Game/Seria/NPC/N28/SKEL_N28.SKEL_N28",
+      face_skeletal_mesh_asset_path: "",
+      face_skeleton_asset_path: "",
+      target_package_path: "/Game/Seria/NPC/N28",
+      animation_package_path: "/Game/Seria/NPC/N28/Animation",
+      existing_asset_paths: [],
+      dirty_package_names: [],
+      face_candidate_count: 0,
+    });
+
+    await expect(
+      scanNpcSupplementTarget(() => connection),
+    ).resolves.toMatchObject({
+      selectedAssetName: "SKEL_N28",
+      selectedAssetType: "Skeleton",
+      skeletalMeshAssetPath:
+        "/Game/Seria/NPC/N28/SK_N28.SK_N28",
+    });
     expect(connection.closed).toBe(true);
   });
 
@@ -141,6 +194,7 @@ describe("NPC supplement server workflow", () => {
       target: target(contentDirectory),
       sourceDirectory,
     });
+    expect(plan.items[0].sourceModifiedTimeMs).toBeGreaterThan(0);
     const connection = new FakeSupplementConnection({
       imported_asset_paths: [
         "/Game/Seria/NPC/N28/Animation/Face/A_N28_Talk_Face.A_N28_Talk_Face",
@@ -177,9 +231,93 @@ describe("NPC supplement server workflow", () => {
       "copy_face_anim_sequence_morph_targets_curve",
     );
     expect(expression).toContain("make_npc_montage_by_anim_sequence");
+    expect(expression).toContain("_restore_reviewed_montage_slots");
     expect(expression).not.toContain("open_editor_for_assets");
     expect(expression).not.toContain(
       "/Game/Seria/Editor/BP_FaceConfigHelper",
+    );
+    expect(connection.closed).toBe(true);
+  });
+
+  it("imports an exact _Face pair after its Body action", async () => {
+    const root = await temporaryDirectory();
+    const contentDirectory = join(root, "res", "Content");
+    const sourceDirectory = join(root, "Animation");
+    const faceDirectory = join(sourceDirectory, "Face");
+    await mkdir(contentDirectory, { recursive: true });
+    await mkdir(faceDirectory, { recursive: true });
+    await writeFile(
+      join(sourceDirectory, "A_N28_Wave.fbx"),
+      "body animation",
+    );
+    await writeFile(
+      join(faceDirectory, "A_N28_Wave_Face.fbx"),
+      "face animation",
+    );
+    const plan = await inspectNpcSupplementPlan({
+      kind: "actions",
+      target: target(contentDirectory),
+      sourceDirectory,
+    });
+    expect(plan.items[0].pairedFace).toMatchObject({
+      sourceAssetName: "A_N28_Wave_Face",
+      state: "new",
+    });
+    const connection = new FakeSupplementConnection([
+      {
+        imported_asset_paths: [
+          "/Game/Seria/NPC/N28/Animation/A_N28_Wave.A_N28_Wave",
+        ],
+        created_montage_asset_paths: [
+          "/Game/Seria/NPC/N28/Animation/AM_Wave.AM_Wave",
+        ],
+        locked_root_asset_paths: [],
+      },
+      {
+        imported_asset_paths: [
+          "/Game/Seria/NPC/N28/Animation/Face/A_N28_Wave_Face.A_N28_Wave_Face",
+        ],
+        created_montage_asset_paths: [],
+        reused_montage_asset_paths: [],
+        locked_root_asset_paths: [
+          "/Game/Seria/NPC/N28/Animation/Face/A_N28_Wave_Face.A_N28_Wave_Face",
+        ],
+        curve_copied_body_asset_paths: [
+          "/Game/Seria/NPC/N28/Animation/A_N28_Wave.A_N28_Wave",
+        ],
+        processed_body_asset_paths: [
+          "/Game/Seria/NPC/N28/Animation/A_N28_Wave.A_N28_Wave",
+        ],
+      },
+    ]);
+
+    const result = await applyNpcSupplement(
+      { plan, reviewToken: plan.reviewToken },
+      () => connection,
+    );
+
+    expect(result).toMatchObject({
+      kind: "actions",
+      importedAssetPaths: [
+        "/Game/Seria/NPC/N28/Animation/A_N28_Wave.A_N28_Wave",
+        "/Game/Seria/NPC/N28/Animation/Face/A_N28_Wave_Face.A_N28_Wave_Face",
+      ],
+      lockedRootAssetPaths: [
+        "/Game/Seria/NPC/N28/Animation/Face/A_N28_Wave_Face.A_N28_Wave_Face",
+      ],
+      createdMontageAssetPaths: [
+        "/Game/Seria/NPC/N28/Animation/AM_Wave.AM_Wave",
+      ],
+    });
+    expect(connection.calls).toHaveLength(2);
+    expect(String(connection.calls[1].args.Expression)).toContain(
+      "FACE_SUPPLEMENT_REQUEST",
+    );
+    expect(String(connection.calls[1].args.Expression)).toMatch(
+      /make_montage.{0,10}false/,
+    );
+    expect(String(connection.calls[0].args.Expression)).toMatch(
+      /montage_slot_name.{0,10}DefaultSlot/,
     );
     expect(connection.closed).toBe(true);
   });

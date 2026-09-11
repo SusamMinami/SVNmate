@@ -8,6 +8,7 @@ import {
   GitMerge,
   GripVertical,
   LoaderCircle,
+  RefreshCw,
   Users,
   X,
 } from "lucide-react";
@@ -25,6 +26,7 @@ import type {
   DialogueCameraQuickActionMode,
   DialogueCameraQuickActionPreview,
   DialogueCameraQuickActionRequest,
+  DialogueCameraPresetSnapshot,
   DialogueSchoolCameraCopy,
   DialogueSchoolCameraRole,
   ExistingDialogueNodeConfiguration,
@@ -32,6 +34,7 @@ import type {
 import {
   applyDialogueCameraQuickAction,
   inspectDialogueCameraQuickAction,
+  readDialogueCameraPresets,
 } from "../ue/client";
 
 interface NodeCameraQuickActionsProps {
@@ -83,6 +86,7 @@ function actionLabel(mode: DialogueCameraQuickActionMode): string {
   return {
     copy_previous: "使用上一相机参数",
     default: "添加默认镜头",
+    preset_camera: "使用预设机位",
     blend_curve: "添加镜头曲线",
     school_cameras: "添加角色相机",
     copy_school_cameras: "复制角色相机",
@@ -252,6 +256,13 @@ export const NodeCameraQuickActions = forwardRef<
   onSelectionChange,
 }, ref) {
   const operationRunRef = useRef(0);
+  const presetReadRunRef = useRef(0);
+  const [presetOpen, setPresetOpen] = useState(false);
+  const [presets, setPresets] = useState<DialogueCameraPresetSnapshot | null>(null);
+  const [presetLoading, setPresetLoading] = useState(false);
+  const [presetError, setPresetError] = useState("");
+  const [presetRole, setPresetRole] = useState("");
+  const [presetName, setPresetName] = useState("");
   const [preview, setPreview] =
     useState<DialogueCameraQuickActionPreview | null>(null);
   const [request, setRequest] =
@@ -326,6 +337,13 @@ export const NodeCameraQuickActions = forwardRef<
 
   useEffect(() => {
     operationRunRef.current += 1;
+    presetReadRunRef.current += 1;
+    setPresetOpen(false);
+    setPresets(null);
+    setPresetRole("");
+    setPresetName("");
+    setPresetLoading(false);
+    setPresetError("");
     setPreview(null);
     setRequest(null);
     setBusy(null);
@@ -334,7 +352,61 @@ export const NodeCameraQuickActions = forwardRef<
     setSelectedSchoolCameraSource(null);
     setDraggedSchoolCameraSource(null);
     setSchoolCameraDropTarget(null);
-  }, [dialogueNodeId]);
+  }, [dialogueId, startId, dialogueNodeId]);
+
+  useEffect(() => () => {
+    operationRunRef.current += 1;
+    presetReadRunRef.current += 1;
+  }, []);
+
+  async function loadPresets() {
+    const run = ++presetReadRunRef.current;
+    setPresetLoading(true);
+    setPresetError("");
+    setPresets(null);
+    setPresetRole("");
+    setPresetName("");
+    if (request?.mode === "preset_camera") {
+      operationRunRef.current += 1;
+      setPreview(null);
+      setBusy(null);
+    }
+    try {
+      const snapshot = await readDialogueCameraPresets({ dialogueId, startId, dialogueNodeId });
+      if (run === presetReadRunRef.current) setPresets(snapshot);
+    } catch (reason) {
+      if (run === presetReadRunRef.current) {
+        setPresetError(reason instanceof Error ? reason.message : "无法读取角色预设");
+      }
+    } finally {
+      if (run === presetReadRunRef.current) setPresetLoading(false);
+    }
+  }
+
+  async function selectPreset(cameraName: string) {
+    const role = presets?.roles.find((item) => String(item.modelIndex) === presetRole);
+    const camera = role?.cameras.find((item) => item.name === cameraName);
+    if (!presets || !role || !camera) return;
+    const run = ++operationRunRef.current;
+    const nextRequest: DialogueCameraQuickActionRequest = {
+      dialogueId, startId, dialogueNodeId, mode: "preset_camera",
+      presetCamera: { modelIndex: role.modelIndex, cameraName, fingerprint: presets.fingerprint },
+    };
+    setPresetName(cameraName);
+    setRequest(nextRequest);
+    setPreview(null);
+    setBusy("inspect");
+    setError("");
+    setStatus("");
+    try {
+      const nextPreview = await inspectDialogueCameraQuickAction(nextRequest);
+      if (run === operationRunRef.current) setPreview(nextPreview);
+    } catch (reason) {
+      if (run === operationRunRef.current) setError(reason instanceof Error ? reason.message : "无法检查预设机位");
+    } finally {
+      if (run === operationRunRef.current) setBusy(null);
+    }
+  }
 
   useEffect(() => {
     if (!request) {
@@ -367,6 +439,12 @@ export const NodeCameraQuickActions = forwardRef<
 
   async function inspect(mode: DialogueCameraQuickActionMode) {
     const operationRun = ++operationRunRef.current;
+    setPreview(null);
+    if (mode !== "default") {
+      setPresetOpen(false);
+      presetReadRunRef.current += 1;
+      setPresetLoading(false);
+    }
     const nextRequest: DialogueCameraQuickActionRequest = {
       dialogueId,
       startId,
@@ -557,7 +635,7 @@ export const NodeCameraQuickActions = forwardRef<
   }
 
   async function apply() {
-    if (!preview || !request) {
+    if (!preview || !request || busy || preview.blockedReasons.length > 0) {
       return;
     }
     const operationRun = ++operationRunRef.current;
@@ -574,6 +652,9 @@ export const NodeCameraQuickActions = forwardRef<
       }
       setPreview(null);
       setRequest(null);
+      setPresetOpen(false);
+      presetReadRunRef.current += 1;
+      setPresetLoading(false);
       setSelectedSchoolCameraSource(null);
       setDraggedSchoolCameraSource(null);
       setSchoolCameraDropTarget(null);
@@ -601,6 +682,9 @@ export const NodeCameraQuickActions = forwardRef<
 
   function clear() {
     operationRunRef.current += 1;
+    presetReadRunRef.current += 1;
+    setPresetOpen(false);
+    setPresetLoading(false);
     setPreview(null);
     setRequest(null);
     setBusy(null);
@@ -671,9 +755,11 @@ export const NodeCameraQuickActions = forwardRef<
         <button
           className={[
             cameraConfigured ? "is-configured" : "",
-            request?.mode === "default" ? "is-selected" : "",
+            presetOpen ? "is-selected" : "",
           ].filter(Boolean).join(" ")}
           type="button"
+          aria-expanded={presetOpen}
+          aria-controls={`camera-preset-picker-${dialogueNodeId}`}
           disabled={
             busy !== null || configurationLoading || !existingConfiguration
           }
@@ -682,15 +768,89 @@ export const NodeCameraQuickActions = forwardRef<
               ? "等待读取当前节点镜头配置"
               : "确认后写入 c1、EPush、速度 1、Blend Out 1、FOV 62"
           }
-          onClick={() => void inspect("default")}
+          onClick={() => {
+            if (presetOpen) {
+              clear();
+              return;
+            }
+            setPresetOpen(true);
+            void inspect("default");
+            void loadPresets();
+          }}
         >
           <Camera size={16} />
           <span>
             <strong>添加默认镜头</strong>
             <small>{cameraSummary}</small>
           </span>
-          <ChevronRight size={15} />
+          {presetOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
         </button>
+        {presetOpen && (
+          <div className="node-camera-preset-picker" id={`camera-preset-picker-${dialogueNodeId}`}>
+            <div className="node-camera-preset-picker__fields">
+              <label>
+                <span>角色</span>
+                <select
+                  aria-label="预设机位角色"
+                  value={presetRole}
+                  disabled={presetLoading || busy !== null || !presets?.roles.length}
+                  onChange={(event) => {
+                    setPresetRole(event.target.value);
+                    setPresetName("");
+                    setError("");
+                    operationRunRef.current += 1;
+                    if (!event.target.value) {
+                      void inspect("default");
+                    } else {
+                      setRequest({ dialogueId, startId, dialogueNodeId, mode: "preset_camera" });
+                      setPreview(null);
+                    }
+                  }}
+                >
+                  <option value="">默认位置</option>
+                  {presets?.roles.map((role) => (
+                    <option key={role.modelIndex} value={role.modelIndex}>
+                      {role.modelIndex} · {role.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>预设角度</span>
+                <select
+                  aria-label="预设机位角度"
+                  value={presetName}
+                  disabled={!presetRole || presetLoading || busy !== null}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    if (value) void selectPreset(value);
+                    else {
+                      setPresetName("");
+                      setPreview(null);
+                    }
+                  }}
+                >
+                  <option value="">选择机位</option>
+                  {presets?.roles.find((role) => String(role.modelIndex) === presetRole)?.cameras.map((camera) => (
+                    <option key={camera.name} value={camera.name}>{camera.label}</option>
+                  ))}
+                </select>
+              </label>
+              <button
+                className="icon-button"
+                type="button"
+                aria-label="重新读取预设机位"
+                title="重新读取当前 UE 预览机位"
+                disabled={presetLoading || busy !== null}
+                onClick={() => void loadPresets()}
+              >
+                {presetLoading ? <LoaderCircle size={14} className="spin" /> : <RefreshCw size={14} />}
+              </button>
+            </div>
+            {presetLoading && <p role="status">正在读取预览角色机位...</p>}
+            {presetError && <p role="alert" className="node-camera-review__warning">{presetError}</p>}
+          </div>
+        )}
         <button
           className={[
             blendConfigured ? "is-configured" : "",
@@ -968,13 +1128,15 @@ export const NodeCameraQuickActions = forwardRef<
                     <dd>
                       {preview.sourceDialogueNodeId
                         ? `节点 ${preview.sourceDialogueNodeId}`
+                        : preview.presetCamera
+                          ? `${preview.presetCamera.roleLabel} · 机位 ${preview.presetCamera.cameraName}`
                         : preview.mode === "default"
                           ? "全新默认参数"
                           : "当前节点"}
                     </dd>
                   </div>
                   {(preview.mode === "copy_previous" ||
-                    preview.mode === "default") && (
+                    preview.mode === "default" || preview.mode === "preset_camera") && (
                     <>
                       <div>
                         <dt>Camera Position</dt>
@@ -1005,6 +1167,21 @@ export const NodeCameraQuickActions = forwardRef<
                           {preview.fov ?? "-"}
                         </dd>
                       </div>
+                    </>
+                  )}
+                  {preview.presetCamera && (
+                    <>
+                      <div>
+                        <dt>{preview.presetCamera.relative ? "局部坐标" : "世界坐标"}</dt>
+                        <dd><code>{Object.values(preview.presetCamera.pose.position).map((value) => value.toFixed(1)).join(" / ")} cm</code></dd>
+                      </div>
+                      <div>
+                        <dt>旋转 P / Y / R</dt>
+                        <dd><code>{Object.values(preview.presetCamera.pose.rotation).map((value) => value.toFixed(1)).join(" / ")}°</code></dd>
+                      </div>
+                      {preview.existingSchoolCameraCount > 0 && (
+                        <div><dt>职业覆盖</dt><dd>保留 {preview.existingSchoolCameraCount} 项，可能覆盖主镜头</dd></div>
+                      )}
                     </>
                   )}
                   {preview.mode === "blend_curve" && (

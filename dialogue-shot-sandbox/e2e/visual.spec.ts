@@ -4563,6 +4563,7 @@ test("manually syncs the sound and music catalogs from settings", async ({
       configCsvDirectory: "C:\\Test\\doc\\csvdir",
       missionTargetTablePath:
         "C:\\Test\\doc\\xlsdir\\r任务剧情\\m目标物表.xlsm",
+      npcAnimationDirectories: ["D:\\NPC\\AnimationLibrary"],
       ueConnected: true,
       ueMcpHost: "127.0.0.1",
       ueMcpPort: 12031,
@@ -4579,6 +4580,13 @@ test("manually syncs the sound and music catalogs from settings", async ({
       getPathForFile: () => "C:\\Test\\doc\\csvdir\\NPC表.csv",
       setLiveResDirectory: async () => status,
       setConfigDocDirectory: async () => status,
+      addNpcAnimationDirectory: async () => status,
+      removeNpcAnimationDirectory: async () => status,
+      resolveNpcAnimationDirectory: async () => ({
+        directoryPath: "D:\\NPC\\AnimationLibrary\\N28",
+        matchedFileCount: 12,
+        candidateDirectories: ["D:\\NPC\\AnimationLibrary\\N28"],
+      }),
       completeSetup: async () => ({
         ...status,
         firstRun: false,
@@ -4629,6 +4637,10 @@ test("manually syncs the sound and music catalogs from settings", async ({
   });
   await expect(setup.getByText("发现 0.22.15")).toBeVisible();
   await expect(setup.getByText("端侧导演模型已就绪")).toBeVisible();
+  await expect(setup.getByText("NPC 动作库")).toBeVisible();
+  await expect(
+    setup.getByText("D:\\NPC\\AnimationLibrary"),
+  ).toBeVisible();
   const updateNotes = setup.locator(".setup-update__notes");
   await updateNotes.getByText("查看本次更新内容").click();
   await expect(updateNotes).toContainText("音效与音乐");
@@ -5469,11 +5481,6 @@ test("offers BP or rule placement after ignored missing models", async ({
     "使用规则导演自动安排的角色位置",
   );
   await page.getByRole("tab", { name: "UE" }).click();
-  await expect(
-    page.getByText(
-      "已从对话文件读取 1 项动作；规则占位下现有动作只读",
-    ),
-  ).toBeVisible();
   const ruleActionTrack = page
     .locator(".character-action-track")
     .filter({ hasText: "伊姆" });
@@ -5481,6 +5488,11 @@ test("offers BP or rule placement after ignored missing models", async ({
   await expect(
     ruleActionTrack.locator(".character-action-existing-row"),
   ).toHaveCount(1);
+  await expect(
+    ruleActionTrack.locator(".character-action-existing-row").getByRole(
+      "combobox",
+    ),
+  ).toHaveCount(0);
   await page.screenshot({
     path: testInfo.outputPath("rule-placement-existing-actions.png"),
     fullPage: true,
@@ -6506,10 +6518,21 @@ test("offers the detected Blueprint formation before designing shots", async ({
   await expect(
     page.locator(".inspector-footer--export"),
   ).toContainText("1 条视线待写入");
-  await expect(page.locator(".character-action-node")).toHaveCount(1);
+  const configurationActionNode = page.locator(".character-action-node");
+  await expect(configurationActionNode).toHaveCount(1);
   await expect(
-    page.locator(".character-action-node__toggle"),
-  ).toContainText("735001");
+    configurationActionNode.locator(".character-action-node__toggle"),
+  ).toHaveCount(0);
+  const configurationSections = configurationActionNode.locator(
+    ":scope > .character-action-node__body > .character-action-section",
+  );
+  await expect(configurationSections).toHaveCount(2);
+  await expect(configurationSections.nth(0)).toHaveClass(
+    /dialogue-view-lines/,
+  );
+  await expect(configurationSections.nth(1)).toHaveClass(
+    /character-action-section--actions/,
+  );
   await expect(
     guardActions.locator(".character-action-row").first().getByRole("combobox"),
   ).toHaveValue("AM_Wave");
@@ -6530,7 +6553,7 @@ test("offers the detected Blueprint formation before designing shots", async ({
   await expect(hiddenConfigurationNode).toHaveCount(1);
   await expect(
     hiddenConfigurationNode.locator(".character-action-node__toggle"),
-  ).toContainText("735015");
+  ).toHaveCount(0);
   await expect.poll(
     () => characterActionReadRequests.at(-1)?.dialogueIds,
   ).toEqual(["735015"]);

@@ -13,6 +13,7 @@ import {
   Music2,
   PlugZap,
   RefreshCw,
+  Trash2,
   X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -371,6 +372,50 @@ export function DesktopSetupModal({
     }
   }
 
+  async function addNpcAnimationDirectory() {
+    if (!desktop?.addNpcAnimationDirectory) {
+      setError("当前桌面版不支持 NPC 动作库设置");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const nextStatus = await desktop.addNpcAnimationDirectory();
+      if (nextStatus) {
+        setStatus(nextStatus);
+      }
+    } catch (directoryError) {
+      setError(
+        directoryError instanceof Error
+          ? directoryError.message
+          : "无法添加 NPC 动作库目录",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeNpcAnimationDirectory(directoryPath: string) {
+    if (!desktop?.removeNpcAnimationDirectory) {
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      setStatus(
+        await desktop.removeNpcAnimationDirectory(directoryPath),
+      );
+    } catch (directoryError) {
+      setError(
+        directoryError instanceof Error
+          ? directoryError.message
+          : "无法移除 NPC 动作库目录",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div className="modal-backdrop desktop-setup-backdrop" role="presentation">
       <section
@@ -473,6 +518,59 @@ export function DesktopSetupModal({
                   <FolderOpen size={14} />
                 )}
                 {dataLoading ? "读取中" : "选择 doc"}
+              </button>
+            </div>
+            <div
+              className={`setup-status-item--wide setup-directory-collection ${
+                (status.npcAnimationDirectories?.length ?? 0) > 0
+                  ? ""
+                  : "is-warning"
+              }`}
+            >
+              {(status.npcAnimationDirectories?.length ?? 0) > 0 ? (
+                <FolderCog size={17} />
+              ) : (
+                <CircleAlert size={17} />
+              )}
+              <div className="setup-status-copy">
+                <strong>NPC 动作库</strong>
+                <small>
+                  {(status.npcAnimationDirectories?.length ?? 0) > 0
+                    ? `${status.npcAnimationDirectories.length} 个根目录，用于自动匹配 NPC 动作`
+                    : "添加动作合集根目录，读取 NPC 后自动查找对应 FBX"}
+                </small>
+                {(status.npcAnimationDirectories?.length ?? 0) > 0 && (
+                  <div className="setup-directory-collection__list">
+                    {status.npcAnimationDirectories.map((directory) => (
+                      <div key={directory}>
+                        <code title={directory}>{directory}</code>
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() =>
+                            void removeNpcAnimationDirectory(directory)
+                          }
+                          title={`移除 ${directory}`}
+                          aria-label={`移除 NPC 动作库目录 ${directory}`}
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void addNpcAnimationDirectory()}
+              >
+                {busy ? (
+                  <LoaderCircle className="spin" size={14} />
+                ) : (
+                  <FolderOpen size={14} />
+                )}
+                添加
               </button>
             </div>
             <div

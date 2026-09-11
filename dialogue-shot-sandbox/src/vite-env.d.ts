@@ -23,6 +23,7 @@ interface DesktopSetupStatus {
   configCsvDirectory: string;
   missionTargetTablePath: string;
   advisorModelDirectory: string;
+  npcAnimationDirectories: string[];
   ueConnected: boolean;
   ueMcpHost: string;
   ueMcpPort: number;
@@ -63,6 +64,12 @@ interface RuleAdvisorModelSnapshot {
   message: string;
 }
 
+interface NpcAnimationDirectoryResolution {
+  directoryPath: string;
+  matchedFileCount: number;
+  candidateDirectories: string[];
+}
+
 interface Window {
   showDirectoryPicker?: (options?: {
     id?: string;
@@ -88,6 +95,14 @@ interface Window {
     chooseNpcMigrationDirectory?: (
       kind: "target-content" | "animations",
     ) => Promise<string | null>;
+    addNpcAnimationDirectory?: () =>
+      Promise<DesktopSetupStatus | null>;
+    removeNpcAnimationDirectory?: (
+      directoryPath: string,
+    ) => Promise<DesktopSetupStatus>;
+    resolveNpcAnimationDirectory?: (
+      npcName: string,
+    ) => Promise<NpcAnimationDirectoryResolution>;
     setLiveResDirectory?: (
       directoryPath: string,
     ) => Promise<DesktopSetupStatus>;

@@ -47,6 +47,7 @@ import {
   populateMissionTargetBlueprint,
   readBlueprintFormation,
   readDialogueCharacterActions,
+  readDialogueCameraPresets,
   readExistingDialogueStoryboard,
   readSelectedLevelActors,
   registerBlueprintDialogueModels,
@@ -57,8 +58,25 @@ import {
   updateMissionTargetBlueprintPositions,
 } from "../ueBridge";
 import { readSelectedDialogueNodePersistent } from "./dialogueSelection";
+import {
+  listAnimationSequences, scanAnimationSequence,
+  reviewAnimationSequence, applyAnimationSequence,
+} from "../animationVoice";
+import { listAnimationSpeechMedia, prepareAnimationSpeechAudio, getAnimationSpeechAudio } from "../animationSpeechMedia";
+import { animationSpeechStatus, startAnimationSpeech, getAnimationSpeechJob, cancelAnimationSpeech } from "../animationSpeechRuntime";
 
 export const ueServices = {
+  listAnimationSpeechMedia,
+  prepareAnimationSpeechAudio,
+  getAnimationSpeechAudio,
+  animationSpeechStatus,
+  startAnimationSpeech,
+  getAnimationSpeechJob,
+  cancelAnimationSpeech,
+  listAnimationSequences,
+  scanAnimationSequence,
+  reviewAnimationSequence,
+  applyAnimationSequence,
   readSceneReference,
   readSelectedDialogueNode: readSelectedDialogueNodePersistent,
   readExistingDialogueStoryboard,
@@ -91,6 +109,7 @@ export const ueServices = {
   readBlueprintFormation,
   readConfiguredDialogueCsvPayload,
   readDialogueCharacterActions,
+  readDialogueCameraPresets,
   readConfiguredMissionTargetPlan,
   readSelectedLevelActors,
   registerBlueprintDialogueModels,

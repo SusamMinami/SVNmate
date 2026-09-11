@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import Papa from "papaparse";
 import type { MissionTargetPreviewPlan } from "../src/types";
 import {
   parseMissionTargetDatabase,
@@ -40,6 +41,37 @@ export function getConfigCsvDirectory(): string {
     throw new Error("尚未选择配置文档目录");
   }
   return configCsvDirectory;
+}
+
+export async function readAnimationVoiceRows(): Promise<Array<{
+  id: number; name: string; text: string; sequence: string; delayMs: number;
+}>> {
+  const source = await readFile(join(getConfigCsvDirectory(), "p配音表.csv"), "utf8");
+  const rows: Array<{ id: number; name: string; text: string; sequence: string; delayMs: number }> = [];
+  let headers: string[] | null = null;
+  Papa.parse<string[]>(source, {
+    skipEmptyLines: true,
+    step(result) {
+      if (result.errors.length) throw new Error("配音表 CSV 格式错误");
+      const row = result.data;
+      if (!headers) {
+        headers = row.map((cell) => cell.replace(/^[\uFEFF#&]+/, "").trim());
+        for (const required of ["Voice.id", "Voice.subtitle", "Voice.name", "Voice.localizenotes"]) {
+          if (!headers.includes(required)) throw new Error(`配音表缺少字段 ${required}`);
+        }
+        return;
+      }
+      if (row[0]?.startsWith("#")) return;
+      const get = (field: string) => row[headers!.indexOf(field)] ?? "";
+      const id = Number(get("Voice.id"));
+      if (!Number.isInteger(id) || id <= 0) return;
+      rows.push({
+        id, name: get("Voice.name"), text: get("Voice.subtitle"),
+        sequence: get("Voice.localizenotes"), delayMs: Number(get("Voice.delaydisappear")) || 0,
+      });
+    },
+  });
+  return rows;
 }
 
 export function getOptionalLiveResDirectory(): string | null {

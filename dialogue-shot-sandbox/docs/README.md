@@ -1,6 +1,6 @@
 # 镜头沙盘文档索引
 
-最近核对：2026-09-09，对应应用版本 `0.24.4`。
+最近核对：2026-09-11，对应应用版本 `0.24.6`。
 
 ## 现行入口
 
@@ -20,6 +20,8 @@
 - `mission-target-preview.md`：任务目标物、BP 创建/注册、站位同步和背景资产。
 - `npc-registration.md`：UE Actor 到模型/NPC/目标物 Excel 草稿。
 - `npc-migration.md`：全新 NPC、动作增补和面部补充。
+- [animation-voice-workspace.md](animation-voice-workspace.md)：第五工作区动画语音的
+  全量扫描、字幕时间、跳过配置、精确差异审核与不自动保存边界；ASR 延后接入。
 - `sound-effect-preview.md`：远端附件优先、本地 Wwise 回退的试听链路。
 - `music-analysis.md`：音乐特征分析、缓存、Base 发布与端侧顾问配乐约束。
 - `shot-language-rulebook.md`：规则导演与 AI 共用的镜头语言规则。
@@ -28,9 +30,15 @@
 - `rule-director-edge-advisor.md`：规则导演的可替换端侧模型顾问与部署方式。
 - `performance-2026-09-09.md`：小窗内存、脚本加载、CSV Worker 和 UE TCP
   响应组装的测量结果与后续优先级。
+- [performance-2026-09-11.md](performance-2026-09-11.md)：候选图渲染器复用、
+  协作状态合并读取的实现边界与验证结果。
+- [camera-bp-presets.md](camera-bp-presets.md)：角色预设机位实测参数、调用方式
+  与小窗快速选择的现行实现边界。
 - `ue-graph-editing-support.md`：UE 对话图创建节点、自动连线、事务和接口建议。
 - `ue-editor-asset-patch-api-requirements.md`：对话图与 LevelSequence 共用的
   Snapshot/Patch 接口、JSON 协议、UE 实现边界和验收要求。
+- [local-dialog-plugin-feasibility.md](local-dialog-plugin-feasibility.md)：Seria 对话
+  图公共 Schema 能力探测、独立插件原型和当前构建环境限制。
 
 ## 研究与历史
 

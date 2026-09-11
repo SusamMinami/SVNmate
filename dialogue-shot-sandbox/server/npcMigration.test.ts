@@ -404,6 +404,18 @@ describe("NPC migration server workflow", () => {
             slot_name: "IdleSlot",
             source_asset_name: "A_N28_Idle",
           },
+          {
+            asset_path:
+              "/Game/Seria/NPC/N28/Animation/AM_Impact.AM_Impact",
+            slot_name: "DefaultSlot",
+            source_asset_name: "A_N28_Impact",
+          },
+          {
+            asset_path:
+              "/Game/Seria/NPC/N28/Animation/AM_Interact.AM_Interact",
+            slot_name: "DefaultSlot",
+            source_asset_name: "A_N28_Interact",
+          },
         ],
       },
     ], [
@@ -432,6 +444,8 @@ describe("NPC migration server workflow", () => {
       turnCurvePropertyPath: "turn.turn_curve",
       createdMontageAssetPaths: [
         "/Game/Seria/NPC/N28/Animation/AM_Idle1.AM_Idle1",
+        "/Game/Seria/NPC/N28/Animation/AM_Impact.AM_Impact",
+        "/Game/Seria/NPC/N28/Animation/AM_Interact.AM_Interact",
       ],
       templateAnimationBlueprintAssetPath:
         "/Game/Seria/NPC/N18/ABP_N18_Villager_Female_A.ABP_N18_Villager_Female_A",
@@ -452,6 +466,7 @@ describe("NPC migration server workflow", () => {
     expect(scripts[1]).toContain("assign_property_path");
     expect(scripts[1]).toContain("AnimMontageFactory");
     expect(scripts[1]).toContain("IdleSlot");
+    expect(scripts[1]).toContain("DefaultSlot");
     expect(scripts[1]).toContain("BlendSpaceFactory1D");
     expect(scripts[1]).toContain("duplicate_asset");
     expect(scripts[1]).toContain("ObjectIterator");
