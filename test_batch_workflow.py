@@ -2,7 +2,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from migration_guard.batch_workflow import BatchMigrationExecutor
+from migration_guard.batch_workflow import (
+    BatchMigrationExecutor,
+    build_update_selection_plan,
+    select_audit_files,
+)
 from migration_guard.models import (
     BatchMigrationAuditResult,
     ExpectedChange,
@@ -109,6 +113,73 @@ class _FakeProcess:
 
 
 class BatchWorkflowTests(unittest.TestCase):
+    def test_update_selection_filters_audit_to_chosen_assets(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            module = WorkspaceModule(
+                "res",
+                root / "source" / "res",
+                root / "target" / "res",
+            )
+            gameplay = _verification(
+                module,
+                "Game/Dialogue/Line.uasset",
+                "SERIA-10",
+                "OSCOA-20",
+                VerificationState.NOT_MIGRATED,
+            )
+            ui = _verification(
+                module,
+                "Game/UI/Panel.uasset",
+                "SERIA-11",
+                "OSCOA-21",
+                VerificationState.NOT_MIGRATED,
+            )
+            completed = _verification(
+                module,
+                "Game/Dialogue/Done.uasset",
+                "SERIA-10",
+                "OSCOA-20",
+                VerificationState.COMPLETE,
+            )
+            result = _batch(
+                (
+                    "SERIA-10",
+                    "OSCOA-20",
+                    (gameplay, completed),
+                ),
+                ("SERIA-11", "OSCOA-21", (ui,)),
+            )
+
+            plan = build_update_selection_plan(result, (module,))
+            selected = select_audit_files(
+                result,
+                (module,),
+                ("/res/Content/Game/Dialogue/Line.uasset",),
+            )
+
+        self.assertEqual(
+            plan.package_names,
+            (
+                "/res/Content/Game/Dialogue/Line.uasset",
+                "/res/Content/Game/UI/Panel.uasset",
+            ),
+        )
+        self.assertEqual(plan.already_handled_count, 1)
+        self.assertEqual(len(selected.cases), 1)
+        self.assertEqual(selected.cases[0].source_issue, "SERIA-10")
+        self.assertEqual(
+            tuple(
+                item.expected.source_local_path
+                for item in selected.files
+            ),
+            (gameplay.expected.source_local_path,),
+        )
+        self.assertEqual(
+            selected.selected_paths,
+            ("/res/Content/Game/Dialogue/Line.uasset",),
+        )
+
     def test_asset_plan_deduplicates_packages_and_keeps_owners(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

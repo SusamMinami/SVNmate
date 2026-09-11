@@ -233,7 +233,14 @@ class MigrationAuditService:
                 module=item.module,
                 source_path=item.source_path,
                 target_path=item.target_path,
-                source_revision=item.source_revision,
+                source_revision=(
+                    max(
+                        item.source_revision,
+                        *source_commit_revisions[item.module],
+                    )
+                    if source_commit_revisions[item.module]
+                    else item.source_revision
+                ),
                 target_revision=item.target_revision,
                 source_commit_count=len(source_commit_revisions[item.module]),
                 target_commit_count=len(target_commit_revisions[item.module]),
@@ -322,6 +329,12 @@ class MigrationAuditService:
             stage="source-log",
             verb="扫描",
         )
+        source_snapshot_revisions: dict[str, set[int]] = defaultdict(set)
+        for context, commits in source_logs.items():
+            source_snapshot_revisions[context.module].update(
+                commit.revision
+                for commit in commits
+            )
 
         expected_by_case: dict[
             MigrationCase,
@@ -474,7 +487,14 @@ class MigrationAuditService:
                     module=template.module,
                     source_path=template.source_path,
                     target_path=template.target_path,
-                    source_revision=template.source_revision,
+                    source_revision=(
+                        max(
+                            template.source_revision,
+                            *source_snapshot_revisions[template.module],
+                        )
+                        if source_snapshot_revisions[template.module]
+                        else template.source_revision
+                    ),
                     target_revision=template.target_revision,
                     source_commit_count=len(
                         source_revisions_by_case[case][template.module]
@@ -558,6 +578,7 @@ class MigrationAuditService:
             finished_at=_utc_now(),
             cases=refreshed_cases,
             warnings=snapshot.warnings,
+            selected_paths=snapshot.selected_paths,
         )
 
     def refresh_batch_commits(
@@ -699,6 +720,7 @@ class MigrationAuditService:
             finished_at=_utc_now(),
             cases=tuple(refreshed_cases),
             warnings=snapshot.warnings,
+            selected_paths=snapshot.selected_paths,
         )
 
     def _target_contexts_for_refresh(
@@ -772,8 +794,6 @@ class MigrationAuditService:
             for context in source:
                 source_baseline_revisions[_context_key(context)] = (
                     previous.source_revision
-                    if not context.is_external
-                    else context.info.revision
                 )
             for context in target:
                 baseline_revisions[_context_key(context)] = (

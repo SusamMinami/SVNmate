@@ -1309,6 +1309,10 @@ class MigrationGuardUiSmokeTests(unittest.TestCase):
         from migration_guard.app import MigrationGuardApp
         from migration_guard.models import (
             BatchMigrationAuditResult,
+            ExpectedChange,
+            FileVerification,
+            MigrationAuditResult,
+            VerificationState,
             WorkspaceModule,
         )
         from migration_guard.selective_update import SelectiveUpdatePlan
@@ -1339,10 +1343,50 @@ class MigrationGuardUiSmokeTests(unittest.TestCase):
                 "target",
                 "raw",
             )
+            files = tuple(
+                FileVerification(
+                    expected=ExpectedChange(
+                        module="res",
+                        source_issue="SERIA-10",
+                        target_issue="OSCOA-20",
+                        source_path=(
+                            f"/project/res/trunk/Content/Game/{name}.uasset"
+                        ),
+                        source_local_path=(
+                            rf"C:\source\res\Content\Game\{name}.uasset"
+                        ),
+                        target_path=(
+                            "/project/res/overseas/trunk/"
+                            f"Content/Game/{name}.uasset"
+                        ),
+                        target_local_path=(
+                            rf"D:\target\res\Content\Game\{name}.uasset"
+                        ),
+                        action="M",
+                        kind="file",
+                        source_revisions=(10,),
+                        source_authors=("tester",),
+                        source_messages=("[SERIA-10] source",),
+                    ),
+                    state=VerificationState.NOT_MIGRATED,
+                    local_status="normal",
+                    repository_status="normal",
+                )
+                for name in ("Dialogue", "UI")
+            )
             result = BatchMigrationAuditResult(
                 started_at="start",
                 finished_at="finish",
-                cases=(),
+                cases=(
+                    MigrationAuditResult(
+                        source_issue="SERIA-10",
+                        target_issue="OSCOA-20",
+                        started_at="start",
+                        finished_at="finish",
+                        files=files,
+                        modules=(),
+                    ),
+                ),
             )
             audit_service = Mock()
             audit_service.svn = Mock()
@@ -1376,6 +1420,13 @@ class MigrationGuardUiSmokeTests(unittest.TestCase):
                     "migration_guard.app.MigrationUpdateClient",
                     return_value=update_client,
                 ),
+                patch.object(
+                    app,
+                    "_request_asset_selection",
+                    return_value=(
+                        "/res/Content/Game/Dialogue.uasset",
+                    ),
+                ) as choose_assets,
             ):
                 app._run_batch_background(
                     (module,),
@@ -1386,16 +1437,27 @@ class MigrationGuardUiSmokeTests(unittest.TestCase):
                 )
 
             self.assertEqual(audit_service.audit_batch.call_count, 2)
-            planner.build.assert_called_once_with(result, (module,))
+            choose_assets.assert_called_once()
+            selected_result = planner.build.call_args.args[0]
+            self.assertEqual(len(selected_result.files), 1)
+            self.assertEqual(
+                selected_result.files[0].expected.source_local_path,
+                files[0].expected.source_local_path,
+            )
             update_client.update_folders.assert_called_once_with(
                 plan.targets
             )
             events = []
+            audited_result = None
             while not app.events.empty():
-                events.append(app.events.get_nowait()[0])
+                event, payload = app.events.get_nowait()
+                events.append(event)
+                if event == "audit-result":
+                    audited_result = payload
             self.assertIn("update-plan", events)
             self.assertIn("update-result", events)
             self.assertIn("audit-result", events)
+            self.assertEqual(len(audited_result.files), 1)
         finally:
             _destroy_root(root)
 
@@ -1430,6 +1492,110 @@ class MigrationGuardUiSmokeTests(unittest.TestCase):
             self.assertEqual(
                 app.workflow_progress_bar.cget("style"),
                 "WorkflowSuccess.Horizontal.TProgressbar",
+            )
+        finally:
+            _destroy_root(root)
+
+    def test_migration_reuses_asset_scope_selected_before_update(
+        self,
+    ) -> None:
+        from tkinter import Tk
+
+        from migration_guard.app import MigrationGuardApp
+        from migration_guard.batch_workflow import (
+            AssetMigrationItem,
+            AssetMigrationPlan,
+        )
+        from migration_guard.models import (
+            BatchMigrationAuditResult,
+            MigrationAuditResult,
+            WorkspaceModule,
+        )
+        from migration_guard.ticket_mapping import (
+            TicketMapping,
+            TicketRoute,
+        )
+
+        root = Tk()
+        root.withdraw()
+        try:
+            with patch(
+                "migration_guard.app.load_config",
+                return_value=MigrationGuardConfig(),
+            ):
+                app = MigrationGuardApp(root)
+            module = WorkspaceModule(
+                "res",
+                Path(r"C:\source\res"),
+                Path(r"D:\target\res"),
+            )
+            mapping = TicketMapping(
+                "SERIA-10",
+                "OSCOA-20",
+                TicketRoute.DOMESTIC_TO_OVERSEAS,
+                1,
+                "source",
+                "target",
+                "raw",
+            )
+            app.current_ticket_mappings = (mapping,)
+            app.source_issue.set(mapping.source_issue)
+            app.target_issue.set(mapping.target_issue)
+            app.current_result = BatchMigrationAuditResult(
+                started_at="start",
+                finished_at="finish",
+                cases=(
+                    MigrationAuditResult(
+                        source_issue=mapping.source_issue,
+                        target_issue=mapping.target_issue,
+                        started_at="start",
+                        finished_at="finish",
+                        files=(),
+                        modules=(),
+                    ),
+                ),
+                selected_paths=(
+                    "/res/Content/Game/Dialogue.uasset",
+                ),
+            )
+            plan = AssetMigrationPlan(
+                assets=(
+                    AssetMigrationItem(
+                        "/Game/Game/Dialogue",
+                        r"C:\source\res\Content\Game\Dialogue.uasset",
+                        r"D:\target\res\Content\Game\Dialogue.uasset",
+                        ("SERIA-10",),
+                        ("OSCOA-20",),
+                    ),
+                ),
+                manual_files=(),
+                already_handled_count=0,
+            )
+            executor = Mock()
+            executor.build_asset_plan.return_value = plan
+
+            with (
+                patch.object(
+                    app,
+                    "_selected_modules",
+                    return_value=(module,),
+                ),
+                patch.object(
+                    app,
+                    "_choose_migration_assets",
+                ) as choose_assets,
+                patch(
+                    "migration_guard.app.BatchMigrationExecutor",
+                    return_value=executor,
+                ),
+                patch("migration_guard.app.threading.Thread") as thread,
+            ):
+                app._start_batch_migration()
+
+            choose_assets.assert_not_called()
+            self.assertEqual(
+                thread.call_args.kwargs["args"][6],
+                ("/Game/Game/Dialogue",),
             )
         finally:
             _destroy_root(root)
@@ -1886,6 +2052,83 @@ class MigrationGuardUiSmokeTests(unittest.TestCase):
             selected = app._choose_migration_assets(plan)
 
             self.assertEqual(selected, ("/Game/A", "/Game/B"))
+        finally:
+            _destroy_root(root)
+
+    def test_update_picker_explains_selective_update_scope(self) -> None:
+        from tkinter import Tk, Toplevel
+
+        from migration_guard.app import MigrationGuardApp
+        from migration_guard.batch_workflow import (
+            AssetMigrationItem,
+            AssetMigrationPlan,
+        )
+
+        root = Tk()
+        root.withdraw()
+        try:
+            with patch(
+                "migration_guard.app.load_config",
+                return_value=MigrationGuardConfig(),
+            ):
+                app = MigrationGuardApp(root)
+            plan = AssetMigrationPlan(
+                assets=(
+                    AssetMigrationItem(
+                        "/res/Content/Dialogue/Line.uasset",
+                        r"C:\source\Line.uasset",
+                        r"D:\target\Line.uasset",
+                        ("SERIA-10",),
+                        ("OSCOA-20",),
+                    ),
+                    AssetMigrationItem(
+                        "/res/Content/UI/Panel.uasset",
+                        r"C:\source\Panel.uasset",
+                        r"D:\target\Panel.uasset",
+                        ("SERIA-10",),
+                        ("OSCOA-20",),
+                    ),
+                ),
+                manual_files=(),
+                already_handled_count=1,
+            )
+            visible_text = []
+
+            def inspect_and_confirm() -> None:
+                for child in root.winfo_children():
+                    if not isinstance(child, Toplevel):
+                        continue
+                    for widget in _walk_widgets(child):
+                        try:
+                            text = str(widget.cget("text"))
+                        except Exception:
+                            continue
+                        visible_text.append(text)
+                        if text.startswith("更新并复核（"):
+                            widget.invoke()
+                            return
+                root.after(20, inspect_and_confirm)
+
+            root.after(50, inspect_and_confirm)
+            selected = app._choose_migration_assets(
+                plan,
+                title="选择本次更新与迁移的资产",
+                purpose="update",
+            )
+
+            self.assertEqual(
+                selected,
+                (
+                    "/res/Content/Dialogue/Line.uasset",
+                    "/res/Content/UI/Panel.uasset",
+                ),
+            )
+            self.assertTrue(
+                any(
+                    "仅更新勾选资产对应的 SVN 目录" in text
+                    for text in visible_text
+                )
+            )
         finally:
             _destroy_root(root)
 

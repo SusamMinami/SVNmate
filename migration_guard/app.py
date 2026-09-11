@@ -39,7 +39,12 @@ from .asset_tree import (
     AssetTreeSelection,
 )
 from .audit import MigrationAuditService, default_workspace_modules
-from .batch_workflow import AssetMigrationPlan, BatchMigrationExecutor
+from .batch_workflow import (
+    AssetMigrationPlan,
+    BatchMigrationExecutor,
+    build_update_selection_plan,
+    select_audit_files,
+)
 from .config import (
     ROUTE_DOMESTIC_TO_DOMESTIC_OB,
     ROUTE_DOMESTIC_TO_OSOB,
@@ -3206,7 +3211,7 @@ class MigrationGuardApp:
                         "progress",
                         (
                             "selective-discovery",
-                            "先扫描本批次文件，规划精细更新范围",
+                            "只读扫描本批次文件，准备选择更新范围",
                         ),
                     )
                 )
@@ -3215,6 +3220,45 @@ class MigrationGuardApp:
                     cases,
                     lookback_days=lookback_days,
                 )
+                selection_plan = build_update_selection_plan(
+                    initial_result,
+                    modules,
+                )
+                selected_paths: tuple[str, ...] = ()
+                selected_cases = cases
+                if selection_plan.assets:
+                    self.events.put(
+                        (
+                            "progress",
+                            (
+                                "selective-selection",
+                                "请选择本次需要更新和迁移的资产",
+                            ),
+                        )
+                    )
+                    selected_paths = self._request_asset_selection(
+                        selection_plan,
+                        "选择本次更新与迁移的资产",
+                        purpose="update",
+                    )
+                    if selected_paths is None:
+                        self.events.put(
+                            ("update-selection-cancelled", None)
+                        )
+                        return
+                    initial_result = select_audit_files(
+                        initial_result,
+                        modules,
+                        selected_paths,
+                    )
+                    selected_cases = tuple(
+                        MigrationCase(
+                            case.source_issue,
+                            case.target_issue,
+                            case.label,
+                        )
+                        for case in initial_result.cases
+                    )
                 planner = SelectiveUpdatePlanner(service.svn)
                 self.events.put(
                     (
@@ -3246,14 +3290,23 @@ class MigrationGuardApp:
                             "progress",
                             (
                                 "selective-verify",
-                                "精细更新完成，重新核验全部文件",
+                                "精细更新完成，重新核验所选文件",
                             ),
                         )
                     )
-                    result = service.audit_batch(
+                    refreshed_result = service.audit_batch(
                         modules,
-                        cases,
+                        selected_cases,
                         lookback_days=lookback_days,
+                    )
+                    result = (
+                        select_audit_files(
+                            refreshed_result,
+                            modules,
+                            selected_paths,
+                        )
+                        if selected_paths
+                        else refreshed_result
                     )
                 else:
                     result = initial_result
@@ -3280,8 +3333,8 @@ class MigrationGuardApp:
                 "请先从合并表选择任务并完成统一核验。",
             )
             return
-        stage_mappings = self._active_stage_mappings()
-        if not stage_mappings:
+        available_stage_mappings = self._active_stage_mappings()
+        if not available_stage_mappings:
             messagebox.showwarning("没有任务", "请先从合并表选择任务。")
             return
         try:
@@ -3289,16 +3342,23 @@ class MigrationGuardApp:
             lookback_days = int(self.lookback_days.get())
             include_externals = self._effective_include_externals()
             target_branch_dir = Path(self.target_root.get())
-            expected_cases = {
+            available_cases = {
                 (item.source_issue, item.target_issue)
-                for item in stage_mappings
+                for item in available_stage_mappings
             }
             actual_cases = {
                 (item.source_issue, item.target_issue)
                 for item in self.current_result.cases
             }
-            if expected_cases != actual_cases:
+            if not actual_cases or not actual_cases.issubset(
+                available_cases
+            ):
                 raise ValueError("工作区路线已变化，请先重新核验")
+            stage_mappings = tuple(
+                item
+                for item in available_stage_mappings
+                if (item.source_issue, item.target_issue) in actual_cases
+            )
             preview = BatchMigrationExecutor().build_asset_plan(
                 self.current_result,
                 modules,
@@ -3308,7 +3368,7 @@ class MigrationGuardApp:
                 == ROUTE_DOMESTIC_TO_OSOB
             )
             osob_mappings = (
-                as_overseas_to_osob(self.current_ticket_mappings)
+                as_overseas_to_osob(stage_mappings)
                 if cascade
                 else ()
             )
@@ -3335,16 +3395,19 @@ class MigrationGuardApp:
         except (ValueError, OSError) as exc:
             messagebox.showwarning("无法开始", str(exc))
             return
-        selected_packages = self._choose_migration_assets(
-            preview,
-            title=(
-                "第一阶段：国内 trunk → 海外 trunk"
-                if cascade
-                else f"选择迁移内容：{first_stage_label}"
-            ),
-        )
-        if selected_packages is None:
-            return
+        if self.current_result.selected_paths:
+            selected_packages = preview.package_names
+        else:
+            selected_packages = self._choose_migration_assets(
+                preview,
+                title=(
+                    "第一阶段：国内 trunk → 海外 trunk"
+                    if cascade
+                    else f"选择迁移内容：{first_stage_label}"
+                ),
+            )
+            if selected_packages is None:
+                return
 
         self.busy = True
         self.task_failed = False
@@ -3454,13 +3517,23 @@ class MigrationGuardApp:
                     osob_cases,
                     lookback_days=lookback_days,
                 )
+                if final_result.selected_paths:
+                    osob_preflight = select_audit_files(
+                        osob_preflight,
+                        osob_modules,
+                        final_result.selected_paths,
+                    )
                 osob_plan = BatchMigrationExecutor().build_asset_plan(
                     osob_preflight,
                     osob_modules,
                 )
-                osob_selection = self._request_asset_selection(
-                    osob_plan,
-                    "第二阶段：海外 trunk → OSOB",
+                osob_selection = (
+                    osob_plan.package_names
+                    if final_result.selected_paths
+                    else self._request_asset_selection(
+                        osob_plan,
+                        "第二阶段：海外 trunk → OSOB",
+                    )
                 )
                 if osob_selection is None:
                     self.events.put(("pipeline-cancelled", None))
@@ -3644,12 +3717,17 @@ class MigrationGuardApp:
         self,
         plan: AssetMigrationPlan,
         title: str,
+        *,
+        purpose: str = "migration",
     ) -> tuple[str, ...] | None:
         response: queue.Queue[tuple[str, ...] | None] = queue.Queue(
             maxsize=1
         )
         self.events.put(
-            ("asset-selection-request", (plan, title, response))
+            (
+                "asset-selection-request",
+                (plan, title, response, purpose),
+            )
         )
         return response.get()
 
@@ -3658,7 +3736,9 @@ class MigrationGuardApp:
         plan: AssetMigrationPlan,
         *,
         title: str = "选择迁移内容",
+        purpose: str = "migration",
     ) -> tuple[str, ...] | None:
+        is_update_selection = purpose == "update"
         window = Toplevel(self.root)
         window.withdraw()
         window.title(title)
@@ -3813,9 +3893,17 @@ class MigrationGuardApp:
         table_frame.columnconfigure(0, weight=1)
 
         note = (
-            f"可迁移 {len(plan.assets)} 个"
-            f" · 人工处理 {len(plan.manual_files)} 个"
-            f" · 已有证据 {plan.already_handled_count} 个"
+            (
+                f"待处理 {len(plan.assets)} 个"
+                " · 仅更新勾选资产对应的 SVN 目录"
+                f" · 已完成 {plan.already_handled_count} 个"
+            )
+            if is_update_selection
+            else (
+                f"可迁移 {len(plan.assets)} 个"
+                f" · 人工处理 {len(plan.manual_files)} 个"
+                f" · 已有证据 {plan.already_handled_count} 个"
+            )
         )
         ttk.Label(
             container,
@@ -3824,7 +3912,11 @@ class MigrationGuardApp:
         ).pack(fill=X, pady=(8, 0))
         detail_text = StringVar(
             value=(
-                "选择目录或资源查看完整项目路径"
+                (
+                    "选择目录或文件查看完整项目路径"
+                    if is_update_selection
+                    else "选择目录或资源查看完整项目路径"
+                )
                 if plan.assets
                 else "待处理任务不等于可由 UE 自动迁移的资源"
             )
@@ -3854,9 +3946,22 @@ class MigrationGuardApp:
                 f" · {folder_count} 个目录"
             )
             confirm_button.configure(
-                text=f"迁移选中（{count}）"
+                text=(
+                    f"更新并复核（{count}）"
+                    if is_update_selection
+                    else f"迁移选中（{count}）"
+                )
                 if count
-                else "继续（不迁移资源）"
+                else (
+                    "请至少选择 1 项"
+                    if is_update_selection
+                    else "继续（不迁移资源）"
+                ),
+                state=(
+                    "normal"
+                    if count or not is_update_selection
+                    else "disabled"
+                ),
             )
 
         def refresh_detail(_event: object = None) -> None:
@@ -3939,7 +4044,9 @@ class MigrationGuardApp:
         confirm_button = ttk.Button(
             footer,
             text=(
-                "迁移选中"
+                "更新并复核"
+                if is_update_selection
+                else "迁移选中"
                 if plan.assets
                 else "继续准备提交"
                 if pending_commit_count
@@ -4351,6 +4458,7 @@ class MigrationGuardApp:
             "source-log": 20,
             "target-log": 32,
             "target-status": 40,
+            "selective-selection": 44,
             "selective-status": 48,
             "selective-update": 58,
             "selective-verify": 64,
@@ -4549,13 +4657,21 @@ class MigrationGuardApp:
                 elif event == "workspace-stage":
                     self._set_workspace_route(str(payload))
                 elif event == "asset-selection-request":
-                    plan, title, response = payload
+                    plan, title, response, purpose = payload
                     response.put(
                         self._choose_migration_assets(
                             plan,
                             title=str(title),
+                            purpose=str(purpose),
                         )
                     )
+                elif event == "update-selection-cancelled":
+                    self.task_failed = True
+                    self.status_text.set("已取消本次选择性更新")
+                    self._set_detail(
+                        "未更新任何文件；可再次点击“更新并复核”重新选择。"
+                    )
+                    self._finish_workflow_progress(complete=False)
                 elif event == "pipeline-cancelled":
                     self.task_failed = True
                     self.status_text.set("第二阶段已取消")

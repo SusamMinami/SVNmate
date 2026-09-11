@@ -5,7 +5,7 @@ import shutil
 import subprocess
 from collections import defaultdict
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from .models import (
@@ -308,6 +308,118 @@ class BatchMigrationExecutor:
     def _progress(self, stage: str, message: str) -> None:
         if self.progress is not None:
             self.progress(stage, message)
+
+
+def build_update_selection_plan(
+    result: BatchMigrationAuditResult,
+    modules: tuple[WorkspaceModule, ...],
+) -> AssetMigrationPlan:
+    module_by_name = {
+        module.name.casefold(): module
+        for module in modules
+    }
+    grouped: dict[str, list[FileVerification]] = defaultdict(list)
+    handled_paths: set[str] = set()
+    for item in result.files:
+        selection_path = _update_selection_path(item, module_by_name)
+        if item.state in {
+            VerificationState.COMPLETE,
+            VerificationState.SUBMITTED,
+        }:
+            handled_paths.add(selection_path.casefold())
+            continue
+        grouped[selection_path.casefold()].append(item)
+
+    planned = []
+    for owned_files in grouped.values():
+        representative = owned_files[0]
+        planned.append(
+            AssetMigrationItem(
+                package_name=_update_selection_path(
+                    representative,
+                    module_by_name,
+                ),
+                source_local_path=(
+                    representative.expected.source_local_path
+                ),
+                target_local_path=(
+                    representative.expected.target_local_path
+                ),
+                source_issues=tuple(
+                    dict.fromkeys(
+                        item.expected.source_issue
+                        for item in owned_files
+                    )
+                ),
+                target_issues=tuple(
+                    dict.fromkeys(
+                        item.expected.target_issue
+                        for item in owned_files
+                    )
+                ),
+            )
+        )
+    return AssetMigrationPlan(
+        assets=tuple(
+            sorted(planned, key=lambda item: item.package_name.casefold())
+        ),
+        manual_files=(),
+        already_handled_count=len(handled_paths - set(grouped)),
+    )
+
+
+def select_audit_files(
+    result: BatchMigrationAuditResult,
+    modules: tuple[WorkspaceModule, ...],
+    selected_paths: tuple[str, ...],
+) -> BatchMigrationAuditResult:
+    module_by_name = {
+        module.name.casefold(): module
+        for module in modules
+    }
+    selected = {path.casefold() for path in selected_paths}
+    cases = []
+    for case in result.cases:
+        files = tuple(
+            item
+            for item in case.files
+            if _update_selection_path(
+                item,
+                module_by_name,
+            ).casefold()
+            in selected
+        )
+        if files:
+            cases.append(replace(case, files=files))
+    return replace(
+        result,
+        cases=tuple(cases),
+        selected_paths=selected_paths,
+    )
+
+
+def _update_selection_path(
+    item: FileVerification,
+    module_by_name: Mapping[str, WorkspaceModule],
+) -> str:
+    expected = item.expected
+    module = module_by_name.get(expected.module.casefold())
+    source_path = Path(expected.source_local_path)
+    relative = ""
+    if module is not None:
+        try:
+            relative = source_path.resolve().relative_to(
+                module.source_path.resolve()
+            ).as_posix()
+        except (OSError, ValueError):
+            pass
+    if not relative:
+        relative = expected.source_path.replace("\\", "/").strip("/")
+    return (
+        f"/{expected.module}/{relative}"
+        .replace("\\", "/")
+        .replace("//", "/")
+    )
 
 
 def _package_name(

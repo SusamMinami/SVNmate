@@ -8,6 +8,7 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
+copy /Y "migration_guard\VERSION" "dist\VERSION" >nul
 echo.
 echo Build complete: dist\MigrationGuard.exe
 pause

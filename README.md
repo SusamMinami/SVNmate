@@ -133,9 +133,10 @@ SVNmate 的“工具模块”卡片包含：
 显示“更新”。检查更新、选择已有 EXE、打开安装位置和复制路径位于每行的
 “更多”菜单。迁移核验助手使用独立的 `migration-guard-latest` 更新通道。
 
-MigrationGuard `1.0.2` 在无本地工作区模式下支持 5 分钟远端结果缓存、按 Jira
-创建时间收敛查询范围、可取消旧查询，以及 2/5 分钟自动刷新。无本地工作区时点击
-“更新”会强制刷新 Jira 与远端 SVN，不执行本地 SVN Update。
+MigrationGuard `1.0.5` 在无本地工作区模式下支持 5 分钟远端结果缓存、按 Jira
+创建时间收敛查询范围、可取消旧查询，以及 2/5 分钟自动刷新。有本地工作区时，
+“更新并复核”会先选择本批资产，只更新相关 SVN 目录，并让后续迁移与提交沿用
+同一范围。
 
 KindleLarkStatus 源码仓保持私有，Windows ZIP 与 manifest 发布在 SVNmate 仓库的独立 `kindle-windows-latest` 通道。发布与验收记录见 [Kindle 公共更新通道交接](KINDLE_PUBLIC_CHANNEL_HANDOFF.md)。
 

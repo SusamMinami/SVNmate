@@ -141,9 +141,9 @@ modules\KindleLarkStatus\KindleLarkStatus.exe
 或 `dist\MigrationGuard.exe` 自动识别，也可手动选择。
 其他模块不随 `SVNmate.zip` 预装。安装失败不会删除当前可用版本，也不会覆盖模块配置。
 
-MigrationGuard `1.0.2` 的无工程模式会缓存远端结果 5 分钟，并可按 2 分钟或
-5 分钟周期自动刷新。该模式下点击“更新”只强制刷新 Jira 与远端 SVN；配置了有效
-本地工作区后才执行精细化 SVN Update。
+MigrationGuard `1.0.5` 的无工程模式会缓存远端结果 5 分钟，并可按 2 分钟或
+5 分钟周期自动刷新。配置了有效本地工作区后，“更新并复核”会先让用户选择本批
+资产，只更新相关 SVN 目录，并让后续迁移、提交和 OSOB 阶段沿用同一范围。
 
 ### 选择已有程序
 

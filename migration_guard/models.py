@@ -201,6 +201,7 @@ class BatchMigrationAuditResult:
     finished_at: str
     cases: tuple[MigrationAuditResult, ...]
     warnings: tuple[str, ...] = field(default_factory=tuple)
+    selected_paths: tuple[str, ...] = field(default_factory=tuple)
 
     @property
     def files(self) -> tuple[FileVerification, ...]:
@@ -243,4 +244,5 @@ class BatchMigrationAuditResult:
             "counts": self.counts,
             "cases": [case.to_dict() for case in self.cases],
             "warnings": list(self.warnings),
+            "selected_paths": list(self.selected_paths),
         }

@@ -3,6 +3,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -564,6 +565,10 @@ class MigrationAuditDecisionTests(unittest.TestCase):
                 (MigrationCase("SERIA-10", "OSCOA-20"),),
                 lookback_days=30,
             )
+            snapshot = replace(
+                snapshot,
+                selected_paths=("/res/asset.uasset",),
+            )
             svn.statuses = {
                 _path_key(target_file): WorkingCopyStatus(
                     path=str(target_file),
@@ -580,6 +585,10 @@ class MigrationAuditDecisionTests(unittest.TestCase):
         self.assertEqual(
             refreshed.files[0].state,
             VerificationState.PENDING_COMMIT,
+        )
+        self.assertEqual(
+            refreshed.selected_paths,
+            snapshot.selected_paths,
         )
         self.assertEqual(svn.log_by_issues_calls, 1)
         self.assertEqual(svn.log_by_message_pattern_calls, 1)
@@ -736,6 +745,72 @@ class MigrationAuditDecisionTests(unittest.TestCase):
                     (module,),
                     verify_source=True,
                 )
+
+    def test_full_audit_baseline_includes_non_file_issue_commits(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "source" / "res"
+            target = root / "target" / "res"
+            source.mkdir(parents=True)
+            target.mkdir(parents=True)
+            (source / "asset.uasset").write_bytes(b"source")
+            (target / "asset.uasset").write_bytes(b"target")
+            source_commits = (
+                SvnCommit(
+                    10,
+                    "a",
+                    "2026-09-01T00:00:00Z",
+                    "[SERIA-10] asset",
+                    (
+                        SvnChange(
+                            "M",
+                            "/project/res/trunk/asset.uasset",
+                            "file",
+                        ),
+                    ),
+                ),
+                SvnCommit(
+                    21,
+                    "a",
+                    "2026-09-01T00:01:00Z",
+                    "[SERIA-10] folder metadata",
+                    (
+                        SvnChange(
+                            "M",
+                            "/project/res/trunk/folder",
+                            "dir",
+                        ),
+                    ),
+                ),
+            )
+            svn = _FakeSvnClient(
+                source,
+                target,
+                source_commits,
+                (),
+                {},
+            )
+            module = WorkspaceModule("res", source, target)
+            service = MigrationAuditService(
+                svn=svn,
+                include_externals=False,
+            )
+            snapshot = service.audit_batch(
+                (module,),
+                (MigrationCase("SERIA-10", "OSCOA-20"),),
+                lookback_days=30,
+            )
+
+            refreshed = service.refresh_batch_status(
+                snapshot,
+                (module,),
+                verify_source=True,
+            )
+
+        self.assertEqual(snapshot.modules[0].source_revision, 21)
+        self.assertEqual(len(refreshed.files), 1)
 
 
 class IssueParsingTests(unittest.TestCase):
