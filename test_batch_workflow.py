@@ -216,8 +216,19 @@ class BatchWorkflowTests(unittest.TestCase):
                 "OSCOA-20",
                 VerificationState.COMPLETE,
             )
+            source_deleted = _verification(
+                module,
+                "Game/Removed.uasset",
+                "SERIA-10",
+                "OSCOA-20",
+                VerificationState.SOURCE_DELETED,
+            )
             result = _batch(
-                ("SERIA-10", "OSCOA-20", (first, table, completed)),
+                (
+                    "SERIA-10",
+                    "OSCOA-20",
+                    (first, table, completed, source_deleted),
+                ),
                 ("SERIA-11", "OSCOA-21", (second,)),
             )
 
@@ -236,7 +247,7 @@ class BatchWorkflowTests(unittest.TestCase):
             ("OSCOA-20", "OSCOA-21"),
         )
         self.assertEqual(len(plan.manual_files), 1)
-        self.assertEqual(plan.already_handled_count, 1)
+        self.assertEqual(plan.already_handled_count, 2)
 
     def test_migrate_calls_unreal_once_with_all_packages(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

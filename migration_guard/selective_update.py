@@ -46,6 +46,7 @@ class SelectiveUpdatePlanner:
                 item.expected.source_local_path
                 for item in result.files
                 if item.expected.source_local_path
+                and item.state != VerificationState.SOURCE_DELETED
             )
         )
         source_statuses = self.svn.status_paths(
@@ -64,6 +65,7 @@ class SelectiveUpdatePlanner:
             _path_key(item.expected.source_local_path): item
             for item in result.files
             if item.expected.source_local_path
+            and item.state != VerificationState.SOURCE_DELETED
         }
         for source_key, item in source_items.items():
             expected = item.expected

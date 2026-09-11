@@ -8,6 +8,7 @@ from pathlib import Path
 class VerificationState(str, Enum):
     COMPLETE = "complete"
     SUBMITTED = "submitted"
+    SOURCE_DELETED = "source_deleted"
     PENDING_COMMIT = "pending_commit"
     NOT_MIGRATED = "not_migrated"
     NEEDS_UPDATE = "needs_update"
@@ -19,6 +20,7 @@ class VerificationState(str, Enum):
         return {
             self.COMPLETE: "已完成",
             self.SUBMITTED: "已提交",
+            self.SOURCE_DELETED: "源已删除",
             self.PENDING_COMMIT: "待提交",
             self.NOT_MIGRATED: "未迁移",
             self.NEEDS_UPDATE: "需更新",
@@ -115,6 +117,7 @@ class ExpectedChange:
     source_messages: tuple[str, ...]
     is_external: bool = False
     mapping_error: str = ""
+    source_deleted_revision: int | None = None
 
 
 @dataclass(frozen=True)
@@ -169,6 +172,7 @@ class MigrationAuditResult:
             in {
                 VerificationState.COMPLETE,
                 VerificationState.SUBMITTED,
+                VerificationState.SOURCE_DELETED,
             }
             for item in self.files
         )

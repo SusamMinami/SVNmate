@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import time
 import urllib.parse
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from enum import Enum
@@ -27,6 +28,7 @@ ISSUE_FINDER = re.compile(
 )
 CACHE_SCHEMA_VERSION = 1
 CACHE_TTL_SECONDS = 300
+MAX_ROUTE_SHEET_SCAN = 12
 
 
 class TicketRoute(str, Enum):
@@ -175,22 +177,33 @@ class LarkTicketSheetClient:
             else default_data_directory() / "ticket_mapping_cache.json"
         )
 
-    def fetch(self, *, force_refresh: bool = False) -> TicketSheetSnapshot:
+    def fetch(
+        self,
+        *,
+        force_refresh: bool = False,
+        required_routes: Iterable[TicketRoute] = (),
+    ) -> TicketSheetSnapshot:
+        required = tuple(dict.fromkeys(required_routes))
         cached = self._load_cache()
         if (
             not force_refresh
             and cached is not None
             and cached.url == self.url
             and _cache_age_seconds(cached.fetched_at) <= CACHE_TTL_SECONDS
+            and _snapshot_matches_routes(cached, required)
         ):
             return cached
 
         try:
-            snapshot = self._fetch_online()
+            snapshot = self._fetch_online(required_routes=required)
             self._save_cache(snapshot)
             return snapshot
         except Exception as exc:
-            if cached is not None and cached.url == self.url:
+            if (
+                cached is not None
+                and cached.url == self.url
+                and _snapshot_matches_routes(cached, required)
+            ):
                 return TicketSheetSnapshot(
                     url=cached.url,
                     sheet_id=cached.sheet_id,
@@ -203,7 +216,11 @@ class LarkTicketSheetClient:
                 )
             raise
 
-    def _fetch_online(self) -> TicketSheetSnapshot:
+    def _fetch_online(
+        self,
+        *,
+        required_routes: tuple[TicketRoute, ...] = (),
+    ) -> TicketSheetSnapshot:
         workbook = self.runner(
             [
                 self.lark_cli,
@@ -222,7 +239,57 @@ class LarkTicketSheetClient:
         if not isinstance(sheets, list):
             raise ValueError("飞书工作簿未返回 sheets")
         requested_sheet_id = _sheet_id_from_url(self.url)
-        selected = _select_sheet(sheets, requested_sheet_id)
+        if requested_sheet_id:
+            candidates = (_select_sheet(sheets, requested_sheet_id),)
+        else:
+            candidates = tuple(
+                sorted(
+                    (
+                        item
+                        for item in sheets
+                        if isinstance(item, dict)
+                        and not item.get("is_hidden")
+                    ),
+                    key=lambda item: int(item.get("index", len(sheets))),
+                )
+            )
+        if not candidates:
+            raise ValueError("合并表没有可读取的工作表")
+
+        first_snapshot: TicketSheetSnapshot | None = None
+        scan_limit = (
+            min(MAX_ROUTE_SHEET_SCAN, len(candidates))
+            if required_routes and not requested_sheet_id
+            else 1
+        )
+        for selected in candidates[:scan_limit]:
+            snapshot = self._fetch_sheet(data, selected)
+            if first_snapshot is None:
+                first_snapshot = snapshot
+            if _snapshot_matches_routes(snapshot, required_routes):
+                return snapshot
+
+        assert first_snapshot is not None
+        route_labels = "、".join(
+            route.label for route in required_routes
+        )
+        return TicketSheetSnapshot(
+            url=first_snapshot.url,
+            sheet_id=first_snapshot.sheet_id,
+            sheet_name=first_snapshot.sheet_name,
+            revision=first_snapshot.revision,
+            fetched_at=first_snapshot.fetched_at,
+            mappings=first_snapshot.mappings,
+            warning=(
+                f"最近 {scan_limit} 个页签未找到{route_labels}任务"
+            ),
+        )
+
+    def _fetch_sheet(
+        self,
+        workbook_data: dict[str, object],
+        selected: dict[str, object],
+    ) -> TicketSheetSnapshot:
         sheet_id = str(selected.get("sheet_id", ""))
         sheet_name = str(
             selected.get("title")
@@ -267,7 +334,7 @@ class LarkTicketSheetClient:
             sheet_name=sheet_name,
             revision=int(
                 csv_data.get("revision")
-                or data.get("revision")
+                or workbook_data.get("revision")
                 or 0
             ),
             fetched_at=_utc_now(),
@@ -421,7 +488,11 @@ def parse_ticket_rows(
             target_issue = oscoa_issues[0]
             source_text = value
             target_text = value
-            item_route = route
+            item_route = (
+                TicketRoute.OVERSEAS_TO_OSOB
+                if route == TicketRoute.DOMESTIC_TO_OVERSEAS
+                else route
+            )
         elif seria_issues and oscoa_issues:
             source_issue = seria_issues[0]
             target_issue = oscoa_issues[0]
@@ -693,6 +764,17 @@ def _select_sheet(
     return min(
         visible,
         key=lambda item: int(item.get("index", len(candidates))),
+    )
+
+
+def _snapshot_matches_routes(
+    snapshot: TicketSheetSnapshot,
+    required_routes: Iterable[TicketRoute],
+) -> bool:
+    required = set(required_routes)
+    return (
+        not required
+        or any(mapping.route in required for mapping in snapshot.mappings)
     )
 
 

@@ -96,6 +96,11 @@ class SelectiveUpdatePlannerTests(unittest.TestCase):
             stale_a = _verification(module, "Content/Game/A.uasset")
             stale_b = _verification(module, "Content/Game/B.uasset")
             current = _verification(module, "Content/UI/C.uasset")
+            source_deleted = _verification(
+                module,
+                "Content/Removed/D.uasset",
+                state=VerificationState.SOURCE_DELETED,
+            )
             for item in (stale_a, stale_b, current):
                 Path(item.expected.source_local_path).parent.mkdir(
                     parents=True,
@@ -123,7 +128,7 @@ class SelectiveUpdatePlannerTests(unittest.TestCase):
             }
 
             plan = SelectiveUpdatePlanner(_StatusSvn(statuses)).build(
-                _batch(stale_a, stale_b, current),
+                _batch(stale_a, stale_b, current, source_deleted),
                 (module,),
             )
 

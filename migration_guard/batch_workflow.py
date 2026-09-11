@@ -325,6 +325,7 @@ def build_update_selection_plan(
         if item.state in {
             VerificationState.COMPLETE,
             VerificationState.SUBMITTED,
+            VerificationState.SOURCE_DELETED,
         }:
             handled_paths.add(selection_path.casefold())
             continue

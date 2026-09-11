@@ -81,6 +81,10 @@ class MigrationAuditService:
             tuple[str, str],
             int,
         ] = {}
+        self._source_path_history_cache: dict[
+            tuple[str, int],
+            tuple[SvnCommit, ...],
+        ] = {}
 
     def audit(
         self,
@@ -167,6 +171,10 @@ class MigrationAuditService:
             source_issue=source_key,
             target_issue=target_key,
         )
+        expected = self._with_source_deletion_evidence(
+            expected,
+            source_contexts,
+        )
         if not expected:
             return MigrationAuditResult(
                 source_issue=source_key,
@@ -211,7 +219,9 @@ class MigrationAuditService:
         target_paths = [
             item.target_local_path
             for item in expected
-            if item.target_local_path and not item.mapping_error
+            if item.target_local_path
+            and not item.mapping_error
+            and item.source_deleted_revision is None
         ]
         self._progress(
             "target-status",
@@ -370,6 +380,10 @@ class MigrationAuditService:
                 source_issue=case.source_issue,
                 target_issue=case.target_issue,
             )
+            expected = self._with_source_deletion_evidence(
+                expected,
+                source_contexts,
+            )
             expected_by_case[case] = expected
             source_revisions_by_case[case] = module_revisions
             all_expected.extend(expected)
@@ -402,7 +416,9 @@ class MigrationAuditService:
             dict.fromkeys(
                 item.target_local_path
                 for item in all_expected
-                if item.target_local_path and not item.mapping_error
+                if item.target_local_path
+                and not item.mapping_error
+                and item.source_deleted_revision is None
             )
         )
         self._progress(
@@ -988,6 +1004,8 @@ class MigrationAuditService:
         batch_commits_by_path: dict[tuple[str, str], list[SvnCommit]],
         batch_issues_by_path: dict[tuple[str, str], set[str]],
     ) -> FileVerification:
+        if previous.state == VerificationState.SOURCE_DELETED:
+            return previous
         expected = previous.expected
         context = _context_for_repository_path(
             expected.target_path,
@@ -1044,6 +1062,8 @@ class MigrationAuditService:
         statuses: dict[str, WorkingCopyStatus],
         target_contexts: dict[str, tuple[_WorkingCopyContext, ...]],
     ) -> FileVerification:
+        if previous.state == VerificationState.SOURCE_DELETED:
+            return previous
         expected = previous.expected
         if expected.mapping_error:
             return replace(
@@ -1380,7 +1400,10 @@ class MigrationAuditService:
         contexts = []
         seen: set[tuple[str, str]] = set()
         for item in expected:
-            if item.mapping_error:
+            if (
+                item.mapping_error
+                or item.source_deleted_revision is not None
+            ):
                 continue
             for context in target_contexts.get(item.module, ()):
                 if not _repository_suffix(
@@ -1396,6 +1419,69 @@ class MigrationAuditService:
                         contexts.append(context)
                     break
         return tuple(contexts)
+
+    def _with_source_deletion_evidence(
+        self,
+        expected: tuple[ExpectedChange, ...],
+        source_contexts: dict[str, tuple[_WorkingCopyContext, ...]],
+    ) -> tuple[ExpectedChange, ...]:
+        result = list(expected)
+        candidates: dict[
+            _WorkingCopyContext,
+            list[tuple[int, ExpectedChange, int]],
+        ] = defaultdict(list)
+        for index, item in enumerate(expected):
+            if (
+                item.action == "D"
+                or not item.source_revisions
+                or Path(item.source_local_path).exists()
+            ):
+                continue
+            context = _context_for_repository_path(
+                item.source_path,
+                source_contexts.get(item.module, ()),
+            )
+            if context is not None:
+                candidates[context].append(
+                    (index, item, max(item.source_revisions))
+                )
+
+        for context, context_items in candidates.items():
+            start_revision = min(
+                source_revision
+                for _index, _item, source_revision in context_items
+            ) + 1
+            cache_key = (
+                context.info.url.casefold(),
+                start_revision,
+            )
+            try:
+                commits = self._source_path_history_cache.get(cache_key)
+                if commits is None:
+                    commits = self.svn.log_path_history(
+                        context.info.url,
+                        start_revision=start_revision,
+                    )
+                    self._source_path_history_cache[cache_key] = commits
+            except Exception as exc:
+                self._progress(
+                    "warning",
+                    f"无法确认 {context.module} 缺失源文件的后续历史："
+                    f"{exc}",
+                )
+                continue
+            for index, item, source_revision in context_items:
+                deleted_revision = _latest_deletion_revision(
+                    item.source_path,
+                    commits,
+                    after_revision=source_revision,
+                )
+                if deleted_revision is not None:
+                    result[index] = replace(
+                        item,
+                        source_deleted_revision=deleted_revision,
+                    )
+        return tuple(result)
 
     def _verify_file(
         self,
@@ -1425,6 +1511,18 @@ class MigrationAuditService:
                 local_status="unknown",
                 repository_status="unknown",
                 reason=expected.mapping_error,
+            )
+        if expected.source_deleted_revision is not None:
+            return FileVerification(
+                expected=expected,
+                state=VerificationState.SOURCE_DELETED,
+                local_status="absent",
+                repository_status="",
+                reason=(
+                    "源文件已在后续 SVN 提交 "
+                    f"r{expected.source_deleted_revision} 中删除，"
+                    "当前单无需迁移该旧路径"
+                ),
             )
 
         target_context = _context_for_repository_path(
@@ -1639,6 +1737,7 @@ def _snapshot_target_paths(
             for item in snapshot.files
             if item.expected.target_local_path
             and not item.expected.mapping_error
+            and item.state != VerificationState.SOURCE_DELETED
         )
     )
 
@@ -1695,6 +1794,38 @@ def _join_repository_path(root: str, suffix: str) -> str:
     if not suffix:
         return normalized_root
     return normalized_root.rstrip("/") + "/" + suffix.replace("\\", "/")
+
+
+def _latest_deletion_revision(
+    source_path: str,
+    commits: tuple[SvnCommit, ...],
+    *,
+    after_revision: int = 0,
+) -> int | None:
+    normalized_source = _normalize_repository_path(
+        source_path
+    ).casefold()
+    relevant_actions = []
+    for commit in commits:
+        if commit.revision <= after_revision:
+            continue
+        for change in commit.changes:
+            normalized_change = _normalize_repository_path(
+                change.path
+            ).casefold()
+            if (
+                normalized_source == normalized_change
+                or normalized_source.startswith(
+                    normalized_change.rstrip("/") + "/"
+                )
+            ):
+                relevant_actions.append(
+                    (commit.revision, change.action.upper())
+                )
+    if not relevant_actions:
+        return None
+    revision, action = max(relevant_actions)
+    return revision if action == "D" else None
 
 
 def _normalize_repository_path(path: str) -> str:

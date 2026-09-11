@@ -9,6 +9,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from tkinter import (
@@ -142,6 +143,7 @@ UI_FONT_CANDIDATES = (
 STATE_COLORS = {
     VerificationState.COMPLETE: "#15803D",
     VerificationState.SUBMITTED: "#047857",
+    VerificationState.SOURCE_DELETED: "#667085",
     VerificationState.PENDING_COMMIT: "#B45309",
     VerificationState.NOT_MIGRATED: "#B42318",
     VerificationState.NEEDS_UPDATE: "#2563EB",
@@ -159,6 +161,46 @@ MIGRATION_STAGE_LABELS = {
     "checkout": "等待提交",
     "verify": "增量复核",
 }
+OPERATION_ROW_LABELS = {
+    "selective-discovery": "扫描清单",
+    "workspace": "校验工作区",
+    "source-log": "扫描源提交",
+    "target-log": "检查目标提交",
+    "target-status": "检查目标状态",
+    "selective-selection": "等待选择",
+    "selective-status": "检查更新",
+    "selective-update": "SVN 更新中",
+    "selective-verify": "更新后复核",
+    "preflight": "迁移预检",
+    "migrate": "UE 迁移中",
+    "checkout-scan": "扫描目标",
+    "checkout": "等待提交",
+    "verify": "最终复核",
+    "osob-preflight": "OB 预检",
+}
+
+
+def _required_ticket_routes(
+    table_kind: str,
+) -> tuple[TicketRoute, ...]:
+    if table_kind == TABLE_TRUNK:
+        return (TicketRoute.DOMESTIC_TO_OVERSEAS,)
+    if table_kind == TABLE_OSOB:
+        return (
+            TicketRoute.DOMESTIC_TO_OVERSEAS,
+            TicketRoute.OVERSEAS_TO_OSOB,
+        )
+    return ()
+
+
+def _ticket_mapping_key(
+    mapping: TicketMapping,
+) -> tuple[str, str, str]:
+    return (
+        mapping.source_issue,
+        mapping.target_issue,
+        mapping.route.value,
+    )
 
 
 def _preferred_ui_font_family(root: Tk) -> str:
@@ -251,6 +293,7 @@ class MigrationGuardApp:
         self.filter_state = StringVar(value="全部")
         self.detail_filter_text = StringVar(value="更多 ▼")
         self.result_view = StringVar(value="单号")
+        self.asset_search_text = StringVar()
         self.status_text = StringVar(value="就绪")
         self.last_refresh_text = StringVar(value="尚未刷新")
         self.workflow_stage_text = StringVar(value="未开始")
@@ -262,6 +305,7 @@ class MigrationGuardApp:
             VerificationState.PENDING_COMMIT.value: StringVar(value="0"),
             VerificationState.COMPLETE.value: StringVar(value="0"),
             VerificationState.SUBMITTED.value: StringVar(value="0"),
+            VerificationState.SOURCE_DELETED.value: StringVar(value="0"),
             VerificationState.NEEDS_UPDATE.value: StringVar(value="0"),
             VerificationState.NEEDS_REVIEW.value: StringVar(value="0"),
             VerificationState.BLOCKED.value: StringVar(value="0"),
@@ -296,7 +340,13 @@ class MigrationGuardApp:
         self.audit_tree_cases: dict[str, MigrationAuditResult] = {}
         self.visible_ticket_mappings: list[TicketMapping] = []
         self.visible_ticket_progress: list[TicketJiraProgress] = []
+        self.ticket_preview_states: dict[
+            tuple[str, str, str],
+            tuple[str, VerificationState],
+        ] = {}
         self.remote_asset_result: RemoteAssetProgressResult | None = None
+        self._ticket_preview_result: RemoteAssetProgressResult | None = None
+        self._ticket_preview_request_id: int | None = None
         self.remote_asset_tree: AssetProgressTree | None = None
         self.remote_notices: list[tuple[str, str, str]] = []
         self.remote_tree_assets: dict[str, RemoteAssetProgress] = {}
@@ -315,6 +365,8 @@ class MigrationGuardApp:
         self._workflow_timing_stage = ""
         self._workflow_timing_message = ""
         self._workflow_timing_started_at: float | None = None
+        self._operation_row_status = ""
+        self._operation_scope_paths: frozenset[str] = frozenset()
         self.active_table_kind = TABLE_TRUNK
         self.table_mode = "audit"
         self.settings_window: Toplevel | None = None
@@ -325,6 +377,10 @@ class MigrationGuardApp:
 
         self._build_styles()
         self._build_ui()
+        self.asset_search_text.trace_add(
+            "write",
+            self._on_asset_search_changed,
+        )
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.bind("<F5>", self._refresh_shortcut)
         self.root.bind(
@@ -900,6 +956,7 @@ class MigrationGuardApp:
             "未迁移",
             "待提交",
             "已提交",
+            "源已删除",
             "需更新",
             "需确认",
         ):
@@ -911,6 +968,36 @@ class MigrationGuardApp:
                 ),
             )
         self.detail_filter_button.configure(menu=detail_filter_menu)
+        self.asset_search_label = ttk.Label(
+            summary,
+            text="搜索资产",
+            style="Panel.TLabel",
+        )
+        self.asset_search_label.pack(side=LEFT, padx=(10, 4))
+        self.asset_search_entry = ttk.Entry(
+            summary,
+            textvariable=self.asset_search_text,
+            width=16,
+            state="disabled",
+        )
+        self.asset_search_entry.pack(side=LEFT)
+        self.asset_search_entry.bind(
+            "<Escape>",
+            lambda _event: self.asset_search_text.set(""),
+        )
+        self._attach_tooltip(
+            self.asset_search_entry,
+            "按资产名或路径关键词筛选",
+        )
+        self.clear_asset_search_button = ttk.Button(
+            summary,
+            text="清除",
+            width=4,
+            style="Tool.TButton",
+            command=lambda: self.asset_search_text.set(""),
+            state="disabled",
+        )
+        self.clear_asset_search_button.pack(side=LEFT, padx=(3, 0))
         progress_group = ttk.Frame(summary, style="Panel.TFrame")
         self.progress_group = progress_group
         progress_group.pack(side=RIGHT)
@@ -1123,6 +1210,31 @@ class MigrationGuardApp:
                 side=LEFT,
                 before=self.workflow_progress_bar,
             )
+        search_label_visible = bool(
+            self.asset_search_label.winfo_manager()
+        )
+        clear_visible = bool(
+            self.clear_asset_search_button.winfo_manager()
+        )
+        if compact and search_label_visible:
+            self.asset_search_label.pack_forget()
+        elif not compact and not search_label_visible:
+            self.asset_search_label.pack(
+                side=LEFT,
+                padx=(10, 4),
+                before=self.asset_search_entry,
+            )
+        hide_clear = compact or self.root.winfo_width() < 1220
+        if hide_clear:
+            if clear_visible:
+                self.clear_asset_search_button.pack_forget()
+        else:
+            if not clear_visible:
+                self.clear_asset_search_button.pack(
+                    side=LEFT,
+                    padx=(3, 0),
+                    after=self.asset_search_entry,
+                )
 
     def _set_use_ticket_button_visible(self, visible: bool) -> None:
         if visible:
@@ -1139,6 +1251,61 @@ class MigrationGuardApp:
         state = "normal" if enabled else "disabled"
         for button in self.result_view_buttons:
             button.configure(state=state)
+        self.asset_search_entry.configure(state=state)
+        self.clear_asset_search_button.configure(
+            state=(
+                "normal"
+                if enabled and self.asset_search_text.get().strip()
+                else "disabled"
+            )
+        )
+
+    def _on_asset_search_changed(self, *_args: object) -> None:
+        enabled = self.table_mode in {"audit", "remote-assets"}
+        self.clear_asset_search_button.configure(
+            state=(
+                "normal"
+                if enabled and self.asset_search_text.get().strip()
+                else "disabled"
+            )
+        )
+        if enabled:
+            self._refresh_table()
+
+    def _asset_search_terms(self) -> tuple[str, ...]:
+        return tuple(
+            part.casefold()
+            for part in self.asset_search_text.get().split()
+            if part
+        )
+
+    def _matches_asset_search(self, *values: str) -> bool:
+        terms = self._asset_search_terms()
+        if not terms:
+            return True
+        content = " ".join(values).replace("\\", "/").casefold()
+        return all(term in content for term in terms)
+
+    def _remote_asset_matches_search(
+        self,
+        asset: RemoteAssetProgress,
+    ) -> bool:
+        return self._matches_asset_search(
+            asset.display_path,
+            asset.relative_path,
+        )
+
+    def _audit_file_matches_search(
+        self,
+        item: FileVerification,
+    ) -> bool:
+        expected = item.expected
+        return self._matches_asset_search(
+            expected.source_path,
+            expected.source_local_path,
+            expected.target_path,
+            expected.target_local_path,
+        )
 
     def _on_result_view_changed(self) -> None:
         if self.table_mode not in {"audit", "remote-assets"}:
@@ -1179,6 +1346,7 @@ class MigrationGuardApp:
             str(
                 value(VerificationState.COMPLETE)
                 + value(VerificationState.SUBMITTED)
+                + value(VerificationState.SOURCE_DELETED)
             )
         )
         pending = sum(
@@ -1540,7 +1708,8 @@ class MigrationGuardApp:
     ) -> None:
         try:
             snapshot = LarkTicketSheetClient(sheet_url).fetch(
-                force_refresh=True
+                force_refresh=True,
+                required_routes=_required_ticket_routes(table_kind),
             )
             self.events.put(
                 ("ticket-table", (table_kind, snapshot))
@@ -1555,7 +1724,7 @@ class MigrationGuardApp:
         snapshot: TicketSheetSnapshot,
         table_kind: str | None = None,
         *,
-        start_preview: bool = False,
+        check_progress: bool = False,
     ) -> None:
         if table_kind is not None:
             self._set_workspace_route(
@@ -1570,14 +1739,11 @@ class MigrationGuardApp:
             snapshot,
         )
         self._render_ticket_snapshot(snapshot)
-        if start_preview and self.visible_ticket_mappings:
-            mappings = tuple(self.visible_ticket_mappings)
-            self._use_ticket_mappings(
-                snapshot,
-                mappings,
-                start_audit=False,
+        if check_progress and self.visible_ticket_mappings:
+            self._start_jira_progress(
+                tuple(self.visible_ticket_mappings),
+                preserve_ticket_table=True,
             )
-            self._start_jira_progress(mappings)
 
     def _set_table_button_snapshot(
         self,
@@ -1614,10 +1780,14 @@ class MigrationGuardApp:
     def _render_ticket_snapshot(
         self,
         snapshot: TicketSheetSnapshot,
+        *,
+        mappings: tuple[TicketMapping, ...] | None = None,
     ) -> None:
         self._set_use_ticket_button_visible(True)
         self._set_result_view_enabled(False)
         self.table_mode = "tickets"
+        if self.asset_search_text.get():
+            self.asset_search_text.set("")
         self.table.configure(show="headings", displaycolumns="#all")
         self.ticket_snapshot = snapshot
         self.current_result = None
@@ -1628,11 +1798,23 @@ class MigrationGuardApp:
         self.migrate_button.configure(state="disabled")
         self.visible_files = []
         self.visible_ticket_progress = []
-        self.visible_ticket_mappings = [
-            mapping
-            for mapping in snapshot.mappings
-            if self._mapping_allowed_for_active_table(mapping)
-        ]
+        self._ticket_preview_result = None
+        self.visible_ticket_mappings = list(
+            mappings
+            if mappings is not None
+            else (
+                mapping
+                for mapping in snapshot.mappings
+                if self._mapping_allowed_for_active_table(mapping)
+            )
+        )
+        self.ticket_preview_states = {
+            _ticket_mapping_key(mapping): (
+                "待确认",
+                VerificationState.NEEDS_REVIEW,
+            )
+            for mapping in self.visible_ticket_mappings
+        }
         self.table.delete(*self.table.get_children())
         headings = {
             "state": "路线",
@@ -1640,7 +1822,7 @@ class MigrationGuardApp:
             "path": "内容",
             "source": "源单号",
             "local": "目标单号",
-            "target": "来源",
+            "target": "状态",
         }
         widths = {
             "state": 112,
@@ -1648,7 +1830,7 @@ class MigrationGuardApp:
             "path": 220,
             "source": 90,
             "local": 90,
-            "target": 52,
+            "target": 82,
         }
         for name in self.table["columns"]:
             self.table.heading(name, text=headings[name])
@@ -1659,14 +1841,10 @@ class MigrationGuardApp:
                 stretch=name == "path",
                 anchor="w" if name == "path" else "center",
             )
-        source_label = (
-            "本地"
-            if self.active_table_kind == TABLE_DOMESTIC_OB
-            else "缓存"
-            if snapshot.from_cache
-            else "飞书"
-        )
         for index, mapping in enumerate(self.visible_ticket_mappings):
+            status_label, status_state = self.ticket_preview_states[
+                _ticket_mapping_key(mapping)
+            ]
             self.table.insert(
                 "",
                 END,
@@ -1677,9 +1855,13 @@ class MigrationGuardApp:
                     mapping.target_text or mapping.source_text,
                     mapping.source_issue,
                     mapping.target_issue or "-",
-                    source_label,
+                    status_label,
                 ),
-                tags=(mapping.route.value,),
+                tags=(
+                    "jira-unknown"
+                    if status_state == VerificationState.NEEDS_REVIEW
+                    else status_state.value,
+                ),
             )
         children = self.table.get_children()
         if children:
@@ -1698,8 +1880,8 @@ class MigrationGuardApp:
             self.table.focus(default_selection[0])
             self.table.see(default_selection[0])
         self.use_ticket_button.configure(
-            text=f"核验选中（{len(self.table.selection())}）",
-            state="normal",
+            text=f"使用选中（{len(self.table.selection())}）",
+            state="normal" if self.table.selection() else "disabled",
             style="Primary.TButton",
         )
         self.open_path_button.configure(state="disabled")
@@ -1708,10 +1890,134 @@ class MigrationGuardApp:
         self.detail_filter_text.set("更多 ▼")
         self.status_text.set(
             f"{snapshot.sheet_name}："
-            f"{len(self.visible_ticket_mappings)} 条，选择后开始核验"
+            f"{len(self.visible_ticket_mappings)} 条，等待确认单号"
         )
         self._update_contextual_action_states()
         self._show_selected_detail()
+        if not children:
+            route_label = (
+                "合海外 Trunk"
+                if self.active_table_kind == TABLE_TRUNK
+                else "当前路线"
+            )
+            self._set_detail(
+                snapshot.warning
+                or f"{snapshot.sheet_name} 中没有{route_label}任务。"
+            )
+
+    def _refresh_ticket_preview_table(self) -> None:
+        if self.table_mode != "tickets":
+            return
+        selection = tuple(self.table.selection())
+        focus = self.table.focus()
+        counts = {state: 0 for state in VerificationState}
+        for index, mapping in enumerate(self.visible_ticket_mappings):
+            item_id = str(index)
+            if not self.table.exists(item_id):
+                continue
+            status_label, status_state = self.ticket_preview_states.get(
+                _ticket_mapping_key(mapping),
+                ("待确认", VerificationState.NEEDS_REVIEW),
+            )
+            counts[status_state] += 1
+            values = list(self.table.item(item_id, "values"))
+            values[5] = status_label
+            self.table.item(
+                item_id,
+                values=values,
+                tags=(
+                    "jira-unknown"
+                    if status_state == VerificationState.NEEDS_REVIEW
+                    else status_state.value,
+                ),
+            )
+        self._set_summary_counts(
+            len(self.visible_ticket_mappings),
+            counts,
+        )
+        existing = tuple(
+            item_id
+            for item_id in selection
+            if self.table.exists(item_id)
+        )
+        if existing:
+            self.table.selection_set(existing)
+        if focus and self.table.exists(focus):
+            self.table.focus(focus)
+        self._show_selected_detail()
+
+    def _set_ticket_preview_status(
+        self,
+        label: str,
+        state: VerificationState,
+    ) -> None:
+        self.ticket_preview_states = {
+            _ticket_mapping_key(mapping): (label, state)
+            for mapping in self.visible_ticket_mappings
+        }
+        self._refresh_ticket_preview_table()
+
+    def _update_ticket_preview_from_jira(
+        self,
+        progress: tuple[TicketJiraProgress, ...],
+    ) -> None:
+        progress_by_key = {
+            _ticket_mapping_key(item.mapping): item
+            for item in progress
+        }
+        for mapping in self.visible_ticket_mappings:
+            item = progress_by_key.get(_ticket_mapping_key(mapping))
+            if item is None:
+                continue
+            state = _jira_summary_state(
+                item,
+                require_osob=self.active_table_kind == TABLE_OSOB,
+            )
+            self.ticket_preview_states[_ticket_mapping_key(mapping)] = (
+                "Jira 异常"
+                if state == VerificationState.BLOCKED
+                else "等待 SVN",
+                state,
+            )
+        self._refresh_ticket_preview_table()
+        self.status_text.set(
+            f"Jira 信息已读取：{len(progress)} 条，继续读取 SVN 资产证据"
+        )
+
+    def _update_ticket_preview_from_assets(
+        self,
+        result: RemoteAssetProgressResult,
+    ) -> None:
+        self.remote_asset_result = result
+        self._ticket_preview_result = result
+        require_osob = self.active_table_kind == TABLE_OSOB
+        for mapping in self.visible_ticket_mappings:
+            assets = _remote_assets_for_mapping(mapping, result)
+            state = _remote_mapping_state(
+                mapping,
+                assets,
+                require_osob=require_osob,
+            )
+            self.ticket_preview_states[_ticket_mapping_key(mapping)] = (
+                state.label,
+                state,
+            )
+        self._refresh_ticket_preview_table()
+        self.status_text.set(
+            f"候选单号状态已更新：{len(self.visible_ticket_mappings)} 条"
+        )
+        self._mark_refresh_time()
+
+    def _refresh_ticket_candidate_status(self) -> None:
+        mappings = tuple(self.visible_ticket_mappings)
+        if not mappings:
+            self.status_text.set("当前没有可刷新单号")
+            return
+        self._start_jira_progress(
+            mappings,
+            force_refresh=True,
+            preserve_ticket_table=True,
+        )
 
     def _configure_ticket_sheet(self) -> None:
         if self.settings_window is not None:
@@ -2257,7 +2563,9 @@ class MigrationGuardApp:
         sheet_url: str,
     ) -> None:
         try:
-            snapshot = LarkTicketSheetClient(sheet_url).fetch()
+            snapshot = LarkTicketSheetClient(sheet_url).fetch(
+                required_routes=_required_ticket_routes(table_kind)
+            )
             resolution = resolve_ticket_text(issue_text, snapshot)
             self.events.put(
                 (
@@ -2294,7 +2602,15 @@ class MigrationGuardApp:
         mappings = tuple(
             mapping
             for mapping in resolution.mappings
-            if self._mapping_allowed_for_active_table(mapping)
+            if (
+                mapping.route == TicketRoute.DOMESTIC_TO_DOMESTIC_OB
+                if is_domestic_ob
+                else mapping.route
+                in {
+                    TicketRoute.DOMESTIC_TO_OVERSEAS,
+                    TicketRoute.OVERSEAS_TO_OSOB,
+                }
+            )
         )
         self.current_result = None
         if not mappings:
@@ -2305,14 +2621,10 @@ class MigrationGuardApp:
             self.status_text.set(
                 "输入中未找到 SERIA 单号"
                 if is_domestic_ob
-                else "固定表中未找到可执行单号"
+                else "粘贴内容中未找到可执行单号"
             )
             details = [
-                (
-                    "来源：粘贴文本"
-                    if is_domestic_ob
-                    else f"工作表：{snapshot.sheet_name}"
-                ),
+                "来源：粘贴文本",
                 f"输入：{issue_text}",
                 (
                     "结果：国内 OB 路线需要 SERIA 单号"
@@ -2332,44 +2644,43 @@ class MigrationGuardApp:
             self._update_contextual_action_states()
             return
         self.ticket_snapshots[self.active_table_kind] = snapshot
-        self.ticket_snapshot = snapshot
-        self._use_ticket_mappings(
-            snapshot,
-            mappings,
-            start_audit=False,
-        )
-        details = [
-            (
-                "来源：粘贴文本"
-                if is_domestic_ob
-                else f"工作表：{snapshot.sheet_name}"
-            ),
-            f"已解析：{len(mappings)} 条",
-            f"源单号：{self.source_issue.get() or '-'}",
-            f"目标单号：{self.target_issue.get() or '-'}",
-        ]
+        notices = []
+        if snapshot.warning:
+            notices.append(snapshot.warning)
         if resolution.unresolved_keys:
-            details.extend(
-                ("", "未识别：" + ", ".join(resolution.unresolved_keys))
+            notices.append(
+                "未识别：" + ", ".join(resolution.unresolved_keys)
             )
         if resolution.ambiguous_keys:
-            details.extend(
-                ("", "映射不唯一：" + ", ".join(resolution.ambiguous_keys))
+            notices.append(
+                "映射不唯一：" + ", ".join(resolution.ambiguous_keys)
             )
-        self._set_detail("\n".join(details))
-        if is_domestic_ob:
-            self.status_text.set(
-                f"已解析 {len(mappings)} 条国内 OB 任务"
+        selection_snapshot = replace(
+            snapshot,
+            mappings=mappings,
+            warning="；".join(notices),
+        )
+        self._render_ticket_snapshot(
+            selection_snapshot,
+            mappings=mappings,
+        )
+        self.status_text.set(
+            f"已解析 {len(mappings)} 条"
+            + ("国内 OB " if is_domestic_ob else "")
+            + "任务，等待确认单号"
+        )
+        if not is_domestic_ob:
+            self._start_jira_progress(
+                mappings,
+                preserve_ticket_table=True,
             )
-            self._update_contextual_action_states()
-            return
-        self._start_jira_progress(mappings)
 
     def _start_jira_progress(
         self,
         mappings: tuple[TicketMapping, ...],
         *,
         force_refresh: bool = False,
+        preserve_ticket_table: bool = False,
     ) -> None:
         if (
             self.active_workspace_route
@@ -2379,10 +2690,19 @@ class MigrationGuardApp:
         self._cancel_remote_asset_query()
         self._jira_request_id += 1
         request_id = self._jira_request_id
+        self._ticket_preview_request_id = (
+            request_id if preserve_ticket_table else None
+        )
+        self._ticket_preview_result = None
         cancel_event = threading.Event()
         self._remote_asset_cancel_event = cancel_event
         enabled_modules = self._remote_module_names()
         self.remote_asset_result = None
+        if preserve_ticket_table:
+            self._set_ticket_preview_status(
+                "读取 Jira",
+                VerificationState.NEEDS_REVIEW,
+            )
         try:
             lookback_days = int(self.lookback_days.get())
         except (TypeError, ValueError):
@@ -2589,7 +2909,7 @@ class MigrationGuardApp:
             if not item.source.available or not item.target.available
         )
         self.status_text.set(
-            f"Jira 进度已更新：{len(progress)} 条"
+            f"Jira 信息已读取：{len(progress)} 条，等待 SVN 资产证据"
             + (f"，{failed} 条读取失败" if failed else "")
         )
         self._mark_refresh_time()
@@ -2617,7 +2937,7 @@ class MigrationGuardApp:
                 END,
                 iid=str(index),
                 values=(
-                    item.stage_label,
+                    "等待 SVN",
                     item.consistency_label,
                     title,
                     (
@@ -2727,6 +3047,123 @@ class MigrationGuardApp:
                 anchor="center",
             )
 
+    def _has_browsable_result_table(self) -> bool:
+        return (
+            self.table_mode == "remote-assets"
+            and self.remote_asset_result is not None
+        ) or (
+            self.table_mode == "audit"
+            and self.current_result is not None
+        )
+
+    @staticmethod
+    def _remote_operation_key(asset: RemoteAssetProgress) -> str:
+        return (
+            f"/{asset.module}/{asset.relative_path}"
+            .replace("\\", "/")
+            .replace("//", "/")
+            .casefold()
+        )
+
+    def _operation_status_for_remote_assets(
+        self,
+        assets: tuple[RemoteAssetProgress, ...],
+        fallback: str,
+    ) -> str:
+        if not self.busy or not self._operation_row_status:
+            return fallback
+        pending = tuple(
+            asset
+            for asset in assets
+            if not _state_is_complete(
+                _remote_asset_summary_state(
+                    asset,
+                    require_osob=self.active_table_kind == TABLE_OSOB,
+                )
+            )
+        )
+        if not pending:
+            return fallback
+        if self._operation_scope_paths and not any(
+            self._remote_operation_key(asset)
+            in self._operation_scope_paths
+            for asset in pending
+        ):
+            return fallback
+        return self._operation_row_status
+
+    def _audit_operation_key(self, item: FileVerification) -> str:
+        expected = item.expected
+        source_path = Path(expected.source_local_path)
+        module_root = (
+            Path(self.source_root.get().strip()) / expected.module
+        )
+        try:
+            relative = source_path.resolve().relative_to(
+                module_root.resolve()
+            ).as_posix()
+        except (OSError, ValueError):
+            relative = expected.source_path.replace("\\", "/").strip("/")
+        return (
+            f"/{expected.module}/{relative}"
+            .replace("\\", "/")
+            .replace("//", "/")
+            .casefold()
+        )
+
+    def _operation_status_for_audit_files(
+        self,
+        files: tuple[FileVerification, ...],
+        fallback: str,
+    ) -> str:
+        if not self.busy or not self._operation_row_status:
+            return fallback
+        pending = tuple(
+            item
+            for item in files
+            if not _state_is_complete(item.state)
+        )
+        if not pending:
+            return fallback
+        if self._operation_scope_paths and not any(
+            self._audit_operation_key(item)
+            in self._operation_scope_paths
+            for item in pending
+        ):
+            return fallback
+        return self._operation_row_status
+
+    def _refresh_live_result_table(self) -> None:
+        if not self._has_browsable_result_table():
+            return
+        selection = tuple(self.table.selection())
+        focus = self.table.focus()
+        y_position = self.table.yview()
+        open_items = set()
+        pending = list(self.table.get_children())
+        while pending:
+            item_id = pending.pop()
+            if bool(self.table.item(item_id, "open")):
+                open_items.add(item_id)
+            pending.extend(self.table.get_children(item_id))
+        self._refresh_table()
+        for item_id in open_items:
+            if self.table.exists(item_id):
+                self.table.item(item_id, open=True)
+        existing = tuple(
+            item_id
+            for item_id in selection
+            if self.table.exists(item_id)
+        )
+        if existing:
+            self.table.selection_set(existing)
+            if focus and self.table.exists(focus):
+                self.table.focus(focus)
+                self.table.see(focus)
+            self._show_selected_detail()
+        if y_position:
+            self.table.yview_moveto(y_position[0])
+
     def _refresh_remote_result(self) -> None:
         if self.remote_asset_result is None:
             return
@@ -2744,13 +3181,21 @@ class MigrationGuardApp:
         if result is None:
             return
         require_osob = self.active_table_kind == TABLE_OSOB
-        mapping_rows = tuple(
-            (
-                mapping,
-                _remote_assets_for_mapping(mapping, result),
+        searching = bool(self._asset_search_terms())
+        mapping_rows_list = []
+        for mapping in self.current_ticket_mappings:
+            assets = tuple(
+                asset
+                for asset in _remote_assets_for_mapping(
+                    mapping,
+                    result,
+                )
+                if self._remote_asset_matches_search(asset)
             )
-            for mapping in self.current_ticket_mappings
-        )
+            if searching and not assets:
+                continue
+            mapping_rows_list.append((mapping, assets))
+        mapping_rows = tuple(mapping_rows_list)
         states = tuple(
             _remote_mapping_state(
                 mapping,
@@ -2787,7 +3232,10 @@ class MigrationGuardApp:
                     _remote_stage_count(assets, "domestic"),
                     _remote_stage_count(assets, "overseas_trunk"),
                     _remote_stage_count(assets, "osob"),
-                    state.label,
+                    self._operation_status_for_remote_assets(
+                        assets,
+                        state.label,
+                    ),
                 ),
                 open=state != VerificationState.COMPLETE,
                 tags=("remote-folder", state.value),
@@ -2822,12 +3270,15 @@ class MigrationGuardApp:
         assets = tuple(
             asset
             for asset in result.assets
-            if _filter_matches(
-                selected_filter,
-                _remote_asset_summary_state(
-                    asset,
-                    require_osob=require_osob,
-                ),
+            if (
+                self._remote_asset_matches_search(asset)
+                and _filter_matches(
+                    selected_filter,
+                    _remote_asset_summary_state(
+                        asset,
+                        require_osob=require_osob,
+                    ),
+                )
             )
         )
         tree = AssetProgressTree(assets)
@@ -2840,7 +3291,11 @@ class MigrationGuardApp:
             initial_depth=0,
         )
         self._select_first_result_row(
-            empty_message="当前筛选下没有资产。",
+            empty_message=(
+                "没有匹配的资产。"
+                if self._asset_search_terms()
+                else "当前筛选下没有资产。"
+            ),
         )
 
     def _insert_remote_progress_tree(
@@ -2886,6 +3341,11 @@ class MigrationGuardApp:
                     )
                 else:
                     state = VerificationState.NEEDS_REVIEW
+                    descendants = ()
+            if node.is_asset:
+                scoped_assets = (asset,) if asset is not None else ()
+            else:
+                scoped_assets = descendants
             stage = tree.stage(source_node_id)
             tags = (
                 ("remote-folder", state.value)
@@ -2901,7 +3361,10 @@ class MigrationGuardApp:
                     tree.stage_label(source_node_id, "domestic"),
                     tree.stage_label(source_node_id, "overseas_trunk"),
                     tree.stage_label(source_node_id, "osob"),
-                    _remote_stage_label(stage),
+                    self._operation_status_for_remote_assets(
+                        scoped_assets,
+                        _remote_stage_label(stage),
+                    ),
                 ),
                 open=depth < 2,
                 tags=tags,
@@ -3007,6 +3470,8 @@ class MigrationGuardApp:
         *,
         start_audit: bool,
     ) -> None:
+        if self.asset_search_text.get():
+            self.asset_search_text.set("")
         if len(mappings) == 1:
             self._use_ticket_mapping(
                 snapshot,
@@ -3157,7 +3622,6 @@ class MigrationGuardApp:
         self.busy = True
         self.task_failed = False
         self.active_task = "audit"
-        self.current_result = None
         self._set_action_buttons("disabled")
         label = "批量更新并核验" if update_first else "批量核验"
         self._reset_workflow_progress(label)
@@ -3246,6 +3710,9 @@ class MigrationGuardApp:
                             ("update-selection-cancelled", None)
                         )
                         return
+                    self.events.put(
+                        ("operation-scope", selected_paths)
+                    )
                     initial_result = select_audit_files(
                         initial_result,
                         modules,
@@ -4146,7 +4613,6 @@ class MigrationGuardApp:
         self.busy = True
         self.task_failed = False
         self.active_task = "audit"
-        self.current_result = None
         self._set_action_buttons("disabled")
         self._reset_workflow_progress(label)
         self.status_text.set(f"{label}中...")
@@ -4253,7 +4719,7 @@ class MigrationGuardApp:
 
     def _refresh_shortcut(self, _event: object = None) -> str:
         if str(self.update_button.cget("state")) != "disabled":
-            self._start_update_and_audit()
+            self.update_button.invoke()
         return "break"
 
     def _set_action_buttons(self, state: str) -> None:
@@ -4274,6 +4740,11 @@ class MigrationGuardApp:
         if self.busy:
             return
         has_mapping = self._current_mapping_selection_is_valid()
+        has_ticket_candidates = (
+            self.table_mode == "tickets"
+            and bool(self.visible_ticket_mappings)
+            and not has_mapping
+        )
         has_workspace = (
             has_mapping and self._local_workspaces_available()
         )
@@ -4293,15 +4764,23 @@ class MigrationGuardApp:
         )
         self.update_button.configure(
             text=(
-                "配置国内 OB"
+                "刷新状态"
+                if has_ticket_candidates
+                else "配置国内 OB"
                 if needs_domestic_ob_config
                 else "更新并复核"
                 if has_workspace
                 else "刷新状态"
             ),
-            state="normal" if has_mapping else "disabled",
+            state=(
+                "normal"
+                if has_mapping or has_ticket_candidates
+                else "disabled"
+            ),
             command=(
-                self._configure_ticket_sheet
+                self._refresh_ticket_candidate_status
+                if has_ticket_candidates
+                else self._configure_ticket_sheet
                 if needs_domestic_ob_config
                 else self._start_update_and_audit
             ),
@@ -4422,6 +4901,16 @@ class MigrationGuardApp:
         state: str = "进行中",
         stage: str = "",
     ) -> None:
+        if self._has_browsable_result_table():
+            row_status = (
+                "执行失败"
+                if state == "失败"
+                else OPERATION_ROW_LABELS.get(stage, "")
+            )
+            if row_status and row_status != self._operation_row_status:
+                self._operation_row_status = row_status
+                self._refresh_live_result_table()
+            return
         self._configure_audit_table(tree=False)
         progress_id = "__progress__"
         values = (state, stage, message, "", "", "")
@@ -4440,6 +4929,8 @@ class MigrationGuardApp:
     def _reset_workflow_progress(self, label: str) -> None:
         self.workflow_progress.set(0)
         self.workflow_stage_text.set(label)
+        self._operation_row_status = ""
+        self._operation_scope_paths = frozenset()
         self._workflow_timing_stage = ""
         self._workflow_timing_message = ""
         self._workflow_timing_started_at = None
@@ -4517,6 +5008,11 @@ class MigrationGuardApp:
         self._workflow_timing_stage = ""
         self._workflow_timing_message = ""
         self._workflow_timing_started_at = None
+        had_row_status = bool(self._operation_row_status)
+        self._operation_row_status = ""
+        self._operation_scope_paths = frozenset()
+        if had_row_status:
+            self._refresh_live_result_table()
         self.workflow_progress_bar.configure(style=style)
         self.workflow_stage_text.set(label)
 
@@ -4552,7 +5048,10 @@ class MigrationGuardApp:
                         "selective-update",
                         f"{owner}精细更新完成",
                     )
-                    self._show_progress_row(f"{owner}更新完成")
+                    self._show_progress_row(
+                        f"{owner}更新完成",
+                        stage="selective-update",
+                    )
                 elif event == "update-plan":
                     plan = payload
                     message = (
@@ -4570,7 +5069,14 @@ class MigrationGuardApp:
                         "selective-status",
                         message,
                     )
+                elif event == "operation-scope":
+                    self._operation_scope_paths = frozenset(
+                        str(path).casefold()
+                        for path in payload
+                    )
+                    self._refresh_live_result_table()
                 elif event == "audit-result":
+                    self._operation_row_status = ""
                     self.current_result = payload
                     self._render_result(payload)
                 elif event == "workflow-summary":
@@ -4620,7 +5126,7 @@ class MigrationGuardApp:
                     self._show_ticket_table(
                         snapshot,
                         table_kind,
-                        start_preview=True,
+                        check_progress=True,
                     )
                 elif event == "jira-progress":
                     request_id, progress = payload
@@ -4628,10 +5134,26 @@ class MigrationGuardApp:
                         request_id == self._jira_request_id
                         and self.active_task not in {"audit", "migration"}
                     ):
-                        self._render_jira_progress(progress)
+                        if (
+                            request_id == self._ticket_preview_request_id
+                            and self.table_mode == "tickets"
+                        ):
+                            self._update_ticket_preview_from_jira(
+                                progress
+                            )
+                        else:
+                            self._render_jira_progress(progress)
                 elif event == "jira-progress-error":
                     request_id, message = payload
                     if request_id == self._jira_request_id:
+                        if (
+                            request_id == self._ticket_preview_request_id
+                            and self.table_mode == "tickets"
+                        ):
+                            self._set_ticket_preview_status(
+                                "Jira 读取失败",
+                                VerificationState.BLOCKED,
+                            )
                         self.status_text.set(
                             f"Jira 进度读取失败：{message}"
                         )
@@ -4639,21 +5161,49 @@ class MigrationGuardApp:
                     request_id, _stage, message = payload
                     if request_id == self._jira_request_id:
                         self.status_text.set(str(message))
+                        if (
+                            request_id == self._ticket_preview_request_id
+                            and self.table_mode == "tickets"
+                        ):
+                            self._set_ticket_preview_status(
+                                "读取 SVN",
+                                VerificationState.NEEDS_REVIEW,
+                            )
                 elif event == "remote-assets":
                     request_id, result = payload
                     if (
                         request_id == self._jira_request_id
                         and self.active_task not in {"audit", "migration"}
                     ):
-                        self._render_remote_assets(result)
-                        self._schedule_remote_auto_refresh()
+                        if (
+                            request_id == self._ticket_preview_request_id
+                            and self.table_mode == "tickets"
+                        ):
+                            self._update_ticket_preview_from_assets(
+                                result
+                            )
+                        else:
+                            self._render_remote_assets(result)
+                            self._schedule_remote_auto_refresh()
                 elif event == "remote-assets-error":
                     request_id, message = payload
                     if request_id == self._jira_request_id:
-                        self.status_text.set(
-                            f"远端资产记录读取失败：{message}"
-                        )
-                        self._schedule_remote_auto_refresh()
+                        if (
+                            request_id == self._ticket_preview_request_id
+                            and self.table_mode == "tickets"
+                        ):
+                            self._set_ticket_preview_status(
+                                "SVN 读取失败",
+                                VerificationState.BLOCKED,
+                            )
+                            self.status_text.set(
+                                f"远端资产记录读取失败：{message}"
+                            )
+                        else:
+                            self.status_text.set(
+                                f"远端资产记录读取失败：{message}"
+                            )
+                            self._schedule_remote_auto_refresh()
                 elif event == "workspace-stage":
                     self._set_workspace_route(str(payload))
                 elif event == "asset-selection-request":
@@ -4786,7 +5336,25 @@ class MigrationGuardApp:
         result = self.current_result
         if result is None:
             return
-        cases = _audit_cases(result)
+        searching = bool(self._asset_search_terms())
+        cases = tuple(
+            replace(
+                case,
+                files=tuple(
+                    item
+                    for item in case.files
+                    if self._audit_file_matches_search(item)
+                ),
+            )
+            for case in _audit_cases(result)
+            if (
+                not searching
+                or any(
+                    self._audit_file_matches_search(item)
+                    for item in case.files
+                )
+            )
+        )
         states = tuple(_audit_case_state(case) for case in cases)
         self._set_summary_counts(len(cases), _count_states(states))
         selected_filter = self.filter_state.get()
@@ -4824,7 +5392,10 @@ class MigrationGuardApp:
                     ),
                 ),
                 values=(
-                    state.label,
+                    self._operation_status_for_audit_files(
+                        case.files,
+                        state.label,
+                    ),
                     "任务",
                     "",
                     f"{total} 项" if total else "-",
@@ -4850,14 +5421,29 @@ class MigrationGuardApp:
                     initial_depth=0,
                 )
         self._select_first_result_row(
-            empty_message="当前筛选下没有单号。",
+            empty_message=(
+                "没有包含匹配资产的单号。"
+                if searching
+                else "当前筛选下没有单号。"
+            ),
         )
 
     def _refresh_audit_asset_tree(self) -> None:
         result = self.current_result
         if result is None:
             return
-        file_groups = self._audit_file_groups(result.files)
+        searching = bool(self._asset_search_terms())
+        file_groups = tuple(
+            group
+            for group in self._audit_file_groups(result.files)
+            if (
+                not searching
+                or any(
+                    self._audit_file_matches_search(item)
+                    for item in group
+                )
+            )
+        )
         states = tuple(
             _audit_group_state(group)
             for group in file_groups
@@ -4880,7 +5466,9 @@ class MigrationGuardApp:
         )
         self._select_first_result_row(
             empty_message=(
-                "当前筛选下没有资产；无资产任务请在单号页签查看。"
+                "没有匹配的资产。"
+                if searching
+                else "当前筛选下没有资产；无资产任务请在单号页签查看。"
             ),
         )
 
@@ -4994,7 +5582,10 @@ class MigrationGuardApp:
                 iid=item_id,
                 text=parts[-1],
                 values=(
-                    state.label,
+                    self._operation_status_for_audit_files(
+                        file_group,
+                        state.label,
+                    ),
                     item.expected.module,
                     relative_path,
                     source_revisions,
@@ -5019,7 +5610,10 @@ class MigrationGuardApp:
             self.table.item(
                 node_id,
                 values=(
-                    state.label,
+                    self._operation_status_for_audit_files(
+                        tuple(files),
+                        state.label,
+                    ),
                     "",
                     "",
                     f"{len(grouped_files)} 项",
@@ -5045,6 +5639,8 @@ class MigrationGuardApp:
             return ()
         selection = self.table.selection()
         if not selection:
+            if self.table_mode == "tickets":
+                return ()
             children = self.table.get_children()
             if not children:
                 return ()
@@ -5070,6 +5666,7 @@ class MigrationGuardApp:
         return selected[0] if selected else None
 
     def _use_selected_ticket(self) -> None:
+        source_mode = self.table_mode
         mappings = self._selected_tickets()
         snapshot = self.ticket_snapshot
         if not mappings or snapshot is None:
@@ -5095,11 +5692,47 @@ class MigrationGuardApp:
                 f"所选任务属于“{route.label}”，不执行常规迁移核验。",
             )
             return
+        preview_result = (
+            self._ticket_preview_result
+            if source_mode == "tickets"
+            else None
+        )
+        self._ticket_preview_request_id = None
         self._use_ticket_mappings(
             snapshot,
             mappings,
-            start_audit=True,
+            start_audit=source_mode != "tickets",
         )
+        if source_mode == "tickets":
+            if preview_result is None:
+                self._start_jira_progress(mappings)
+            else:
+                selected_keys = {
+                    (
+                        asset.module.casefold(),
+                        asset.relative_path.casefold(),
+                    )
+                    for mapping in mappings
+                    for asset in _remote_assets_for_mapping(
+                        mapping,
+                        preview_result,
+                    )
+                }
+                filtered = replace(
+                    preview_result,
+                    assets=tuple(
+                        asset
+                        for asset in preview_result.assets
+                        if (
+                            asset.module.casefold(),
+                            asset.relative_path.casefold(),
+                        )
+                        in selected_keys
+                    ),
+                )
+                self._cancel_remote_asset_query()
+                self._render_remote_assets(filtered)
+                self._schedule_remote_auto_refresh()
 
     def _on_table_double_click(self, event: object = None) -> None:
         if self.table_mode in {"tickets", "jira"}:
@@ -5262,7 +5895,8 @@ class MigrationGuardApp:
             self._set_detail(
                 "\n".join(
                     (
-                        f"当前阶段：{item.stage_label}",
+                        "证据状态：等待 SVN 资产记录",
+                        f"Jira 登记阶段：{item.stage_label}",
                         f"版本一致性：{item.consistency_label}",
                         "数据来源：Jira 状态与版本登记",
                         "",
@@ -5293,15 +5927,26 @@ class MigrationGuardApp:
         if self.table_mode == "tickets":
             mappings = self._selected_tickets()
             if not mappings:
+                self.use_ticket_button.configure(
+                    text="使用选中（0）",
+                    state="disabled",
+                )
+                self._set_detail("请选择本次要处理的单号。")
                 return
             mapping = mappings[0]
+            status_label = self.ticket_preview_states.get(
+                _ticket_mapping_key(mapping),
+                ("待确认", VerificationState.NEEDS_REVIEW),
+            )[0]
             self.use_ticket_button.configure(
-                text=f"核验选中（{len(mappings)}）"
+                text=f"使用选中（{len(mappings)}）",
+                state="normal",
             )
             self._set_detail(
                 "\n".join(
                     (
                         f"已选择：{len(mappings)} 条",
+                        f"当前状态：{status_label}",
                         f"路线：{mapping.route.label}",
                         f"表格行：{mapping.row}",
                         f"源单号：{mapping.source_issue}",
@@ -5310,7 +5955,8 @@ class MigrationGuardApp:
                         f"源标题：{mapping.source_text or '-'}",
                         f"目标标题：{mapping.target_text or '-'}",
                         "",
-                        "点击“核验选中”后统一扫描并显示进度。",
+                        "确认后读取所选单号的远端状态；"
+                        "更新前仍可筛选具体资产。",
                     )
                 )
             )
@@ -5779,6 +6425,7 @@ def _state_is_complete(state: VerificationState) -> bool:
     return state in {
         VerificationState.COMPLETE,
         VerificationState.SUBMITTED,
+        VerificationState.SOURCE_DELETED,
     }
 
 
@@ -5796,6 +6443,11 @@ def _aggregate_states(
 ) -> VerificationState:
     if not states:
         return VerificationState.NEEDS_REVIEW
+    if all(
+        state == VerificationState.SOURCE_DELETED
+        for state in states
+    ):
+        return VerificationState.SOURCE_DELETED
     if all(_state_is_complete(state) for state in states):
         return VerificationState.COMPLETE
     priority = (
@@ -5804,6 +6456,7 @@ def _aggregate_states(
         VerificationState.NEEDS_UPDATE,
         VerificationState.PENDING_COMMIT,
         VerificationState.NEEDS_REVIEW,
+        VerificationState.SOURCE_DELETED,
         VerificationState.SUBMITTED,
         VerificationState.COMPLETE,
     )
@@ -6111,16 +6764,12 @@ def _ticket_commit_message(mapping: TicketMapping) -> str:
 
 
 def _jira_progress_tag(item: TicketJiraProgress) -> str:
-    if not item.source.available or not item.target.available:
-        return "jira-unknown"
-    if item.consistency_label == "版本异常":
+    if (
+        not item.source.available
+        or not item.target.available
+        or item.consistency_label == "版本异常"
+    ):
         return "jira-warning"
-    if item.target.has_osob:
-        return "jira-osob"
-    if item.target.has_trunk:
-        return "jira-trunk"
-    if item.source.has_trunk:
-        return "jira-domestic"
     return "jira-unknown"
 
 
@@ -6129,23 +6778,14 @@ def _jira_summary_state(
     *,
     require_osob: bool,
 ) -> VerificationState:
+    del require_osob
     if (
         not item.source.available
         or not item.target.available
         or item.consistency_label == "版本异常"
     ):
         return VerificationState.BLOCKED
-    if require_osob:
-        if item.target.has_osob:
-            return VerificationState.COMPLETE
-        if item.target.has_trunk or item.source.has_trunk:
-            return VerificationState.PENDING_COMMIT
-        return VerificationState.NOT_MIGRATED
-    if item.target.has_trunk or item.target.has_osob:
-        return VerificationState.COMPLETE
-    if item.source.has_trunk:
-        return VerificationState.PENDING_COMMIT
-    return VerificationState.NOT_MIGRATED
+    return VerificationState.NEEDS_REVIEW
 
 
 def _filter_matches(

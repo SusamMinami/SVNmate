@@ -17,6 +17,21 @@ from migration_guard.ticket_mapping import (
 
 
 class TicketRowParsingTests(unittest.TestCase):
+    def test_standalone_oscoa_row_defaults_to_overseas_ob_route(
+        self,
+    ) -> None:
+        mappings = parse_ticket_rows(
+            ["【OSCOA-19195】[trunk, OSOB2.0]纯海外任务"]
+        )
+
+        self.assertEqual(len(mappings), 1)
+        self.assertEqual(
+            mappings[0].route,
+            TicketRoute.OVERSEAS_TO_OSOB,
+        )
+        self.assertEqual(mappings[0].source_issue, "OSCOA-19195")
+        self.assertEqual(mappings[0].target_issue, "OSCOA-19195")
+
     def test_rows_are_classified_by_mapping_protocol_and_sections(self) -> None:
         values = [
             "",
@@ -346,6 +361,89 @@ class LarkTicketSheetClientTests(unittest.TestCase):
 
         self.assertEqual(snapshot.sheet_id, "latest")
         self.assertEqual(snapshot.sheet_name, "latest")
+
+    def test_route_filter_uses_latest_sheet_with_matching_tasks(
+        self,
+    ) -> None:
+        workbook = {
+            "ok": True,
+            "data": {
+                "revision": 20,
+                "sheets": [
+                    {
+                        "sheet_id": "latest-ob",
+                        "sheet_name": "0911",
+                        "row_count": 2,
+                        "index": 0,
+                        "is_hidden": False,
+                    },
+                    {
+                        "sheet_id": "previous-trunk",
+                        "sheet_name": "0910",
+                        "row_count": 2,
+                        "index": 1,
+                        "is_hidden": False,
+                    },
+                ],
+            },
+        }
+        responses = {
+            "latest-ob": {
+                "ok": True,
+                "data": {
+                    "revision": 21,
+                    "annotated_csv": (
+                        "纯海外单子\n"
+                        '"【OSCOA-21】纯海外"\n'
+                    ),
+                    "row_indices": [1, 2],
+                    "has_more": False,
+                },
+            },
+            "previous-trunk": {
+                "ok": True,
+                "data": {
+                    "revision": 19,
+                    "annotated_csv": (
+                        "国内迁移\n"
+                        '"【OSCOA-20】海外&&&&【SERIA-10】国内"\n'
+                    ),
+                    "row_indices": [1, 2],
+                    "has_more": False,
+                },
+            },
+        }
+        calls: list[list[str]] = []
+
+        def runner(command: list[str]):
+            calls.append(command)
+            if "+workbook-info" in command:
+                return workbook
+            sheet_id = command[command.index("--sheet-id") + 1]
+            return responses[sheet_id]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            snapshot = LarkTicketSheetClient(
+                "https://example.invalid/wiki/token",
+                runner=runner,
+                cache_path=Path(temp_dir) / "cache.json",
+            ).fetch(
+                force_refresh=True,
+                required_routes=(
+                    TicketRoute.DOMESTIC_TO_OVERSEAS,
+                ),
+            )
+
+        self.assertEqual(snapshot.sheet_id, "previous-trunk")
+        self.assertEqual(snapshot.sheet_name, "0910")
+        self.assertEqual(
+            tuple(item.source_issue for item in snapshot.mappings),
+            ("SERIA-10",),
+        )
+        self.assertEqual(
+            sum("+csv-get" in command for command in calls),
+            2,
+        )
 
 
 if __name__ == "__main__":

@@ -55,6 +55,10 @@ class _FakeSvnClient:
         self.last_message_pattern = ""
         self.last_start_revision: int | None = None
         self.status_paths_calls = 0
+        self.path_history_commits: tuple[SvnCommit, ...] = ()
+        self.path_history_calls: list[
+            tuple[str, int, int | None]
+        ] = []
 
     def info(self, path: Path | str) -> SvnInfo:
         target = Path(path)
@@ -143,8 +147,142 @@ class _FakeSvnClient:
         self.last_show_updates = show_updates
         return self.statuses
 
+    def log_path_history(
+        self,
+        target_url: str,
+        *,
+        start_revision: int,
+        peg_revision: int | None = None,
+    ) -> tuple[SvnCommit, ...]:
+        self.path_history_calls.append(
+            (target_url, start_revision, peg_revision)
+        )
+        return self.path_history_commits
+
 
 class MigrationAuditDecisionTests(unittest.TestCase):
+    def test_source_deleted_by_later_commit_is_not_pending_migration(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "source" / "res"
+            target = root / "target" / "res"
+            source.mkdir(parents=True)
+            target.mkdir(parents=True)
+            source_commit = SvnCommit(
+                10,
+                "author-a",
+                "2026-09-01T00:00:00Z",
+                "[SERIA-10] original asset",
+                (
+                    SvnChange(
+                        "M",
+                        "/project/res/trunk/Content/Game/Old.uasset",
+                        "file",
+                    ),
+                ),
+            )
+            svn = _FakeSvnClient(
+                source,
+                target,
+                (source_commit,),
+                (),
+                {},
+            )
+            svn.path_history_commits = (
+                SvnCommit(
+                    21,
+                    "author-b",
+                    "2026-09-02T00:00:00Z",
+                    "[SERIA-OTHER] remove obsolete folder",
+                    (
+                        SvnChange(
+                            "D",
+                            "/project/res/trunk/Content/Game",
+                            "dir",
+                        ),
+                    ),
+                ),
+            )
+
+            result = MigrationAuditService(
+                svn=svn,
+                include_externals=False,
+            ).audit_batch(
+                (WorkspaceModule("res", source, target),),
+                (MigrationCase("SERIA-10", "OSCOA-20"),),
+                lookback_days=30,
+            )
+
+        item = result.files[0]
+        self.assertEqual(
+            item.state,
+            VerificationState.SOURCE_DELETED,
+        )
+        self.assertEqual(item.expected.source_deleted_revision, 21)
+        self.assertIn("r21", item.reason)
+        self.assertTrue(result.complete)
+        self.assertEqual(
+            svn.path_history_calls,
+            [
+                (
+                    "https://example.invalid/project/res/trunk",
+                    11,
+                    None,
+                ),
+            ],
+        )
+
+    def test_missing_source_without_delete_evidence_remains_pending(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "source" / "res"
+            target = root / "target" / "res"
+            source.mkdir(parents=True)
+            target.mkdir(parents=True)
+            svn = _FakeSvnClient(
+                source,
+                target,
+                (
+                    SvnCommit(
+                        10,
+                        "author-a",
+                        "2026-09-01T00:00:00Z",
+                        "[SERIA-10] original asset",
+                        (
+                            SvnChange(
+                                "M",
+                                (
+                                    "/project/res/trunk/"
+                                    "Content/Game/Missing.uasset"
+                                ),
+                                "file",
+                            ),
+                        ),
+                    ),
+                ),
+                (),
+                {},
+            )
+
+            result = MigrationAuditService(
+                svn=svn,
+                include_externals=False,
+            ).audit_batch(
+                (WorkspaceModule("res", source, target),),
+                (MigrationCase("SERIA-10", "OSCOA-20"),),
+                lookback_days=30,
+            )
+
+        self.assertEqual(
+            result.files[0].state,
+            VerificationState.NOT_MIGRATED,
+        )
+        self.assertFalse(result.complete)
+
     def test_audit_classifies_local_and_committed_states(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -953,12 +1091,119 @@ class IssueParsingTests(unittest.TestCase):
         revision_index = seen[0].index("-r")
         self.assertEqual(seen[0][revision_index + 1], "30:HEAD")
 
+    def test_path_history_uses_peg_revision_for_deleted_asset(self) -> None:
+        seen: list[tuple[str, ...]] = []
+        xml = '<?xml version="1.0" encoding="UTF-8"?><log />'
+
+        def runner(command, cwd, timeout):
+            del cwd, timeout
+            seen.append(tuple(command))
+            return SvnCommandOutput(
+                command=tuple(command),
+                return_code=0,
+                stdout=xml,
+                stderr="",
+                elapsed_seconds=0,
+            )
+
+        SvnClient(runner=runner).log_path_history(
+            "https://example.invalid/trunk/Old.uasset",
+            start_revision=11,
+            peg_revision=10,
+        )
+
+        revision_index = seen[0].index("-r")
+        self.assertEqual(seen[0][revision_index + 1], "11:HEAD")
+        self.assertEqual(
+            seen[0][-1],
+            "https://example.invalid/trunk/Old.uasset@10",
+        )
+
 
 @unittest.skipUnless(
     shutil.which("svn") and shutil.which("svnadmin"),
     "SVN command line tools are required",
 )
 class MigrationAuditSvnIntegrationTests(unittest.TestCase):
+    def test_real_repository_detects_later_source_deletion(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="migration deleted source "
+        ) as temp_dir:
+            root = Path(temp_dir)
+            repository = root / "repository"
+            source = root / "source"
+            target = root / "target"
+            subprocess.run(
+                ["svnadmin", "create", str(repository)],
+                check=True,
+                capture_output=True,
+            )
+            base_url = repository.resolve().as_uri() + "/project/res"
+            source_url = base_url + "/trunk"
+            target_url = base_url + "/overseas/trunk"
+            subprocess.run(
+                [
+                    "svn",
+                    "mkdir",
+                    "--parents",
+                    source_url,
+                    target_url,
+                    "-m",
+                    "initialize branches",
+                ],
+                check=True,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["svn", "checkout", source_url, str(source)],
+                check=True,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["svn", "checkout", target_url, str(target)],
+                check=True,
+                capture_output=True,
+            )
+            source_file = source / "Content" / "Old.uasset"
+            source_file.parent.mkdir()
+            source_file.write_bytes(b"old")
+            subprocess.run(
+                ["svn", "add", "--parents", str(source_file)],
+                check=True,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["svn", "commit", str(source), "-m", "[SERIA-10] add"],
+                check=True,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["svn", "delete", str(source_file)],
+                check=True,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["svn", "commit", str(source), "-m", "remove obsolete"],
+                check=True,
+                capture_output=True,
+            )
+
+            result = MigrationAuditService(
+                svn=SvnClient(timeout=30),
+                include_externals=False,
+            ).audit_batch(
+                (WorkspaceModule("res", source, target),),
+                (MigrationCase("SERIA-10", "OSCOA-20"),),
+                lookback_days=30,
+            )
+
+        self.assertEqual(
+            result.files[0].state,
+            VerificationState.SOURCE_DELETED,
+        )
+        self.assertTrue(result.complete)
+        self.assertIn("后续 SVN 提交", result.files[0].reason)
+
     def test_real_repository_reports_committed_then_pending_change(self) -> None:
         with tempfile.TemporaryDirectory(prefix="migration audit ") as temp_dir:
             root = Path(temp_dir)

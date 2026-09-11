@@ -182,6 +182,30 @@ class SvnClient:
         )
         return self._parse_commits(output.stdout)
 
+    def log_path_history(
+        self,
+        target_url: str,
+        *,
+        start_revision: int,
+        peg_revision: int | None = None,
+    ) -> tuple[SvnCommit, ...]:
+        target = (
+            f"{target_url}@{max(0, peg_revision)}"
+            if peg_revision is not None
+            else target_url
+        )
+        output = self._run(
+            [
+                "log",
+                "--xml",
+                "-v",
+                "-r",
+                f"{max(0, start_revision)}:HEAD",
+                target,
+            ]
+        )
+        return self._parse_commits(output.stdout)
+
     def _parse_commits(self, value: str) -> tuple[SvnCommit, ...]:
         root = self._parse_xml(value, "svn log")
         commits: list[SvnCommit] = []
