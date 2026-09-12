@@ -253,7 +253,9 @@ BP 输入框右侧的检查按钮会读取 BP、对应数字槽位、同名 Dial
 3. 唯一匹配时，用 Actor 世界位置补 `PlayerInitPosition`，用世界旋转补
    `PlayerForward`，并把当前地图写入 `PreviewLevel`。
 4. 多个匹配实例时停止写入，要求用户在 UE 中只选择一个。
-5. 已存在的坐标或地图字段不会被覆盖；只补缺失值并勾选虚拟场景。
+5. 用户在 UE 当前选择中明确包含目标 BP Actor 时，该 Actor 的世界 Transform
+   是本次权威原点，会更新 `PlayerInitPosition` 与 `PlayerForward`；未明确选择
+   BP Actor、只从关卡唯一实例或任务目标物推断时，保留已有坐标并只补缺失值。
 
 写入缺失空间配置时会先单独启用并回读 `Virtual`，再写
 `PlayerInitPosition`、`PlayerForward` 和 `PreviewLevel`，兼容 UE 只有在虚拟
@@ -358,8 +360,8 @@ Actor 的世界 Transform 完成相同换算。两种路径都会完整写入位
 `DialogModels` 补齐空间配置，再重新读取 UE 选择并用新审核快照写入 BP 和
 对话模型。只有背景资产、没有对话 NPC 时仍提供独立“补齐对话配置”，避免普通
 背景写入隐式修改对话。两条路径都优先使用当前选择或地图中的唯一同类 BP Actor
-确定世界位置；已有主角位置与地图不覆盖。地图冲突、多个 BP 实例或不支持的根
-旋转仍保持阻断。
+确定世界位置；明确选中的 BP Actor 覆盖默认或旧的主角初始 Transform，关卡扫描
+和任务推断仍只补缺失字段。地图冲突、多个 BP 实例或不支持的根旋转仍保持阻断。
 
 ## 主要代码
 

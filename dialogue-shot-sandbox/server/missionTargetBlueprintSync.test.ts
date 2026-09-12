@@ -1177,6 +1177,64 @@ describe("mission target Blueprint synchronization", () => {
     ).toBe(false);
   });
 
+  it("uses an explicitly selected BP Actor as the authoritative scene origin", async () => {
+    await writeConfigFixture();
+    const connection = new BlueprintSyncConnection();
+    connection.formationClassPath = "None";
+    connection.previewLevel = "";
+    connection.commonProperties[0].CurrentBool = false;
+    connection.specialProperties[0].CurrentBool = false;
+    connection.commonProperties[1].CurrentVector = { X: 0, Y: 0, Z: 0 };
+    connection.selectedPlacementActors = [
+      {
+        actor_ref: "PersistentLevel.BP_735200_C_0",
+        label: "BP_735200",
+        class_path: connection.blueprintClassPath,
+        location: [700, 800, 900],
+        rotation: [0, 35, 0],
+        scale: [1, 1, 1],
+      },
+      {
+        actor_ref: "PersistentLevel.BP_Guard_C_0",
+        label: "BP_Guard",
+        class_path: "/Game/Test/BP_Guard.BP_Guard_C",
+        location: [740, 810, 920],
+        rotation: [0, 50, 0],
+        scale: [1, 1, 1],
+      },
+    ];
+
+    const result = await registerBlueprintDialogueModels(
+      {
+        blueprintName: "BP_735200",
+        selectedModelIndexes: [],
+        preserveModels: true,
+      },
+      () => connection,
+    );
+
+    expect(result).toMatchObject({
+      status: "registered",
+      spatialStatus: "configured",
+      spatialSource: "selected_actor",
+    });
+    expect(connection.commonProperties).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          Alias: "PlayerInitPosition",
+          CurrentVector: { X: 700, Y: 800, Z: 900 },
+        }),
+        expect.objectContaining({
+          Alias: "PlayerForward",
+          CurrentRotator: { Pitch: 0, Yaw: 35, Roll: 0 },
+        }),
+      ]),
+    );
+    expect(connection.previewLevel).toBe(
+      "/Game/Test/Maps/PlacedMap.PlacedMap",
+    );
+  });
+
   it("accepts UE string booleans, lowercase structs and wrapped object paths on readback", async () => {
     await writeConfigFixture();
     const connection = new AlternateSpatialShapeConnection();

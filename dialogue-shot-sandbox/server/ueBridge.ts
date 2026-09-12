@@ -7473,12 +7473,21 @@ export async function registerBlueprintDialogueModels(
       const needsActorPlacement =
         !dialogueSpatial.root.explicit ||
         !dialogueSpatial.forwardExplicit;
-      const placement = needsActorPlacement
-        ? await findBlueprintActorPlacement(
-            connection,
-            blueprint.blueprintClassPath,
-          )
-        : null;
+      const selectedPlacement = await findBlueprintActorPlacement(
+        connection,
+        blueprint.blueprintClassPath,
+        undefined,
+        false,
+      );
+      const placement =
+        selectedPlacement ??
+        (needsActorPlacement
+          ? await findBlueprintActorPlacement(
+              connection,
+              blueprint.blueprintClassPath,
+              [],
+            )
+          : null);
       if (placement) {
         if (
           hasUnrealObjectReference(dialogueSpatial.previewLevel) &&
@@ -7497,7 +7506,7 @@ export async function registerBlueprintDialogueModels(
             location: placement.actor.transform.location,
             rotation: placement.actor.transform.rotation,
           },
-          fillMissingOnly: true,
+          fillMissingOnly: placement.source !== "selected_actor",
           source: placement.source,
         };
       } else if (
@@ -8638,6 +8647,7 @@ async function findBlueprintActorPlacement(
   connection: UnrealInvoker,
   blueprintClassPathValue: string,
   selectedActorSnapshot?: SelectedLevelActor[],
+  scanLevelIfMissing = true,
 ): Promise<{
   actor: SelectedLevelActor;
   mapAssetPath: string;
@@ -8666,6 +8676,9 @@ async function findBlueprintActorPlacement(
       mapAssetPath: await currentMapName(connection),
       source: "selected_actor",
     };
+  }
+  if (!scanLevelIfMissing) {
+    return null;
   }
   const classPathLiteral = JSON.stringify(blueprintClassPathValue);
   const actors = await queryLevelActors(
