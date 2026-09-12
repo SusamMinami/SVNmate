@@ -377,6 +377,15 @@ export function MissionTargetModal({
         reason.startsWith("对话尚未配置") ||
         reason.startsWith("对话尚未启用虚拟场景"),
     ) ?? [];
+  const backgroundAutoConfigurationRequired =
+    selectedDialogueNpcCount > 0 &&
+    backgroundDialogueSetupReasons.length > 0;
+  const backgroundBlockingReasons =
+    backgroundPropPreview?.blockedReasons.filter(
+      (reason) =>
+        !backgroundAutoConfigurationRequired ||
+        !backgroundDialogueSetupReasons.includes(reason),
+    ) ?? [];
   const activeUeTargetSelectionReview =
     plan && ueTargetSelectionReview?.taskId === plan.taskId
       ? ueTargetSelectionReview
@@ -633,11 +642,59 @@ export function MissionTargetModal({
     }
   }
 
+  async function fillBackgroundDialogueConfiguration(
+    reviewedActorRefs: string[],
+  ) {
+    const matchedTargetIds = backgroundMatchedTargetIds;
+    const result = await registerBlueprintDialogueModels(
+      blueprintName.trim(),
+      [],
+      plan?.taskId,
+      targetOverrideItems,
+      true,
+      configuredDialogueId,
+    );
+    const inspection = await inspectMissionTargetBlueprint(
+      blueprintName.trim(),
+      plan ?? undefined,
+      plan?.taskId,
+      targetOverrideItems,
+      configuredDialogueId,
+      configuredDialogueTimeline,
+    );
+    applyBlueprintInspection(inspection, false);
+    if (matchedTargetIds.length > 0) {
+      const refreshedExistingTargetIds =
+        inspection.sync?.mappings.map((mapping) => mapping.targetId) ?? [];
+      setSelectedTargetIds(
+        new Set([...refreshedExistingTargetIds, ...matchedTargetIds]),
+      );
+    }
+    const preview = await inspectBackgroundPropImport(
+      blueprintName.trim(),
+      reviewedActorRefs.length > 0 ? reviewedActorRefs : undefined,
+      configuredDialogueId,
+      taskId.trim() || undefined,
+    );
+    setBackgroundPropPreview(preview);
+    setSelectedBackgroundActorRefs((current) =>
+      new Set(
+        preview.items
+          .filter(
+            (item) =>
+              item.action !== "blocked" &&
+              current.has(item.actorRef),
+          )
+          .map((item) => item.actorRef),
+      ),
+    );
+    return { result, preview };
+  }
+
   async function configureBackgroundDialogue() {
-    if (!blueprintName.trim()) {
+    if (!blueprintName.trim() || !backgroundPropPreview) {
       return;
     }
-    const matchedTargetIds = backgroundMatchedTargetIds;
     if (
       !window.confirm(
         "将补齐当前 BP 对应对话的 Formation、Preview Level、虚拟场景和主角初始 Transform。" +
@@ -652,49 +709,8 @@ export function MissionTargetModal({
     setError("");
     setStatus("");
     try {
-      const result = await registerBlueprintDialogueModels(
-        blueprintName.trim(),
-        [],
-        plan?.taskId,
-        targetOverrideItems,
-        true,
-        configuredDialogueId,
-      );
-      const inspection = await inspectMissionTargetBlueprint(
-        blueprintName.trim(),
-        plan ?? undefined,
-        plan?.taskId,
-        targetOverrideItems,
-        configuredDialogueId,
-        configuredDialogueTimeline,
-      );
-      applyBlueprintInspection(inspection, false);
-      if (matchedTargetIds.length > 0) {
-        const refreshedExistingTargetIds =
-          inspection.sync?.mappings.map((mapping) => mapping.targetId) ?? [];
-        setSelectedTargetIds(
-          new Set([...refreshedExistingTargetIds, ...matchedTargetIds]),
-        );
-      }
-      const reviewedActorRefs =
-        backgroundPropPreview?.items.map((item) => item.actorRef) ?? [];
-      const preview = await inspectBackgroundPropImport(
-        blueprintName.trim(),
-        reviewedActorRefs.length > 0 ? reviewedActorRefs : undefined,
-        configuredDialogueId,
-        taskId.trim() || undefined,
-      );
-      setBackgroundPropPreview(preview);
-      setSelectedBackgroundActorRefs((current) =>
-        new Set(
-          preview.items
-            .filter(
-              (item) =>
-                item.action !== "blocked" &&
-                current.has(item.actorRef),
-            )
-            .map((item) => item.actorRef),
-        ),
+      const { result } = await fillBackgroundDialogueConfiguration(
+        backgroundPropPreview.items.map((item) => item.actorRef),
       );
       if (result.spatialStatus === "not_configured") {
         setBackgroundPropError(
@@ -1012,6 +1028,10 @@ export function MissionTargetModal({
     ) {
       return;
     }
+    const selectedActorRefs = Array.from(selectedBackgroundActorRefs);
+    const reviewedActorRefs = backgroundPropPreview.items.map(
+      (item) => item.actorRef,
+    );
     const selectedItems = backgroundPropPreview.items.filter((item) =>
       selectedBackgroundActorRefs.has(item.actorRef),
     );
@@ -1028,21 +1048,41 @@ export function MissionTargetModal({
           (backgroundAssetCount > 0
             ? `\n${backgroundAssetCount} 个背景资产使用资产原名写入。`
             : "") +
+          (backgroundAutoConfigurationRequired
+            ? "\n将先自动补齐对话 Formation、Preview Level、虚拟场景和主角初始 Transform；现有 DialogModels 保持不变。"
+            : "") +
           "\n全部对象均保留位置、旋转和缩放。" +
           "\n不会写入 NPC 表或目标物表。" +
-          "\n\nBP 将编译并保存，是否继续？",
+          `\n\n${dialogueNpcCount > 0 ? "BP 与对话资产" : "BP"}将保存，是否继续？`,
       )
     ) {
       return;
     }
     setBusy(true);
     setError("");
+    let dialogueConfigurationCompleted = false;
     try {
+      let activePreview = backgroundPropPreview;
+      if (backgroundAutoConfigurationRequired) {
+        const configured = await fillBackgroundDialogueConfiguration(
+          reviewedActorRefs,
+        );
+        if (configured.result.spatialStatus === "not_configured") {
+          throw new Error(
+            "Formation 已补齐，但无法确定 BP 的世界位置。请把该 BP 放入当前地图，或输入任务节点后重试。",
+          );
+        }
+        dialogueConfigurationCompleted = true;
+        activePreview = configured.preview;
+        if (activePreview.blockedReasons.length > 0) {
+          throw new Error(activePreview.blockedReasons.join("；"));
+        }
+      }
       const result = await applyBackgroundPropImport(
         blueprintName.trim(),
-        backgroundPropPreview.reviewToken,
-        Array.from(selectedBackgroundActorRefs),
-        backgroundPropPreview.items.map((item) => item.actorRef),
+        activePreview.reviewToken,
+        selectedActorRefs,
+        activePreview.items.map((item) => item.actorRef),
         configuredDialogueId,
         taskId.trim() || undefined,
       );
@@ -1065,9 +1105,15 @@ export function MissionTargetModal({
       );
     } catch (importError) {
       setBackgroundPropError(
-        importError instanceof Error
-          ? importError.message
-          : "背景资产写入 BP 失败",
+        `${
+          importError instanceof Error
+            ? importError.message
+            : "背景资产写入 BP 失败"
+        }${
+          dialogueConfigurationCompleted
+            ? "；对话空间配置已补齐，但 BP 尚未写入"
+            : ""
+        }`,
       );
     } finally {
       setBusy(false);
@@ -2628,15 +2674,21 @@ export function MissionTargetModal({
                     ，下列未匹配 Actor 按实际类型审核
                   </span>
                 )}
+                {backgroundAutoConfigurationRequired && (
+                  <span className="background-prop-choice__routing">
+                    写入时将自动补齐对话配置：
+                    {backgroundDialogueSetupReasons.join("、")}
+                  </span>
+                )}
               </div>
-              {backgroundPropPreview.blockedReasons.length > 0 && (
+              {backgroundBlockingReasons.length > 0 && (
                 <div
                   className="mission-map-choice__error"
                   role="alert"
                 >
                   <AlertTriangle size={15} />
                   <span>
-                    {backgroundPropPreview.blockedReasons.join("；")}
+                    {backgroundBlockingReasons.join("；")}
                   </span>
                 </div>
               )}
@@ -2847,7 +2899,8 @@ export function MissionTargetModal({
                   {selectableBackgroundItems.length} 个可写入 Actor
                 </span>
                 <div>
-                  {backgroundDialogueSetupReasons.length > 0 && (
+                  {backgroundDialogueSetupReasons.length > 0 &&
+                    !backgroundAutoConfigurationRequired && (
                     <button
                       className="button"
                       type="button"
@@ -2879,7 +2932,7 @@ export function MissionTargetModal({
                     disabled={
                       busy ||
                       selectedBackgroundCount === 0 ||
-                      backgroundPropPreview.blockedReasons.length > 0
+                      backgroundBlockingReasons.length > 0
                     }
                   >
                     {busy ? (
@@ -2889,9 +2942,11 @@ export function MissionTargetModal({
                     )}
                     {busy
                       ? "正在写入..."
-                      : selectedDialogueNpcCount > 0
-                        ? "写入 BP 与对话"
-                        : "写入 BP"}
+                      : backgroundAutoConfigurationRequired
+                        ? "补齐并写入 BP 与对话"
+                        : selectedDialogueNpcCount > 0
+                          ? "写入 BP 与对话"
+                          : "写入 BP"}
                   </button>
                 </div>
               </footer>

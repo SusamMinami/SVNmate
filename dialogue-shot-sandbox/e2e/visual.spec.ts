@@ -8994,6 +8994,8 @@ test("lists the automatic player slot when importing an NPC into an empty BP", a
   page,
 }, testInfo) => {
   let applyRequest: Record<string, unknown> | null = null;
+  let dialogueSetupRequest: Record<string, unknown> | null = null;
+  let backgroundInspectCount = 0;
   const actorRef = "PersistentLevel.BP_Added_C_2";
   await page.route("**/api/ue/selection/read", async (route) => {
     await route.fulfill({
@@ -9025,13 +9027,14 @@ test("lists the automatic player slot when importing an NPC into an empty BP", a
   await page.route(
     "**/api/ue/mission-targets/background-props/inspect",
     async (route) => {
+      backgroundInspectCount += 1;
       await route.fulfill({
         status: 200,
         contentType: "application/json",
         body: JSON.stringify({
           ok: true,
           data: {
-            reviewToken: "b".repeat(64),
+            reviewToken: (backgroundInspectCount === 1 ? "b" : "c").repeat(64),
             blueprintAssetPath:
               "/Game/Seria/Task/Mod/Test/BP_735200.BP_735200",
             mapAssetPath: "/Game/Test/Maps/PlacedMap",
@@ -9067,7 +9070,71 @@ test("lists the automatic player slot when importing an NPC into an empty BP", a
                 message: "新增对话角色槽 1；DialogModels=Added",
               },
             ],
-            blockedReasons: [],
+            blockedReasons:
+              backgroundInspectCount === 1
+                ? [
+                    "对话 Formation 尚未指向当前 BP",
+                    "对话尚未启用虚拟场景",
+                    "对话尚未配置 Preview Level",
+                  ]
+                : [],
+          },
+        }),
+      });
+    },
+  );
+  await page.route(
+    "**/api/ue/mission-targets/register-dialogue",
+    async (route) => {
+      dialogueSetupRequest = route.request().postDataJSON();
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          data: {
+            status: "registered",
+            blueprintAssetPath:
+              "/Game/Seria/Task/Mod/Test/BP_735200.BP_735200",
+            dialogueId: "735200",
+            dialogueAssetPath:
+              "/Game/Seria/Task/dialoggraph/Test/735200.735200",
+            dialogueModels: [],
+            registeredCount: 0,
+            characterCount: 0,
+            emptyCount: 0,
+            unresolvedIndexes: [],
+            spatialStatus: "configured",
+            spatialSource: "selected_actor",
+            spatialMapAssetPath: "/Game/Test/Maps/PlacedMap.PlacedMap",
+          },
+        }),
+      });
+    },
+  );
+  await page.route(
+    "**/api/ue/mission-targets/inspect-blueprint",
+    async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          data: {
+            blueprintState: "empty",
+            blueprintAssetPath:
+              "/Game/Seria/Task/Mod/Test/BP_735200.BP_735200",
+            blueprintClassPath:
+              "/Game/Seria/Task/Mod/Test/BP_735200.BP_735200_C",
+            parentClassPath:
+              "/Game/Seria/Task/Mod/PositionMode/PositionModeBase.PositionModeBase_C",
+            dialogueId: "735200",
+            dialogueAssetPath:
+              "/Game/Seria/Task/dialoggraph/Test/735200.735200",
+            formationClassPath:
+              "/Game/Seria/Task/Mod/Test/BP_735200.BP_735200_C",
+            slots: [],
+            message: "对话空间配置已补齐",
           },
         }),
       });
@@ -9130,25 +9197,40 @@ test("lists the automatic player slot when importing an NPC into an empty BP", a
     review.locator(".background-prop-table tbody tr"),
   ).toHaveCount(3);
   await expect(
-    review.getByRole("button", { name: "写入 BP 与对话" }),
+    review.getByText(/写入时将自动补齐对话配置/),
+  ).toBeVisible();
+  await expect(
+    review.getByRole("button", { name: "补齐对话配置" }),
+  ).toHaveCount(0);
+  await expect(
+    review.getByRole("button", { name: "补齐并写入 BP 与对话" }),
   ).toBeEnabled();
   await review.screenshot({
     path: testInfo.outputPath("empty-bp-player-slot-bootstrap.png"),
   });
   page.once("dialog", async (confirmation) => {
     expect(confirmation.message()).toContain("1 个对话 NPC");
-    expect(confirmation.message()).not.toContain("自动补建");
+    expect(confirmation.message()).toContain("先自动补齐对话 Formation");
     await confirmation.accept();
   });
-  await review.getByRole("button", { name: "写入 BP 与对话" }).click();
+  await review
+    .getByRole("button", { name: "补齐并写入 BP 与对话" })
+    .click();
 
+  await expect(workspace.getByText(/已写入 BP：新增 3 个/)).toBeVisible();
+  expect(dialogueSetupRequest).toEqual({
+    blueprintName: "BP_735200",
+    selectedModelIndexes: [],
+    targetOverrides: [],
+    preserveModels: true,
+  });
+  expect(backgroundInspectCount).toBe(2);
   expect(applyRequest).toEqual({
     blueprintName: "BP_735200",
-    reviewToken: "b".repeat(64),
+    reviewToken: "c".repeat(64),
     selectedActorRefs: [actorRef],
     reviewedActorRefs: [actorRef],
   });
-  await expect(workspace.getByText(/已写入 BP：新增 3 个/)).toBeVisible();
 });
 
 test("offers bidirectional position sync for a registered Blueprint", async ({
