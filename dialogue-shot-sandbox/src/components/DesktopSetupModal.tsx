@@ -1,16 +1,12 @@
 import {
-  Check,
   ChevronDown,
   CircleAlert,
-  Cpu,
-  Database,
   Download,
   ExternalLink,
   FolderCog,
   FolderOpen,
   LoaderCircle,
   LogIn,
-  Music2,
   PlugZap,
   RefreshCw,
   Trash2,
@@ -20,6 +16,7 @@ import { useEffect, useState } from "react";
 import type { SoundEffectCatalogSnapshot } from "../data/soundEffectCatalog";
 import type { MusicCatalogSnapshot } from "../data/musicCatalog";
 import type { LarkStatus } from "../lark/client";
+import { SetupStatusIcon, useSetupStatusIntro } from "./SetupStatusIcon";
 
 interface DesktopSetupModalProps {
   initialStatus: DesktopSetupStatus;
@@ -148,6 +145,7 @@ export function DesktopSetupModal({
   onSyncMusicCatalog,
 }: DesktopSetupModalProps) {
   const desktop = window.shotSandboxDesktop;
+  const { intro, finishIntro } = useSetupStatusIntro();
   const [status, setStatus] = useState(initialStatus);
   const [update, setUpdate] = useState<DesktopUpdateSnapshot>({
     state: "idle",
@@ -440,6 +438,8 @@ export function DesktopSetupModal({
         role="dialog"
         aria-modal="true"
         aria-labelledby="desktop-setup-title"
+        onPointerDownCapture={finishIntro}
+        onKeyDownCapture={finishIntro}
       >
         <header>
           <div>
@@ -458,9 +458,13 @@ export function DesktopSetupModal({
         </header>
 
         <div className="desktop-setup-modal__body">
-          <section className="setup-status-list" aria-label="环境检查">
+          <section
+            className="setup-status-list"
+            aria-label="环境检查"
+            data-status-intro={intro}
+          >
             <div>
-              <Check size={17} />
+              <SetupStatusIcon name="应用运行时" ready index={0} />
               <span>
                 <strong>应用运行时</strong>
                 <small>已内置，无需安装 Node.js 或 npm</small>
@@ -473,11 +477,11 @@ export function DesktopSetupModal({
                   : "setup-directory-collection is-warning"
               }
             >
-              {npcAnimationDirectories.length > 0 ? (
-                <FolderCog size={17} />
-              ) : (
-                <CircleAlert size={17} />
-              )}
+              <SetupStatusIcon
+                name="NPC 动作库"
+                ready={npcAnimationDirectories.length > 0}
+                index={1}
+              />
               <div className="setup-status-copy">
                 <strong>NPC 动作库</strong>
                 {npcAnimationDirectories.length > 0 ? (
@@ -538,14 +542,15 @@ export function DesktopSetupModal({
                   : "is-warning"
               }
             >
-              {(status.liveDataReady ?? status.defaultDataReady) ? (
-                <Check size={17} />
-              ) : (
-                <CircleAlert size={17} />
-              )}
+              <SetupStatusIcon
+                name="res 实时数据"
+                ready={status.liveDataReady ?? status.defaultDataReady}
+                loading={dataLoading}
+                index={2}
+              />
               <span>
                 <strong>res 实时数据</strong>
-                <small>
+                <small title={status.liveResDirectory}>
                   {status.liveResDirectory ||
                     "选择项目 res 目录，固定读取 Content\\Seria\\Tables\\csvdir"}
                 </small>
@@ -571,14 +576,15 @@ export function DesktopSetupModal({
                   : "is-warning"
               }
             >
-              {(status.configDataReady ?? status.defaultDataReady) ? (
-                <Check size={17} />
-              ) : (
-                <CircleAlert size={17} />
-              )}
+              <SetupStatusIcon
+                name="doc 配置文档"
+                ready={status.configDataReady ?? status.defaultDataReady}
+                loading={dataLoading}
+                index={3}
+              />
               <span>
                 <strong>doc 配置文档</strong>
-                <small>
+                <small title={status.configDocDirectory}>
                   {status.configDocDirectory ||
                     "选择项目 doc 目录，固定读取 csvdir"}
                 </small>
@@ -607,13 +613,13 @@ export function DesktopSetupModal({
                 larkReady ? "" : "is-warning"
               }
             >
-              {larkLoading ? (
-                <LoaderCircle className="spin" size={17} />
-              ) : larkReady ? (
-                <Database size={17} />
-              ) : (
-                <CircleAlert size={17} />
-              )}
+              <SetupStatusIcon
+                name="飞书数据"
+                ready={larkReady}
+                loading={larkLoading}
+                error={Boolean(larkError)}
+                index={4}
+              />
               <span>
                 <strong>飞书数据</strong>
                 <small>
@@ -648,14 +654,13 @@ export function DesktopSetupModal({
                 advisorModel.state === "ready" ? "" : "is-warning"
               }`}
             >
-              {advisorModel.state === "checking" ||
-              advisorModel.state === "downloading" ? (
-                <LoaderCircle className="spin" size={17} />
-              ) : advisorModel.state === "ready" ? (
-                <Cpu size={17} />
-              ) : (
-                <CircleAlert size={17} />
-              )}
+              <SetupStatusIcon
+                name="端侧导演模型"
+                ready={advisorModel.state === "ready"}
+                loading={advisorModel.state === "checking" || advisorModel.state === "downloading"}
+                error={advisorModel.state === "error"}
+                index={5}
+              />
               <span
                 title={
                   advisorModel.modelDirectory
@@ -731,13 +736,15 @@ export function DesktopSetupModal({
               </div>
             </div>
             <div className={docsReady ? "" : "is-warning"}>
-              {soundEffectCatalogBusy ? (
-                <LoaderCircle className="spin" size={17} />
-              ) : docsReady ? (
-                <Database size={17} />
-              ) : (
-                <CircleAlert size={17} />
-              )}
+              <SetupStatusIcon
+                name="音效资料库"
+                ready={docsReady && soundEffectCatalog.entries.length > 0}
+                loading={soundEffectCatalogBusy}
+                error={Boolean(soundEffectCatalogError)}
+                detail={!soundEffectCatalogBusy && !soundEffectCatalogError && !docsReady
+                  ? "待授权同步（已有资料仍可使用）" : undefined}
+                index={6}
+              />
               <span>
                 <strong>音效资料库</strong>
                 <small aria-live="polite">
@@ -772,11 +779,17 @@ export function DesktopSetupModal({
               </button>
             </div>
             <div className={larkReady ? "" : "is-warning"}>
-              {musicCatalogBusy ? (
-                <LoaderCircle className="spin" size={17} />
-              ) : (
-                <Music2 size={17} />
-              )}
+              <SetupStatusIcon
+                name="音乐资料库"
+                ready={larkReady && musicCatalog.entries.length > 0}
+                loading={musicCatalogBusy}
+                error={Boolean(musicCatalogError)}
+                detail={!musicCatalogBusy && !musicCatalogError
+                  ? !larkReady ? "待授权同步"
+                    : musicCatalog.entries.length === 0 ? "待同步" : undefined
+                  : undefined}
+                index={7}
+              />
               <span>
                 <strong>音乐资料库</strong>
                 <small aria-live="polite">
@@ -820,11 +833,7 @@ export function DesktopSetupModal({
               </button>
             </div>
             <div className={status.traeDetected ? "" : "is-warning"}>
-              {status.traeDetected ? (
-                <Check size={17} />
-              ) : (
-                <CircleAlert size={17} />
-              )}
+              <SetupStatusIcon name="TRAE" ready={status.traeDetected} index={8} />
               <span>
                 <strong>TRAE</strong>
                 <small>
@@ -844,11 +853,12 @@ export function DesktopSetupModal({
               )}
             </div>
             <div className={status.mcpConnected ? "" : "is-warning"}>
-              {status.mcpConnected ? (
-                <Check size={17} />
-              ) : (
-                <CircleAlert size={17} />
-              )}
+              <SetupStatusIcon
+                name="分镜 MCP"
+                ready={status.mcpConnected}
+                detail={status.mcpConnected ? undefined : "待连接"}
+                index={9}
+              />
               <span>
                 <strong>分镜 MCP</strong>
                 <small>
@@ -865,11 +875,12 @@ export function DesktopSetupModal({
                 status.ueConnected ? "" : "is-warning"
               }`}
             >
-              {status.ueConnected ? (
-                <Check size={17} />
-              ) : (
-                <CircleAlert size={17} />
-              )}
+              <SetupStatusIcon
+                name="UE 编辑器"
+                ready={status.ueConnected}
+                detail={status.ueConnected ? undefined : "待连接"}
+                index={10}
+              />
               <span>
                 <strong>UE 编辑器</strong>
                 <small title={status.ueConnectionMessage}>

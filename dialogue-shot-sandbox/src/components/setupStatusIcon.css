@@ -1,0 +1,99 @@
+.setup-status-list .setup-status-icon {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  color: var(--success);
+  border-radius: 2px;
+}
+
+.setup-status-list .setup-status-icon[data-state="warning"] {
+  color: var(--warning);
+}
+
+.setup-status-list .setup-status-icon[data-state="loading"] {
+  color: var(--text-muted);
+}
+
+.setup-status-list .setup-status-icon[data-state="error"] {
+  color: var(--danger, #c84b3a);
+}
+
+.setup-status-icon__pending,
+.setup-status-list .setup-status-icon__result {
+  grid-area: 1 / 1;
+}
+
+.setup-status-icon__pending {
+  color: var(--text-muted);
+  opacity: 0;
+}
+
+.setup-status-icon__result {
+  opacity: 1;
+}
+
+.setup-status-list[data-status-intro="true"]
+  .setup-status-icon:not([data-state="error"]) .setup-status-icon__pending {
+  animation: setup-status-clear 260ms ease-out var(--setup-status-delay) both;
+}
+
+.setup-status-list[data-status-intro="true"]
+  .setup-status-icon:not([data-state="error"]) .setup-status-icon__result {
+  animation: setup-status-reveal 260ms ease-out var(--setup-status-delay) both;
+}
+
+.setup-status-icon:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.setup-status-icon::after {
+  content: attr(data-label);
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 2;
+  padding: 4px 7px;
+  color: var(--surface);
+  background: var(--ink);
+  border-radius: 2px;
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: nowrap;
+  pointer-events: none;
+  visibility: hidden;
+}
+
+.setup-status-icon:hover::after,
+.setup-status-icon:focus-visible::after {
+  visibility: visible;
+}
+
+@keyframes setup-status-clear {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@keyframes setup-status-reveal {
+  from { opacity: 0; clip-path: inset(0 100% 0 0); }
+  to { opacity: 1; clip-path: inset(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .setup-status-list[data-status-intro] .setup-status-icon .setup-status-icon__pending {
+    animation: none;
+    opacity: 0;
+  }
+
+  .setup-status-list[data-status-intro] .setup-status-icon .setup-status-icon__result {
+    animation: none;
+    opacity: 1;
+    clip-path: none;
+  }
+
+  .setup-status-icon .spin {
+    animation: none;
+  }
+}

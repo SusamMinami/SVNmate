@@ -3,7 +3,7 @@ import { writeFile } from "node:fs/promises";
 import { configureConfigDocDirectory } from "../server/configRepository";
 import { scanAnimationSequence } from "../server/animationVoice";
 import { listAnimationSpeechMedia, prepareAnimationSpeechAudio } from "../server/animationSpeechMedia";
-import { animationSpeechStatus, startAnimationSpeech, getAnimationSpeechJob } from "../server/animationSpeechRuntime";
+import { animationSpeechStatus, startAnimationSpeech, getAnimationSpeechJob, cancelAnimationSpeech } from "../server/animationSpeechRuntime";
 
 const assetPath = process.argv[2];
 if (!assetPath) throw new Error("Pass a LevelSequence object path. This test only reads UE and performs local inference.");
@@ -40,3 +40,15 @@ for (const mode of ["align", "asr"] as const) {
 }
 assert.equal((await animationSpeechStatus()).busy, false);
 console.log("Both speech modes completed; worker exited and GPU resources released.");
+const cancelled = await startAnimationSpeech({
+  audioToken: audio.token, mode: "asr", cropStart: 0, cropEnd: Math.min(10, audio.duration),
+  timelineOrigin: audio.sectionStart, lines: [],
+});
+await new Promise((resolve) => setTimeout(resolve, 1500));
+assert.equal((await cancelAnimationSpeech({ id: cancelled.id })).state, "cancelled");
+const deadline = Date.now() + 15000;
+while ((await animationSpeechStatus()).busy && Date.now() < deadline) {
+  await new Promise((resolve) => setTimeout(resolve, 200));
+}
+assert.equal((await animationSpeechStatus()).busy, false, "Cancelled process did not exit");
+console.log("Native worker cancellation and lease release verified.");

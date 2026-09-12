@@ -217,8 +217,11 @@ BP 输入框右侧的检查按钮会读取 BP、对应数字槽位、同名 Dial
   “未登记”。
 - 全部数字角色位都会显示和计数。0 号位固定勾选并写为 `player`；其余模型槽
   也固定保留，并按 BP 原槽位序号写入。
-- 找不到 `DialogNPCTable` 映射的已选模型保持
-  `None` 并在结果中列出。
+- 找不到 `DialogNPCTable` 映射的已选模型在检查结果标为未登记；
+  写入必须先走补登记审核，不得静默把 `None` 写回。
+
+所有改写 `DialogModels` 的服务端入口在公共写入层再次验证 `0 = BP_Eric`，
+不能只依赖界面校验。仅明确保留现有模型、只补空间配置的流程可跳过该验证。
 
 当检查结果包含“未登记”槽位时，任务目标物工作区会在 BP 创建、追加或
 `DialogModels` 写入前打开补登记审核：
@@ -318,6 +321,7 @@ UE 选择审核会区分 SceneObject NPC 与普通背景资源，不新增目标
   Preview Actor 解析实际 NPC Generated Class，使用包装 Actor 的世界 Transform。
   匹配任务目标物时沿用原流程；未匹配时从 BP 当前最大数字槽后按 UE 选择顺序
   追加，并通过 `DialogNPCTable` 同步 `DialogModels`。
+  两种类解析都失败时报告单项根因，不回退 `BP_Npc_Preview` 背景组件。
 - 空 `PositionModeBase` BP 首次写入对话 NPC 时，会在同一审核事务中自动补建
   `0 = BP_Eric` 和 `c1 = CameraComponent`，NPC 从 `1` 开始编号。玩家与摄像机
   作为固定勾选项和 NPC 一起显示。若 BP 已有其他数字槽却缺少 `0`，或保留名
@@ -326,8 +330,8 @@ UE 选择审核会区分 SceneObject NPC 与普通背景资源，不新增目标
 - StaticMeshActor 写为 `StaticMeshComponent` 和实际 Static Mesh。
 - Cascade Emitter 写为 `ParticleSystemComponent` 和实际 Particle System。
 - Niagara Actor 写为 `NiagaraComponent` 和实际 Niagara System。
-- 除 SceneObject NPC 外，普通背景资源仍以资产名创建非数字展示组件，不修改
-  `DialogModels`；其他 Actor 显示为不支持，不参与写入。
+- `SceneObject` NPC 与直接 `SeriaNPC` Actor 均走数字槽管线；真正的普通背景资源
+  才以资产名创建非数字组件，不修改 `DialogModels`。不支持的 Actor 不参与写入。
 - 任务节点与对话节点都为空时，工具按 BP 父类分流。`TaskActorBase` 不要求
   BP 文件名包含对话数字 ID，优先使用 UE 当前选择中的目标 BP Actor 作为
   坐标原点；未选中目标 BP 时，可回退到当前关卡中的唯一同类 BP 实例。无法

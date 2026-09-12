@@ -446,7 +446,7 @@ describe("preset camera quick action transaction", () => {
       presetCamera: { cameraName: "3", relative: true },
     });
     expect(writes(connection)).toHaveLength(0);
-    await applyDialogueCameraQuickAction({ ...request, reviewToken: preview.reviewToken }, () => connection);
+    await applyDialogueCameraQuickAction(request, () => connection);
     const pose = connection.presetSnapshot.roles[0].cameras[0].local;
     expect(connection.movesByData.get("ActionData1")).toEqual([{
       ...original,
@@ -470,7 +470,7 @@ describe("preset camera quick action transaction", () => {
     expect(writes(connection)).toHaveLength(0);
   });
 
-  it.each(["position", "configuration", "selection", "token"])("rejects changed %s before any write", async (change) => {
+  it.each(["position", "configuration", "selection"])("rejects changed %s before any write", async (change) => {
     const connection = new FakePresetCameraConnection();
     const request = await presetRequest(connection);
     const preview = await inspectDialogueCameraQuickAction(request, () => connection);
@@ -478,8 +478,19 @@ describe("preset camera quick action transaction", () => {
     if (change === "configuration") connection.movesByData.set("ActionData1", [{ ...buildDefaultDialogueCameraMove(), FOV: 42 }]);
     if (change === "selection") connection.selectedDialogueNodeId = "735202";
     await expect(applyDialogueCameraQuickAction({
-      ...request, ...(change !== "token" ? { reviewToken: preview.reviewToken } : {}),
-    }, () => connection)).rejects.toThrow(change === "token" ? "审核令牌" : "变化");
+      ...request, reviewToken: preview.reviewToken,
+    }, () => connection)).rejects.toThrow("变化");
+    expect(writes(connection)).toHaveLength(0);
+  });
+
+  it("revalidates the selected preset without a separate review request", async () => {
+    const connection = new FakePresetCameraConnection();
+    const request = await presetRequest(connection);
+    connection.presetSnapshot.roles[0].cameras[0].local.position.X += 20;
+
+    await expect(
+      applyDialogueCameraQuickAction(request, () => connection),
+    ).rejects.toThrow("预设机位已变化");
     expect(writes(connection)).toHaveLength(0);
   });
 
@@ -1768,8 +1779,13 @@ describe("dialogue camera quick actions", () => {
     });
   });
 
-  it("adds the default blend curve while preserving duration", async () => {
+  it("adds the default blend curve with duration zero without a review request", async () => {
     const connection = new FakeStoryboardExportConnection();
+    connection.blendByData.set("ActionData1", {
+      DialogBlendCameraType: "ECutShot",
+      BlendCurve: "None",
+      Duration: 3,
+    });
     const request = {
       dialogueId: "7352",
       startId: "735200",
@@ -1791,15 +1807,35 @@ describe("dialogue camera quick actions", () => {
       blendDuration: 0,
       changed: true,
     });
-    await applyDialogueCameraQuickAction(
-      { ...request, reviewToken: preview.reviewToken },
-      () => connection,
-    );
+    await applyDialogueCameraQuickAction(request, () => connection);
     expect(connection.blendByData.get("ActionData1")).toEqual({
       DialogBlendCameraType: "EBlend",
       BlendCurve:
         "/Game/Seria/Task/Mod/MainQuest/DialogCurve/trans_6015.trans_6015",
       Duration: 0,
+    });
+  });
+
+  it("writes an edited blend curve duration", async () => {
+    const connection = new FakeStoryboardExportConnection();
+    const request = {
+      dialogueId: "7352",
+      startId: "735200",
+      dialogueNodeId: "735201",
+      blendCurveAssetName: "trans_6015",
+      blendDuration: 1.5,
+      mode: "blend_curve" as const,
+    };
+
+    await expect(
+      applyDialogueCameraQuickAction(request, () => connection),
+    ).resolves.toMatchObject({
+      status: "updated",
+      saved: true,
+    });
+    expect(connection.blendByData.get("ActionData1")).toMatchObject({
+      DialogBlendCameraType: "EBlend",
+      Duration: 1.5,
     });
   });
 
@@ -1970,12 +2006,6 @@ describe("dialogue camera quick actions", () => {
 
     await expect(
       applyDialogueCameraQuickAction(request, () => connection),
-    ).rejects.toThrow("镜头快捷操作缺少审核令牌");
-    await expect(
-      applyDialogueCameraQuickAction(
-        { ...request, reviewToken: preview.reviewToken },
-        () => connection,
-      ),
     ).resolves.toMatchObject({
       status: "updated",
       dialogueNodeId: "735202",

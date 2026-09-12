@@ -6,6 +6,7 @@ export const SubtitleDraftSchema = z.object({
   dialogueId: z.number().int().positive().max(2147483647),
   start: z.number().finite(),
   end: z.number().finite(),
+  speechText: z.string().trim().min(1).max(1000).optional(),
 });
 export const SequencePatchSchema = z.object({
   assetPath: SequencePathSchema,

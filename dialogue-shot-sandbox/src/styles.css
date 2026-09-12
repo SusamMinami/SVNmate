@@ -834,6 +834,12 @@ textarea:focus-visible {
   padding: 0 12px;
 }
 
+.query-formation-button {
+  width: 100%;
+  min-height: 32px;
+  margin-top: 7px;
+}
+
 .input-row input {
   width: 100%;
   height: 36px;
@@ -881,6 +887,10 @@ textarea:focus-visible {
   font-size: 10px;
   font-weight: 700;
   cursor: pointer;
+  transition:
+    color 160ms ease,
+    background-color 160ms ease,
+    box-shadow 160ms ease;
   white-space: nowrap;
 }
 
@@ -11321,6 +11331,33 @@ textarea:focus-visible {
   font-size: 9px;
 }
 
+.node-camera-review dd.node-camera-review__duration {
+  flex-wrap: nowrap;
+}
+
+.node-camera-review__duration label {
+  display: grid;
+  grid-template-columns: 58px 12px;
+  align-items: center;
+  gap: 4px;
+}
+
+.node-camera-review__duration input {
+  width: 58px;
+  height: 24px;
+  padding: 2px 5px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  background: var(--surface);
+  font: 10px/1 "Cascadia Code", Consolas, monospace;
+}
+
+.node-camera-review__duration input:focus {
+  border-color: var(--ark-cyan);
+  outline: 2px solid color-mix(in srgb, var(--ark-cyan) 28%, transparent);
+  outline-offset: 0;
+}
+
 .node-camera-review__warning,
 .node-camera-quick-actions__status {
   display: grid;
@@ -11773,6 +11810,22 @@ textarea:focus-visible {
 }
 
 @media (any-hover: hover) {
+  .app-shell[data-ark-theme="endfield"]
+    .mode-segment
+    button:not(:disabled):not(.is-active):hover {
+    color: var(--ink);
+    background: var(--surface);
+    box-shadow: inset 0 -2px 0 var(--ark-cyan);
+  }
+
+  .app-shell[data-ark-theme="endfield"]
+    .mode-segment
+    button.is-active:not(:disabled):hover {
+    color: #ffffff;
+    background: var(--ink);
+    box-shadow: inset 0 -3px 0 var(--signal);
+  }
+
   .app-shell[data-ark-theme="endfield"] .button:not(:disabled):hover {
     border-radius: 5px;
   }

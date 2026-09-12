@@ -31,6 +31,15 @@ function numericSort(left: string, right: string): number {
   return left.localeCompare(right);
 }
 
+export function normalizeDialogueSearchText(value: string): string {
+  return value
+    .normalize("NFKC")
+    .toLocaleLowerCase()
+    .replace(/<[^>]*>/g, "")
+    .replace(/\\[nr]/g, "")
+    .replace(/[\p{Punctuation}\p{White_Space}]+/gu, "");
+}
+
 function append<TKey, TValue>(
   index: Map<TKey, TValue[]>,
   key: TKey,
@@ -94,7 +103,10 @@ export function getDialogueDatabaseIndex(
       // Exact-ID navigation does not need a second copy of every dialogue string.
       return searchableDialogueRows ??= database.dialogueRows.flatMap((row) =>
         row.state !== 4 && row.content && /^\d{4,}$/.test(row.id)
-          ? [{ row, normalizedContent: row.content.toLocaleLowerCase() }]
+          ? [{
+              row,
+              normalizedContent: normalizeDialogueSearchText(row.content),
+            }]
           : [],
       );
     },

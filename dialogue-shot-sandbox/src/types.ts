@@ -723,6 +723,7 @@ export interface DialogueCameraQuickActionRequest {
   dialogueNodeId: string;
   previousDialogueNodeIds?: string[];
   blendCurveAssetName?: string;
+  blendDuration?: number;
   schoolCameraCopies?: DialogueSchoolCameraCopy[];
   presetCamera?: {
     modelIndex: number;
@@ -821,6 +822,9 @@ export interface ExistingDialogueNodeConfiguration {
   cameraPosition: string;
   moveCameraCount: number;
   cameraMoveTypes: string[];
+  cameraRelative?: boolean | null;
+  cameraVelocity?: number | null;
+  cameraBlendOutTime?: number | null;
   fov: number | null;
   blendCameraType: string;
   blendCurve: string;

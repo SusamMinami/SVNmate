@@ -4,13 +4,13 @@ import { join } from "node:path";
 import { z } from "zod";
 import {
   SequencePatchSchema, SequencePathSchema, sequencePatchProblems,
-  type SequenceSnapshot, type SequenceReview,
+  type SequenceSnapshot, type SequenceReview, type SubtitleDraft,
 } from "../src/animationVoice";
 import { readAnimationVoiceRows } from "./configRepository";
 import { getUnrealMcpEndpoint, UnrealMcpConnection, type UnrealInvoker } from "./ue/transport";
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
-const reviews = new Map<string, { review: SequenceReview; expires: number; endpoint: string }>();
+const reviews = new Map<string, { review: SequenceReview; expires: number; endpoint: string; voiceProof: string }>();
 let busy = false;
 
 async function exclusive<T>(work: () => Promise<T>): Promise<T> {
@@ -167,16 +167,34 @@ export async function scanAnimationSequence(raw: unknown) {
   return exclusive(() => connected((c) => scan(c, assetPath)));
 }
 
+export function validateSpeechVoices(subtitles: SubtitleDraft[], voices: Array<{ id: number; text: string; name: string }>) {
+  const verified = subtitles.filter((s) => s.speechText).map((draft) => {
+    const matches = voices.filter((voice) => voice.id === draft.dialogueId);
+    if (matches.length !== 1 || !matches[0].text.trim()) throw new Error(`配音 ID ${draft.dialogueId} 不存在、重复或没有正式台词，请先完善配音表`);
+    return { id: draft.dialogueId, text: matches[0].text, name: matches[0].name, speechText: draft.speechText };
+  });
+  return {
+    proof: hash(verified),
+    changes: verified.map((v) => `配音 ${v.id} / ${v.name}：正式台词「${v.text}」；语音草稿「${v.speechText}」`),
+  };
+}
+
+async function speechVoiceProof(subtitles: SubtitleDraft[]) {
+  return validateSpeechVoices(subtitles, subtitles.some((s) => s.speechText) ? await readAnimationVoiceRows() : []);
+}
+
 export async function reviewAnimationSequence(raw: unknown): Promise<SequenceReview> {
   const patch = SequencePatchSchema.parse(raw);
   return exclusive(() => connected(async (c) => {
     const snapshot = await scan(c, patch.assetPath);
     const problems = sequencePatchProblems(snapshot, patch);
     if (problems.length) throw new Error(problems.join("\n"));
+    const voiceReview = await speechVoiceProof(patch.subtitles);
     const changes = patch.subtitles.map((s) => {
       const old = snapshot.tracks.flatMap((t) => t.sections).find((section) => section.path === s.sectionPath);
       return `${old ? `修改字幕 ${old.dialogueId}（${old.start?.toFixed(3)}–${old.end?.toFixed(3)}s）` : "新增字幕"} → ${s.dialogueId} / ${s.start.toFixed(3)}–${s.end.toFixed(3)}s`;
     });
+    changes.push(...voiceReview.changes);
     if (patch.skipTime !== null) changes.push(`skip 标记：${snapshot.marks.find((m) => m.label === "skip")?.seconds.toFixed(3) ?? "未配置"} → ${patch.skipTime.toFixed(3)}s`);
     if (patch.eventTimes) for (const role of ["show", "hide"] as const) changes.push(
       `${role === "show" ? "显示" : "隐藏"}跳过按钮：${snapshot.events.find((e) => e.role === role)?.seconds.toFixed(3)} → ${patch.eventTimes[role].toFixed(3)}s（保留端点）`);
@@ -184,7 +202,7 @@ export async function reviewAnimationSequence(raw: unknown): Promise<SequenceRev
     const review = { token, patch, changes };
     for (const [key, value] of reviews) if (value.expires < Date.now()) reviews.delete(key);
     if (reviews.size >= 100) reviews.delete(reviews.keys().next().value!);
-    reviews.set(token, { review, expires: Date.now() + 10 * 60_000, endpoint: JSON.stringify(getUnrealMcpEndpoint()) });
+    reviews.set(token, { review, expires: Date.now() + 10 * 60_000, endpoint: JSON.stringify(getUnrealMcpEndpoint()), voiceProof: voiceReview.proof });
     return review;
   }));
 }
@@ -201,6 +219,7 @@ export async function applyAnimationSequence(raw: unknown) {
     const before = await scan(c, patch.assetPath);
     const problems = sequencePatchProblems(before, patch);
     if (problems.length) throw new Error(problems.join("\n"));
+    if ((await speechVoiceProof(patch.subtitles)).proof !== stored.voiceProof) throw new Error("配音表台词已变化，请重新审核");
     const eventTargets = patch.eventTimes ? (["show", "hide"] as const).map((role) => ({
       ...before.events.find((e) => e.role === role)!, seconds: patch.eventTimes![role],
     })) : [];

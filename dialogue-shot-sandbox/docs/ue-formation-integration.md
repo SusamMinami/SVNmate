@@ -2,8 +2,8 @@
 
 > 文档状态：现行专题规范
 >
-> 最近核对：2026-09-09，对应镜头沙盘 `0.24.4`。本文描述已实现的 BP 读取、
-> 占位选择、身份映射、动作回读和导出联动；末尾“后续阶段”仍是待办。
+> 加载触发与坐标按 2026-09-11 工作区实现核对。本文维护 BP 读取、身份、体型
+> 和坐标；交互编排归 [分镜工作流](storyboard-workflow.md)，末尾仍是待办。
 
 ## 当前范围
 
@@ -12,38 +12,19 @@ Blueprint 站位查询本身只读。用户确认基于 BP 站位生成的分镜
 保存对话 `.uasset`。该集成只面向 Windows 桌面版，不提供移动端运行或测试
 目标。
 
-用户加载真实配置中的四位数对话 ID 后，程序会：
+四位对话 ID 仅加载本地对话链与文字，不连接 UE。用户点击“读取 BP 站位”后才执行：
 
-1. 根据开始节点定位完整对话链。
-2. 立即显示对白文字，不启动任何导演。
-3. 优先读取 `DialogStart.Formation` 指定的 Blueprint。
-4. 当 Formation 为空时，通过 UE Asset Registry 搜索
+1. 优先读取 `DialogStart.Formation` 指定的 Blueprint。
+2. 当 Formation 为空时，通过 UE Asset Registry 搜索
    `BP_<开始节点ID>`。
-5. 读取 Blueprint SCS 中数字命名的 `ChildActorComponent`。
-6. 读取对话资产实际保存的 `DialogModels`，与 BP 数字槽共同确定场内角色；
+3. 读取 Blueprint SCS 中数字命名的 `ChildActorComponent`。
+4. 读取对话资产实际保存的 `DialogModels`，与 BP 数字槽共同确定场内角色；
    CSV `DialogStart.Model` 仅作为离线回退。
-7. 读取 Dialog Graph 中已有的 `CameraPosition` 与 `MoveCameras`；可识别的
+5. 读取 Dialog Graph 中已有的 `CameraPosition` 与 `MoveCameras`；可识别的
    `EPush` 直接转换为沙盘镜头，没有相机时保持纯文字状态。
-8. 只有用户明确点击导演入口后，才展示 BP 与规则站位选项；选择 BP 时可勾选
-   是否固定 0 号玩家位置，默认仅解锁 0 号位。
-9. 用户确认站位后，才运行规则导演、端侧顾问、TRAE 或 Mira。
 
-只有对白、尚未生成分镜时，右侧检查器仍按当前对白节点开放导演、镜头、音频和
-UE 页签。镜头与导演页显示未生成状态；音频和角色动作继续按节点工作，并可独立
-导出。对白列表本身可点击切换当前节点，三个导演入口在用户主动启动前均保持
-未选择状态。
-
-完成首次选择后，工作台保留 BP、规则导演以及随后完成的 AI 占位方案。左侧状态
-只显示 `BP_xxxx00` 等简短方案名，点击切换按钮可重新打开对比并直接载入已有
-方案，不重复读取 UE 或调用 AI。
-
-BP 查询期间会立即显示新对话的梗概、角色和完整台词；查询完成后只显示纯文字
-或 UE 已有镜头，不会先把规则分镜写入主画布。当前对话 ID 未改变时，从规则
-导演切换到 TRAE 协作会复用当前对话和已选站位
-而不重新读取 Blueprint，但会在提交前先让用户选择“BP 占位”或“TRAE 自主
-占位”。选择 BP 时可同时决定是否固定 0 号玩家；未固定时，其他 BP 角色保持
-原位，仅 0 号玩家按导演的 `blocking.position` 调整。确认策略后只发起一次
-AI 分析，完成后直接应用对应方案，不再进行第二轮占位重算。
+只读加载不调用导演或模型。占位确认、玩家锁定、方案切换和 TRAE 缓存规则统一见
+[分镜工作流](storyboard-workflow.md)，无分镜节点编辑见 [节点配置](node-configuration.md)。
 
 Blueprint 不存在、UE 未启动、OmniMcpCore 未连接、桥接异常或单步查询超时时，
 程序不会中断对白加载，也不会因此自动执行导演。BP 不可用时仍会继续尝试读取
@@ -120,13 +101,10 @@ CSV 解析器已经保留：
 起止坐标换算沙盘位移，并让角色面向移动方向。UE 回读仅补充 CSV 中不存在的
 动作，避免同一动作重复应用。
 
-任务目标物工作区在检查已有 BP 时可附带对话文件 ID。系统沿完整 `NextID`
-链读取所有节点（包括关闭 UI 和无对白节点），先应用每个节点的
-`RelativeTransformsString`，再按顺序执行该节点动作，得到每个数字模型槽在
-对话结束时的局部 Transform。最终结果通过对话根 Transform 转为关卡世界坐标，
-并以“BP 原位 → 对话最终站位”的俯视图和逐槽统计展示。首次操作只计算预览，
-用户确认后再加载到 UE；加载完成后自动选中发生变化的非玩家角色，供现有
-“注册 NPC”流程直接读取并写入目标物表。
+任务目标物的六位节点站位从完整 `NextID` 链累计到指定节点，包含隐藏节点；
+每节点先应用 `RelativeTransformsString` 再执行动作，不误算到整段对话末尾。
+四位 BP 简写不触发站位预览。世界坐标、确认和加载流程见
+[任务目标物](mission-target-preview.md)。
 
 ## 身份模型
 
@@ -168,12 +146,14 @@ UE 使用厘米和 `X 前 / Y 右 / Z 上`，Three.js 舞台使用米和
 
 ```text
 Three.x = UE.y / 100
-Three.y = 0
+Three.y = UE.z / 100
 Three.z = -UE.x / 100
 ```
 
-导入后以有效角色的中心点平移到沙盘原点，只改变预览坐标，不改变 UE 原始
-Transform。Yaw 被转换为角色朝向向量，镜头求解和正面偏角验收都使用该真实
+导入后仅按实际选入角色的水平中心平移 X/Z，保留垂直高度；记录
+`formationOrigin = [centerX, 0, centerZ]`。场景与导出复用此基准，不重新对全部
+原始槽求平均。只改变预览坐标，不改变 UE 原始 Transform。
+Yaw 被转换为角色朝向向量，镜头求解和正面偏角验收都使用该真实
 朝向，不再默认把 `look_target` 当成角色已经面向的位置。
 
 需要改变对话视线时，演员调度只从现有
@@ -187,8 +167,8 @@ Formation 模型槽；节点已有动作只读展示，本次动作按界面顺�
 `AM_Turn` 的新增项写为 `ERotate` 并按名称中的左右方向和角度更新沙盘朝向，
 其他新增项写为 `ENone`。每项包含 Montage 名和 `StartTime` 延迟；同一槽位
 原有 `EWalk`、`ERotate`、`EStateMachineWalk`、`bStop` 和位置数据不会被覆盖。
-新增动作初始不选择 Montage；输入名称或资源路径关键词后，从最多 8 条匹配结果
-中确认选择。未选 Montage 的空白编辑行不参与导出。右下角统一导出入口先展示
+新增动作初始不选择 Montage；输入名称或资源路径关键词后连续滚动全部匹配结果，
+同时只渲染约 8 条。未选 Montage 的空白编辑行不参与导出。右下角统一导出入口先展示
 本地待导出清单，用户确认范围后才连接 UE；只勾选动作时仅检查涉及的节点和
 角色槽，跳过相机、音效、音乐以及其他角色槽读取。UE 预检同时显示 NPC 名称，
 未映射 NPC 时显示 `DialogModels` 模型名。
@@ -202,42 +182,19 @@ POST /api/ue/formation/read
 POST /api/ue/dialogue/storyboard/read
 ```
 
-Electron 主进程中的 UE 传输服务默认通过 `127.0.0.1:12031` 连接项目现有的
-`OmniMcpCore`。`12031` 是当前插件约定的默认端口，不是 TRAE 的分镜 MCP
-端口。首次启动页会直接调用 OmniMcpCore 验证连接；若同事的插件配置不同，
-可在该页面修改端口并保存。
+UE 服务通过现有 `server/ue/transport.ts` 连接 OmniMcpCore；默认端口、配置位置
+与进程区别见 [开发指南](development.md)。BP 查询使用：
 
 - `asset.asset_search`
 - `bp.get_blueprint_by_path`
 - `reflect.read_object_property`
-- `reflect.write_object_property`
 
-通信默认仅限本机。源码运行时仍可通过 `UE_MCP_HOST` 和 `UE_MCP_PORT`
-覆盖；桌面版会把用户确认的端口保存到
-`%APPDATA%\Shot Sandbox\desktop-state.json`。不要让 TRAE 扫描 UE 端口，
-因为 TRAE 使用的是独立的 `127.0.0.1:43127/mcp`。
-
-配置小窗的轻量选择监听以 1.2 秒节奏运行。当前旧版 Seria 接口只返回局部值时，
-沙盒最多每 4.8 秒通过节点数据精确回读一次六位 ID；轻量调用已经变慢时延后
-精确反射，避免在保存、自动保存或序列化繁忙期提高冲突概率。若后续 UE 接口
-直接返回六位节点 ID，则只使用轻量结果。
-
-基础站位查询是只读操作；任务目标物预览、BP 填充、DialogGraph 注册和配表
-草稿属于显式写操作，均由各自界面中的确认步骤触发。已注册 BP 还支持目标物
-与数字角色槽的双向 Transform 同步，以及把 UE 当前选择写入非数字背景组件。
-背景组件不进入 DialogModels；Blueprint Actor、Skeletal Mesh 和 Static Mesh
-分别写为 ChildActor、SkeletalMesh 和 StaticMesh 组件，并保留缩放。
-任务目标物与已有数字槽位 BP 同时加载时，原槽位固定保留；只有未映射且经用户
-勾选的实际模型目标物会从当前最大槽位号后连续追加，随后所有数字槽位共同注册
-到 DialogModels。对话缺失空间配置时，写入流程会先启用并回读 Virtual，再写入
-主角初始坐标、朝向和预览地图。
+小窗轮询节奏归 [节点配置](node-configuration.md)。BP 查询不得调用属性写入；
+目标物预览、BP 填充、DialogGraph 注册和配表是独立的显式操作，按各自专题确认。
 普通 UE MCP 调用的单步响应上限为 20 秒；自动打开地图属于长操作，单独允许
 最长 3 分钟。切图期间连接关闭或暂时无法回读关卡时，界面会提示继续等待，并
 允许地图加载完成后使用“检查并加载”继续目标物预览。
-分镜导出同样先回读并展示逐节点差异。默认只预检当前激活镜头；切换“全部导出”
-后可逐镜头勾选范围。确认后只更新所选镜头对应节点的 `CameraPosition` 与
-`MoveCameras`，以及用户在动作编辑器中明确修改并勾选的
-`CharacterBehaviours` 槽位；未选镜头、节点和角色动作保持原状。
+分镜及动作写入、回读与保存归 [导出协议](dialogue-camera-export-design.md)。
 
 ## 主要代码
 

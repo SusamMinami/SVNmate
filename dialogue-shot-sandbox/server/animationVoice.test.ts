@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { attachSequenceEndpoints } from "./animationVoice";
+import { attachSequenceEndpoints, validateSpeechVoices } from "./animationVoice";
 import type { SequenceSnapshot } from "../src/animationVoice";
 
 function snapshot(): SequenceSnapshot {
@@ -55,5 +55,25 @@ describe("attachSequenceEndpoints", () => {
     const source = snapshot(); attachSequenceEndpoints(source, 'Begin Object Name="LS_Test"\nEnd Object');
     expect(source.skipBlockedReasons[0]).toContain("缺少 Director Blueprint");
     expect(source.events).toHaveLength(1);
+  });
+});
+
+describe("validateSpeechVoices", () => {
+  const draft = { dialogueId: 123, start: 1, end: 2, speechText: "识别台词" };
+  const voice = { id: 123, name: "角色", text: "正式台词" };
+  it("includes both recognized and official text in the review", () => {
+    const result = validateSpeechVoices([draft], [voice]);
+    expect(result.changes[0]).toContain("正式台词「正式台词」");
+    expect(result.changes[0]).toContain("语音草稿「识别台词」");
+  });
+  it.each([{ voices: [] }, { voices: [voice, voice] }, { voices: [{ ...voice, text: "" }] }])("refuses unresolved IDs: %j", ({ voices }) => {
+    expect(() => validateSpeechVoices([draft], voices)).toThrow("不存在、重复或没有正式台词");
+  });
+  it("changes the review fingerprint when official text changes", () => {
+    expect(validateSpeechVoices([draft], [voice]).proof).not.toBe(
+      validateSpeechVoices([draft], [{ ...voice, text: "新版台词" }]).proof);
+  });
+  it("does not make ordinary non-speech timing edits depend on the voice table", () => {
+    expect(validateSpeechVoices([{ dialogueId: 123, start: 1, end: 2 }], []).changes).toEqual([]);
   });
 });

@@ -62,6 +62,33 @@ describe("findDialogueSequence", () => {
     ]);
   });
 
+  it("searches across punctuation, spacing, full-width text and rich tags", () => {
+    const database = parseDialogueDatabase(
+      [
+        "##&Dialog.id,Dialog.NPCID,Dialog.Content,Dialog.NextID,Dialog.End",
+        "##对话ID,人物,内容,下一ID,结束",
+        '735000,,,735001,false',
+        '735001,1,"你好，<red>冒险家</>！\\n准备好了吗？",,true',
+      ].join("\n"),
+      [
+        "##&DialogStart.id,DialogStart.Outline",
+        "##对话ID,剧情梗概",
+        "735000,搜索归一化",
+      ].join("\n"),
+      [
+        "##&NPC.id,NPC.name,NPC.npcintroduce",
+        "##id,NPC名字,NPC介绍",
+        "1,玩家,由玩家控制的冒险者",
+      ].join("\n"),
+      "test",
+    );
+
+    expect(searchDialogueContent(database, "你好 冒险家").totalMatchCount)
+      .toBe(1);
+    expect(searchDialogueContent(database, "冒险家准备好了吗").totalMatchCount)
+      .toBe(1);
+  });
+
   it("keeps every speaker in a multi-character dialogue", () => {
     const result = findDialogueSequence(demoDatabase, "3099");
 

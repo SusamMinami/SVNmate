@@ -7,12 +7,13 @@ export interface SpeechSession {
   sectionPath: string; media: SpeechMediaChoice[]; mediaId: string; audio?: SpeechAudio;
   mode: "align" | "asr"; cropStart: string; cropEnd: string; origin: string; confirmed: boolean;
   reference: Array<{ key: string; dialogueId?: number; text: string; selected: boolean }>;
-  job?: SpeechJob; submittedRows?: string; adopted: boolean;
+  job?: SpeechJob; submittedRows?: string;
+  adoptedKeys: Record<string, boolean>; targetKeys: string[]; auditioned: Record<string, boolean>;
   error: string; loading: boolean; chosen: Record<string, boolean>;
 }
 const initial = (): SpeechSession => ({
   sectionPath: "", media: [], mediaId: "", mode: "align", cropStart: "0", cropEnd: "", origin: "",
-  confirmed: false, reference: [], error: "", loading: false, adopted: false, chosen: {},
+  confirmed: false, reference: [], error: "", loading: false, adoptedKeys: {}, targetKeys: [], auditioned: {}, chosen: {},
 });
 
 export function useAnimationSpeech(snapshot: SequenceSnapshot | undefined, rows: SubtitleRow[], active: boolean) {
@@ -26,7 +27,7 @@ export function useAnimationSpeech(snapshot: SequenceSnapshot | undefined, rows:
     if (alive.current) setSessions((old) => ({ ...old, [target]: { ...(old[target] ?? initial()), ...patch } }));
   }
   function edit(patch: Partial<SpeechSession>) {
-    update({ ...patch, job: undefined, adopted: false, error: "", chosen: {} });
+    update({ ...patch, job: undefined, adoptedKeys: {}, targetKeys: [], auditioned: {}, error: "", chosen: {} });
   }
   async function check() {
     update({ loading: true, error: "" });
@@ -67,7 +68,7 @@ export function useAnimationSpeech(snapshot: SequenceSnapshot | undefined, rows:
   }
   async function start() {
     if (!snapshot || !session.audio) return;
-    update({ loading: true, error: "", job: undefined, adopted: false });
+    update({ loading: true, error: "", job: undefined, adoptedKeys: {}, targetKeys: [], auditioned: {} });
     try {
       if (!session.confirmed) throw new Error("请确认音频与动画时间映射");
       if (!session.cropStart.trim() || !session.cropEnd.trim() || !session.origin.trim()) throw new Error("请填写裁剪范围及时间映射");
@@ -114,15 +115,15 @@ export function useAnimationSpeech(snapshot: SequenceSnapshot | undefined, rows:
     catch (e) { update({ error: String(e) }); }
     finally { update({ loading: false }); }
   }
-  function adoptedRows(): SubtitleRow[] {
+  function adoptedRows() {
     if (!snapshot || !session.audio || !session.job?.result) throw new Error("没有可采用的语音结果");
     if (session.audio.revision !== snapshot.revision || session.submittedRows !== JSON.stringify(rows)) {
       throw new Error("动画或字幕草稿已变化，请重新识别/对齐，避免覆盖较新的编辑");
     }
-    const chosen = session.job.result.lines.filter((line) => session.chosen[line.key]);
+    const chosen = session.job.result.lines.filter((line) => session.chosen[line.key] && !session.adoptedKeys[line.key]);
     if (!chosen.length) throw new Error("请先勾选要采用的语音结果");
     const next = rows.map((row) => ({ ...row }));
-    const used = new Set<string>();
+    const used = new Set(session.targetKeys);
     for (const line of chosen) {
       if (!(line.end > line.start && line.start >= snapshot.start && line.end <= snapshot.end)) throw new Error("结果时间无效或超出动画范围，请重新裁剪/对齐");
       let target: SubtitleRow | undefined;
@@ -144,7 +145,10 @@ export function useAnimationSpeech(snapshot: SequenceSnapshot | undefined, rows:
       Object.assign(target, { start: line.start.toFixed(3), end: line.end.toFixed(3), selected: true,
         speechText: line.text, timeSource: session.job.result.mode === "align" ? "强制对齐" : "语音识别" });
     }
-    return next;
+    return {
+      rows: next, targetKeys: [...used],
+      adoptedKeys: { ...session.adoptedKeys, ...Object.fromEntries(chosen.map((line) => [line.key, true])) },
+    };
   }
   return { session, status, update, edit, check, loadMedia, prepareAudio, start, cancel, adoptedRows };
 }

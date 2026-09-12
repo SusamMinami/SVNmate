@@ -104,6 +104,8 @@ const SCHOOL_CAMERA_ROLES = [
 
 const SCHOOL_CAMERA_DRAG_TYPE =
   "application/x-shot-sandbox-school-camera";
+const DIALOGUE_BLEND_CURVE_DIRECTORY =
+  "/Game/Seria/Task/Mod/MainQuest/DialogCurve";
 
 function schoolCameraRoleLabel(role: DialogueSchoolCameraRole): string {
   return SCHOOL_CAMERA_ROLES.find(({ key }) => key === role)?.label ?? role;
@@ -197,6 +199,106 @@ function defaultCameraConfirmationPreview(
   };
 }
 
+function blendCurveConfirmationPreview(
+  request: DialogueCameraQuickActionRequest,
+  configuration: ExistingDialogueNodeConfiguration,
+): DialogueCameraQuickActionPreview {
+  const curveName = request.blendCurveAssetName ?? "trans_6015";
+  const desiredCurve =
+    `${DIALOGUE_BLEND_CURVE_DIRECTORY}/${curveName}.${curveName}`;
+  const duration = request.blendDuration ?? 0;
+  const existingKeys = Array.from(new Set(configuration.schoolCameraKeys));
+  return {
+    reviewToken: "",
+    dialogueId: request.dialogueId,
+    startId: request.startId,
+    dialogueNodeId: request.dialogueNodeId,
+    dialogueAssetPath: "",
+    mode: "blend_curve",
+    sourceDialogueNodeId: null,
+    existingCameraPosition: configuration.cameraPosition,
+    desiredCameraPosition: configuration.cameraPosition,
+    existingMoveCount: configuration.moveCameraCount,
+    desiredMoveCount: configuration.moveCameraCount,
+    cameraMoveType: configuration.cameraMoveTypes[0] ?? "",
+    velocity: configuration.cameraVelocity ?? null,
+    blendOutTime: configuration.cameraBlendOutTime ?? null,
+    fov: configuration.fov,
+    existingBlendCameraType: configuration.blendCameraType,
+    desiredBlendCameraType: "EBlend",
+    existingBlendCurve: configuration.blendCurve,
+    desiredBlendCurve: desiredCurve,
+    blendDuration: duration,
+    existingSchoolCameraKeys: existingKeys,
+    addedSchoolCameraKeys: [],
+    desiredSchoolCameraKeys: existingKeys,
+    schoolCameraCopies: [],
+    existingSchoolCameraCount: configuration.schoolCameraCount,
+    desiredSchoolCameraCount: configuration.schoolCameraCount,
+    changed:
+      configuration.blendCameraType !== "EBlend" ||
+      configuration.blendCurve !== desiredCurve ||
+      configuration.blendDuration !== duration,
+    blockedReasons: [],
+  };
+}
+
+function presetCameraConfirmationPreview(
+  request: DialogueCameraQuickActionRequest,
+  configuration: ExistingDialogueNodeConfiguration,
+  role: DialogueCameraPresetSnapshot["roles"][number],
+  camera: DialogueCameraPresetSnapshot["roles"][number]["cameras"][number],
+): DialogueCameraQuickActionPreview {
+  const existingKeys = Array.from(new Set(configuration.schoolCameraKeys));
+  const existingMoveType = configuration.cameraMoveTypes[0] ?? "";
+  const relative = configuration.cameraRelative !== false;
+  const blockedReasons = [
+    ...(configuration.moveCameraCount > 1
+      ? ["当前节点包含多段运镜，不能用单个预设覆盖"]
+      : []),
+    ...(configuration.moveCameraCount === 1 &&
+    existingMoveType !== "EPush"
+      ? ["当前运镜不是 EPush，请保留原配置或先在 UE 中转换"]
+      : []),
+  ];
+  return {
+    reviewToken: "",
+    dialogueId: request.dialogueId,
+    startId: request.startId,
+    dialogueNodeId: request.dialogueNodeId,
+    dialogueAssetPath: "",
+    mode: "preset_camera",
+    sourceDialogueNodeId: null,
+    existingCameraPosition: configuration.cameraPosition,
+    desiredCameraPosition: configuration.cameraPosition || "c1",
+    existingMoveCount: configuration.moveCameraCount,
+    desiredMoveCount: 1,
+    cameraMoveType: existingMoveType || "EPush",
+    velocity: configuration.cameraVelocity ?? 1,
+    blendOutTime: configuration.cameraBlendOutTime ?? 1,
+    fov: configuration.fov ?? 62,
+    existingBlendCameraType: configuration.blendCameraType,
+    desiredBlendCameraType: configuration.blendCameraType,
+    existingBlendCurve: configuration.blendCurve,
+    desiredBlendCurve: configuration.blendCurve,
+    blendDuration: configuration.blendDuration,
+    existingSchoolCameraKeys: existingKeys,
+    addedSchoolCameraKeys: [],
+    desiredSchoolCameraKeys: existingKeys,
+    schoolCameraCopies: [],
+    existingSchoolCameraCount: configuration.schoolCameraCount,
+    desiredSchoolCameraCount: configuration.schoolCameraCount,
+    changed: blockedReasons.length === 0,
+    blockedReasons,
+    presetCamera: {
+      roleLabel: `${role.modelIndex} · ${role.label}`,
+      cameraName: camera.name,
+      pose: relative ? camera.local : camera.world,
+      relative,
+    },
+  };
+}
+
 function schoolCameraCopyDraftPreview(
   request: DialogueCameraQuickActionRequest,
   configuration: ExistingDialogueNodeConfiguration,
@@ -272,6 +374,7 @@ export const NodeCameraQuickActions = forwardRef<
   const [status, setStatus] = useState("");
   const [blendCurveAssetName, setBlendCurveAssetName] =
     useState("trans_6015");
+  const [blendDuration, setBlendDuration] = useState(0);
   const [
     selectedSchoolCameraSource,
     setSelectedSchoolCameraSource,
@@ -314,7 +417,7 @@ export const NodeCameraQuickActions = forwardRef<
         existingConfiguration?.blendCurve
           ? assetName(existingConfiguration.blendCurve)
           : "",
-        existingConfiguration?.blendDuration
+        existingConfiguration?.blendDuration !== undefined
           ? `${existingConfiguration.blendDuration}s`
           : "",
       ]
@@ -349,6 +452,7 @@ export const NodeCameraQuickActions = forwardRef<
     setBusy(null);
     setError("");
     setStatus("");
+    setBlendDuration(0);
     setSelectedSchoolCameraSource(null);
     setDraggedSchoolCameraSource(null);
     setSchoolCameraDropTarget(null);
@@ -383,29 +487,28 @@ export const NodeCameraQuickActions = forwardRef<
     }
   }
 
-  async function selectPreset(cameraName: string) {
+  function selectPreset(cameraName: string): void {
     const role = presets?.roles.find((item) => String(item.modelIndex) === presetRole);
     const camera = role?.cameras.find((item) => item.name === cameraName);
-    if (!presets || !role || !camera) return;
-    const run = ++operationRunRef.current;
+    if (!presets || !role || !camera || !existingConfiguration) return;
+    operationRunRef.current += 1;
     const nextRequest: DialogueCameraQuickActionRequest = {
       dialogueId, startId, dialogueNodeId, mode: "preset_camera",
       presetCamera: { modelIndex: role.modelIndex, cameraName, fingerprint: presets.fingerprint },
     };
     setPresetName(cameraName);
     setRequest(nextRequest);
-    setPreview(null);
-    setBusy("inspect");
+    setPreview(
+      presetCameraConfirmationPreview(
+        nextRequest,
+        existingConfiguration,
+        role,
+        camera,
+      ),
+    );
+    setBusy(null);
     setError("");
     setStatus("");
-    try {
-      const nextPreview = await inspectDialogueCameraQuickAction(nextRequest);
-      if (run === operationRunRef.current) setPreview(nextPreview);
-    } catch (reason) {
-      if (run === operationRunRef.current) setError(reason instanceof Error ? reason.message : "无法检查预设机位");
-    } finally {
-      if (run === operationRunRef.current) setBusy(null);
-    }
   }
 
   useEffect(() => {
@@ -453,7 +556,10 @@ export const NodeCameraQuickActions = forwardRef<
         ? { previousDialogueNodeIds }
         : {}),
       ...(mode === "blend_curve"
-        ? { blendCurveAssetName: blendCurveAssetName.trim() }
+        ? {
+            blendCurveAssetName: blendCurveAssetName.trim(),
+            blendDuration,
+          }
         : {}),
       mode,
     };
@@ -474,6 +580,14 @@ export const NodeCameraQuickActions = forwardRef<
       setPreview(
         defaultCameraConfirmationPreview(nextRequest, existingConfiguration),
       );
+      return;
+    }
+    if (mode === "blend_curve" && existingConfiguration) {
+      setRequest(nextRequest);
+      setPreview(
+        blendCurveConfirmationPreview(nextRequest, existingConfiguration),
+      );
+      setBusy(null);
       return;
     }
     setBusy("inspect");
@@ -502,13 +616,34 @@ export const NodeCameraQuickActions = forwardRef<
     }
   }
 
-  async function inspectSchoolCameraCopies(
+  function updateBlendDuration(nextDuration: number): void {
+    const duration = Math.min(3600, Math.max(0, nextDuration || 0));
+    setBlendDuration(duration);
+    if (
+      request?.mode !== "blend_curve" ||
+      !existingConfiguration
+    ) {
+      return;
+    }
+    const nextRequest = {
+      ...request,
+      blendDuration: duration,
+    };
+    setRequest(nextRequest);
+    setPreview(
+      blendCurveConfirmationPreview(nextRequest, existingConfiguration),
+    );
+    setError("");
+    setStatus("");
+  }
+
+  function stageSchoolCameraCopies(
     copies: DialogueSchoolCameraCopy[],
-  ) {
+  ): void {
     if (!existingConfiguration || copies.length === 0) {
       return;
     }
-    const operationRun = ++operationRunRef.current;
+    operationRunRef.current += 1;
     const nextRequest: DialogueCameraQuickActionRequest = {
       dialogueId,
       startId,
@@ -522,33 +657,9 @@ export const NodeCameraQuickActions = forwardRef<
     );
     setRequest(nextRequest);
     setPreview(draftPreview);
-    setBusy("inspect");
+    setBusy(null);
     setError("");
     setStatus("");
-    try {
-      const nextPreview =
-        await inspectDialogueCameraQuickAction(nextRequest);
-      if (operationRun === operationRunRef.current) {
-        setPreview(nextPreview);
-      }
-    } catch (inspectError) {
-      if (operationRun !== operationRunRef.current) {
-        return;
-      }
-      const message =
-        inspectError instanceof Error
-          ? inspectError.message
-          : "无法检查角色相机复制";
-      setPreview({
-        ...draftPreview,
-        changed: false,
-        blockedReasons: [message],
-      });
-    } finally {
-      if (operationRun === operationRunRef.current) {
-        setBusy(null);
-      }
-    }
   }
 
   function stageSchoolCameraCopy(
@@ -573,7 +684,7 @@ export const NodeCameraQuickActions = forwardRef<
     setSelectedSchoolCameraSource(null);
     setDraggedSchoolCameraSource(null);
     setSchoolCameraDropTarget(null);
-    void inspectSchoolCameraCopies(nextCopies);
+    stageSchoolCameraCopies(nextCopies);
   }
 
   function removeSchoolCameraCopy(targetRole: DialogueSchoolCameraRole) {
@@ -587,7 +698,7 @@ export const NodeCameraQuickActions = forwardRef<
     setDraggedSchoolCameraSource(null);
     setSchoolCameraDropTarget(null);
     if (nextCopies.length > 0) {
-      void inspectSchoolCameraCopies(nextCopies);
+      stageSchoolCameraCopies(nextCopies);
       return;
     }
     operationRunRef.current += 1;
@@ -714,8 +825,25 @@ export const NodeCameraQuickActions = forwardRef<
           disabled={busy !== null}
           maxLength={128}
           onChange={(event) => {
-            setBlendCurveAssetName(event.target.value);
-            if (request?.mode === "blend_curve") {
+            const value = event.target.value;
+            setBlendCurveAssetName(value);
+            if (
+              request?.mode === "blend_curve" &&
+              existingConfiguration &&
+              /^[A-Za-z0-9_]+$/.test(value.trim())
+            ) {
+              const nextRequest = {
+                ...request,
+                blendCurveAssetName: value.trim(),
+              };
+              setRequest(nextRequest);
+              setPreview(
+                blendCurveConfirmationPreview(
+                  nextRequest,
+                  existingConfiguration,
+                ),
+              );
+            } else if (request?.mode === "blend_curve") {
               clear();
             }
           }}
@@ -775,7 +903,6 @@ export const NodeCameraQuickActions = forwardRef<
             }
             setPresetOpen(true);
             void inspect("default");
-            void loadPresets();
           }}
         >
           <Camera size={16} />
@@ -823,7 +950,7 @@ export const NodeCameraQuickActions = forwardRef<
                   disabled={!presetRole || presetLoading || busy !== null}
                   onChange={(event) => {
                     const value = event.target.value;
-                    if (value) void selectPreset(value);
+                    if (value) selectPreset(value);
                     else {
                       setPresetName("");
                       setPreview(null);
@@ -839,8 +966,12 @@ export const NodeCameraQuickActions = forwardRef<
               <button
                 className="icon-button"
                 type="button"
-                aria-label="重新读取预设机位"
-                title="重新读取当前 UE 预览机位"
+                aria-label={presets ? "重新读取预设机位" : "读取预设机位"}
+                title={
+                  presets
+                    ? "重新读取当前 UE 预览机位"
+                    : "读取当前 UE 预览机位"
+                }
                 disabled={presetLoading || busy !== null}
                 onClick={() => void loadPresets()}
               >
@@ -848,6 +979,9 @@ export const NodeCameraQuickActions = forwardRef<
               </button>
             </div>
             {presetLoading && <p role="status">正在读取预览角色机位...</p>}
+            {!presetLoading && !presets && !presetError && (
+              <p>如需使用预设机位，请点击右侧刷新读取当前 UE。</p>
+            )}
             {presetError && <p role="alert" className="node-camera-review__warning">{presetError}</p>}
           </div>
         )}
@@ -857,8 +991,17 @@ export const NodeCameraQuickActions = forwardRef<
             request?.mode === "blend_curve" ? "is-selected" : "",
           ].filter(Boolean).join(" ")}
           type="button"
-          disabled={busy !== null || !blendCurveAssetName.trim()}
-          title="设置 DialogBlendCameraData 为 EBlend 并写入指定 CurveFloat"
+          disabled={
+            busy !== null ||
+            configurationLoading ||
+            !existingConfiguration ||
+            !blendCurveAssetName.trim()
+          }
+          title={
+            configurationLoading || !existingConfiguration
+              ? "等待读取当前节点镜头配置"
+              : "设置 DialogBlendCameraData 为 EBlend 并写入指定 CurveFloat"
+          }
           onClick={() => void inspect("blend_curve")}
         >
           <GitMerge size={16} />
@@ -866,11 +1009,7 @@ export const NodeCameraQuickActions = forwardRef<
             <strong>添加镜头曲线</strong>
             <small>{blendSummary}</small>
           </span>
-          {busy === "inspect" && request?.mode === "blend_curve" ? (
-            <LoaderCircle className="spin" size={15} />
-          ) : (
-            <ChevronRight size={15} />
-          )}
+          <ChevronRight size={15} />
         </button>
         <button
           className={
@@ -932,16 +1071,26 @@ export const NodeCameraQuickActions = forwardRef<
             }`}
             aria-label="节点镜头写入确认"
           >
-            <button
-              className="icon-button node-camera-review__clear"
-              type="button"
-              title="取消当前镜头方案"
-              aria-label="取消当前镜头方案"
-              disabled={busy !== null}
-              onClick={clear}
-            >
-              <X size={13} />
-            </button>
+            {preview.mode !== "school_cameras" && (
+              <button
+                className="icon-button node-camera-review__clear"
+                type="button"
+                title={
+                  preview.mode === "copy_school_cameras"
+                    ? "取消角色相机覆盖"
+                    : "取消当前镜头方案"
+                }
+                aria-label={
+                  preview.mode === "copy_school_cameras"
+                    ? "取消角色相机覆盖"
+                    : "取消当前镜头方案"
+                }
+                disabled={busy !== null}
+                onClick={clear}
+              >
+                <X size={13} />
+              </button>
+            )}
             {preview.mode === "school_cameras" ||
             preview.mode === "copy_school_cameras" ? (
               <div
@@ -1116,9 +1265,13 @@ export const NodeCameraQuickActions = forwardRef<
                   <span>
                     <strong>{actionLabel(preview.mode)}</strong>
                     <small>
-                      {preview.changed
-                        ? "检测到参数变化"
-                        : "当前参数已经一致"}
+                      {preview.blockedReasons.length > 0
+                        ? preview.mode === "preset_camera"
+                          ? "无法应用此预设"
+                          : "无法应用当前方案"
+                        : preview.changed
+                          ? "检测到参数变化"
+                          : "当前参数已经一致"}
                     </small>
                   </span>
                 </header>
@@ -1204,7 +1357,29 @@ export const NodeCameraQuickActions = forwardRef<
                       </div>
                       <div>
                         <dt>Duration</dt>
-                        <dd>{preview.blendDuration}s · 保留当前值</dd>
+                        <dd className="node-camera-review__duration">
+                          <code>
+                            {existingConfiguration?.blendDuration ?? 0}s
+                          </code>
+                          <ChevronRight size={12} />
+                          <label>
+                            <input
+                              aria-label="镜头曲线 Duration"
+                              type="number"
+                              min={0}
+                              max={3600}
+                              step={0.1}
+                              value={blendDuration}
+                              disabled={busy !== null}
+                              onChange={(event) =>
+                                updateBlendDuration(
+                                  Number(event.target.value),
+                                )
+                              }
+                            />
+                            <span>s</span>
+                          </label>
+                        </dd>
                       </div>
                     </>
                   )}

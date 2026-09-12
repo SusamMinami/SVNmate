@@ -1,5 +1,5 @@
 import { AudioLines, ArrowDown, ArrowUp, Check, Download, Play, RefreshCw, Square } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { SequenceSnapshot } from "../animationVoice";
 import type { useAnimationSpeech } from "../app/useAnimationSpeech";
 
@@ -10,19 +10,30 @@ export function AnimationSpeechPanel({ speech, snapshot, disabled, active, onAdo
   const s = speech.session;
   const player = useRef<HTMLAudioElement>(null);
   const stopAt = useRef<number | undefined>(undefined);
+  const playbackKey = useRef<string | undefined>(undefined);
+  const [playing, setPlaying] = useState<string>();
   const running = s.job?.state === "running";
   const locked = disabled || s.loading || running;
   const sections = snapshot.tracks.flatMap((t) => t.sections).filter((section) => section.active && section.audioEvent?.startsWith("A_Voice_"));
   useEffect(() => {
     if (!active) player.current?.pause();
   }, [active]);
-  useEffect(() => { stopAt.current = undefined; player.current?.pause(); }, [s.audio?.token]);
-  async function play(start: number, end: number) {
+  const pending = s.job?.result?.lines.filter((line) => !s.adoptedKeys[line.key]) ?? [];
+  function stop() {
+    stopAt.current = undefined; playbackKey.current = undefined; setPlaying(undefined);
+  }
+  function completeAudition() {
+    if (playbackKey.current) speech.update({ auditioned: { ...s.auditioned, [playbackKey.current]: true } });
+    stop(); player.current?.pause();
+  }
+  useEffect(() => { stop(); player.current?.pause(); }, [s.audio?.token, s.job?.id]);
+  async function play(key: string, start: number, end: number) {
     if (!player.current) return;
     try {
       player.current.currentTime = start; stopAt.current = end;
+      playbackKey.current = key; setPlaying(key);
       await player.current.play();
-    } catch (e) { speech.update({ error: `试听失败：${String(e)}` }); }
+    } catch (e) { stop(); speech.update({ error: `试听失败：${String(e)}` }); }
   }
   function reorder(index: number, delta: number) {
     const reference = [...s.reference];
@@ -57,8 +68,9 @@ export function AnimationSpeechPanel({ speech, snapshot, disabled, active, onAdo
     {s.audio && <>
       <div className="animation-speech__audio">
         <audio ref={player} controls preload="metadata" src={s.audio.url} aria-label="源语音试听"
-          onTimeUpdate={() => { if (player.current && stopAt.current !== undefined && player.current.currentTime >= stopAt.current) { player.current.pause(); stopAt.current = undefined; } }}
-          onSeeked={() => { if (stopAt.current !== undefined && player.current && player.current.currentTime > stopAt.current) stopAt.current = undefined; }}
+          onTimeUpdate={() => { if (player.current && stopAt.current !== undefined && player.current.currentTime >= stopAt.current) completeAudition(); }}
+          onSeeked={() => { if (stopAt.current !== undefined && player.current && player.current.currentTime > stopAt.current) stop(); }}
+          onPause={stop} onEnded={completeAudition}
           onError={() => speech.update({ error: "音频加载失败，请重新提取语音" })} />
         <span>源音频 {s.audio.duration.toFixed(3)} 秒 · CN · 媒体 {s.audio.mediaId}</span>
       </div>
@@ -102,20 +114,23 @@ export function AnimationSpeechPanel({ speech, snapshot, disabled, active, onAdo
     {s.job?.result && <div className="animation-speech__result" aria-label="语音分析结果">
       {s.job.result.warnings.map((warning) => <p className="animation-voice__warning" key={warning}>{warning}</p>)}
       <table><thead><tr>
-        <th><input type="checkbox" aria-label="选择全部语音结果" disabled={disabled || s.adopted}
-          checked={s.job.result.lines.length > 0 && s.job.result.lines.every((line) => s.chosen[line.key])}
-          onChange={(e) => speech.update({ chosen: Object.fromEntries(s.job!.result!.lines.map((line) => [line.key, e.target.checked])) })} /></th>
+        <th><input type="checkbox" aria-label="选择全部语音结果" disabled={disabled || !pending.length}
+          checked={pending.length > 0 && pending.every((line) => s.chosen[line.key])}
+          onChange={(e) => speech.update({ chosen: Object.fromEntries(pending.map((line) => [line.key, e.target.checked])) })} /></th>
         <th>台词 / ID</th><th>动画起止 / 秒</th><th>复核</th><th />
       </tr></thead><tbody>{s.job.result.lines.map((line, index) => <tr key={line.key}>
-        <td><input type="checkbox" aria-label={`选择语音结果 ${index + 1}`} disabled={disabled || s.adopted} checked={s.chosen[line.key] || false}
+        <td><input type="checkbox" aria-label={`选择语音结果 ${index + 1}`} disabled={disabled || s.adoptedKeys[line.key]} checked={s.chosen[line.key] || Boolean(s.adoptedKeys[line.key])}
           onChange={(e) => speech.update({ chosen: { ...s.chosen, [line.key]: e.target.checked } })} /></td>
         <td><small>{line.dialogueId || "识别草稿 · 待关联配音 ID"}</small><span>{line.text}</span></td>
         <td>{line.start.toFixed(3)} – {line.end.toFixed(3)}</td>
-        <td className="animation-voice__warning">{line.warnings.join("；") || "待试听"}</td>
-        <td><button title="试听本句" aria-label={`试听语音结果 ${index + 1}`} onClick={() => void play(line.audioStart, line.audioEnd)}><Play size={14} /></button></td>
+        <td>
+          <span role="status">{playing === line.key ? "试听中" : s.auditioned[line.key] ? "已试听" : "待试听"}{s.adoptedKeys[line.key] ? " · 已采用" : ""}</span>
+          {line.warnings.length > 0 && <span className="animation-voice__warning">{line.warnings.join("；")}</span>}
+        </td>
+        <td><button title="试听本句" aria-label={`试听语音结果 ${index + 1}`} onClick={() => void play(line.key, line.audioStart, line.audioEnd)}><Play size={14} /></button></td>
       </tr>)}</tbody></table>
-      <button disabled={disabled || s.adopted || !Object.values(s.chosen).some(Boolean)} onClick={onAdopt}>
-        <Check size={14} />{s.adopted ? "已加入字幕草稿" : "采用所选时间到草稿"}
+      <button disabled={disabled || !pending.some((line) => s.chosen[line.key])} onClick={onAdopt}>
+        <Check size={14} />{pending.length ? "采用所选时间到草稿" : "已加入字幕草稿"}
       </button>
     </div>}
   </section>;

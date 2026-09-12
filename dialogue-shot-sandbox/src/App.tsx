@@ -4142,7 +4142,9 @@ export default function App() {
         setError("请输入四位数对话 ID，或输入对白文字");
         return;
       }
-      void applySearch(database, normalizedQuery).catch((searchError) => {
+      void applySearch(database, normalizedQuery, {
+        loadUeConfiguration: false,
+      }).catch((searchError) => {
         setError(
           searchError instanceof Error ? searchError.message : "查询失败",
         );
@@ -4151,20 +4153,39 @@ export default function App() {
       });
       return;
     }
-    try {
-      const result = searchDialogueContent(database, normalizedQuery);
+    void (async () => {
+      let searchDatabase = database;
+      let result = searchDialogueContent(searchDatabase, normalizedQuery);
+      if (
+        result.contexts.length === 0 &&
+        window.shotSandboxDesktop
+      ) {
+        setLoading(true);
+        try {
+          searchDatabase = await loadConfiguredDatabase();
+          setDatabase(searchDatabase);
+          result = searchDialogueContent(
+            searchDatabase,
+            normalizedQuery,
+          );
+        } finally {
+          setLoading(false);
+        }
+      }
       if (result.contexts.length === 0) {
         throw new Error(`没有找到包含“${normalizedQuery}”的对白`);
       }
+      setError("");
       setContentSearch(result);
       const firstContext = result.contexts[0];
       openContentSearchContext(
         firstContext,
         firstContext.matchedDialogueIds[0],
       );
-    } catch (searchError) {
+    })().catch((searchError) => {
       setError(searchError instanceof Error ? searchError.message : "查询失败");
-    }
+      setLoading(false);
+    });
   }
 
   function useDatabase(nextDatabase: DialogueDatabase) {
@@ -5238,12 +5259,12 @@ export default function App() {
                   type="submit"
                   title={
                     queryIsDialogueId
-                      ? "加载对话与已有配置"
+                      ? "加载对白内容"
                       : "搜索对白内容"
                   }
                   aria-label={
                     queryIsDialogueId
-                      ? "加载对话与已有配置"
+                      ? "加载对白内容"
                       : "搜索对白内容"
                   }
                   disabled={
@@ -5262,6 +5283,37 @@ export default function App() {
                 </button>
               </div>
             </form>
+            {sequence.prefix &&
+              !contentSearch &&
+              database.sourceName !== "内置演示数据" && (
+                <button
+                  className="button query-formation-button"
+                  type="button"
+                  title="按需读取当前对话的 Formation BP 站位与已有镜头"
+                  disabled={
+                    loading || directorLoading || formationChecking
+                  }
+                  onClick={() => {
+                    void applySearch(database, sequence.prefix, {
+                      loadUeConfiguration: true,
+                    }).catch((searchError) => {
+                      setError(
+                        searchError instanceof Error
+                          ? searchError.message
+                          : "读取 BP 站位失败",
+                      );
+                      setFormationChecking(false);
+                    });
+                  }}
+                >
+                  {formationChecking ? (
+                    <LoaderCircle className="spin" size={15} />
+                  ) : (
+                    <Boxes size={15} />
+                  )}
+                  {formationChecking ? "正在读取 BP" : "读取 BP 站位"}
+                </button>
+              )}
             {(formationStatus || formationChoice) && (
               <div
                 className={`formation-status formation-status--${activeFormationSource}`}

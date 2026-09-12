@@ -95,6 +95,7 @@
 .animation-voice__detail > .animation-voice__empty { flex: 1; }
 
 .animation-speech { border-bottom: 1px solid var(--border); padding-bottom: 12px; }
+.animation-speech .animation-voice__warning { color: #8a5612; }
 .animation-speech h3 { display: inline-flex; align-items: center; gap: 8px; }
 .animation-speech__status { color: var(--text-muted); font-size: 11px; overflow-wrap: anywhere; }
 .animation-speech__source { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; }

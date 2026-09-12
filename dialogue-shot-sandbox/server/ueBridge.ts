@@ -538,6 +538,7 @@ const DialogueCameraQuickActionRequestSchema = z.object({
     .regex(/^[A-Za-z0-9_]+$/)
     .max(128)
     .optional(),
+  blendDuration: z.number().finite().min(0).max(3600).optional(),
   schoolCameraCopies: DialogueSchoolCameraCopiesSchema.optional(),
   presetCamera: z.object({
     modelIndex: z.number().int().min(0).max(127),
@@ -2592,6 +2593,15 @@ async function existingNodeConfiguration(
       Boolean(move) && typeof move === "object" && !Array.isArray(move),
   );
   const firstFov = Number(moveRecords[0]?.FOV);
+  const firstPushValue = moveRecords[0]?.PushCameraArg;
+  const firstPush =
+    firstPushValue &&
+    typeof firstPushValue === "object" &&
+    !Array.isArray(firstPushValue)
+      ? firstPushValue as Record<string, unknown>
+      : {};
+  const firstVelocity = Number(firstPush.Velocity);
+  const firstBlendOutTime = Number(firstPush.BlendOutTime);
   const backgroundMusicStateId = Number(
     commonProperty(node, "BackgroundMusic")?.CurrentUint32,
   );
@@ -2606,6 +2616,16 @@ async function existingNodeConfiguration(
           .filter(Boolean),
       ),
     ),
+    cameraRelative:
+      typeof firstPush.bRelative === "boolean"
+        ? firstPush.bRelative
+        : null,
+    cameraVelocity: Number.isFinite(firstVelocity)
+      ? firstVelocity
+      : null,
+    cameraBlendOutTime: Number.isFinite(firstBlendOutTime)
+      ? firstBlendOutTime
+      : null,
     fov: Number.isFinite(firstFov) ? firstFov : null,
     blendCameraType: String(
       blend.DialogBlendCameraType ?? "",
@@ -4501,6 +4521,7 @@ async function prepareDialogueCameraQuickAction(
         connection,
         curveName,
       ),
+      Duration: request.blendDuration ?? 0,
     };
   } else if (
     request.mode === "school_cameras" ||
@@ -4764,7 +4785,10 @@ export async function applyDialogueCameraQuickAction(
     if (
       !reviewToken &&
       request.mode !== "school_cameras" &&
-      request.mode !== "default"
+      request.mode !== "copy_school_cameras" &&
+      request.mode !== "default" &&
+      request.mode !== "blend_curve" &&
+      request.mode !== "preset_camera"
     ) {
       throw new Error("镜头快捷操作缺少审核令牌，请重新检查后再写入");
     }

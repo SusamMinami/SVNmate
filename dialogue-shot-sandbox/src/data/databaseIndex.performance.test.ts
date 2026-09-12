@@ -25,7 +25,9 @@ describe("lazy dialogue search index", () => {
     expect(normalize).toHaveBeenCalledTimes(expected.length);
     expect(index.searchableDialogueRows).toBe(rows);
     expect(normalize).toHaveBeenCalledTimes(expected.length);
-    expect(rows[0].normalizedContent).toBe(expected[0].content.toLocaleLowerCase());
+    expect(rows[0].normalizedContent).toBe(
+      "钥匙失踪后封锁区的巡逻路线已经改变",
+    );
   });
 
   it("does not reuse a search index across replacement databases", () => {

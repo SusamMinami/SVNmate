@@ -115,7 +115,7 @@ export function useAnimationVoice() {
       (markEnabled && !skipTime.trim()) || (eventsEnabled && (!showTime.trim() || !hideTime.trim()))) throw new Error("请填写勾选项的 ID 和起止时间");
     const parsed = SequencePatchSchema.safeParse({
       assetPath: snapshot.assetPath, revision: draftRevision,
-      subtitles: chosen.map((r) => ({ sectionPath: r.sectionPath, dialogueId: Number(r.dialogueId), start: Number(r.start), end: Number(r.end) })),
+      subtitles: chosen.map((r) => ({ sectionPath: r.sectionPath, dialogueId: Number(r.dialogueId), start: Number(r.start), end: Number(r.end), speechText: r.speechText })),
       skipTime: markEnabled ? Number(skipTime) : null,
       eventTimes: eventsEnabled ? { show: Number(showTime), hide: Number(hideTime) } : null,
     });

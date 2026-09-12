@@ -62,8 +62,12 @@ export function AnimationVoiceWorkspace({ active = true }: { active?: boolean })
               <AnimationSpeechPanel speech={speech} snapshot={current} disabled={disabled} active={active && tab === "subtitles"}
                 onAdopt={() => {
                   try {
-                    const rows = speech.adoptedRows();
-                    vm.invalidate(); vm.setRows(rows); speech.update({ adopted: true, error: "" });
+                    const adopted = speech.adoptedRows();
+                    vm.invalidate(); vm.setRows(adopted.rows);
+                    speech.update({
+                      adoptedKeys: adopted.adoptedKeys, targetKeys: adopted.targetKeys,
+                      submittedRows: JSON.stringify(adopted.rows), chosen: {}, error: "",
+                    });
                   } catch (e) { speech.update({ error: e instanceof Error ? e.message : String(e) }); }
                 }} />
             </div>
@@ -89,7 +93,7 @@ export function AnimationVoiceWorkspace({ active = true }: { active?: boolean })
                     <td><input aria-label={`字幕 ${index + 1} ID`} value={row.dialogueId} disabled={disabled} onChange={(e) => update("dialogueId", e.target.value)} /></td>
                     <td><small>{voice?.name || (row.sectionPath ? "UE 已有字幕" : "新增字幕")}{row.timeSource ? ` · ${row.timeSource}` : ""}</small>
                       <span>{voice?.text || row.speechText || "配音表未匹配"}</span>
-                      {row.speechText && !voice && <small className="animation-voice__warning">待填写有效配音 ID；识别文字不写入配音表</small>}
+                      {row.speechText && !voice && <small className="animation-voice__warning">{row.dialogueId ? "配音 ID 待审核校验" : "待填写有效配音 ID"}；识别文字不写入配音表</small>}
                     </td>
                     <td><input type="number" step="0.001" aria-label={`字幕 ${index + 1} 开始`} value={row.start} disabled={disabled} onChange={(e) => update("start", e.target.value)} /></td>
                     <td><input type="number" step="0.001" aria-label={`字幕 ${index + 1} 结束`} value={row.end} disabled={disabled} onChange={(e) => update("end", e.target.value)} /></td>

@@ -12,7 +12,10 @@ import {
   MAX_DIALOGUE_PARTICIPANTS,
   PARTICIPANT_SLOTS,
 } from "../types";
-import { getDialogueDatabaseIndex } from "./databaseIndex";
+import {
+  getDialogueDatabaseIndex,
+  normalizeDialogueSearchText,
+} from "./databaseIndex";
 
 export const PARTICIPANT_COLORS = [
   "#e85d47",
@@ -356,7 +359,10 @@ export function searchDialogueContent(
   if (!query) {
     throw new Error("请输入对话 ID 或对白内容");
   }
-  const normalizedQuery = query.toLocaleLowerCase();
+  const normalizedQuery = normalizeDialogueSearchText(query);
+  if (!normalizedQuery) {
+    throw new Error("请输入有效的对白文字");
+  }
   const matches = getDialogueDatabaseIndex(database).searchableDialogueRows.flatMap(
     ({ row, normalizedContent }) =>
       normalizedContent.includes(normalizedQuery) ? [row] : [],

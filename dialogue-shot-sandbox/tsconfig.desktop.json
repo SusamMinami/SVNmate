@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.desktop.tsbuildinfo",
+    "target": "ES2023",
+    "lib": ["ES2023", "DOM"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "allowSyntheticDefaultImports": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "types": ["node", "electron"]
+  },
+  "include": [
+    "desktop/**/*.ts",
+    "mcp/**/*.ts",
+    "server/**/*.ts",
+    "src/director/contracts.ts",
+    "src/director/prompt.ts",
+    "src/types.ts"
+  ],
+  "exclude": ["server/**/*.test.ts"]
+}

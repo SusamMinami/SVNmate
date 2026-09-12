@@ -405,7 +405,7 @@ test("reviews every rule shot and exposes VLM camera rankings", async ({
   await page.setViewportSize({ width: 1360, height: 768 });
   await page.goto("/");
 
-  await page.getByRole("button", { name: "加载对话与已有配置" }).click();
+  await page.getByRole("button", { name: "加载对白内容" }).click();
   await page.getByRole("button", { name: "规则导演" }).click();
   await expect(page.locator(".dialogue-strip__advisor-note")).toContainText(
     "表达清晰度",
@@ -468,7 +468,7 @@ test("provides button morph and viewport pointer feedback", async ({
   await page.goto("/");
 
   const analyzeButton = page.getByRole("button", {
-    name: "加载对话与已有配置",
+    name: "加载对白内容",
   });
   const markerBefore = await analyzeButton.evaluate(
     (element) => getComputedStyle(element, "::before").clipPath,
@@ -479,6 +479,21 @@ test("provides button morph and viewport pointer feedback", async ({
     (element) => getComputedStyle(element, "::before").clipPath,
   );
   expect(markerAfter).not.toBe(markerBefore);
+
+  for (const label of ["规则导演", "TRAE 协作", "Mira AI"]) {
+    const modeButton = page.getByRole("button", { name: label });
+    const before = await modeButton.evaluate((element) => ({
+      background: getComputedStyle(element).backgroundColor,
+      shadow: getComputedStyle(element).boxShadow,
+    }));
+    await modeButton.hover();
+    await page.waitForTimeout(180);
+    const after = await modeButton.evaluate((element) => ({
+      background: getComputedStyle(element).backgroundColor,
+      shadow: getComputedStyle(element).boxShadow,
+    }));
+    expect(after).not.toEqual(before);
+  }
 
   const stage = page.locator(".stage-main");
   const bounds = await stage.boundingBox();
@@ -526,7 +541,7 @@ test("loads dialogue content before explicitly starting the director", async ({
   ).toHaveAttribute("aria-pressed", "false");
 
   await page
-    .getByRole("button", { name: "加载对话与已有配置" })
+    .getByRole("button", { name: "加载对白内容" })
     .click();
   await expect(page.locator(".shot-row")).toHaveCount(0);
   await expect(page.locator(".dialogue-preview__row")).toHaveCount(7);
@@ -725,7 +740,7 @@ test("discovers action roles from UE when the configuration window skips Formati
 
   await page.goto("/");
   await page
-    .getByRole("button", { name: "加载对话与已有配置" })
+    .getByRole("button", { name: "加载对白内容" })
     .click();
   await page.getByRole("button", { name: "进入配置小窗" }).click();
   await expect(page.locator(".app-shell")).toHaveAttribute(
@@ -907,9 +922,12 @@ test("loads existing UE cameras without starting a director", async ({
   ).toBeVisible();
   await page.getByLabel("四位数对话 ID 或对白内容").fill("7350");
   await page
-    .getByRole("button", { name: "加载对话与已有配置" })
+    .getByRole("button", { name: "加载对白内容" })
     .click();
 
+  await expect(page.locator(".dialogue-preview__row")).toHaveCount(2);
+  await expect(page.locator(".shot-row")).toHaveCount(0);
+  await page.getByRole("button", { name: "读取 BP 站位" }).click();
   await expect(page.locator(".shot-row")).toHaveCount(1);
   await expect(page.locator(".shot-row").first()).toContainText(
     "已有镜头 · c1",
@@ -1176,7 +1194,7 @@ test("renders every participant in a multi-character dialogue", async ({
 }) => {
   await page.goto("/");
   await page.getByLabel("四位数对话 ID").fill("3099");
-  await page.getByRole("button", { name: "加载对话与已有配置" }).click();
+  await page.getByRole("button", { name: "加载对白内容" }).click();
   await page.getByRole("button", { name: "规则导演" }).click();
 
   await expect(page.locator(".shot-row")).toHaveCount(3);
@@ -1250,7 +1268,7 @@ test("previews future entrants as transparent blocking markers", async ({
 }) => {
   await page.goto("/");
   await page.getByLabel("四位数对话 ID").fill("3099");
-  await page.getByRole("button", { name: "加载对话与已有配置" }).click();
+  await page.getByRole("button", { name: "加载对白内容" }).click();
   await page.getByRole("button", { name: "规则导演" }).click();
 
   await expect(page.locator(".stage-main .actor-label")).toHaveCount(3);
@@ -1414,7 +1432,7 @@ test("removes a character after the AI-directed exit node", async ({
 
   await page.goto("/");
   await page.getByLabel("四位数对话 ID").fill("3099");
-  await page.getByRole("button", { name: "加载对话与已有配置" }).click();
+  await page.getByRole("button", { name: "加载对白内容" }).click();
   await page.getByRole("button", { name: "TRAE 协作" }).click();
   await expect(page.locator(".shot-row")).toHaveCount(5);
 
@@ -1524,6 +1542,7 @@ test("keeps configuration mode aligned with the selected UE node", async ({
   const previewSchoolApplyRequests: Array<Record<string, unknown>> = [];
   const nodeWriteInspectRequests: Array<Record<string, unknown>> = [];
   const nodeWriteExportRequests: Array<Record<string, unknown>> = [];
+  let cameraPresetReadRequests = 0;
   let cameraApplyResponseDelayMs = 0;
   let formationReadRequests = 0;
   let storyboardReadRequests = 0;
@@ -1538,6 +1557,9 @@ test("keeps configuration mode aligned with the selected UE node", async ({
       storyboardReadBodies.push(
         request.postDataJSON() as Record<string, unknown>,
       );
+    }
+    if (pathname === "/api/ue/dialogue/camera/presets") {
+      cameraPresetReadRequests += 1;
     }
   });
   await page.unroute("**/api/ue/dialogue/selection");
@@ -2092,6 +2114,7 @@ test("keeps configuration mode aligned with the selected UE node", async ({
     "EPush · 速度 1 · Blend Out 1 · FOV 62",
   );
   expect(cameraInspectRequests).toHaveLength(0);
+  expect(cameraPresetReadRequests).toBe(0);
   await expect(cameraReview.locator(".button--primary")).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: "添加默认镜头" }),
@@ -2137,22 +2160,53 @@ test("keeps configuration mode aligned with the selected UE node", async ({
     mode: "default",
   });
   expect(cameraApplyRequests[0]).not.toHaveProperty("reviewToken");
+  const curveInspectCount = cameraInspectRequests.length;
   await page.getByRole("button", { name: "添加镜头曲线" }).click();
   await expect(cameraReview).toContainText("EBlend");
   await expect(cameraReview).toContainText("trans_6015.trans_6015");
-  expect(cameraInspectRequests[0]).toMatchObject({
-    dialogueNodeId: "204801",
-    blendCurveAssetName: "trans_6015",
-    mode: "blend_curve",
+  expect(cameraInspectRequests).toHaveLength(curveInspectCount);
+  const blendDuration = page.getByRole("spinbutton", {
+    name: "镜头曲线 Duration",
   });
-  await page
-    .getByRole("button", { name: "取消当前镜头方案" })
-    .click();
+  await expect(blendDuration).toHaveValue("0");
+  await blendDuration.fill("1.5");
+  await expect(blendDuration).toHaveValue("1.5");
+  await expect(cameraApplyButton).toHaveAttribute("aria-busy", "false");
+  await expect(
+    page.locator(".inspector-footer--export"),
+  ).toContainText("添加镜头曲线已选择，等待底栏确认");
+  const curvePreviewViewport = page.viewportSize();
+  await page.setViewportSize({
+    width: Math.round(fullPanelBounds!.width),
+    height: Math.round(fullPanelBounds!.height + fullHeaderBounds!.height),
+  });
+  await page.screenshot({
+    path: testInfo.outputPath("configuration-blend-curve-duration.png"),
+    fullPage: true,
+  });
+  await page.setViewportSize(curvePreviewViewport!);
+  const curveApplyCount = cameraApplyRequests.length;
+  await cameraApplyButton.click();
+  await expect
+    .poll(() => cameraApplyRequests.length)
+    .toBe(curveApplyCount + 1);
+  expect(cameraApplyRequests.at(-1)).toMatchObject({
+    dialogueNodeId: "204801",
+    mode: "blend_curve",
+    blendCurveAssetName: "trans_6015",
+    blendDuration: 1.5,
+  });
+  expect(cameraApplyRequests.at(-1)).not.toHaveProperty("reviewToken");
   const cameraInspectCountBeforeSchoolConfirmation =
     cameraInspectRequests.length;
+  const cameraApplyCountBeforeSchoolConfirmation =
+    cameraApplyRequests.length;
   await page.getByRole("button", { name: "添加角色相机" }).click();
   await expect(cameraReview).toContainText("确认补齐角色相机");
   await expect(cameraReview.locator("dl")).toHaveCount(0);
+  await expect(
+    cameraReview.getByRole("button", { name: "取消当前镜头方案" }),
+  ).toHaveCount(0);
   expect(cameraInspectRequests).toHaveLength(
     cameraInspectCountBeforeSchoolConfirmation,
   );
@@ -2161,12 +2215,14 @@ test("keeps configuration mode aligned with the selected UE node", async ({
     fullPage: true,
   });
   await cameraApplyButton.click();
-  await expect.poll(() => cameraApplyRequests.length).toBe(2);
-  expect(cameraApplyRequests[1]).toMatchObject({
+  await expect
+    .poll(() => cameraApplyRequests.length)
+    .toBe(cameraApplyCountBeforeSchoolConfirmation + 1);
+  expect(cameraApplyRequests.at(-1)).toMatchObject({
     dialogueNodeId: "204801",
     mode: "school_cameras",
   });
-  expect(cameraApplyRequests[1]).not.toHaveProperty("reviewToken");
+  expect(cameraApplyRequests.at(-1)).not.toHaveProperty("reviewToken");
 
   selectedDialogueNodeId = "204803";
   await expect(page.locator(".inspector-header")).toContainText(
@@ -2178,7 +2234,7 @@ test("keeps configuration mode aligned with the selected UE node", async ({
   await expect(page.getByLabel("节点镜头写入确认")).toContainText(
     "节点 204801",
   );
-  expect(cameraInspectRequests[1]).toMatchObject({
+  expect(cameraInspectRequests.at(-1)).toMatchObject({
     dialogueNodeId: "204803",
     previousDialogueNodeIds: ["204802", "204801"],
     mode: "copy_previous",
@@ -2296,32 +2352,31 @@ test("keeps configuration mode aligned with the selected UE node", async ({
   await expect(ringCameraSource).toHaveAttribute("aria-pressed", "true");
   await ninoCameraTargetButton.focus();
   await page.keyboard.press("Enter");
-  await expect
-    .poll(() => cameraInspectRequests.length)
-    .toBe(roleCopyInspectCount + 1);
+  expect(cameraInspectRequests).toHaveLength(roleCopyInspectCount);
   await expect(ninoCameraTarget).toHaveClass(/has-copy/);
+  await expect(cameraApplyButton).toHaveAttribute("aria-busy", "false");
+  await expect(
+    page.locator(".inspector-footer--export"),
+  ).toContainText("复制角色相机已选择，等待底栏确认");
+  await expect(
+    cameraReview.getByRole("button", { name: "取消角色相机覆盖" }),
+  ).toBeVisible();
   await page
     .getByRole("button", { name: "取消覆盖 Nino" })
     .click();
   await expect(ninoCameraTarget).not.toHaveClass(/has-copy/);
+  await expect(
+    cameraReview.getByRole("button", { name: "取消角色相机覆盖" }),
+  ).toHaveCount(0);
   const dragInspectCount = cameraInspectRequests.length;
   await ringCameraSource.dragTo(ninoCameraTarget);
-  await expect
-    .poll(() => cameraInspectRequests.length)
-    .toBe(dragInspectCount + 1);
-  expect(cameraInspectRequests.at(-1)).toMatchObject({
-    dialogueNodeId: "204803",
-    mode: "copy_school_cameras",
-    schoolCameraCopies: [
-      {
-        sourceRole: "ERing",
-        targetRole: "ENino",
-      },
-    ],
-  });
+  expect(cameraInspectRequests).toHaveLength(dragInspectCount);
   expect(cameraApplyRequests).toHaveLength(roleCopyApplyCount);
   await expect(cameraReview).toContainText("确认角色相机覆盖");
   await expect(cameraReview).toContainText("Ring → Nino");
+  await expect(
+    cameraReview.getByRole("button", { name: "取消角色相机覆盖" }),
+  ).toBeVisible();
   await expect(ninoCameraTarget).toHaveClass(/has-copy/);
   await expect(cameraApplyButton).toBeEnabled();
   await page.screenshot({
@@ -2341,8 +2396,8 @@ test("keeps configuration mode aligned with the selected UE node", async ({
         targetRole: "ENino",
       },
     ],
-    reviewToken: "a".repeat(64),
   });
+  expect(cameraApplyRequests.at(-1)).not.toHaveProperty("reviewToken");
   await page.getByRole("tab", { name: "音频" }).click();
   await expect(page.getByRole("tab", { name: "音频" })).toHaveAttribute(
     "aria-selected",
@@ -2353,7 +2408,7 @@ test("keeps configuration mode aligned with the selected UE node", async ({
     "A_SFX_Dialog_204803",
   );
   await expect(page.locator(".ue-existing-audio")).toContainText("0.4s");
-  expect(storyboardReadRequests).toBe(5);
+  expect(storyboardReadRequests).toBe(6);
   await expect(page.locator(".inspector-tab-panel:visible")).toHaveCSS(
     "animation-name",
     "none",
@@ -2508,7 +2563,7 @@ test("keeps configuration mode aligned with the selected UE node", async ({
     "aria-selected",
     "true",
   );
-  await expect.poll(() => storyboardReadRequests).toBe(6);
+  await expect.poll(() => storyboardReadRequests).toBe(7);
 
   const ueReadsBeforeLocalSwitch = {
     formation: formationReadRequests,
@@ -3858,7 +3913,7 @@ test("switches to Mira and visibly degrades when the bridge fails", async ({
 
   await page.goto("/");
   await page.getByRole("button", { name: "Mira AI" }).click();
-  await page.getByRole("button", { name: "加载对话与已有配置" }).click();
+  await page.getByRole("button", { name: "加载对白内容" }).click();
   await page.getByRole("button", { name: "Mira AI" }).click();
 
   await expect(
@@ -4946,7 +5001,7 @@ test("syncs the selected desktop doc path for registration data", async ({
   await expect(page.getByLabel("四位数对话 ID 或对白内容")).toHaveValue("");
   await settingsDialog.getByRole("button", { name: "关闭桌面版设置" }).click();
   await page.getByLabel("四位数对话 ID 或对白内容").fill("7350");
-  await page.getByRole("button", { name: "加载对话与已有配置" }).click();
+  await page.getByRole("button", { name: "加载对白内容" }).click();
   await page.getByRole("button", { name: "规则导演" }).click();
   const outlineToggle = page.getByRole("button", { name: /剧情梗概/ });
   await expect(outlineToggle).toHaveAttribute("aria-expanded", "false");
@@ -5020,7 +5075,7 @@ test("excludes close-UI node content from visible dialogue analysis", async ({
   await page.goto("/");
   await page.locator('input[type="file"]').setInputFiles(fixtureDirectory);
   await page.getByLabel("四位数对话 ID 或对白内容").fill("7350");
-  await page.getByRole("button", { name: "加载对话与已有配置" }).click();
+  await page.getByRole("button", { name: "加载对白内容" }).click();
   await page.getByRole("button", { name: "规则导演" }).click();
 
   await expect(page.getByText("不可见的重复台词", { exact: true }))
@@ -5074,6 +5129,95 @@ test("searches dialogue text and reuses only previously designed storyboards", a
     path: testInfo.outputPath("dialogue-text-search.png"),
     fullPage: true,
   });
+});
+
+test("normalizes dialogue search and refreshes configured data after a miss", async ({
+  page,
+}, testInfo) => {
+  let refreshRequests = 0;
+  const fixtureDirectory = await writeDirectoryFixture(
+    testInfo.outputPath("stale-search-csvdir"),
+    [
+      {
+        name: "对话表.csv",
+        content: [
+          "##&Dialog.id,Dialog.NPCID,Dialog.Content,Dialog.NextID,Dialog.End",
+          "##对话ID,人物,内容,下一ID,结束",
+          "735000,,,735001,false",
+          "735001,1,旧对白。,,true",
+        ].join("\n"),
+      },
+      {
+        name: "对话表_开始节点.csv",
+        content: [
+          "##&DialogStart.id,DialogStart.Outline",
+          "##对话ID,剧情梗概",
+          "735000,搜索刷新测试",
+        ].join("\n"),
+      },
+      {
+        name: "NPC表.csv",
+        content: [
+          "##&NPC.id,NPC.name,NPC.npcintroduce",
+          "##id,NPC名字,NPC介绍",
+          "1,玩家,玩家",
+        ].join("\n"),
+      },
+    ],
+  );
+  await page.route("**/api/ue/config-data/read", async (route) => {
+    refreshRequests += 1;
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          sourceName: "C:\\Live\\res + C:\\Live\\doc",
+          dialogueText: [
+            "##&Dialog.id,Dialog.NPCID,Dialog.Content,Dialog.NextID,Dialog.End",
+            "##对话ID,人物,内容,下一ID,结束",
+            "735000,,,735001,false",
+            '735001,1,"你好，<red>冒险家</>！\\n准备好了吗？",,true',
+          ].join("\n"),
+          startText: [
+            "##&DialogStart.id,DialogStart.Outline",
+            "##对话ID,剧情梗概",
+            "735000,搜索刷新测试",
+          ].join("\n"),
+          npcText: [
+            "##&NPC.id,NPC.name,NPC.npcintroduce",
+            "##id,NPC名字,NPC介绍",
+            "1,玩家,玩家",
+          ].join("\n"),
+          modelText: "",
+          careerText: "",
+          missionText: "",
+          dungeonMissionText: "",
+          missionPositionText: "",
+          mapConfigText: "",
+          mapResourceText: "",
+        },
+      }),
+    });
+  });
+
+  await page.goto("/");
+  await page.locator('input[type="file"]').setInputFiles(fixtureDirectory);
+  await page.evaluate(() => {
+    window.shotSandboxDesktop =
+      {} as NonNullable<Window["shotSandboxDesktop"]>;
+  });
+  await page
+    .getByLabel("四位数对话 ID 或对白内容")
+    .fill("你好 冒险家，准备好了吗");
+  await page.getByRole("button", { name: "搜索对白内容" }).click();
+
+  await expect(page.getByText(/1 处命中 · 1 组对话/)).toBeVisible();
+  await expect(page.locator(".dialogue-search-row.is-match")).toContainText(
+    "你好，<red>冒险家</>！\\n准备好了吗？",
+  );
+  expect(refreshRequests).toBe(1);
 });
 
 test("edits the active dialogue, cancels on outside click and saves to UE", async ({
@@ -5149,7 +5293,7 @@ test("edits the active dialogue, cancels on outside click and saves to UE", asyn
   await page.goto("/");
   await page.locator('input[type="file"]').setInputFiles(fixtureDirectory);
   await page.getByLabel("四位数对话 ID 或对白内容").fill("7352");
-  await page.getByRole("button", { name: "加载对话与已有配置" }).click();
+  await page.getByRole("button", { name: "加载对白内容" }).click();
   await page.getByRole("button", { name: "规则导演" }).click();
   await expect(page.getByRole("button", { name: "编辑当前对白" })).toBeEnabled();
 
@@ -5416,7 +5560,11 @@ test("offers BP or rule placement after ignored missing models", async ({
   await page.locator('input[type="file"]').setInputFiles(fixtureDirectory);
   const searchInput = page.getByLabel("四位数对话 ID 或对白内容");
   await searchInput.fill("7370");
-  await page.getByRole("button", { name: "加载对话与已有配置" }).click();
+  await page.getByRole("button", { name: "加载对白内容" }).click();
+  await page.getByRole("button", { name: "读取 BP 站位" }).click();
+  await expect(
+    page.getByRole("button", { name: "加载对白内容" }),
+  ).toBeEnabled();
   await page.getByRole("button", { name: "规则导演" }).click();
 
   const missingModal = page.getByRole("dialog", {
@@ -5451,7 +5599,11 @@ test("offers BP or rule placement after ignored missing models", async ({
   await formationModal.getByRole("button", { name: "关闭占位选择" }).click();
 
   formationReady = false;
-  await page.getByRole("button", { name: "加载对话与已有配置" }).click();
+  await page.getByRole("button", { name: "加载对白内容" }).click();
+  await page.getByRole("button", { name: "读取 BP 站位" }).click();
+  await expect(
+    page.getByRole("button", { name: "加载对白内容" }),
+  ).toBeEnabled();
   await page.getByRole("button", { name: "规则导演" }).click();
   await expect(missingModal).toBeVisible();
   await expect(
@@ -6114,15 +6266,25 @@ test("offers the detected Blueprint formation before designing shots", async ({
   );
   await page.locator('input[type="file"]').setInputFiles(fixtureDirectory);
   await page.getByLabel("四位数对话 ID 或对白内容").fill("7350");
-  await page.getByRole("button", { name: "加载对话与已有配置" }).click();
-  await expect(
-    page.getByRole("button", { name: "加载对话与已有配置" }),
-  ).toBeDisabled();
+  await page.getByRole("button", { name: "加载对白内容" }).click();
   await expect(
     page.locator(".dialogue-preview p").filter({ hasText: "你来了。" }),
   ).toBeVisible();
   await expect(page.locator(".dialogue-row")).toHaveCount(2);
   await expect(page.locator(".shot-row")).toHaveCount(0);
+  expect(formationRequests).toBe(0);
+  const readBlueprintPlacement = page.getByRole("button", {
+    name: "读取 BP 站位",
+  });
+  await expect(readBlueprintPlacement).toBeEnabled();
+  await page.screenshot({
+    path: testInfo.outputPath("dialogue-local-before-bp.png"),
+    fullPage: true,
+  });
+  await readBlueprintPlacement.click();
+  await expect(
+    page.getByRole("button", { name: "加载对白内容" }),
+  ).toBeDisabled();
   await expect(
     page.getByText("正在查询 UE Blueprint 站位").first(),
   ).toBeVisible();
@@ -7541,7 +7703,7 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
   await page.goto("/");
   await page.locator('input[type="file"]').setInputFiles(fixtureDirectory);
   await page.getByLabel("四位数对话 ID 或对白内容").fill("7350");
-  await page.getByRole("button", { name: "加载对话与已有配置" }).click();
+  await page.getByRole("button", { name: "加载对白内容" }).click();
   await page.getByRole("button", { name: "规则导演" }).click();
   const outlineToggle = page.getByRole("button", { name: /剧情梗概/ });
   await expect(outlineToggle).toHaveAttribute("aria-expanded", "false");
@@ -7554,7 +7716,7 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
   ).toBeVisible();
   await expect(page.getByText(/实际：规则导演/)).toBeVisible();
   await expect(page.locator(".shot-row")).toHaveCount(1);
-  expect(formationRequests).toBe(1);
+  expect(formationRequests).toBe(0);
   await page.getByRole("button", { name: "任务目标物" }).click();
   const dialog = page.getByRole("region", {
     name: "任务目标物",

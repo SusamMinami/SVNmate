@@ -2,7 +2,7 @@
 
 > 文档状态：现行专题规范
 >
-> 最近核对：2026-09-11，对应镜头沙盘 `0.24.6`。当前实现同时支持镜头、
+> 最近核对：2026-09-12，对应镜头沙盘 `0.24.7`。当前实现同时支持镜头、
 > 角色动作、音效和音乐的独立勾选、预检、回读与保存。
 
 ## 目标
@@ -29,7 +29,8 @@
 - `MoveCameras[0]` 的 `FMoveCamera` 包含 `CameraMoveType`、
   `PushCameraArg`、`RotateCameraArg`、`LookAtArg`、
   `LookAtPushArg` 和 `FOV`。
-- `DialogBlendCameraData` 默认使用 `ECutShot`。首版不修改该字段。
+- `DialogBlendCameraData` 默认使用 `ECutShot`；完整分镜导出不改该字段，
+  小窗显式镜头曲线操作另有写入协议。
 - 音效位于 `CommonDialogGraphProperties` 的 `Alias="SoundEffect"`，
   类型为 `softobjectpath`，实际值写入 `CurrentPath`。
 - 音效延迟位于 `Alias="DelayTime"` 的 `CurrentFloat`；音效建议可选择目标
@@ -59,7 +60,8 @@
 
 ## 坐标转换
 
-只有使用 BP 站位生成的方案允许导出。服务器重新读取 Formation BP，
+只有使用 BP 站位生成的镜头数据允许导出；独立音频/动作不受此镜头条件限制。
+服务器重新读取 Formation BP，
 按当前参与者的数字模型槽计算与前端相同的平面中心：
 
 ```text
@@ -74,15 +76,15 @@ UE 使用厘米和 `X 前 / Y 右 / Z 上`，Three.js 使用米和
 相机旋转由起止相机位置和注视点计算：
 
 ```text
-Yaw   = atan2(deltaY, deltaX)
-Pitch = atan2(deltaZ, sqrt(deltaX^2 + deltaY^2))
+Yaw   = atan2(deltaY, deltaX) * 180 / PI
+Pitch = atan2(deltaZ, sqrt(deltaX^2 + deltaY^2)) * 180 / PI
 Roll  = 沙盘镜头横滚角
 ```
 
 焦距按 35 mm 画幅宽度转换为 UE 水平 FOV：
 
 ```text
-FOV = 2 * atan(35 / (2 * focalLength))
+FOV_degrees = 2 * atan(35 / (2 * focalLength_mm)) * 180 / PI
 ```
 
 ## 当前运镜映射
@@ -103,10 +105,11 @@ FOV = 2 * atan(35 / (2 * focalLength))
 
 1. 镜头数据导出要求当前分镜已生成并完整绑定 BP 模型槽；当前节点音频和角色
    动作可以在只有对白、尚无分镜时独立进入预检。
-2. 用户点击右下角“导出到 UE”，默认只预检当前激活镜头。
-   导演页的“写入本镜音效”则以无镜头数据的方式复用同一预检流程。
-3. 弹窗右上角“全部导出”可切换为全量预检和多镜头选择。
-4. 应用只读检查对话资产、Formation、`c1` 组件及本次目标节点。
+2. 用户点击右下角“导出到 UE”，先仅展示当前激活镜头的本地清单，不立即读 UE。
+   节点音频入口以无镜头数据的方式复用预检。
+3. 弹窗右上角“全部导出”可切换多镜头选择，选择范围后才请求服务端预检。
+4. 应用按所选数据类型只读检查资产与目标节点。仅导动作时不读相机、音效、
+   音乐或未选角色槽；镜头导出才要求 Formation 与 `c1`。
 5. 弹窗展示每个节点的当前相机、目标相机和处理方式：
    `新增`、`覆盖`、`清空旧镜头` 或 `无需修改`。
 6. 全量页面中每个镜头可独立勾选；同一镜头覆盖的起点和延续节点作为一个整体处理，
@@ -127,8 +130,8 @@ FOV = 2 * atan(35 / (2 * focalLength))
 
 ### 已有镜头只读加载
 
-输入四位对话 ID 时，工作台在任何导演运行前读取 Dialog Graph 节点的
-`CameraPosition` 与 `MoveCameras`。当前版本将 `EPush.PushCameraArg` 的起止
+输入四位对话 ID 只加载本地文字；用户点击“读取 BP 站位”后，才读取 Dialog Graph
+节点的 `CameraPosition` 与 `MoveCameras`。当前版本将 `EPush.PushCameraArg` 的起止
 位置、旋转、FOV 和速度反解为沙盘镜头，并以有相机数据的节点作为镜头边界；
 该过程只执行本地几何转换和投影验收，不调用规则顾问、VLM、TRAE 或 Mira。
 
@@ -138,72 +141,28 @@ Formation BP 只提供坐标中心和角色站位，不是读取镜头的前置�
 
 ### 配置小窗节点快捷镜头
 
-配置小窗的镜头页只处理 UE 当前唯一选中的对话节点，提供四种独立操作：
-
-1. “使用上一相机参数”从当前节点向前查找最近一个具有相机数据的对话节点，
-   完整复制其 `CameraPosition` 和 `MoveCameras`；中间没有相机数据的节点跳过，
-   全部候选均为空时才阻止执行。
-2. “添加默认镜头”写入 `CameraPosition=c1`，并创建一个
-   `CameraMoveType=EPush` 的 `MoveCameras[0]`，其中
-   `PushCameraArg.Velocity=1`、`PushCameraArg.BlendOutTime=1`、
-   `FOV=62`。展开后还可读取当前 Formation 预览中的角色 Camera BP，按角色和
-   数字机位选择真实 Transform；相对/世界坐标由 `EPush.bRelative` 决定。
-3. “添加镜头曲线”将 `DialogBlendCameraData.DialogBlendCameraType`
-   设为 `EBlend`，默认曲线为
-   `/Game/Seria/Task/Mod/MainQuest/DialogCurve/trans_6015.trans_6015`；
-   界面只要求输入资产名，`Duration` 保留节点当前值。
-4. “添加角色相机”要求当前主 `MoveCameras` 非空，保留
-   `SchoolMoveCamerasMap` 已有键值，并补齐 `ERing`、`ENino`、`EJodie`
-   中尚未配置的角色。反射接口未返回枚举键时，从资产导出文本恢复键名。
-
-“添加默认镜头”和“添加角色相机”直接依据已回读配置生成确认，不重复发起预检；
-提交后由服务端重新读取真实节点配置。“使用上一相机参数”和“添加镜头曲线”
-仍先读取真实来源或资产并生成审核令牌。所有操作都会复核 UE 当前仍选中同一节点，并按需写入
-`CommonDialogGraphProperties`、`MoveCameras`、`DialogBlendCameraData`
-或 `SchoolMoveCamerasMap`，逐项回读一致后只保存一次对话资产；用户已确认的
-资产现有修改随本次操作统一保存，任一步骤失败都恢复本轮涉及的原值。写入成功后
-前端保留成功反馈，只重新读取当前节点配置，不回读整段对话、Formation 或启动
-导演。
-
-配置小窗的音频页和 UE 页不依赖已生成分镜。音频页直接写入当前节点的音效与
-音乐，UE 页直接写入当前节点新增动作与角色视线；两者均使用固定底栏完成预检、
-令牌校验、写入、回读与保存，不恢复完整窗口，也不打开全量导出弹窗。UE 页不再
-显示重复的节点折叠栏，角色视线位于角色动作上方；写入范围始终只包含当前节点。
+四种快捷相机操作、职业覆盖拖拽、节点音频/动作/视线、底栏和 dirty 例外统一维护在
+[节点配置](node-configuration.md)；角色预设的来源指纹与参数保留见
+[Camera BP 预设](camera-bp-presets.md)。这些操作不等同于完整分镜导出，
+不要把单节点“合并保存已有修改”例外放宽到本节第 8 步。
 
 ### 00 配置节点预览角色
 
-六位 ID 以 `00` 结尾时，小窗进入独立配置状态，不继续显示上一对白节点，也不
-显示普通镜头、音频和 UE 页签。职业候选来自
-`doc\csvdir\z职业配置表.csv` 的 `CareerInfor.id`、`CareerInfor.name` 和
-`CareerInfor.bp`。
-
-用户选择职业后，预检只读取当前节点数据对象的 `PreviewSchoolID` 并展示当前值
-与目标值。确认时服务端重新检查 UE 当前仍唯一选中同一 `00` 节点，校验审核令牌，
-写入并回读 `PreviewSchoolID`，最后保存对话资产；写入或保存失败时恢复原值。
+独立状态、职业数据源与 `PreviewSchoolID` 写入统一见
+[00 配置节点](node-configuration.md#00-配置节点)。
 
 ## 音乐资料库与试听
 
-- 音乐目录由用户在设置页手动同步飞书多维表格，不后台定时刷新。
-- 只有 `资源标识` 能在本地音乐状态 CSV 中找到唯一状态 ID 的记录才进入推荐
-  目录；同步结果显示未映射记录数和缺少附件数。
-- 配乐建议由规则导演端侧顾问结合剧情梗概、整段对白、真实音乐目录和 UE 当前
-  配乐生成。每项只能引用目录内状态 ID 和当前对白节点；普通寒暄、现有音乐合适
-  或没有可靠匹配时不产生建议。
-- 目录同步只读取元数据。WAV/MP3 附件在用户点击试听后按需下载，以
-  `fileToken + 文件名` 缓存，并通过 HTTP Range 响应支持流式播放和拖动。
-- `npm run analyze:music` 可显式执行全库增量分析并更新 Base 中的
-  “音乐音频分析”表。分析包含 BPM、置信度、LUFS、动态范围、频谱重心和
-  低/中/高频占比；应用同步音乐目录时会读取这些结果。
-- 建议仍以人工标签、备注和剧情语义为主，音频特征只提供同类判断依据。重复
-  节点、目录外状态和与 UE 当前状态相同的建议会被过滤；建议只在绑定节点显示，
-  不跨节点显示为“沿用中”。分析结果必须与当前附件 token 一致才可使用，避免
-  附件更新后复用过期特征。
+同步、映射、缓存与推荐统一见 [音乐分析](music-analysis.md)；
+音效媒体来源见 [音效试听](sound-effect-preview.md)。
+本协议仅写用户确认的节点音频字段，音乐必须保留 `DelayBackgroundMusicTime`。
 
 ## 失败与恢复
 
 - 写入和回读期间不调用保存。
-- 任一节点失败时，恢复本轮已修改节点的原始
-  `CommonDialogGraphProperties` 与 `MoveCameras`。
+- 任一节点失败时，恢复本轮实际触及字段的原始快照，包括
+  `CommonDialogGraphProperties`、`MoveCameras` 和相关角色动作；
+  节点快捷操作还需恢复所触及的 Blend、职业相机或视线字段。
 - 只有全部回读通过后调用一次 `asset.save_asset`。
 - 保存失败时同样恢复本轮内存修改并返回错误。
 - 不修改导出的 CSV，不自动执行 SVN checkout。

@@ -54,7 +54,7 @@ test("shows multiline node text without shrinking the shot image", async ({ page
   await page.goto("/");
   await page.locator('input[type="file"]').setInputFiles(directory);
   await page.getByLabel("四位数对话 ID 或对白内容").fill("7352");
-  await page.getByRole("button", { name: "加载对话与已有配置" }).click();
+  await page.getByRole("button", { name: "加载对白内容" }).click();
   await page.getByRole("button", { name: "规则导演" }).click();
   const content = page.getByRole("region", { name: "当前节点对白" });
   await expect(content.locator("p")).toHaveText(text);
