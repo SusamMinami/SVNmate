@@ -53,3 +53,28 @@ Keep instrumentation and this record until user confirms success or aborts.
 - Baseline rebasing improves but does not solve palm facing. Apply an explicit
   wave-only wrist twist around the finger direction; do not alter hand position,
   finger-up direction, or non-wave actions.
+
+## Post-fix evidence
+- IdleStand is evaluated by copying world location/rotation onto the real source
+  rig; animation-FBX scale/bind matrices are not consumed as pose truth.
+- A 15-frame smoothstep envelope has weights 0 at frames 1/120 and 1 at
+  frames 16/105 and through the gesture middle.
+- All-bone endpoint residual: 0.00003280m / 0.00069053rad.
+- Feet/toes at frame 60 differ from IdleStand by at most 0.0969 degrees.
+- Explicit right-wave correction affects 92 raised/transition frames, rotates
+  around finger direction only, and leaves endpoints unchanged.
+- Palm/forward alignment at frames 25/43/60/79 is approximately
+  0.926 / 0.955 / 0.917 / 0.955; projected alignment is >=0.99999978.
+- Full 120-frame/189-bone FBX roundtrip passes:
+  animation 0.00001937m / 0.00097656rad; diagnostic skin
+  0.00002047m / 0.00119604rad.
+- Neutral-face and body-only branches pass with the same motion checks.
+- 14 contract checks, Python compile, TypeScript type check, links and
+  `git diff --check` pass.
+- No UE writes. Current UE has unrelated dirty package
+  `/Game/Seria/Task/taskgraph/MainQuest/1009-Cha9`; future import must block.
+
+## User verification
+Review `%LOCALAPPDATA%/Kimodo/runs/20260914-n113-idlestand-palm-final-v2/`
+`n113_body_preview.gif`. Keep status OPEN and retain instrumentation until the
+user confirms fixed, reports another symptom, or aborts.
