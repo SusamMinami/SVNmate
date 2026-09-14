@@ -1,6 +1,5 @@
 import {
   AlertTriangle,
-  ArrowUpDown,
   Check,
   CheckCircle2,
   ClipboardCheck,
@@ -13,8 +12,6 @@ import {
   Play,
   RefreshCw,
   ScanFace,
-  SquareCheckBig,
-  SquareX,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type {
@@ -94,6 +91,7 @@ export function NpcSupplementWorkspace({
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
   const reviewRevision = useRef(0);
+  const selectAllCheckboxRef = useRef<HTMLInputElement>(null);
   const isFace = kind === "face";
   const title = isFace ? "面部补充" : "动作补充与修改";
   const currentSelectionKey = useMemo(
@@ -116,6 +114,10 @@ export function NpcSupplementWorkspace({
   ).length;
   const processableCount =
     plan?.items.filter((item) => item.state !== "blocked").length ?? 0;
+  const allItemsSelected =
+    processableCount > 0 && selectedItems.length === processableCount;
+  const someItemsSelected =
+    selectedItems.length > 0 && !allItemsSelected;
   const sortedItems = useMemo(() => {
     const items = [...(plan?.items ?? [])];
     return items.sort((left, right) => {
@@ -145,6 +147,12 @@ export function NpcSupplementWorkspace({
       return sort === "modified-desc" ? -timeDifference : timeDifference;
     });
   }, [plan, sort]);
+
+  useEffect(() => {
+    if (selectAllCheckboxRef.current) {
+      selectAllCheckboxRef.current.indeterminate = someItemsSelected;
+    }
+  }, [someItemsSelected]);
 
   useEffect(() => {
     const revision = reviewRevision.current + 1;
@@ -623,60 +631,6 @@ export function NpcSupplementWorkspace({
         </aside>
 
         <main className="npc-supplement-list">
-          <header>
-            <div className="npc-supplement-list-header-main">
-              <div className="npc-supplement-list-heading">
-                <strong>动作清单</strong>
-                <small>
-                  {plan
-                    ? `${selectedItems.length} / ${processableCount} 已选`
-                    : isFace
-                      ? "FACE ANIM SEQUENCES"
-                      : "BODY ANIM SEQUENCES"}
-                </small>
-              </div>
-              {plan && (
-                <div className="npc-supplement-list-actions">
-                  <button
-                    className="npc-supplement-list-action"
-                    type="button"
-                    disabled={busy !== null || Boolean(result)}
-                    onClick={() => selectAll(true)}
-                    title="选择全部可处理动作"
-                  >
-                    <SquareCheckBig size={14} />
-                    全选
-                  </button>
-                  <button
-                    className="npc-supplement-list-action"
-                    type="button"
-                    disabled={busy !== null || Boolean(result)}
-                    onClick={() => selectAll(false)}
-                    title="清空选择"
-                  >
-                    <SquareX size={14} />
-                    取消
-                  </button>
-                </div>
-              )}
-            </div>
-            {plan && (
-              <label className="npc-supplement-sort">
-                <ArrowUpDown size={14} aria-hidden="true" />
-                <select
-                  aria-label="动作排序"
-                  value={sort}
-                  onChange={(event) =>
-                    setSort(event.target.value as SupplementSort)
-                  }
-                >
-                  <option value="modified-desc">最近修改</option>
-                  <option value="modified-asc">最早修改</option>
-                  <option value="name-asc">名称 A-Z</option>
-                </select>
-              </label>
-            )}
-          </header>
           {plan ? (
             <div
               className={`npc-supplement-table ${isFace ? "is-face" : ""}`}
@@ -689,8 +643,43 @@ export function NpcSupplementWorkspace({
                 }`}
                 role="row"
               >
-                <span role="columnheader">选择</span>
-                <span role="columnheader">动作 / 修改时间</span>
+                <label
+                  className="npc-supplement-table__select"
+                  role="columnheader"
+                  title={
+                    allItemsSelected ? "取消全部选择" : "选择全部可处理动作"
+                  }
+                >
+                  <input
+                    ref={selectAllCheckboxRef}
+                    type="checkbox"
+                    aria-label="全选可处理动作"
+                    checked={allItemsSelected}
+                    disabled={
+                      processableCount === 0 ||
+                      busy !== null ||
+                      Boolean(result)
+                    }
+                    onChange={(event) => selectAll(event.currentTarget.checked)}
+                  />
+                </label>
+                <span
+                  className="npc-supplement-table__action-head"
+                  role="columnheader"
+                >
+                  <span>动作 / 修改时间</span>
+                  <select
+                    aria-label="动作排序"
+                    value={sort}
+                    onChange={(event) =>
+                      setSort(event.target.value as SupplementSort)
+                    }
+                  >
+                    <option value="modified-desc">时间：新到旧</option>
+                    <option value="modified-asc">时间：旧到新</option>
+                    <option value="name-asc">名称：A-Z</option>
+                  </select>
+                </span>
                 <span role="columnheader">目标状态</span>
                 <span role="columnheader">
                   {isFace ? "Body 配对" : "Face 配对"}

@@ -418,20 +418,50 @@ test("sorts action supplements by source modification time", async ({
   const actionNames = page.locator(
     ".npc-supplement-row__action > strong",
   );
+  const selectAllCheckbox = page.getByRole("checkbox", {
+    name: "全选可处理动作",
+  });
+  const actionCheckboxes = page.getByRole("checkbox", { name: /^处理 / });
+  const sortControl = page.getByLabel("动作排序");
   await expect(actionNames).toHaveText(["Wave", "Idle"]);
+  await expect(selectAllCheckbox).toBeChecked();
+  await expect(
+    page.getByText("动作清单", { exact: true }),
+  ).toHaveCount(0);
   await expect(page.getByText("新增 Face", { exact: true })).toBeVisible();
   await expect(
     page.getByText("AM_Wave · IdleSlot", { exact: true }),
   ).toBeVisible();
-  await page.getByLabel("动作排序").selectOption("modified-asc");
+  await sortControl.selectOption("modified-asc");
   await expect(actionNames).toHaveText(["Idle", "Wave"]);
 
+  await selectAllCheckbox.uncheck();
+  expect(
+    await actionCheckboxes.evaluateAll((elements) =>
+      elements.map((element) => (element as HTMLInputElement).checked),
+    ),
+  ).toEqual([false, false]);
+  await expect(page.getByText("正在同步选择")).toBeVisible();
+  await expect(page.getByText("正在同步选择")).toBeHidden();
+  await selectAllCheckbox.check();
+  expect(
+    await actionCheckboxes.evaluateAll((elements) =>
+      elements.map((element) => (element as HTMLInputElement).checked),
+    ),
+  ).toEqual([true, true]);
+  await expect(page.getByText("正在同步选择")).toBeVisible();
+  await expect(page.getByText("正在同步选择")).toBeHidden();
   await page
     .getByRole("checkbox", { name: "处理 A_N28_Idle" })
     .uncheck();
   await expect(page.getByText("正在同步选择")).toBeVisible();
   await expect(page.getByText("正在同步选择")).toBeHidden();
-  expect(planRequestCount).toBe(2);
+  expect(
+    await selectAllCheckbox.evaluate(
+      (element) => (element as HTMLInputElement).indeterminate,
+    ),
+  ).toBe(true);
+  expect(planRequestCount).toBe(4);
   await expect(
     page.getByText("选择已自动审核：Body 1，Face 1"),
   ).toBeVisible();
@@ -439,16 +469,23 @@ test("sorts action supplements by source modification time", async ({
     page.getByRole("button", { name: "执行动作增补" }),
   ).toBeEnabled();
 
-  const header = page.locator(".npc-supplement-list > header");
-  const bulkActions = page.locator(".npc-supplement-list-actions");
-  const sortControl = page.locator(".npc-supplement-sort");
+  const tableHeader = page.locator(".npc-supplement-table__head");
+  const actionHeader = page.locator(
+    ".npc-supplement-table__action-head",
+  );
   const positions = await Promise.all([
-    header.boundingBox(),
-    bulkActions.boundingBox(),
+    tableHeader.boundingBox(),
+    actionHeader.boundingBox(),
+    selectAllCheckbox.boundingBox(),
     sortControl.boundingBox(),
   ]);
   expect(positions.every(Boolean)).toBe(true);
-  expect(positions[1]!.x).toBeLessThan(positions[2]!.x);
+  expect(positions[0]!.height).toBeLessThanOrEqual(32);
+  expect(positions[2]!.x).toBeLessThan(positions[3]!.x);
+  expect(positions[3]!.x).toBeGreaterThanOrEqual(positions[1]!.x);
+  expect(positions[3]!.x + positions[3]!.width).toBeLessThanOrEqual(
+    positions[1]!.x + positions[1]!.width + 1,
+  );
 
   await page.screenshot({
     path: testInfo.outputPath("npc-action-supplement-sorted.png"),

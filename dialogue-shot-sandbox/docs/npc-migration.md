@@ -47,7 +47,9 @@ NPC 迁移可以自动化，但不能安全地压缩成一次无审核的写入�
 
 动作和面部增补不再执行美术 UE 依赖扫描、跨工程文件复制、NPC BP/ABP 创建、
 胶囊体和状态机配置。清单勾选变化后由工具自动刷新审核令牌，无需再次点击生成
-清单；同步完成前写入按钮保持禁用。
+清单；同步完成前写入按钮保持禁用。清单首列表头的三态复选框负责全选和全部
+取消，部分选择时显示中间态，阻断项不计入可选数量。名称/时间排序直接位于
+“动作 / 修改时间”表头，不再额外占用一行清单标题栏。
 
 ## 单独面部补充
 
@@ -69,10 +71,11 @@ NPC 迁移可以自动化，但不能安全地压缩成一次无审核的写入�
 6. 工具逐项调用 Seria 原生 Python 接口：
    `copy_face_anim_sequence_morph_targets_curve` 复制 Morph Target 曲线；
    `make_npc_montage_by_anim_sequence` 生成需要的 Montage。
-7. 写入后重新使用 `get_face_anim_sequence` 校验 Body / Face 配对，并回读、
-   保存 Body AnimSequence、Face AnimSequence 和新建 Montage。处理既有
-   Montage 前后会快照并回读 Slot 名称，如原生接口发生改写则恢复原值，禁止把
-   人工配置的插槽降级为 `DefaultSlot`。
+7. 写入后重新使用 `get_face_anim_sequence` 校验 Body / Face 配对，并保存
+   Body AnimSequence、Face AnimSequence 和新建 Montage。既有 Montage 不调用
+   创建接口，因此保留人工 Slot；新建 Montage 由 Seria 原生接口设置 Slot。
+   支持轨道属性的引擎版本继续回读 Slot；UE4 Python 未暴露
+   `SlotAnimTracks` 时跳过二次改写并提示在 UE 中复核，不因此中断 Face 导入。
 
 `BP_FaceConfigHelper` 本身不再参与独立面部补充。运行时反射确认
 `SeriaAssetHelperBlueprintFunctionLibrary` 及以上三个逐资产函数均可由

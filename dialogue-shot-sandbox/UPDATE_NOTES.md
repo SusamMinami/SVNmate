@@ -10,8 +10,12 @@
   恢复 Body 与 Face 配对。
 - 原生 Helper 创建 Montage 后不再调用 UE4 未暴露的 Python 轨道类型；单项失败
   会继续处理其余 Montage，并在结果中列出待补项。
+- 面部补充兼容 UE4 不开放 `slot_anim_tracks` 的情况，既有 Montage 保持原 Slot，
+  新建项由 Seria 原生接口处理，不再在导入前被 Slot 快照打断。
 - Walk 生成 `AM_Walk` 并使用 `TurnSlot`；`AM_Emotion_*` 动作匹配既有
   `AM_<Emotion>` 命名。
+- 动作表使用首列三态复选框全选，名称/时间排序合并到动作表头，移除重复的清单
+  标题栏与批量按钮。
 
 ## 研究与开发
 

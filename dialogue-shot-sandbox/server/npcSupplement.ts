@@ -617,6 +617,9 @@ async function applyNpcFaceSupplement(
   const reusedMontageAssetPaths = array(
     "reused_montage_asset_paths",
   );
+  const unverifiedMontageSlotPaths = array(
+    "unverified_montage_slot_paths",
+  );
   const expectedCurveCount = selectedItems.filter(
     (item) => item.copyFaceCurves,
   ).length;
@@ -657,6 +660,11 @@ async function applyNpcFaceSupplement(
     manualChecks: [
       "抽查 Body 动作中的 Morph Target 曲线与 Face 动作是否一致",
       "抽查新建或复用 Montage 的动作内容与播放结果",
+      ...(unverifiedMontageSlotPaths.length > 0
+        ? [
+            `UE4 Python 未开放 Montage 轨道读取；请在 UE 中复核 ${unverifiedMontageSlotPaths.length} 个新建 Montage 的 Slot`,
+          ]
+        : []),
       "打开 NPC BP 验证面部动作，并保存相关 BP",
     ],
   };

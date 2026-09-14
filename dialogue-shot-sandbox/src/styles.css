@@ -9950,7 +9950,6 @@ textarea:focus-visible {
 }
 
 .npc-supplement-setup section > header,
-.npc-supplement-list > header,
 .npc-supplement-review > header {
   display: flex;
   min-height: 50px;
@@ -9962,7 +9961,6 @@ textarea:focus-visible {
 }
 
 .npc-supplement-setup section > header > div,
-.npc-supplement-list-heading,
 .npc-supplement-review > header > div {
   display: grid;
   min-width: 0;
@@ -9970,13 +9968,11 @@ textarea:focus-visible {
 }
 
 .npc-supplement-setup header strong,
-.npc-supplement-list header strong,
 .npc-supplement-review header strong {
   font-size: 11px;
 }
 
 .npc-supplement-setup header small,
-.npc-supplement-list header small,
 .npc-supplement-review header small {
   overflow: hidden;
   color: #858881;
@@ -10047,75 +10043,37 @@ textarea:focus-visible {
   background: #ffffff;
 }
 
-.npc-supplement-list > header {
-  position: sticky;
-  z-index: 2;
-  top: 0;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.npc-supplement-list-header-main {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 12px;
-}
-
-.npc-supplement-list-actions {
-  display: flex;
-  flex: 0 0 auto;
-  gap: 5px;
-}
-
-.npc-supplement-list-action {
-  display: inline-flex;
-  height: 28px;
-  align-items: center;
-  gap: 4px;
-  padding: 0 7px;
-  color: #4f524d;
-  background: #ffffff;
-  border: 1px solid #c8cac4;
-  border-radius: 2px;
-  font: 600 9px/1 "Segoe UI", "Microsoft YaHei UI", sans-serif;
-  cursor: pointer;
-}
-
-.npc-supplement-list-action:hover:not(:disabled) {
-  color: #ffffff;
-  background: #383838;
-  border-color: #383838;
-}
-
-.npc-supplement-list-action:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
-
-.npc-supplement-list-action:focus-visible,
-.npc-supplement-sort select:focus-visible {
+.npc-supplement-table__select input:focus-visible,
+.npc-supplement-table__action-head select:focus-visible {
   outline: 2px solid rgba(255, 250, 0, 0.72);
   outline-offset: 1px;
 }
 
-.npc-supplement-sort {
+.npc-supplement-table__action-head {
   display: flex;
-  flex: 0 0 auto;
+  min-width: 0;
   align-items: center;
-  gap: 5px;
-  color: #686b65;
+  gap: 7px;
 }
 
-.npc-supplement-sort select {
-  height: 28px;
-  min-width: 90px;
-  padding: 0 22px 0 7px;
+.npc-supplement-table__action-head > span {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.npc-supplement-table__action-head select {
+  flex: 0 0 auto;
+  width: 92px;
+  height: 22px;
+  margin-left: auto;
+  padding: 0 18px 0 5px;
   color: #363834;
   background: #ffffff;
   border: 1px solid #c8cac4;
   border-radius: 2px;
-  font: 600 9px/1 "Segoe UI", "Microsoft YaHei UI", sans-serif;
+  font: 600 8px/1 "Segoe UI", "Microsoft YaHei UI", sans-serif;
 }
 
 .npc-supplement-table {
@@ -10144,7 +10102,7 @@ textarea:focus-visible {
 .npc-supplement-table__head {
   position: sticky;
   z-index: 1;
-  top: 50px;
+  top: 0;
   min-height: 31px;
   padding: 0 12px;
   color: #777a74;
@@ -10173,6 +10131,7 @@ textarea:focus-visible {
   cursor: default;
 }
 
+.npc-supplement-table__head input,
 .npc-supplement-row input {
   width: 14px;
   height: 14px;
@@ -10180,9 +10139,18 @@ textarea:focus-visible {
   accent-color: var(--ink);
 }
 
+.npc-supplement-table__select,
 .npc-supplement-row__check {
   display: grid;
   place-items: center;
+}
+
+.npc-supplement-table__select {
+  cursor: pointer;
+}
+
+.npc-supplement-table__select:has(input:disabled) {
+  cursor: default;
 }
 
 .npc-supplement-row__action {

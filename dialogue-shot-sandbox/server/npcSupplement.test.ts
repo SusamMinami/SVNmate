@@ -251,6 +251,9 @@ describe("NPC supplement server workflow", () => {
         "/Game/Seria/NPC/N28/Animation/AM_Talk.AM_Talk",
       ],
       reused_montage_asset_paths: [],
+      unverified_montage_slot_paths: [
+        "/Game/Seria/NPC/N28/Animation/AM_Talk.AM_Talk",
+      ],
       locked_root_asset_paths: [
         "/Game/Seria/NPC/N28/Animation/Face/A_N28_Talk_Face.A_N28_Talk_Face",
       ],
@@ -273,6 +276,9 @@ describe("NPC supplement server workflow", () => {
         "/Game/Seria/NPC/N28/Animation/A_N28_Talk.A_N28_Talk",
       ],
     });
+    expect(result.manualChecks.join("\n")).toContain(
+      "UE4 Python 未开放 Montage 轨道读取",
+    );
     const expression = String(connection.calls[0].args.Expression);
     expect(expression).toContain("force_root_lock");
     expect(expression).toContain(
@@ -282,6 +288,10 @@ describe("NPC supplement server workflow", () => {
     expect(expression).toContain("_set_new_montage_slot");
     expect(expression).toMatch(/montage_slot_name.{0,10}IdleSlot/);
     expect(expression).toContain("_restore_reviewed_montage_slots");
+    expect(expression).toContain("_try_get_montage_tracks");
+    expect(expression).toContain(
+      "failed to find property 'slot_anim_tracks'",
+    );
     expect(expression).not.toContain("open_editor_for_assets");
     expect(expression).not.toContain(
       "/Game/Seria/Editor/BP_FaceConfigHelper",

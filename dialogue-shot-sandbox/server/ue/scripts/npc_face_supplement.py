@@ -37,6 +37,15 @@ def _save_asset(asset, label):
         raise RuntimeError("Failed to save " + label + ": " + asset.get_path_name())
 
 
+def _try_get_montage_tracks(montage):
+    try:
+        return list(montage.get_editor_property("slot_anim_tracks"))
+    except Exception as error:
+        if "failed to find property 'slot_anim_tracks'" not in str(error).lower():
+            raise
+        return None
+
+
 def _capture_reviewed_montage_slots(items, asset_library):
     snapshots = {}
     for item in items:
@@ -48,7 +57,9 @@ def _capture_reviewed_montage_slots(items, asset_library):
         montage = _require_asset(
             montage_path, "AnimMontage", "Existing Montage"
         )
-        tracks = list(montage.get_editor_property("slot_anim_tracks"))
+        tracks = _try_get_montage_tracks(montage)
+        if tracks is None:
+            continue
         snapshots[montage_path] = [
             str(track.get_editor_property("slot_name")) for track in tracks
         ]
@@ -61,7 +72,11 @@ def _restore_reviewed_montage_slots(snapshots):
         montage = _require_asset(
             montage_path, "AnimMontage", "Existing Montage"
         )
-        tracks = list(montage.get_editor_property("slot_anim_tracks"))
+        tracks = _try_get_montage_tracks(montage)
+        if tracks is None:
+            raise RuntimeError(
+                "Existing Montage slots are no longer readable: " + montage_path
+            )
         if len(tracks) != len(expected_names):
             raise RuntimeError(
                 "Existing Montage slot track count changed: " + montage_path
@@ -88,7 +103,10 @@ def _restore_reviewed_montage_slots(snapshots):
 
 
 def _set_new_montage_slot(montage, slot_name):
-    tracks = list(montage.get_editor_property("slot_anim_tracks"))
+    tracks = _try_get_montage_tracks(montage)
+    if tracks is None:
+        _save_asset(montage, "Generated Montage")
+        return False
     if not tracks:
         raise RuntimeError(
             "Generated Montage has no animation track: "
@@ -106,6 +124,7 @@ def _set_new_montage_slot(montage, slot_name):
             "Generated Montage slot readback mismatch: "
             + montage.get_path_name()
         )
+    return True
 
 
 def _validate_request(request):
@@ -275,6 +294,7 @@ def run_face_supplement(request):
     processed_body_paths = []
     created_montage_paths = []
     reused_montage_paths = []
+    unverified_montage_slot_paths = []
     pair_readback = []
     for item in request["items"]:
         body_animation = _require_asset(
@@ -318,9 +338,11 @@ def run_face_supplement(request):
                 montage = _require_asset(
                     montage_path, "AnimMontage", "Generated Montage"
                 )
-                _set_new_montage_slot(
+                slot_verified = _set_new_montage_slot(
                     montage, item.get("montage_slot_name") or "IdleSlot"
                 )
+                if not slot_verified:
+                    unverified_montage_slot_paths.append(montage.get_path_name())
                 created_montage_paths.append(montage.get_path_name())
             else:
                 montage = _require_asset(
@@ -341,6 +363,7 @@ def run_face_supplement(request):
         "created_montage_asset_paths": created_montage_paths,
         "reused_montage_asset_paths": reused_montage_paths,
         "restored_montage_slot_paths": restored_montage_slot_paths,
+        "unverified_montage_slot_paths": unverified_montage_slot_paths,
         "pair_readback": pair_readback,
     }
 
