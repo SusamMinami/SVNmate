@@ -72,6 +72,7 @@ export function buildNpcMontagePlans(
       return [];
     }
     const actionName = sourceAssetName.slice(prefix.length);
+    const montageActionName = actionName.replace(/^AM_Emotion_/i, "");
     const normalized = actionName.replaceAll(/[^a-z0-9]/gi, "").toLowerCase();
     let montage: Pick<
       NpcMigrationMontagePlan,
@@ -108,14 +109,20 @@ export function buildNpcMontagePlans(
         montageName: "AM_TurnRight180",
         slotName: "TurnSlot",
       };
+    } else if (normalized === "walk") {
+      montage = {
+        kind: "action",
+        montageName: "AM_Walk",
+        slotName: "TurnSlot",
+      };
     } else if (
-      !/^(?:look[dfu]|walk|backlean|frontlean|idlestand\d*)$/.test(
+      !/^(?:look[dfu]|backlean|frontlean|idlestand\d*)$/.test(
         normalized,
       )
     ) {
       montage = {
         kind: "action",
-        montageName: `AM_${actionName}`,
+        montageName: `AM_${montageActionName}`,
         slotName: "IdleSlot",
       };
     }

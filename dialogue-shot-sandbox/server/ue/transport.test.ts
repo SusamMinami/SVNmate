@@ -94,6 +94,30 @@ describe("UnrealMcpConnection response lifecycle", () => {
     connection.close();
   });
 
+  it("keeps the complete nested UE error when errorLogs is truncated", async () => {
+    const connection = new UnrealMcpConnection();
+    await connection.connect();
+    const response = connection.invoke("script.eval_python_expression", {});
+    socket().emit(
+      "data",
+      frame({
+        success: false,
+        errorLogs:
+          'Traceback (most recent call last):\n  File "<string>", line 126, in create_montage',
+        Output: {
+          ReturnValue: {
+            Message:
+              'Traceback (most recent call last):\n  File "<string>", line 126, in create_montage\nAttributeError: module \'unreal\' has no attribute \'AnimTrack\'',
+          },
+        },
+      }),
+    );
+    await expect(response).rejects.toThrow(
+      "AttributeError: module 'unreal' has no attribute 'AnimTrack'",
+    );
+    connection.close();
+  });
+
   it("releases pending requests and timers on explicit close", async () => {
     vi.useFakeTimers();
     const connection = new UnrealMcpConnection();

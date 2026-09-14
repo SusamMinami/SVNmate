@@ -179,6 +179,54 @@ describe("NPC supplement server workflow", () => {
     expect(connection.closed).toBe(true);
   });
 
+  it("resolves a nested Body mesh to the named NPC package root", async () => {
+    const connection = new FakeSupplementConnection({
+      target_project_file: "C:/trunk/res/Seria.uproject",
+      target_content_directory: "C:/trunk/res/Content",
+      selected_asset_path:
+        "/Game/Seria/NPC/N113_Ratking/body/SK_N113_Ratking.SK_N113_Ratking",
+      selected_asset_name: "SK_N113_Ratking",
+      selected_asset_type: "SkeletalMesh",
+      npc_name: "N113_Ratking",
+      skeletal_mesh_asset_path:
+        "/Game/Seria/NPC/N113_Ratking/body/SK_N113_Ratking.SK_N113_Ratking",
+      skeleton_asset_path:
+        "/Game/Seria/NPC/N113_Ratking/body/SKEL_N113_Ratking.SKEL_N113_Ratking",
+      face_skeletal_mesh_asset_path:
+        "/Game/Seria/NPC/N113_Ratking/SK_N113_Ratking_Face.SK_N113_Ratking_Face",
+      face_skeleton_asset_path:
+        "/Game/Seria/NPC/N113_Ratking/SKEL_N113_Ratking_Face.SKEL_N113_Ratking_Face",
+      target_package_path: "/Game/Seria/NPC/N113_Ratking",
+      animation_package_path:
+        "/Game/Seria/NPC/N113_Ratking/Animation",
+      existing_asset_paths: [
+        "/Game/Seria/NPC/N113_Ratking/Animation/A_N113_Ratking_Talk.A_N113_Ratking_Talk",
+      ],
+      dirty_package_names: [],
+      face_candidate_count: 1,
+    });
+
+    await expect(
+      scanNpcSupplementTarget(() => connection),
+    ).resolves.toMatchObject({
+      npcName: "N113_Ratking",
+      targetPackagePath: "/Game/Seria/NPC/N113_Ratking",
+      animationPackagePath:
+        "/Game/Seria/NPC/N113_Ratking/Animation",
+      faceSkeletalMeshAssetPath:
+        "/Game/Seria/NPC/N113_Ratking/SK_N113_Ratking_Face.SK_N113_Ratking_Face",
+    });
+    const expression = String(connection.calls[0].args.Expression);
+    expect(expression).toContain("def npc_package_root");
+    expect(expression).toContain(
+      "target_root = npc_package_root(body_package, npc_name)",
+    );
+    expect(expression).toContain(
+      "asset_data_class_name(asset_data) != 'SkeletalMesh'",
+    );
+    expect(connection.closed).toBe(true);
+  });
+
   it("runs the native per-item face automation script", async () => {
     const root = await temporaryDirectory();
     const contentDirectory = join(root, "res", "Content");
@@ -245,11 +293,13 @@ describe("NPC supplement server workflow", () => {
     const root = await temporaryDirectory();
     const contentDirectory = join(root, "res", "Content");
     const sourceDirectory = join(root, "Animation");
-    const faceDirectory = join(sourceDirectory, "Face");
+    const bodyDirectory = join(sourceDirectory, "Animation_Body");
+    const faceDirectory = join(sourceDirectory, "Animation_Face");
     await mkdir(contentDirectory, { recursive: true });
+    await mkdir(bodyDirectory, { recursive: true });
     await mkdir(faceDirectory, { recursive: true });
     await writeFile(
-      join(sourceDirectory, "A_N28_Wave.fbx"),
+      join(bodyDirectory, "A_N28_Wave.fbx"),
       "body animation",
     );
     await writeFile(
@@ -259,8 +309,9 @@ describe("NPC supplement server workflow", () => {
     const plan = await inspectNpcSupplementPlan({
       kind: "actions",
       target: target(contentDirectory),
-      sourceDirectory,
+      sourceDirectory: bodyDirectory,
     });
+    expect(plan.sourceDirectory).toBe(sourceDirectory.replaceAll("\\", "/"));
     expect(plan.items[0].pairedFace).toMatchObject({
       sourceAssetName: "A_N28_Wave_Face",
       state: "new",
@@ -299,6 +350,7 @@ describe("NPC supplement server workflow", () => {
     );
 
     expect(result).toMatchObject({
+      status: "configured",
       kind: "actions",
       importedAssetPaths: [
         "/Game/Seria/NPC/N28/Animation/A_N28_Wave.A_N28_Wave",
@@ -310,6 +362,7 @@ describe("NPC supplement server workflow", () => {
       createdMontageAssetPaths: [
         "/Game/Seria/NPC/N28/Animation/AM_Wave.AM_Wave",
       ],
+      montageFailures: [],
     });
     expect(connection.calls).toHaveLength(2);
     expect(String(connection.calls[1].args.Expression)).toContain(
@@ -327,7 +380,89 @@ describe("NPC supplement server workflow", () => {
     expect(String(connection.calls[0].args.Expression)).toContain(
       "Montage 插槽回读不一致",
     );
+    expect(String(connection.calls[0].args.Expression)).toContain(
+      "anim_track_type = unreal_type('AnimTrack')",
+    );
+    expect(String(connection.calls[0].args.Expression)).not.toContain(
+      "hasattr(unreal, 'AnimTrack')",
+    );
+    expect(String(connection.calls[0].args.Expression)).toContain(
+      "montage_failures.append",
+    );
+    expect(String(connection.calls[0].args.Expression)).toContain(
+      "asset_library.delete_asset",
+    );
+    const actionExpression = String(connection.calls[0].args.Expression);
+    expect(
+      actionExpression.indexOf(
+        "created_montages.append(montage.get_path_name())",
+      ),
+    ).toBeLessThan(
+      actionExpression.indexOf("factory = montage_factory_type()"),
+    );
+    expect(actionExpression).toContain("return\\n    else:");
     expect(connection.closed).toBe(true);
+  });
+
+  it("returns partial success and continues after a Montage failure", async () => {
+    const root = await temporaryDirectory();
+    const contentDirectory = join(root, "res", "Content");
+    const sourceDirectory = join(root, "Animation");
+    await mkdir(contentDirectory, { recursive: true });
+    await mkdir(sourceDirectory, { recursive: true });
+    await writeFile(
+      join(sourceDirectory, "A_N28_Greet.fbx"),
+      "greet animation",
+    );
+    await writeFile(
+      join(sourceDirectory, "A_N28_Wave.fbx"),
+      "wave animation",
+    );
+    const plan = await inspectNpcSupplementPlan({
+      kind: "actions",
+      target: target(contentDirectory),
+      sourceDirectory,
+    });
+    const connection = new FakeSupplementConnection({
+      imported_asset_paths: [
+        "/Game/Seria/NPC/N28/Animation/A_N28_Greet.A_N28_Greet",
+        "/Game/Seria/NPC/N28/Animation/A_N28_Wave.A_N28_Wave",
+      ],
+      created_montage_asset_paths: [
+        "/Game/Seria/NPC/N28/Animation/AM_Wave.AM_Wave",
+      ],
+      montage_failures: [
+        {
+          source_asset_name: "A_N28_Greet",
+          montage_name: "AM_Greet",
+          error: "Montage factory failed",
+        },
+      ],
+      locked_root_asset_paths: [],
+    });
+
+    await expect(
+      applyNpcSupplement(
+        { plan, reviewToken: plan.reviewToken },
+        () => connection,
+      ),
+    ).resolves.toMatchObject({
+      status: "partial",
+      importedAssetPaths: [
+        "/Game/Seria/NPC/N28/Animation/A_N28_Greet.A_N28_Greet",
+        "/Game/Seria/NPC/N28/Animation/A_N28_Wave.A_N28_Wave",
+      ],
+      createdMontageAssetPaths: [
+        "/Game/Seria/NPC/N28/Animation/AM_Wave.AM_Wave",
+      ],
+      montageFailures: [
+        {
+          sourceAssetName: "A_N28_Greet",
+          montageName: "AM_Greet",
+          error: "Montage factory failed",
+        },
+      ],
+    });
   });
 
   it("rejects a changed supplement plan before connecting to UE", async () => {
@@ -376,7 +511,7 @@ describe("NPC supplement server workflow", () => {
       connect: async () => undefined,
       invoke: async () => {
         throw new Error(
-          'Traceback (most recent call last):\n  File "<string>", line 41\nRuntimeError: Seria 原生 Montage 创建失败',
+          'Traceback (most recent call last):\n  File "<string>", line 126, in create_montage\nAttributeError: module \'unreal\' has no attribute \'AnimTrack\'',
         );
       },
       close: () => undefined,
@@ -387,6 +522,8 @@ describe("NPC supplement server workflow", () => {
         { plan, reviewToken: plan.reviewToken },
         () => connection,
       ),
-    ).rejects.toThrow(/^Seria 原生 Montage 创建失败$/);
+    ).rejects.toThrow(
+      /^module 'unreal' has no attribute 'AnimTrack'$/,
+    );
   });
 });

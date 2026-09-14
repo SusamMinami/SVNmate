@@ -1,5 +1,22 @@
 # 镜头沙盘 v0.24.7
 
+## NPC 动作增补
+
+- Body Mesh/Skeleton 位于 NPC 的 `body` 子目录时，动作目标仍识别为 NPC 根目录
+  下的 `Animation`，Face 统一进入 `Animation/Face`。
+- 动作源采用同级 `Animation_Body` / `Animation_Face` 时扫描共同父目录，
+  自动恢复严格同名的 Body/Face 配对。
+- Seria 原生 Helper 创建 Montage 后跳过 UE4 未暴露的 Python 轨道接口；
+  单个 Montage 失败时继续处理后续项，并在结果中列出待补资产。
+- Walk 生成或复用 `AM_Walk` 并使用 `TurnSlot`；`AM_Emotion_*` 动作按项目
+  现有 `AM_<Emotion>` 规则匹配。
+
+## 研究与开发支撑
+
+- 补充 Kimodo、MotionCorrection、Blender 5.2 动态往返及 N113 身体/面部验证
+  记录，并加入经审核的只读目标导出工具。
+- 重整仓库与各产品的 AI 导航、现行文档索引和历史记录边界。
+
 ## 设置状态引导
 
 - 设置页首次打开时先统一显示未就绪图标，再按阅读顺序揭示真实状态，帮助用户
@@ -28,7 +45,7 @@
 
 ## 验证
 
-- 65 个测试文件、517 项 Vitest 测试与 62 项桌面 Playwright 测试全部通过。
+- 65 个测试文件、522 项 Vitest 测试与 62 项桌面 Playwright 测试全部通过。
 - 前端、Electron 主进程与 preload 构建通过；Windows 安装版和便携版重新生成。
 - 发布资产包含更新元数据、blockmap 与 SHA-256 校验文件。
 

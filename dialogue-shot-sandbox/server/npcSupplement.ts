@@ -13,6 +13,7 @@ import {
   UnrealMcpConnection,
   type UnrealInvoker,
 } from "./ue/transport";
+import { resolveNpcAnimationFamilyDirectory } from "./npcAnimationLibrary";
 
 interface FaceSupplementApplyItem {
   sourceFile: string;
@@ -115,7 +116,9 @@ function readableUnrealError(
 ): Error {
   const message = error instanceof Error ? error.message : String(error ?? "");
   const matches = Array.from(
-    message.matchAll(/(?:RuntimeError|Exception):\s*([^\r\n]+)/g),
+    message.matchAll(
+      /(?:^|[\r\n])(?:[A-Za-z_][\w.]*(?:Error|Exception)):\s*([^\r\n]+)/g,
+    ),
   );
   return new Error(matches.at(-1)?.[1]?.trim() || message || fallback);
 }
@@ -313,6 +316,14 @@ def asset_data_class_name(asset_data):
         except Exception:
             return ''
 
+def npc_package_root(body_package, npc_name):
+    body_directory = body_package.rsplit('/', 1)[0]
+    parts = body_directory.split('/')
+    for index in range(len(parts) - 1, -1, -1):
+        if parts[index].lower() == npc_name.lower():
+            return '/'.join(parts[:index + 1])
+    return body_directory
+
 def body_meshes_for_skeleton(skeleton):
     skeleton_path = skeleton.get_path_name()
     skeleton_package = skeleton.get_outermost().get_path_name()
@@ -404,7 +415,7 @@ else:
         body_name = body_mesh.get_name()
         npc_name = body_name[3:] if body_name.lower().startswith('sk_') else body_name
         body_package = body_mesh.get_outermost().get_path_name()
-        target_root = body_package.rsplit('/', 1)[0]
+        target_root = npc_package_root(body_package, npc_name)
         animation_root = target_root + '/Animation'
         asset_paths = [
             str(path)
@@ -420,11 +431,7 @@ else:
             unreal.Name(target_root),
             recursive=True
         ):
-            try:
-                asset_class = str(asset_data.get_editor_property('asset_class'))
-            except Exception:
-                asset_class = ''
-            if asset_class != 'SkeletalMesh':
+            if asset_data_class_name(asset_data) != 'SkeletalMesh':
                 continue
             candidate = asset_data.get_asset()
             candidate_name = candidate.get_name().lower()
@@ -534,7 +541,10 @@ export async function inspectNpcSupplementPlan(
   const request = SupplementPlanRequestSchema.parse(
     rawRequest,
   ) as NpcSupplementPlanRequest;
-  const sourceDirectory = resolve(request.sourceDirectory);
+  const sourceDirectory = await resolveNpcAnimationFamilyDirectory(
+    request.target.npcName,
+    request.sourceDirectory,
+  );
   const animationFiles = await listFbxFiles(sourceDirectory);
   const sourceModifiedTimes = new Map(
     await Promise.all(
@@ -640,6 +650,7 @@ async function applyNpcFaceSupplement(
     importedAssetPaths,
     createdMontageAssetPaths,
     reusedMontageAssetPaths,
+    montageFailures: [],
     lockedRootAssetPaths,
     curveCopiedBodyAssetPaths,
     processedBodyAssetPaths,
@@ -722,6 +733,18 @@ native_montage_creator = (
     if montage_helper else None
 )
 
+def unreal_type(name):
+    try:
+        return getattr(unreal, name)
+    except Exception:
+        return None
+
+montage_factory_type = unreal_type('AnimMontageFactory')
+montage_asset_type = unreal_type('AnimMontage')
+anim_segment_type = unreal_type('AnimSegment')
+anim_track_type = unreal_type('AnimTrack')
+slot_animation_track_type = unreal_type('SlotAnimationTrack')
+
 items = ${JSON.stringify(
       selectedItems.map((item) => ({
         source_file: item.sourceFile,
@@ -754,13 +777,27 @@ for item in items:
         raise RuntimeError('目标 Montage 尚未保存：' + item['montage_asset_path'])
 if any(item['montage_state'] == 'create' for item in items):
     fallback_supported = all([
-        hasattr(unreal, 'AnimMontageFactory'),
-        hasattr(unreal, 'AnimSegment'),
-        hasattr(unreal, 'AnimTrack'),
-        hasattr(unreal, 'SlotAnimationTrack'),
+        montage_factory_type,
+        montage_asset_type,
+        anim_segment_type,
+        anim_track_type,
+        slot_animation_track_type,
     ])
+    if fallback_supported:
+        try:
+            test_segment = anim_segment_type()
+            test_track = anim_track_type()
+            test_track.set_editor_property('anim_segments', [test_segment])
+            test_slot = slot_animation_track_type()
+            test_slot.set_editor_property('anim_track', test_track)
+        except Exception:
+            fallback_supported = False
+    montage_creation_error = ''
     if not callable(native_montage_creator) and not fallback_supported:
-        raise RuntimeError('当前 UE 缺少 Seria Montage 创建接口，且 Python 工厂不可用')
+        montage_creation_error = '当前 UE 缺少 Seria Montage 创建接口，且此 UE4 版本不支持 Python Montage 轨道构造'
+else:
+    fallback_supported = False
+    montage_creation_error = ''
 
 destination = ${JSON.stringify(plan.target.animationPackagePath)}
 asset_library.make_directory(destination)
@@ -794,6 +831,7 @@ for item in items:
     imported.append(animation.get_path_name())
 
 created_montages = []
+montage_failures = []
 def create_montage(item):
     sequence = unreal.load_asset(item['target_asset_path'])
     if not sequence or sequence.get_class().get_name() != 'AnimSequence':
@@ -808,8 +846,14 @@ def create_montage(item):
         except Exception as error:
             raise RuntimeError('Seria 原生 Montage 创建失败：' + str(error))
         montage = unreal.load_asset(item['montage_asset_path'])
+        if not montage:
+            raise RuntimeError('创建 Montage 失败：' + item['montage_name'])
+        if not asset_library.save_loaded_asset(montage):
+            raise RuntimeError('Montage 保存失败：' + item['montage_name'])
+        created_montages.append(montage.get_path_name())
+        return
     else:
-        factory = unreal.AnimMontageFactory()
+        factory = montage_factory_type()
         try:
             factory.set_editor_property('target_skeleton', body_skeleton)
             factory.set_editor_property('source_animation', sequence)
@@ -818,7 +862,7 @@ def create_montage(item):
         montage = asset_tools.create_asset(
             item['montage_name'],
             ${JSON.stringify(plan.target.animationPackagePath)},
-            unreal.AnimMontage,
+            montage_asset_type,
             factory
         )
     if not montage:
@@ -833,18 +877,22 @@ def create_montage(item):
         tracks[0].set_editor_property('slot_name', unreal.Name(slot_name))
         montage.set_editor_property('slot_anim_tracks', tracks)
     else:
-        segment = unreal.AnimSegment()
+        segment = anim_segment_type()
         segment.set_editor_property('anim_reference', sequence)
         segment.set_editor_property('anim_start_time', 0.0)
         segment.set_editor_property('anim_end_time', sequence.get_play_length())
         segment.set_editor_property('anim_play_rate', 1.0)
         segment.set_editor_property('looping_count', 1)
-        anim_track = unreal.AnimTrack()
+        anim_track = anim_track_type()
         anim_track.set_editor_property('anim_segments', [segment])
-        slot_track = unreal.SlotAnimationTrack()
+        slot_track = slot_animation_track_type()
         slot_track.set_editor_property('slot_name', unreal.Name(slot_name))
         slot_track.set_editor_property('anim_track', anim_track)
         montage.set_editor_property('slot_anim_tracks', [slot_track])
+    try:
+        montage.set_editor_property('skeleton', body_skeleton)
+    except Exception:
+        pass
     if not asset_library.save_loaded_asset(montage):
         raise RuntimeError('Montage 保存失败：' + item['montage_name'])
     actual_tracks = list(montage.get_editor_property('slot_anim_tracks'))
@@ -860,11 +908,33 @@ def create_montage(item):
 
 for item in items:
     if item['montage_state'] == 'create':
-        create_montage(item)
+        if montage_creation_error:
+            montage_failures.append({
+                'source_asset_name': item['source_asset_name'],
+                'montage_name': item['montage_name'],
+                'error': montage_creation_error,
+            })
+            continue
+        try:
+            create_montage(item)
+        except Exception as error:
+            error_message = str(error).strip() or type(error).__name__
+            try:
+                if asset_library.does_asset_exist(item['montage_asset_path']):
+                    if not asset_library.delete_asset(item['montage_asset_path']):
+                        error_message += '；失败产物清理失败'
+            except Exception as cleanup_error:
+                error_message += '；失败产物清理失败：' + str(cleanup_error)
+            montage_failures.append({
+                'source_asset_name': item['source_asset_name'],
+                'montage_name': item['montage_name'],
+                'error': error_message,
+            })
 
 _result = {
     'imported_asset_paths': imported,
     'created_montage_asset_paths': created_montages,
+    'montage_failures': montage_failures,
     'locked_root_asset_paths': locked,
 }
 `;
@@ -888,22 +958,36 @@ _result = {
         ? raw.created_montage_asset_paths
         : []
     ).map(String);
+    const montageFailures = (
+      Array.isArray(raw.montage_failures)
+        ? raw.montage_failures
+        : []
+    ).map((failure) => {
+      const item = failure as Record<string, unknown>;
+      return {
+        sourceAssetName: String(item.source_asset_name ?? ""),
+        montageName: String(item.montage_name ?? ""),
+        error: String(item.error ?? "未知错误"),
+      };
+    });
     const expectedMontageCount = selectedItems.filter(
       (item) => item.montageState === "create",
     ).length;
     if (
-      createdMontageAssetPaths.length !== expectedMontageCount
+      createdMontageAssetPaths.length + montageFailures.length !==
+      expectedMontageCount
     ) {
       throw new Error("Montage 创建数量与审核清单不一致");
     }
     const bodyResult: NpcSupplementApplyResult = {
-      status: "configured",
+      status: montageFailures.length > 0 ? "partial" : "configured",
       kind: "actions",
       importedAssetPaths,
       createdMontageAssetPaths,
       reusedMontageAssetPaths: selectedItems
         .filter((item) => item.montageState === "reuse")
         .map((item) => item.montageAssetPath),
+      montageFailures,
       lockedRootAssetPaths: [],
       curveCopiedBodyAssetPaths: [],
       processedBodyAssetPaths: [],
@@ -911,6 +995,10 @@ _result = {
         "抽查新增或更新动作的 Skeleton、帧率和 Root Motion",
         "检查新建 Montage 的源动作与 IdleSlot 或 TurnSlot",
         "保存并编译引用这些动作的 NPC BP / ABP",
+        ...montageFailures.map(
+          (failure) =>
+            `${failure.montageName} 未创建（${failure.sourceAssetName}）：${failure.error}`,
+        ),
       ],
     };
     if (pairedFaceItems.length === 0) {
@@ -923,6 +1011,10 @@ _result = {
     );
     return {
       ...bodyResult,
+      status:
+        bodyResult.status === "partial" || faceResult.status === "partial"
+          ? "partial"
+          : "configured",
       importedAssetPaths: [
         ...bodyResult.importedAssetPaths,
         ...faceResult.importedAssetPaths,
@@ -931,7 +1023,14 @@ _result = {
         ...bodyResult.createdMontageAssetPaths,
         ...faceResult.createdMontageAssetPaths,
       ],
-      reusedMontageAssetPaths: faceResult.reusedMontageAssetPaths,
+      reusedMontageAssetPaths: [
+        ...bodyResult.reusedMontageAssetPaths,
+        ...faceResult.reusedMontageAssetPaths,
+      ],
+      montageFailures: [
+        ...bodyResult.montageFailures,
+        ...faceResult.montageFailures,
+      ],
       lockedRootAssetPaths: faceResult.lockedRootAssetPaths,
       curveCopiedBodyAssetPaths:
         faceResult.curveCopiedBodyAssetPaths,

@@ -1,5 +1,5 @@
 import { readdir, stat } from "node:fs/promises";
-import { extname, resolve } from "node:path";
+import { basename, dirname, extname, resolve } from "node:path";
 
 export interface NpcAnimationDirectoryResolution {
   directoryPath: string;
@@ -22,6 +22,67 @@ export function normalizeNpcAnimationDirectories(
     directories.set(directory.toLowerCase(), directory);
   }
   return Array.from(directories.values());
+}
+
+function isSplitDirectory(directory: string, role: "body" | "face"): boolean {
+  return new RegExp(`(?:^|[_ -])${role}$`, "i").test(basename(directory));
+}
+
+async function containsNpcFaceFbx(
+  directory: string,
+  facePrefix: string,
+): Promise<boolean> {
+  let entries;
+  try {
+    entries = await readdir(directory, { withFileTypes: true });
+  } catch {
+    return false;
+  }
+  for (const entry of entries) {
+    const path = resolve(directory, entry.name);
+    if (entry.isDirectory()) {
+      if (await containsNpcFaceFbx(path, facePrefix)) {
+        return true;
+      }
+    } else if (
+      entry.isFile() &&
+      extname(entry.name).toLowerCase() === ".fbx" &&
+      entry.name.toLowerCase().startsWith(facePrefix) &&
+      /_face\.fbx$/i.test(entry.name)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export async function resolveNpcAnimationFamilyDirectory(
+  npcName: string,
+  bodyDirectory: string,
+): Promise<string> {
+  const directory = resolve(bodyDirectory);
+  if (!isSplitDirectory(directory, "body")) {
+    return directory;
+  }
+  const parent = dirname(directory);
+  let siblings;
+  try {
+    siblings = await readdir(parent, { withFileTypes: true });
+  } catch {
+    return directory;
+  }
+  const facePrefix = `a_${npcName.trim().toLowerCase()}_`;
+  for (const sibling of siblings) {
+    const siblingPath = resolve(parent, sibling.name);
+    if (
+      sibling.isDirectory() &&
+      isSplitDirectory(siblingPath, "face") &&
+      (await containsNpcFaceFbx(siblingPath, facePrefix))
+    ) {
+      return parent;
+    }
+  }
+  return directory;
 }
 
 export async function resolveNpcAnimationDirectory(
@@ -84,7 +145,28 @@ export async function resolveNpcAnimationDirectory(
     await visit(root);
   }
 
-  const candidates = Array.from(matches.values()).sort(
+  const familyMatches = new Map<
+    string,
+    { path: string; count: number; latestModifiedTimeMs: number }
+  >();
+  for (const match of matches.values()) {
+    const path = await resolveNpcAnimationFamilyDirectory(
+      normalizedNpcName,
+      match.path,
+    );
+    const key = path.toLowerCase();
+    const current = familyMatches.get(key);
+    familyMatches.set(key, {
+      path,
+      count: (current?.count ?? 0) + match.count,
+      latestModifiedTimeMs: Math.max(
+        current?.latestModifiedTimeMs ?? 0,
+        match.latestModifiedTimeMs,
+      ),
+    });
+  }
+
+  const candidates = Array.from(familyMatches.values()).sort(
     (left, right) =>
       right.count - left.count ||
       right.latestModifiedTimeMs - left.latestModifiedTimeMs ||

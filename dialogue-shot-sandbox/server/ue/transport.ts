@@ -25,6 +25,33 @@ interface UnrealResponse {
   errorLogs?: string;
 }
 
+function errorMessageFromResponse(
+  response: UnrealResponse,
+  action: string,
+): string {
+  const returnValue = response.Output?.ReturnValue;
+  const details =
+    returnValue && typeof returnValue === "object"
+      ? (returnValue as { Message?: unknown; Result?: unknown })
+      : null;
+  const candidates = [
+    details?.Message,
+    details?.Result,
+    typeof returnValue === "string" ? returnValue : "",
+    response.errorLogs,
+  ].filter(
+    (value): value is string =>
+      typeof value === "string" && value.trim().length > 0,
+  );
+  return (
+    candidates.reduce(
+      (longest, value) =>
+        value.trim().length > longest.length ? value.trim() : longest,
+      "",
+    ) || `UE 操作失败：${action}`
+  );
+}
+
 export interface UnrealInvoker {
   connect(): Promise<void>;
   invoke(
@@ -88,6 +115,10 @@ export class UnrealMcpConnection implements UnrealInvoker {
     args: Record<string, unknown>,
     options: { timeoutMs?: number } = {},
   ): Promise<unknown> {
+    // #region debug-point A-B-C:ue-request
+    const debugTrace = process.env.DEBUG_SESSION_ID === "ue-search-compact-crash" ? { id: `${Date.now()}-${Math.random().toString(16).slice(2)}`, startedAt: Date.now(), connectionPort: this.socket.localPort } : null;
+    if (debugTrace) void fetch(process.env.DEBUG_SERVER_URL || "http://127.0.0.1:7777/event", { method: "POST", signal: AbortSignal.timeout(750), body: JSON.stringify({ sessionId: "ue-search-compact-crash", runId: process.env.DEBUG_RUN_ID || "pre-fix", hypothesisId: "A-B-C", traceId: debugTrace.id, location: "server/ue/transport.ts:invoke", msg: "[DEBUG] UE request begin", ts: debugTrace.startedAt, data: { action, propertyName: args.PropertyName, connectionPort: debugTrace.connectionPort, pendingOnConnection: this.waiters.length, socketState: this.socket.readyState, selectionProbe: typeof args.Expression === "string" && args.Expression.includes("get_current_selected_dialog_node_info") } }) }).catch(() => {});
+    // #endregion
     const response = await this.request(
       {
         proto_type: "tool_call",
@@ -97,8 +128,11 @@ export class UnrealMcpConnection implements UnrealInvoker {
       options.timeoutMs,
       action,
     );
+    // #region debug-point A-B-C:ue-response
+    if (debugTrace) void fetch(process.env.DEBUG_SERVER_URL || "http://127.0.0.1:7777/event", { method: "POST", signal: AbortSignal.timeout(750), body: JSON.stringify({ sessionId: "ue-search-compact-crash", runId: process.env.DEBUG_RUN_ID || "pre-fix", hypothesisId: "A-B-C", traceId: debugTrace.id, location: "server/ue/transport.ts:invoke", msg: "[DEBUG] UE request returned", ts: Date.now(), data: { action, propertyName: args.PropertyName, connectionPort: debugTrace.connectionPort, durationMs: Date.now() - debugTrace.startedAt, success: response.success !== false, emptySelectionError: response.errorLogs?.includes("'NoneType' object is not iterable") ?? false } }) }).catch(() => {});
+    // #endregion
     if (response.success === false) {
-      throw new Error(response.errorLogs || `UE 操作失败：${action}`);
+      throw new Error(errorMessageFromResponse(response, action));
     }
     return response.Value ?? response.Output?.ReturnValue;
   }
@@ -178,6 +212,9 @@ export class UnrealMcpConnection implements UnrealInvoker {
   }
 
   private rejectAll(error: Error): void {
+    // #region debug-point B-D:ue-connection-failure
+    if (process.env.DEBUG_SESSION_ID === "ue-search-compact-crash" && this.waiters.length > 0) void fetch(process.env.DEBUG_SERVER_URL || "http://127.0.0.1:7777/event", { method: "POST", signal: AbortSignal.timeout(750), body: JSON.stringify({ sessionId: "ue-search-compact-crash", runId: process.env.DEBUG_RUN_ID || "pre-fix", hypothesisId: "B-D", location: "server/ue/transport.ts:rejectAll", msg: "[DEBUG] UE pending requests rejected", ts: Date.now(), data: { connectionPort: this.socket.localPort, pendingOnConnection: this.waiters.length, socketState: this.socket.readyState, error: error.message.slice(0, 200) } }) }).catch(() => {});
+    // #endregion
     this.responseBuffer = null;
     this.responseOffset = 0;
     this.headerOffset = 0;

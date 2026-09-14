@@ -59,6 +59,36 @@ describe("NPC animation library", () => {
     });
   });
 
+  it("returns the shared root for sibling Body and Face directories", async () => {
+    const root = await temporaryDirectory();
+    const animationDirectory = join(
+      root,
+      "NPC",
+      "N113_Ratking",
+      "Animation",
+    );
+    const bodyDirectory = join(animationDirectory, "Animation_Body");
+    const faceDirectory = join(animationDirectory, "Animation_Face");
+    await mkdir(bodyDirectory, { recursive: true });
+    await mkdir(faceDirectory, { recursive: true });
+    await writeFile(
+      join(bodyDirectory, "A_N113_Ratking_Talk.fbx"),
+      "body",
+    );
+    await writeFile(
+      join(faceDirectory, "A_N113_Ratking_Talk_Face.fbx"),
+      "face",
+    );
+
+    await expect(
+      resolveNpcAnimationDirectory("N113_Ratking", [root]),
+    ).resolves.toEqual({
+      directoryPath: animationDirectory,
+      matchedFileCount: 1,
+      candidateDirectories: [animationDirectory],
+    });
+  });
+
   it("selects the most complete directory when multiple directories match", async () => {
     const root = await temporaryDirectory();
     const current = join(root, "Current", "N28");

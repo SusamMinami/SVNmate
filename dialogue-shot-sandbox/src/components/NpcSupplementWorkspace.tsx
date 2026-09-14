@@ -440,10 +440,13 @@ export function NpcSupplementWorkspace({
     try {
       const next = await applyNpcSupplement(plan);
       setResult(next);
+      const montageFailureCount = next.montageFailures.length;
       setStatus(
-        isFace
-          ? `面部补充完成：导入 ${next.importedAssetPaths.length}，复制曲线 ${next.curveCopiedBodyAssetPaths.length}，创建 Montage ${next.createdMontageAssetPaths.length}`
-          : `动作增补完成：Body ${selectedItems.length}，Face ${next.lockedRootAssetPaths.length}，创建 Montage ${next.createdMontageAssetPaths.length}`,
+        montageFailureCount > 0
+          ? `动作已导入，${montageFailureCount} 个 Montage 未创建；其余项已继续处理`
+          : isFace
+            ? `面部补充完成：导入 ${next.importedAssetPaths.length}，复制曲线 ${next.curveCopiedBodyAssetPaths.length}，创建 Montage ${next.createdMontageAssetPaths.length}`
+            : `动作增补完成：Body ${selectedItems.length}，Face ${next.lockedRootAssetPaths.length}，创建 Montage ${next.createdMontageAssetPaths.length}`,
       );
     } catch (applyError) {
       setError(
@@ -949,13 +952,17 @@ export function NpcSupplementWorkspace({
               >
                 {busy === "apply" ? (
                   <LoaderCircle className="spin" size={16} />
+                ) : result?.status === "partial" ? (
+                  <AlertTriangle size={16} />
                 ) : result ? (
                   <Check size={16} />
                 ) : (
                   <Play size={16} />
                 )}
                 {result
-                  ? "执行已完成"
+                  ? result.status === "partial"
+                    ? "执行有遗漏"
+                    : "执行已完成"
                   : isFace
                     ? "执行面部补充"
                     : "执行动作增补"}
@@ -985,8 +992,15 @@ export function NpcSupplementWorkspace({
                         </span>
                         <span>Face {result.lockedRootAssetPaths.length}</span>
                         <span>
-                          Montage {result.createdMontageAssetPaths.length}
+                          Montage{" "}
+                          {result.createdMontageAssetPaths.length +
+                            result.reusedMontageAssetPaths.length}
                         </span>
+                        {result.montageFailures.length > 0 && (
+                          <span>
+                            待补 Montage {result.montageFailures.length}
+                          </span>
+                        )}
                       </>
                     )}
                   </div>

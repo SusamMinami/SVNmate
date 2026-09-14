@@ -29,7 +29,7 @@ function defaultCopyFaceCurves(actionName: string): boolean {
 }
 
 function defaultMakeFaceMontage(actionName: string): boolean {
-  return !/^(?:look[DFU]|walk|backlean|frontlean|idlestand\d*|turn(?:L|R|Left|Right)\d*)$/i.test(
+  return !/^(?:look[DFU]|backlean|frontlean|idlestand\d*|turn(?:L|R|Left|Right)\d*)$/i.test(
     actionName,
   );
 }

@@ -168,6 +168,7 @@ describe("NPC supplement planning", () => {
       "D:/FBX/N28/Animation/Face/A_N28_TurnL_Face.fbx",
       "D:/FBX/N28/Animation/Face/A_N28_Idle1_Face.fbx",
       "D:/FBX/N28/Animation/Face/A_N28_Talk_Face.fbx",
+      "D:/FBX/N28/Animation/Face/A_N28_Walk_Face.fbx",
     ]);
 
     expect(
@@ -181,6 +182,7 @@ describe("NPC supplement planning", () => {
       { action: "LookF", curves: false, montage: false },
       { action: "Talk", curves: true, montage: true },
       { action: "TurnL", curves: true, montage: false },
+      { action: "Walk", curves: true, montage: true },
     ]);
   });
 

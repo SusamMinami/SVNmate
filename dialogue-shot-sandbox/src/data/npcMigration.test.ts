@@ -118,6 +118,7 @@ describe("NPC migration planning", () => {
         "D:/Anim/A_N28_Citizen_Male_C_TurnLeft180.fbx",
         "D:/Anim/A_N28_Citizen_Male_C_Walk.fbx",
         "D:/Anim/A_N28_Citizen_Male_C_Wave.fbx",
+        "D:/Anim/A_N28_Citizen_Male_C_AM_Emotion_Anger.fbx",
       ]).montages,
     ).toMatchObject([
       { montageName: "AM_Idle1", slotName: "IdleSlot" },
@@ -125,7 +126,9 @@ describe("NPC migration planning", () => {
       { montageName: "AM_TurnLeft90", slotName: "TurnSlot" },
       { montageName: "AM_TurnRight90", slotName: "TurnSlot" },
       { montageName: "AM_TurnLeft180", slotName: "TurnSlot" },
+      { montageName: "AM_Walk", slotName: "TurnSlot" },
       { montageName: "AM_Wave", slotName: "IdleSlot" },
+      { montageName: "AM_Anger", slotName: "IdleSlot" },
     ]);
   });
 

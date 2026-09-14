@@ -339,6 +339,44 @@ test("sorts action supplements by source modification time", async ({
       });
     },
   );
+  await page.route(
+    "**/api/ue/npc-migration/supplement-apply",
+    (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          data: {
+            status: "partial",
+            kind: "actions",
+            importedAssetPaths: [
+              "/Game/Seria/NPC/N28/Animation/A_N28_Wave.A_N28_Wave",
+              "/Game/Seria/NPC/N28/Animation/Face/A_N28_Wave_Face.A_N28_Wave_Face",
+            ],
+            createdMontageAssetPaths: [],
+            reusedMontageAssetPaths: [],
+            montageFailures: [
+              {
+                sourceAssetName: "A_N28_Wave",
+                montageName: "AM_Wave",
+                error: "Montage factory failed",
+              },
+            ],
+            lockedRootAssetPaths: [
+              "/Game/Seria/NPC/N28/Animation/Face/A_N28_Wave_Face.A_N28_Wave_Face",
+            ],
+            curveCopiedBodyAssetPaths: [],
+            processedBodyAssetPaths: [
+              "/Game/Seria/NPC/N28/Animation/A_N28_Wave.A_N28_Wave",
+            ],
+            manualChecks: [
+              "AM_Wave 未创建（A_N28_Wave）：Montage factory failed",
+            ],
+          },
+        }),
+      }),
+  );
   await page.addInitScript(() => {
     window.sessionStorage.setItem("shot-sandbox.launch-screen-seen", "1");
   });
@@ -416,6 +454,20 @@ test("sorts action supplements by source modification time", async ({
     path: testInfo.outputPath("npc-action-supplement-sorted.png"),
     fullPage: true,
   });
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "执行动作增补" }).click();
+  await expect(
+    page.getByText("动作已导入，1 个 Montage 未创建；其余项已继续处理"),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "执行有遗漏" }),
+  ).toBeVisible();
+  await expect(page.getByText("待补 Montage 1")).toBeVisible();
+  await expect(
+    page.getByText(
+      "AM_Wave 未创建（A_N28_Wave）：Montage factory failed",
+    ),
+  ).toBeVisible();
   await expect(
     page.getByRole("button", { name: "返回分镜工作台" }),
   ).toHaveCount(0);

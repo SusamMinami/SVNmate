@@ -1,6 +1,23 @@
 # 镜头沙盘 v0.24.7
 
-> 2026-09-12 · 设置状态引导、语音审核与小窗机位优化
+> 2026-09-14 · 设置状态引导、语音审核、小窗机位与 NPC 动作增补优化
+
+## NPC 动作增补
+
+- Body Mesh 位于 `body` 子目录时，动作仍统一写入 NPC 根目录的 `Animation`，
+  Face 写入 `Animation/Face`。
+- 动作库采用 `Animation_Body` / `Animation_Face` 同级结构时自动扫描共同父目录，
+  恢复 Body 与 Face 配对。
+- 原生 Helper 创建 Montage 后不再调用 UE4 未暴露的 Python 轨道类型；单项失败
+  会继续处理其余 Montage，并在结果中列出待补项。
+- Walk 生成 `AM_Walk` 并使用 `TurnSlot`；`AM_Emotion_*` 动作匹配既有
+  `AM_<Emotion>` 命名。
+
+## 研究与开发
+
+- 补充 Kimodo、MotionCorrection、Blender 5.2 动态往返及 N113 骨架/面部验证
+  记录，并加入只读目标导出工具。
+- 重整多产品 AI 入口和文档索引，明确现行规范、历史记录与项目边界。
 
 ## 设置与状态
 
@@ -31,6 +48,6 @@
 
 ## 验证
 
-- 517 项单元测试与 62 项桌面端 E2E 测试通过。
+- 522 项单元测试与 62 项桌面端 E2E 测试通过。
 - Windows 安装版、便携版、更新元数据与 SHA-256 校验文件重新生成。
 - 本地语音模型权重不包含在安装包中；主 bundle 仍保留超过 500 kB 的构建提醒。

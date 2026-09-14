@@ -40,6 +40,14 @@
 
 ## 研究与历史
 
+- [2026-09-14 N113 身体重定向测试](research/kimodo-n113-validation-2026-09-14.md)：
+  身体往返、独立衣物/面部预览；已纠正披衣袖管判断，UE 挂接与生产验收待完成。
+- [2026-09-14 Kimodo 约束动作验证](research/kimodo-constraint-validation-2026-09-14.md)：
+  无文本约束生成、原生后处理与 Blender 动态 BVH/FBX 链路已经通过。
+- [2026-09-13 Kimodo 离线验证](research/kimodo-validation-2026-09-13.md)：
+  权重加载与静态骨架格式的阶段性记录；后续结论以上述 2026-09-14 记录为准。
+- [2026-09-12 NPC 动作制作研究](research/npc-motion-authoring-2026-09-12.md)：
+  工具选型、Kimodo 制作链路及官方 Blender MCP 配置验证；动作生成模块尚未实现。
 - [2026-09-09 性能记录](performance-2026-09-09.md)、
   [2026-09-11 性能记录](performance-2026-09-11.md)：已测结果与当时待办，非当前测试报告。
 - [Adobe](adobe-camera-techniques.md)、[StudioBinder](studiobinder-camera-techniques.md)：

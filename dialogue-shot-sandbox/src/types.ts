@@ -1244,12 +1244,19 @@ export interface NpcSupplementPlanRequest {
   }>;
 }
 
+export interface NpcSupplementMontageFailure {
+  sourceAssetName: string;
+  montageName: string;
+  error: string;
+}
+
 export interface NpcSupplementApplyResult {
-  status: "configured";
+  status: "configured" | "partial";
   kind: NpcSupplementKind;
   importedAssetPaths: string[];
   createdMontageAssetPaths: string[];
   reusedMontageAssetPaths: string[];
+  montageFailures: NpcSupplementMontageFailure[];
   lockedRootAssetPaths: string[];
   curveCopiedBodyAssetPaths: string[];
   processedBodyAssetPaths: string[];
