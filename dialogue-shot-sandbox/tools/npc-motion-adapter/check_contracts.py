@@ -3,8 +3,10 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+from mathutils import Matrix, Quaternion, Vector
+
 sys.path.insert(0, str(Path(__file__).parent))
-from adapt_motion import matrix, rigid_fit, unique_names
+from adapt_motion import blend_transform, matrix, rigid_fit, rotation_angle, unique_names
 
 
 def rejected(call):
@@ -32,4 +34,14 @@ assert abs(matrix(identity).determinant()-1) < 1e-6
 rejected(lambda: matrix({**identity, "translation": [float("nan"), 0, 0]}))
 rejected(lambda: matrix({**identity, "rotation_xyzw": [0, 0, 0, 2]}))
 rejected(lambda: matrix({**identity, "scale": [2, 1, 1]}))
-print("10 coordinate/name/transform contract checks passed")
+left = Matrix.Identity(4)
+right = Matrix.LocRotScale(
+    Vector((10, 0, 0)), Quaternion(Vector((0, 0, 1)), 1.5707963267948966),
+    Vector((1, 1, 1)),
+)
+assert blend_transform(left, right, 0) == left
+assert blend_transform(left, right, 1) == right
+half = blend_transform(left, right, 0.5)
+assert abs(half.translation.x - 5) < 1e-6
+assert abs(rotation_angle(left, half) - 0.7853981633974483) < 1e-6
+print("14 coordinate/name/transform/blend contract checks passed")

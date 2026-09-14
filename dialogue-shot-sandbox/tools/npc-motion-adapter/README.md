@@ -39,9 +39,26 @@ Use Blender 5.2 with its bundled NumPy. No Rokoko plugin or debug server is requ
   --snapshot "<capture>/target.json" `
   --motion-blend "<prepared animation.blend>" `
   --source-rig "<exact animated Armature object>" `
+  --idle-reference "<A_NPC_Idlestand.fbx>" `
+  --transition-frames 15 `
+  --palm-forward right `
   --face neutral `
   --output "<new output directory>"
 ```
+
+An authored IdleStand reference is required. The adapter evaluates its location
+and rotation through the real source rig instead of trusting animation-FBX bind
+matrices or copying scale. It treats generated motion as change relative to its
+first frame, rebases that change onto the chosen IdleStand frame (the loop start
+by default), and applies a smooth endpoint envelope. First and last frames must
+match IdleStand within 0.1mm / 0.001rad or the command fails.
+
+`--transition-frames` controls each endpoint window and must leave an unchanged
+middle. `--idle-frame` may select another authored frame explicitly.
+`--palm-forward left|right` is an opt-in wave correction: while that hand is raised,
+it twists the wrist and descendants only around the finger direction so the palm
+plane faces the character's foot-inferred forward direction. It preserves wrist
+position and finger-up direction. Other gestures should leave it as `none`.
 
 `--face none` is the default and works for characters without an independent face.
 `neutral` uses the exported UE face and the captured relative transform. Existing
@@ -54,12 +71,14 @@ The adapter:
   reference residual limit. Does not hardcode an NPC's handedness or facing.
 - Requires near-identical source/target proportions (5 mm landmark residual).
 - Rebuilds the target hierarchy, restoring a root Blender represented as an object.
-- Transfers world-space deformation relative to the source rest pose; unmapped
-  target bones keep their local reference relation and follow their parent.
+- Rebases source-local motion onto authored IdleStand, then transfers the resulting
+  world-space deformation relative to source rest. Unmapped target bones keep
+  their local reference relation and follow their parent.
 - Preserves the exported target mesh and weights. Refuses mirrored weighted or
   non-leaf bind bones; reflected unweighted leaf axes are normalized and reported.
 - Rejects nonfinite data, unsupported non-unit scale magnitudes, missing bones,
-  name collisions, invalid hierarchy, and changed bind matrices.
+  weighted bones omitted by IdleStand, name collisions, invalid hierarchy,
+  implausible evaluated IdleStand bounds, and changed bind matrices.
 - Exports `animation.fbx` separately from `diagnostic_skin.fbx`.
 - Exposes `--primary-bone-axis` / `--secondary-bone-axis` (defaults X/Y);
   export coordinate axes are validated, not silently changed after a failure.
@@ -96,5 +115,6 @@ git diff --check
 ```
 
 Temporary `debug-point` instrumentation runs only when `DEBUG_SERVER_URL` is set;
-it is retained pending review of the bind-pose fix. Leave that variable unset for
-ordinary offline operation. `DEBUG_RUN_ID` distinguishes pre/post-fix evidence.
+it is retained pending review of the bind-pose and pose-continuity fixes. Leave
+that variable unset for ordinary offline operation. `DEBUG_RUN_ID` distinguishes
+pre/post-fix evidence.
