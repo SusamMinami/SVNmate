@@ -36,6 +36,7 @@
   --border-strong: #a7a9a2;
   --text: #191919;
   --text-muted: #686a65;
+  --control-hover: #383838;
   --accent: #fffa00;
   --accent-strong: #ded900;
   --accent-soft: #fffdd1;
@@ -10780,7 +10781,7 @@ textarea:focus-visible {
 
 .node-camera-preset-picker__fields {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 28px;
+  grid-template-columns: minmax(0, 1fr) 28px;
   align-items: end;
   gap: 6px;
 }
@@ -10815,36 +10816,133 @@ textarea:focus-visible {
   overflow-wrap: anywhere;
 }
 
-.node-camera-curve-field {
-  display: grid;
-  grid-template-columns: 82px minmax(0, 1fr);
-  align-items: center;
-  min-height: 34px;
-  margin-bottom: 8px;
-  border: 1px solid var(--border);
+.node-camera-orbit {
+  position: relative;
+  height: 142px;
+  margin-top: 8px;
+  overflow: hidden;
   background: var(--surface);
+  border: 1px solid var(--border);
 }
 
-.node-camera-curve-field > span {
-  align-self: stretch;
-  display: flex;
-  align-items: center;
-  padding: 0 8px;
-  color: var(--text-muted);
-  background: var(--paper);
-  border-right: 1px solid var(--border);
-  font-size: 9px;
+.node-camera-orbit__guides {
+  position: absolute;
+  inset: 8px;
+  width: calc(100% - 16px);
+  height: calc(100% - 16px);
+  overflow: visible;
+  pointer-events: none;
 }
 
-.node-camera-curve-field input {
-  width: 100%;
-  min-width: 0;
-  height: 32px;
-  padding: 0 8px;
-  border: 0;
-  background: transparent;
-  font-family: "Cascadia Code", Consolas, monospace;
-  font-size: 10px;
+.node-camera-orbit__guides circle {
+  fill: none;
+  stroke: var(--border);
+  stroke-dasharray: 2 3;
+  stroke-width: 0.7;
+}
+
+.node-camera-orbit__guides line {
+  stroke: var(--border);
+  stroke-width: 0.55;
+}
+
+.node-camera-orbit__guides line.is-selected {
+  stroke: var(--signal);
+  stroke-width: 1.4;
+}
+
+.node-camera-orbit__npc {
+  position: absolute;
+  z-index: 1;
+  top: 50%;
+  left: 50%;
+  width: 42px;
+  height: 42px;
+  background: var(--surface-strong);
+  border: 2px solid var(--ink);
+  border-radius: 50%;
+  box-shadow: inset -5px -5px 8px
+    color-mix(in srgb, var(--ink) 18%, transparent);
+  transform: translate(-50%, -50%);
+}
+
+.node-camera-orbit__npc::before {
+  position: absolute;
+  bottom: -8px;
+  left: 50%;
+  width: 0;
+  height: 0;
+  content: "";
+  border-right: 5px solid transparent;
+  border-top: 8px solid var(--ink);
+  border-left: 5px solid transparent;
+  transform: translateX(-50%);
+}
+
+.node-camera-orbit__npc::after {
+  position: absolute;
+  bottom: 9px;
+  left: 10px;
+  width: 3px;
+  height: 3px;
+  content: "";
+  background: var(--ink);
+  border-radius: 50%;
+  box-shadow: 15px 0 0 var(--ink);
+}
+
+.node-camera-orbit > button {
+  position: absolute;
+  z-index: 2;
+  display: grid;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  cursor: pointer;
+  place-items: center;
+  transform: translate(-50%, -50%);
+  transition:
+    color var(--motion-feedback) ease,
+    background-color var(--motion-feedback) ease,
+    border-color var(--motion-feedback) ease,
+    transform var(--motion-press) ease;
+}
+
+.node-camera-orbit > button:hover:not(:disabled),
+.node-camera-orbit > button:focus-visible {
+  color: #ffffff;
+  background: var(--control-hover);
+  border-color: var(--control-hover);
+}
+
+.node-camera-orbit > button:focus-visible {
+  outline: 2px solid var(--signal);
+  outline-offset: 2px;
+}
+
+.node-camera-orbit > button:active:not(:disabled) {
+  transform: translate(-50%, -50%) scale(0.96);
+}
+
+.node-camera-orbit > button.is-selected {
+  color: var(--ink);
+  background: var(--signal);
+  border-color: var(--ink);
+}
+
+.node-camera-orbit > button.is-selected:is(:hover, :focus-visible) {
+  color: var(--ink);
+  background: var(--signal);
+  border-color: var(--ink);
+}
+
+.node-camera-orbit > button:disabled {
+  opacity: 0.48;
+  cursor: default;
 }
 
 .preview-school-editor {
@@ -11303,6 +11401,21 @@ textarea:focus-visible {
   flex-wrap: nowrap;
 }
 
+.node-camera-review dd.node-camera-review__curve {
+  flex-wrap: nowrap;
+}
+
+.node-camera-review__curve input {
+  width: 112px;
+  min-width: 0;
+  height: 24px;
+  padding: 2px 5px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  background: var(--surface);
+  font: 10px/1 "Cascadia Code", Consolas, monospace;
+}
+
 .node-camera-review__duration label {
   display: grid;
   grid-template-columns: 58px 12px;
@@ -11320,6 +11433,7 @@ textarea:focus-visible {
   font: 10px/1 "Cascadia Code", Consolas, monospace;
 }
 
+.node-camera-review__curve input:focus,
 .node-camera-review__duration input:focus {
   border-color: var(--ark-cyan);
   outline: 2px solid color-mix(in srgb, var(--ark-cyan) 28%, transparent);
@@ -11787,6 +11901,15 @@ textarea:focus-visible {
   }
 
   .app-shell[data-ark-theme="endfield"]
+    .director-control
+    .mode-segment
+    button:not(:disabled):not(.is-active):is(:hover, :focus-visible) {
+    color: #ffffff;
+    background: var(--control-hover);
+    box-shadow: none;
+  }
+
+  .app-shell[data-ark-theme="endfield"]
     .mode-segment
     button.is-active:not(:disabled):hover {
     color: #ffffff;
@@ -11801,8 +11924,8 @@ textarea:focus-visible {
   .app-shell[data-ark-theme="endfield"]
     .button:not(.button--primary):not(:disabled):hover {
     color: #ffffff;
-    background-color: #383838;
-    border-color: #383838;
+    background-color: var(--control-hover);
+    border-color: var(--control-hover);
     box-shadow: none;
   }
 
@@ -11811,8 +11934,8 @@ textarea:focus-visible {
       :disabled
     ):hover {
     color: #ffffff;
-    background-color: #383838;
-    border-color: #383838;
+    background-color: var(--control-hover);
+    border-color: var(--control-hover);
     box-shadow: 0 5px 16px rgba(25, 25, 25, 0.12);
   }
 

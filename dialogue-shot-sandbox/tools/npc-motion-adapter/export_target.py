@@ -41,13 +41,30 @@ def export_target(request):
         if not face or not isinstance(face, unreal.SkeletalMeshComponent):
             raise ValueError("Face component template not found")
     bones = []
+    # An unregistered transient component has identity current transforms. Its
+    # ref-pose delta is therefore inverse(local reference). Verify this contract
+    # against the separate reference-position API before accepting any result.
+    probe = unreal.new_object(unreal.SkeletalMeshComponent)
+    probe.set_skeletal_mesh(mesh)
     for i in range(body.get_num_bones()):
         name = body.get_bone_name(i)
         parent = str(body.get_parent_bone(name))
+        current = transform_data(probe.get_socket_transform(
+            name, unreal.RelativeTransformSpace.RTS_COMPONENT))
+        if (max(abs(v) for v in current["translation"]) > 1e-6 or
+                max(abs(v) for v in current["rotation_xyzw"][:3]) > 1e-6 or
+                abs(abs(current["rotation_xyzw"][3]) - 1) > 1e-6):
+            raise RuntimeError("Transient component no longer has identity current poses")
+        reference = unreal.MathLibrary.invert_transform(
+            probe.get_delta_transform_from_ref_pose(name))
+        local = transform_data(reference)
+        position = probe.get_ref_pose_position(i)
+        if max(abs(a-b) for a, b in zip(local["translation"],
+                                        [position.x, position.y, position.z])) > 0.001:
+            raise RuntimeError("Reference-pose API cross-check failed: " + str(name))
         bones.append({
             "name": str(name), "parent": None if parent == "None" else parent,
-            "component_transform": transform_data(body.get_socket_transform(
-                name, unreal.RelativeTransformSpace.RTS_COMPONENT)),
+            "reference_local_transform": local,
         })
     output.mkdir(parents=True)
     options = unreal.FbxExportOption()
@@ -72,6 +89,7 @@ def export_target(request):
         "schema_version": 1, "project": actual, "blueprint": request["blueprint"],
         "body_component": body.get_name(), "skeleton": skeleton.get_path_name(),
         "bones": bones, "body": export_copy(mesh, "target_body.fbx"), "face": None,
+        "reference_source": "inverse transient identity-pose delta; local positions cross-checked",
         "ue_assets_written": False,
     }
     if face:

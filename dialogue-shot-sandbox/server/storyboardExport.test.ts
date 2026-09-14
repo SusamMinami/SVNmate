@@ -399,6 +399,7 @@ class FakePresetCameraConnection extends FakeStoryboardExportConnection {
       cameraClassPath: "/Game/Test/Camera.Camera_C",
       cameras: [{
         name: "3", label: "3 | +25 deg", componentPath: "/Temp/Preview:PersistentLevel.Role0.3",
+        actorRelative: { position: { X: 157, Y: 81, Z: 63 }, rotation: { Pitch: 0, Yaw: -145, Roll: 0 } },
         local: { position: { X: 130, Y: 25, Z: 160 }, rotation: { Pitch: -5, Yaw: 160, Roll: 0 } },
         world: { position: { X: 5100, Y: 130, Z: 160 }, rotation: { Pitch: -5, Yaw: -110, Roll: 0 } },
       }],

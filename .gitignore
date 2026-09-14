@@ -6,6 +6,7 @@ __pycache__/
 build/
 dist/
 release/
+rust/target/
 *.spec
 !config_id_lookup/ConfigLinker.spec
 !MigrationGuard.spec

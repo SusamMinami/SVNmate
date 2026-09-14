@@ -11,6 +11,7 @@
 | MigrationGuard | `migration_guard/`，入口/测试在根目录 | 复用 SVNmate core/IPC，编排 Jira/SVN/UE 迁移核验 |
 | ConfigLinker | `config_id_lookup/` | 独立只读 CSV 查询，复用根目录模块更新能力 |
 | 镜头沙盘 | `dialogue-shot-sandbox/` | 独立 Node/Electron 工程，直接读配置并调用 UE，不依赖 ConfigLinker 进程 |
+| Seria Config Core | `rust/` | 镜头沙盘与 ConfigLinker 可复用的只读 Rust 数据核心；各产品私有打包 |
 
 四者独立版本与交付；同仓不等于共享 UI。KindleLarkStatus 只作为外部模块接入。
 不编辑产物目录中的 README 副本来代替源码文档。
@@ -42,6 +43,11 @@
 - [AI 入口](../dialogue-shot-sandbox/AGENTS.md)：任务到专题/代码的路由。
 - [专题索引](../dialogue-shot-sandbox/docs/README.md)：现行协议、待接入方案、
   研究与验证记录分开列出。
+
+## 共享 Rust 数据核心
+
+- [开发与协议](../rust/README.md)：当前实现范围、跨产品边界、JSON Lines
+  协议和验证命令。
 
 ## 历史与外部资料
 

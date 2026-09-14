@@ -689,6 +689,11 @@ export interface DialogueCameraPresetPose {
   rotation: { Pitch: number; Yaw: number; Roll: number };
 }
 
+export interface DialogueCameraPresetRoleHint {
+  modelIndex: number;
+  label: string;
+}
+
 export interface DialogueCameraPresetSnapshot {
   dialogueNodeId: string;
   fingerprint: string;
@@ -703,6 +708,7 @@ export interface DialogueCameraPresetSnapshot {
       name: string;
       label: string;
       componentPath: string;
+      actorRelative: DialogueCameraPresetPose;
       local: DialogueCameraPresetPose;
       world: DialogueCameraPresetPose;
     }>;
@@ -721,6 +727,7 @@ export interface DialogueCameraQuickActionRequest {
   dialogueId: string;
   startId: string;
   dialogueNodeId: string;
+  roleHints?: DialogueCameraPresetRoleHint[];
   previousDialogueNodeIds?: string[];
   blendCurveAssetName?: string;
   blendDuration?: number;

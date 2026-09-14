@@ -14,6 +14,10 @@ async function main() {
     throw new Error("--project, --blueprint and --output are required");
   if (!!values["face-node"] !== !!values["face-template"])
     throw new Error("Supply both --face-node and --face-template, or neither");
+  const packagePath = values.blueprint.split(".")[0];
+  if (values["face-node"] && (!values["face-node"].startsWith(`${packagePath}.`) ||
+      !values["face-template"]!.startsWith(`${packagePath}.`)))
+    throw new Error("Face node/template must belong to the requested blueprint");
   const connection = new UnrealMcpConnection();
   try {
     await connection.connect();

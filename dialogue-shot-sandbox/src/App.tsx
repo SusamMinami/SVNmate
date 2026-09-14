@@ -1184,6 +1184,11 @@ function ShotInspector({
                 dialogueId={sequence.prefix}
                 startId={sequence.startId}
                 dialogueNodeId={configurationDialogueNodeId}
+                roleHints={characterActionEditor.catalogs.map((catalog) => ({
+                  modelIndex: catalog.modelIndex,
+                  label:
+                    catalog.characterLabel || `角色 ${catalog.modelIndex}`,
+                }))}
                 existingConfiguration={configurationNodeConfiguration}
                 configurationLoading={configurationNodeReading}
                 externalConfirmation
@@ -6139,6 +6144,14 @@ export default function App() {
                     dialogueId={sequence.prefix}
                     startId={sequence.startId}
                     dialogueNodeId={selectedUeDialogueNodeId}
+                     roleHints={characterActionEditor.catalogs.map(
+                       (catalog) => ({
+                         modelIndex: catalog.modelIndex,
+                         label:
+                           catalog.characterLabel ||
+                           `角色 ${catalog.modelIndex}`,
+                       }),
+                     )}
                     configurationLoading={configurationNodeReading}
                     previousDialogueNodeIds={
                       previousSelectedUeDialogueNodeIds

@@ -440,7 +440,10 @@ export function exportDialogueStoryboard(
 }
 
 export function readDialogueCameraPresets(
-  request: Pick<DialogueCameraQuickActionRequest, "dialogueId" | "startId" | "dialogueNodeId">,
+  request: Pick<
+    DialogueCameraQuickActionRequest,
+    "dialogueId" | "startId" | "dialogueNodeId" | "roleHints"
+  >,
 ): Promise<import("../types").DialogueCameraPresetSnapshot> {
   return postUe("/api/ue/dialogue/camera/presets", request, false);
 }

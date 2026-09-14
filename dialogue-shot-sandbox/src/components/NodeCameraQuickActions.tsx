@@ -26,6 +26,7 @@ import type {
   DialogueCameraQuickActionMode,
   DialogueCameraQuickActionPreview,
   DialogueCameraQuickActionRequest,
+  DialogueCameraPresetRoleHint,
   DialogueCameraPresetSnapshot,
   DialogueSchoolCameraCopy,
   DialogueSchoolCameraRole,
@@ -41,6 +42,7 @@ interface NodeCameraQuickActionsProps {
   dialogueId: string;
   startId: string;
   dialogueNodeId: string;
+  roleHints?: DialogueCameraPresetRoleHint[];
   previousDialogueNodeIds?: string[];
   existingConfiguration?: ExistingDialogueNodeConfiguration;
   configurationLoading?: boolean;
@@ -117,6 +119,37 @@ function isSchoolCameraRole(value: string): value is DialogueSchoolCameraRole {
 
 function assetName(assetPath: string): string {
   return assetPath.split("/").at(-1)?.split(".")[0] ?? assetPath;
+}
+
+type PresetCamera =
+  DialogueCameraPresetSnapshot["roles"][number]["cameras"][number];
+
+function cameraOrbitPoints(cameras: PresetCamera[]) {
+  const distances = cameras.map((camera) =>
+    Math.hypot(
+      camera.actorRelative.position.X,
+      camera.actorRelative.position.Y,
+    ),
+  );
+  const minimumDistance = Math.min(...distances);
+  const maximumDistance = Math.max(...distances);
+  const distanceRange = maximumDistance - minimumDistance;
+  return cameras.map((camera, index) => {
+    const { X, Y } = camera.actorRelative.position;
+    const angle =
+      Number.isFinite(X) && Number.isFinite(Y) && Math.hypot(X, Y) > 0.001
+        ? Math.atan2(Y, X)
+        : (index / Math.max(cameras.length, 1)) * Math.PI * 2;
+    const radius =
+      distanceRange > 0.001
+        ? 31 + ((distances[index] - minimumDistance) / distanceRange) * 8
+        : 35;
+    return {
+      camera,
+      x: 50 + Math.sin(angle) * radius,
+      y: 50 + Math.cos(angle) * radius,
+    };
+  });
 }
 
 function schoolCameraConfirmationPreview(
@@ -203,9 +236,11 @@ function blendCurveConfirmationPreview(
   request: DialogueCameraQuickActionRequest,
   configuration: ExistingDialogueNodeConfiguration,
 ): DialogueCameraQuickActionPreview {
-  const curveName = request.blendCurveAssetName ?? "trans_6015";
-  const desiredCurve =
-    `${DIALOGUE_BLEND_CURVE_DIRECTORY}/${curveName}.${curveName}`;
+  const curveName = request.blendCurveAssetName?.trim() ?? "trans_6015";
+  const validCurveName = /^[A-Za-z0-9_]+$/.test(curveName);
+  const desiredCurve = validCurveName
+    ? `${DIALOGUE_BLEND_CURVE_DIRECTORY}/${curveName}.${curveName}`
+    : "";
   const duration = request.blendDuration ?? 0;
   const existingKeys = Array.from(new Set(configuration.schoolCameraKeys));
   return {
@@ -236,10 +271,13 @@ function blendCurveConfirmationPreview(
     existingSchoolCameraCount: configuration.schoolCameraCount,
     desiredSchoolCameraCount: configuration.schoolCameraCount,
     changed:
-      configuration.blendCameraType !== "EBlend" ||
-      configuration.blendCurve !== desiredCurve ||
-      configuration.blendDuration !== duration,
-    blockedReasons: [],
+      validCurveName &&
+      (configuration.blendCameraType !== "EBlend" ||
+        configuration.blendCurve !== desiredCurve ||
+        configuration.blendDuration !== duration),
+    blockedReasons: validCurveName
+      ? []
+      : ["曲线资产名只能包含英文字母、数字和下划线"],
   };
 }
 
@@ -348,6 +386,7 @@ export const NodeCameraQuickActions = forwardRef<
   dialogueId,
   startId,
   dialogueNodeId,
+  roleHints = [],
   previousDialogueNodeIds = [],
   existingConfiguration,
   configurationLoading = false,
@@ -437,6 +476,15 @@ export const NodeCameraQuickActions = forwardRef<
   const schoolCameraEditorOpen =
     request?.mode === "school_cameras" ||
     request?.mode === "copy_school_cameras";
+  const presetRoleOptions =
+    presets?.roles.map(({ modelIndex, label }) => ({ modelIndex, label })) ??
+    roleHints;
+  const selectedPresetRole = presets?.roles.find(
+    (role) => String(role.modelIndex) === presetRole,
+  );
+  const presetOrbitPoints = selectedPresetRole
+    ? cameraOrbitPoints(selectedPresetRole.cameras)
+    : [];
 
   useEffect(() => {
     operationRunRef.current += 1;
@@ -468,7 +516,6 @@ export const NodeCameraQuickActions = forwardRef<
     setPresetLoading(true);
     setPresetError("");
     setPresets(null);
-    setPresetRole("");
     setPresetName("");
     if (request?.mode === "preset_camera") {
       operationRunRef.current += 1;
@@ -476,8 +523,31 @@ export const NodeCameraQuickActions = forwardRef<
       setBusy(null);
     }
     try {
-      const snapshot = await readDialogueCameraPresets({ dialogueId, startId, dialogueNodeId });
-      if (run === presetReadRunRef.current) setPresets(snapshot);
+      const snapshot = await readDialogueCameraPresets({
+        dialogueId,
+        startId,
+        dialogueNodeId,
+        roleHints,
+      });
+      if (run === presetReadRunRef.current) {
+        const nextRole = snapshot.roles.some(
+          (role) => String(role.modelIndex) === presetRole,
+        )
+          ? presetRole
+          : String(snapshot.roles[0]?.modelIndex ?? "");
+        setPresets(snapshot);
+        setPresetRole(nextRole);
+        if (nextRole) {
+          setRequest({
+            dialogueId,
+            startId,
+            dialogueNodeId,
+            mode: "preset_camera",
+            roleHints,
+          });
+          setPreview(null);
+        }
+      }
     } catch (reason) {
       if (run === presetReadRunRef.current) {
         setPresetError(reason instanceof Error ? reason.message : "无法读取角色预设");
@@ -494,6 +564,7 @@ export const NodeCameraQuickActions = forwardRef<
     operationRunRef.current += 1;
     const nextRequest: DialogueCameraQuickActionRequest = {
       dialogueId, startId, dialogueNodeId, mode: "preset_camera",
+      roleHints,
       presetCamera: { modelIndex: role.modelIndex, cameraName, fingerprint: presets.fingerprint },
     };
     setPresetName(cameraName);
@@ -628,6 +699,23 @@ export const NodeCameraQuickActions = forwardRef<
     const nextRequest = {
       ...request,
       blendDuration: duration,
+    };
+    setRequest(nextRequest);
+    setPreview(
+      blendCurveConfirmationPreview(nextRequest, existingConfiguration),
+    );
+    setError("");
+    setStatus("");
+  }
+
+  function updateBlendCurveAsset(value: string): void {
+    setBlendCurveAssetName(value);
+    if (request?.mode !== "blend_curve" || !existingConfiguration) {
+      return;
+    }
+    const nextRequest = {
+      ...request,
+      blendCurveAssetName: value.trim(),
     };
     setRequest(nextRequest);
     setPreview(
@@ -817,39 +905,6 @@ export const NodeCameraQuickActions = forwardRef<
         <small>节点 {dialogueNodeId}</small>
       </div>
 
-      <label className="node-camera-curve-field">
-        <span>混合曲线资产</span>
-        <input
-          aria-label="镜头混合曲线资产名"
-          value={blendCurveAssetName}
-          disabled={busy !== null}
-          maxLength={128}
-          onChange={(event) => {
-            const value = event.target.value;
-            setBlendCurveAssetName(value);
-            if (
-              request?.mode === "blend_curve" &&
-              existingConfiguration &&
-              /^[A-Za-z0-9_]+$/.test(value.trim())
-            ) {
-              const nextRequest = {
-                ...request,
-                blendCurveAssetName: value.trim(),
-              };
-              setRequest(nextRequest);
-              setPreview(
-                blendCurveConfirmationPreview(
-                  nextRequest,
-                  existingConfiguration,
-                ),
-              );
-            } else if (request?.mode === "blend_curve") {
-              clear();
-            }
-          }}
-        />
-      </label>
-
       <div className="node-camera-command-list">
         <button
           className={
@@ -903,6 +958,9 @@ export const NodeCameraQuickActions = forwardRef<
             }
             setPresetOpen(true);
             void inspect("default");
+            if (!presets && !presetLoading) {
+              void loadPresets();
+            }
           }}
         >
           <Camera size={16} />
@@ -920,7 +978,11 @@ export const NodeCameraQuickActions = forwardRef<
                 <select
                   aria-label="预设机位角色"
                   value={presetRole}
-                  disabled={presetLoading || busy !== null || !presets?.roles.length}
+                  disabled={
+                    presetLoading ||
+                    busy !== null ||
+                    presetRoleOptions.length === 0
+                  }
                   onChange={(event) => {
                     setPresetRole(event.target.value);
                     setPresetName("");
@@ -935,31 +997,10 @@ export const NodeCameraQuickActions = forwardRef<
                   }}
                 >
                   <option value="">默认位置</option>
-                  {presets?.roles.map((role) => (
+                  {presetRoleOptions.map((role) => (
                     <option key={role.modelIndex} value={role.modelIndex}>
                       {role.modelIndex} · {role.label}
                     </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                <span>预设角度</span>
-                <select
-                  aria-label="预设机位角度"
-                  value={presetName}
-                  disabled={!presetRole || presetLoading || busy !== null}
-                  onChange={(event) => {
-                    const value = event.target.value;
-                    if (value) selectPreset(value);
-                    else {
-                      setPresetName("");
-                      setPreview(null);
-                    }
-                  }}
-                >
-                  <option value="">选择机位</option>
-                  {presets?.roles.find((role) => String(role.modelIndex) === presetRole)?.cameras.map((camera) => (
-                    <option key={camera.name} value={camera.name}>{camera.label}</option>
                   ))}
                 </select>
               </label>
@@ -979,8 +1020,52 @@ export const NodeCameraQuickActions = forwardRef<
               </button>
             </div>
             {presetLoading && <p role="status">正在读取预览角色机位...</p>}
-            {!presetLoading && !presets && !presetError && (
-              <p>如需使用预设机位，请点击右侧刷新读取当前 UE。</p>
+            {selectedPresetRole && presetOrbitPoints.length > 0 && (
+              <div
+                className="node-camera-orbit"
+                role="radiogroup"
+                aria-label={`${selectedPresetRole.label}的预设机位`}
+              >
+                <svg
+                  className="node-camera-orbit__guides"
+                  viewBox="0 0 100 100"
+                  aria-hidden="true"
+                  preserveAspectRatio="none"
+                >
+                  <circle cx="50" cy="50" r="35" />
+                  {presetOrbitPoints.map(({ camera, x, y }) => (
+                    <line
+                      className={
+                        camera.name === presetName ? "is-selected" : undefined
+                      }
+                      key={camera.name}
+                      x1="50"
+                      y1="50"
+                      x2={x}
+                      y2={y}
+                    />
+                  ))}
+                </svg>
+                <div className="node-camera-orbit__npc" aria-hidden="true" />
+                {presetOrbitPoints.map(({ camera, x, y }) => (
+                  <button
+                    className={
+                      camera.name === presetName ? "is-selected" : undefined
+                    }
+                    type="button"
+                    role="radio"
+                    aria-checked={camera.name === presetName}
+                    aria-label={`机位 ${camera.name}`}
+                    title={`${selectedPresetRole.label} · ${camera.label}`}
+                    disabled={busy !== null}
+                    key={camera.name}
+                    style={{ left: `${x}%`, top: `${y}%` }}
+                    onClick={() => selectPreset(camera.name)}
+                  >
+                    <Camera size={13} />
+                  </button>
+                ))}
+              </div>
             )}
             {presetError && <p role="alert" className="node-camera-review__warning">{presetError}</p>}
           </div>
@@ -994,8 +1079,7 @@ export const NodeCameraQuickActions = forwardRef<
           disabled={
             busy !== null ||
             configurationLoading ||
-            !existingConfiguration ||
-            !blendCurveAssetName.trim()
+            !existingConfiguration
           }
           title={
             configurationLoading || !existingConfiguration
@@ -1351,8 +1435,20 @@ export const NodeCameraQuickActions = forwardRef<
                       </div>
                       <div>
                         <dt>Blend Curve</dt>
-                        <dd>
-                          <code>{preview.desiredBlendCurve}</code>
+                        <dd className="node-camera-review__curve">
+                          <code>
+                            {assetName(preview.existingBlendCurve) || "空"}
+                          </code>
+                          <ChevronRight size={12} />
+                          <input
+                            aria-label="镜头混合曲线资产名"
+                            value={blendCurveAssetName}
+                            disabled={busy !== null}
+                            maxLength={128}
+                            onChange={(event) =>
+                              updateBlendCurveAsset(event.target.value)
+                            }
+                          />
                         </dd>
                       </div>
                       <div>

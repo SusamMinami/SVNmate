@@ -16,6 +16,7 @@ import type {
   DialogueCameraQuickActionPreview,
   DialogueCameraQuickActionRequest,
   DialogueCameraQuickActionResult,
+  DialogueCameraPresetRoleHint,
   DialogueSchoolCameraRole,
   DialoguePreviewSchoolPreview,
   DialoguePreviewSchoolRequest,
@@ -524,10 +525,25 @@ const DialogueSchoolCameraCopiesSchema = z
     });
   });
 
+const DialogueCameraPresetRoleHintsSchema = z
+  .array(
+    z.object({
+      modelIndex: z.number().int().min(0).max(127),
+      label: z.string().trim().min(1).max(128),
+    }),
+  )
+  .max(64)
+  .refine(
+    (roles) =>
+      new Set(roles.map((role) => role.modelIndex)).size === roles.length,
+    "预设机位角色提示包含重复槽位",
+  );
+
 const DialogueCameraQuickActionRequestSchema = z.object({
   dialogueId: z.string().regex(/^\d{4}$/),
   startId: z.string().regex(/^\d{4,}$/),
   dialogueNodeId: z.string().regex(/^\d+$/),
+  roleHints: DialogueCameraPresetRoleHintsSchema.optional(),
   previousDialogueNodeIds: z
     .array(z.string().regex(/^\d+$/))
     .max(500)
@@ -4488,7 +4504,10 @@ async function prepareDialogueCameraQuickAction(
     await assertCameraPresetSelection(connection, request.dialogueNodeId);
     const exportedDialogue = parseDialogueExport(exportedText);
     const snapshot = await captureDialogueCameraPresets(
-      connection, exportedDialogue.formationClassPath ?? "", request.dialogueNodeId,
+      connection,
+      exportedDialogue.formationClassPath ?? "",
+      request.dialogueNodeId,
+      request.roleHints,
     );
     if (snapshot.fingerprint !== request.presetCamera.fingerprint) {
       throw new Error("UE 预览站位或预设机位已变化，请重新读取并选择");
@@ -4715,6 +4734,7 @@ export async function readDialogueCameraPresets(
     dialogueId: z.string().regex(/^\d{4}$/),
     startId: z.string().regex(/^\d{6}$/),
     dialogueNodeId: z.string().regex(/^\d{6}$/),
+    roleHints: DialogueCameraPresetRoleHintsSchema.optional(),
   }).parse(rawRequest);
   if (!request.startId.startsWith(request.dialogueId) ||
       !request.dialogueNodeId.startsWith(request.dialogueId) ||
@@ -4729,7 +4749,10 @@ export async function readDialogueCameraPresets(
     if (paths.length !== 1) throw new Error("无法唯一确定当前对话资产");
     const exported = parseDialogueExport(await exportAssetText(connection, paths[0]));
     const snapshot = await captureDialogueCameraPresets(
-      connection, exported.formationClassPath ?? "", request.dialogueNodeId,
+      connection,
+      exported.formationClassPath ?? "",
+      request.dialogueNodeId,
+      request.roleHints as DialogueCameraPresetRoleHint[] | undefined,
     );
     await assertCameraPresetSelection(connection, request.dialogueNodeId);
     return snapshot;

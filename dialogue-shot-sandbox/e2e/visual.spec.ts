@@ -464,7 +464,7 @@ test("shows the launch screen once per window session", async ({
 
 test("provides button morph and viewport pointer feedback", async ({
   page,
-}) => {
+}, testInfo) => {
   await page.goto("/");
 
   const analyzeButton = page.getByRole("button", {
@@ -484,16 +484,26 @@ test("provides button morph and viewport pointer feedback", async ({
     const modeButton = page.getByRole("button", { name: label });
     const before = await modeButton.evaluate((element) => ({
       background: getComputedStyle(element).backgroundColor,
+      color: getComputedStyle(element).color,
       shadow: getComputedStyle(element).boxShadow,
     }));
     await modeButton.hover();
     await page.waitForTimeout(180);
     const after = await modeButton.evaluate((element) => ({
       background: getComputedStyle(element).backgroundColor,
+      color: getComputedStyle(element).color,
       shadow: getComputedStyle(element).boxShadow,
     }));
     expect(after).not.toEqual(before);
+    expect(after).toEqual({
+      background: "rgb(56, 56, 56)",
+      color: "rgb(255, 255, 255)",
+      shadow: "none",
+    });
   }
+  await page.screenshot({
+    path: testInfo.outputPath("director-mode-hover-dark.png"),
+  });
 
   const stage = page.locator(".stage-main");
   const bounds = await stage.boundingBox();
@@ -2114,7 +2124,7 @@ test("keeps configuration mode aligned with the selected UE node", async ({
     "EPush · 速度 1 · Blend Out 1 · FOV 62",
   );
   expect(cameraInspectRequests).toHaveLength(0);
-  expect(cameraPresetReadRequests).toBe(0);
+  expect(cameraPresetReadRequests).toBe(1);
   await expect(cameraReview.locator(".button--primary")).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: "添加默认镜头" }),
@@ -2161,9 +2171,20 @@ test("keeps configuration mode aligned with the selected UE node", async ({
   });
   expect(cameraApplyRequests[0]).not.toHaveProperty("reviewToken");
   const curveInspectCount = cameraInspectRequests.length;
+  await expect(
+    page.getByLabel("镜头混合曲线资产名"),
+  ).toHaveCount(0);
   await page.getByRole("button", { name: "添加镜头曲线" }).click();
   await expect(cameraReview).toContainText("EBlend");
-  await expect(cameraReview).toContainText("trans_6015.trans_6015");
+  const blendCurve = page.getByLabel("镜头混合曲线资产名");
+  await expect(blendCurve).toHaveValue("trans_6015");
+  await blendCurve.fill("");
+  await expect(cameraApplyButton).toBeDisabled();
+  await expect(cameraReview).toContainText(
+    "曲线资产名只能包含英文字母、数字和下划线",
+  );
+  await blendCurve.fill("trans_6015");
+  await expect(cameraApplyButton).toBeEnabled();
   expect(cameraInspectRequests).toHaveLength(curveInspectCount);
   const blendDuration = page.getByRole("spinbutton", {
     name: "镜头曲线 Duration",

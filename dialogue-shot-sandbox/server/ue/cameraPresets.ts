@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import type { DialogueCameraPresetSnapshot } from "../../src/types";
+import type {
+  DialogueCameraPresetRoleHint,
+  DialogueCameraPresetSnapshot,
+} from "../../src/types";
 import type { UnrealInvoker } from "./transport";
 
 const vector = z.object({ X: z.number().finite(), Y: z.number().finite(), Z: z.number().finite() });
@@ -18,6 +21,7 @@ const snapshotSchema = z.object({
       name: z.string().regex(/^\d+$/),
       label: z.string(),
       componentPath: z.string().min(1),
+      actorRelative: pose,
       local: pose,
       world: pose,
     })).max(64),
@@ -28,6 +32,7 @@ export async function captureDialogueCameraPresets(
   connection: UnrealInvoker,
   formationClassPath: string,
   dialogueNodeId: string,
+  roleHints: readonly DialogueCameraPresetRoleHint[] = [],
 ): Promise<DialogueCameraPresetSnapshot> {
   if (!formationClassPath.startsWith("/Game/")) {
     throw new Error("当前对话未配置 Formation BP，无法读取预设机位");
@@ -36,11 +41,22 @@ export async function captureDialogueCameraPresets(
   const script = `
 import math
 class_path = ${JSON.stringify(formationClassPath)}
+role_labels = ${JSON.stringify(
+    Object.fromEntries(
+      roleHints.map((role) => [String(role.modelIndex), role.label]),
+    ),
+  )}
 editor_world = unreal.EditorLevelLibrary.get_editor_world()
 formats = [a for a in unreal.ObjectIterator(unreal.SeriaDialogFormat)
     if a.get_class().get_path_name() == class_path
     and a.get_world() and a.get_world() != editor_world
     and ':PersistentLevel.' in a.get_path_name()]
+expected_label = class_path.rsplit('.', 1)[-1]
+if expected_label.endswith('_C'):
+    expected_label = expected_label[:-2]
+exact_formats = [a for a in formats if a.get_actor_label() == expected_label]
+if len(exact_formats) == 1:
+    formats = exact_formats
 if len(formats) != 1:
     raise RuntimeError('Open the dialogue preview first; exactly one matching Formation preview is required.')
 formation = formats[0]
@@ -73,13 +89,12 @@ for slot in formation.get_components_by_class(unreal.ChildActorComponent):
         angle = math.degrees(math.atan2(p.y, p.x))
         label = camera_name + ' | ' + ('%+.0f' % angle) + ' deg'
         cameras.append(dict(name=camera_name, label=label, componentPath=camera.get_path_name(),
-            local=pose(local), world=pose(world)))
+            actorRelative=pose(relative), local=pose(local), world=pose(world)))
     if cameras:
         if len(cameras) > 64:
             raise RuntimeError('Too many cameras on one role.')
         cameras.sort(key=lambda c: int(c['name']))
-        body = actor.get_dialog_actor()
-        label = body.get_class().get_name() if body else actor.get_class().get_name()
+        label = role_labels.get(name) or actor.get_class().get_name()
         if label.endswith('_C'):
             label = label[:-2]
         roles.append(dict(modelIndex=int(name), label=label, actorPath=actor.get_path_name(),

@@ -5,6 +5,7 @@ import type { UnrealInvoker } from "./transport";
 
 const camera = {
   name: "3", label: "3 | +25 deg", componentPath: "/Preview/Role.3",
+  actorRelative: { position: { X: 156, Y: 80, Z: 63 }, rotation: { Pitch: -6, Yaw: 145, Roll: 3 } },
   local: { position: { X: 110, Y: 240, Z: 175 }, rotation: { Pitch: -6, Yaw: 145, Roll: 3 } },
   world: { position: { X: 2040, Y: -110, Z: 200 }, rotation: { Pitch: -6, Yaw: -125, Roll: 3 } },
 };
@@ -86,10 +87,21 @@ describe("cameraMoveFromPreset", () => {
 describe("captureDialogueCameraPresets", () => {
   it("uses one read-only invocation and binds the fingerprint to node and effective pose", async () => {
     const connection = connectionWith({ bSuccess: true, Result: `'${JSON.stringify(snapshot)}'` });
-    const first = await captureDialogueCameraPresets(connection, snapshot.formationClassPath, "735201");
+    const first = await captureDialogueCameraPresets(
+      connection,
+      snapshot.formationClassPath,
+      "735201",
+      [{ modelIndex: 0, label: "Player" }],
+    );
     expect(first).toMatchObject({ ...snapshot, dialogueNodeId: "735201", fingerprint: expect.stringMatching(/^[a-f0-9]{64}$/) });
     expect(connection.invoke).toHaveBeenCalledTimes(1);
     expect(connection.invoke).toHaveBeenCalledWith("script.eval_python_expression", expect.any(Object));
+    const expression = String(
+      vi.mocked(connection.invoke).mock.calls[0]?.[1]?.Expression,
+    );
+    expect(expression).toContain("exact_formats");
+    expect(expression).toContain('role_labels = {\\"0\\":\\"Player\\"}');
+    expect(expression).not.toContain("get_dialog_actor");
     const again = await captureDialogueCameraPresets(connection, snapshot.formationClassPath, "735201");
     expect(again.fingerprint).toBe(first.fingerprint);
     const otherNode = await captureDialogueCameraPresets(connection, snapshot.formationClassPath, "735202");
