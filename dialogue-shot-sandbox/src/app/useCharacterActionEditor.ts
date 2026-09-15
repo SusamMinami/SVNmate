@@ -262,6 +262,9 @@ export function useCharacterActionEditor({
         ? catalogCacheRef.current
         : null;
     const includeCatalogs = refreshCatalogs || !cachedCatalog;
+    const missingDialogueIds = dialogueIds.filter(
+      (dialogueId) => !trackCacheRef.current.has(dialogueId),
+    );
     setStatus(
       includeCatalogs
         ? "正在读取 UE 角色动作..."
@@ -270,7 +273,7 @@ export function useCharacterActionEditor({
     try {
       const snapshot = await readDialogueCharacterActions({
         startId: sequence.startId,
-        dialogueIds,
+        dialogueIds: missingDialogueIds,
         models: includeCatalogs
           ? models
           : cachedCatalog.catalogs.map((catalog) => ({
@@ -293,15 +296,22 @@ export function useCharacterActionEditor({
           catalogs: snapshot.catalogs,
         };
       }
-      trackCacheRef.current.set(readSignature, {
-        dialogueAssetPath: snapshot.dialogueAssetPath,
-        tracks: snapshot.tracks,
-        viewLineNodes: nextViewLineNodes,
-      });
+      // Cache empty nodes too, so changing the visible node set does not reread them.
+      for (const dialogueId of missingDialogueIds) {
+        trackCacheRef.current.set(dialogueId, {
+          dialogueAssetPath: snapshot.dialogueAssetPath,
+          tracks: snapshot.tracks.filter((track) => track.dialogueId === dialogueId),
+          viewLineNodes: nextViewLineNodes.filter((node) => node.dialogueId === dialogueId),
+        });
+      }
       setDialogueAssetPath(snapshot.dialogueAssetPath);
       setCatalogs(nextCatalogs);
-      setUeTracks(snapshot.tracks);
-      setExistingViewLineNodes(nextViewLineNodes);
+      setUeTracks(dialogueIds.flatMap(
+        (dialogueId) => trackCacheRef.current.get(dialogueId)?.tracks ?? [],
+      ));
+      setExistingViewLineNodes(dialogueIds.flatMap(
+        (dialogueId) => trackCacheRef.current.get(dialogueId)?.viewLineNodes ?? [],
+      ));
       if (discardDrafts) {
         setTracks([]);
         setViewLines([]);
@@ -354,21 +364,21 @@ export function useCharacterActionEditor({
       catalogCacheRef.current?.signature === catalogSignature
         ? catalogCacheRef.current
         : null;
-    const cachedTracks = trackCacheRef.current.get(readSignature);
+    const cachedNodes = dialogueIds.flatMap((dialogueId) => {
+      const node = trackCacheRef.current.get(dialogueId);
+      return node ? [node] : [];
+    });
+    const allNodesCached = cachedNodes.length === dialogueIds.length;
     if (cachedCatalog) {
       setDialogueAssetPath(cachedCatalog.dialogueAssetPath);
       setCatalogs(cachedCatalog.catalogs);
       setStatus(catalogStatus(cachedCatalog.catalogs));
     }
-    if (cachedTracks) {
+    if (cachedCatalog && allNodesCached) {
       loadedSignatureRef.current = readSignature;
-      setDialogueAssetPath(cachedTracks.dialogueAssetPath);
-      setUeTracks(cachedTracks.tracks);
-      setExistingViewLineNodes(cachedTracks.viewLineNodes);
-    } else {
-      setUeTracks([]);
-      setExistingViewLineNodes([]);
     }
+    setUeTracks(cachedNodes.flatMap((node) => node.tracks));
+    setExistingViewLineNodes(cachedNodes.flatMap((node) => node.viewLineNodes));
   }, [catalogSignature, readSignature]);
 
   useEffect(() => {
@@ -658,22 +668,18 @@ export function useCharacterActionEditor({
             });
           }
         }
-        trackCacheRef.current.set(readSignature, {
-          dialogueAssetPath,
-          tracks: next,
-          viewLineNodes:
-            trackCacheRef.current.get(readSignature)?.viewLineNodes ??
-            existingViewLineNodes,
-        });
+        for (const dialogueId of new Set(items.map((item) => item.dialogueId))) {
+          const cached = trackCacheRef.current.get(dialogueId);
+          // An append does not prove that an unread node's full contents are known.
+          if (cached) trackCacheRef.current.set(dialogueId, {
+            ...cached,
+            tracks: next.filter((track) => track.dialogueId === dialogueId),
+          });
+        }
         return next;
       });
     },
-    [
-      dialogueAssetPath,
-      existingViewLineNodes,
-      readSignature,
-      setTracks,
-    ],
+    [setTracks],
   );
 
   const commitExportedViewLines = useCallback(
@@ -720,16 +726,17 @@ export function useCharacterActionEditor({
               left.observerModelIndex - right.observerModelIndex,
           );
         }
-        trackCacheRef.current.set(readSignature, {
-          dialogueAssetPath,
-          tracks:
-            trackCacheRef.current.get(readSignature)?.tracks ?? ueTracks,
-          viewLineNodes: next,
-        });
+        for (const dialogueId of new Set(items.map((item) => item.dialogueId))) {
+          const cached = trackCacheRef.current.get(dialogueId);
+          if (cached) trackCacheRef.current.set(dialogueId, {
+            ...cached,
+            viewLineNodes: next.filter((node) => node.dialogueId === dialogueId),
+          });
+        }
         return next;
       });
     },
-    [dialogueAssetPath, readSignature, setViewLines, ueTracks],
+    [setViewLines],
   );
 
   return {

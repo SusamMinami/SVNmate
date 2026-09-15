@@ -40,6 +40,8 @@
 
 ## 研究与历史
 
+- [2026-09-15 UE 崩溃调查](research/ue-editor-stability-2026-09-15.md)：
+  PostLoad/GC 调用断言、Niagara/Slate 分类证据；跨模式缓存已改，原生修复仍待接入。
 - [2026-09-14 N113 身体重定向测试](research/kimodo-n113-validation-2026-09-14.md)：
   身体往返、独立衣物/面部预览；已纠正披衣袖管判断，UE 挂接与生产验收待完成。
 - [2026-09-14 Kimodo 约束动作验证](research/kimodo-constraint-validation-2026-09-14.md)：

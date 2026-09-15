@@ -6,6 +6,7 @@ import type {
 import {
   behaviourTypeForMontageName,
   dialogueCharacterActionTracks,
+  dialogueParticipantsByModelIndex,
   mergeDialogueCharacterActionTracks,
   parseDialogueCharacterBehaviourString,
   parseDialogueRelativeTransformsString,
@@ -31,6 +32,73 @@ describe("character actions", () => {
   it("keeps other Montage names as ordinary actions", () => {
     expect(behaviourTypeForMontageName("AM_Wave")).toBe("ENone");
     expect(turnDegreesFromMontageName("AM_Wave")).toBeNull();
+  });
+
+  it("uses a unique configured model match for compact role labels", () => {
+    const participant = {
+      id: 101968,
+      name: "商会安保",
+      note: "",
+      introduction: "",
+      resourceId: 200135,
+      instanceId: "generated:101968",
+      slot: "A" as const,
+      color: "#fff",
+      position: [0, 0, 0] as const,
+      facingTarget: [0, 0, -2] as const,
+      modelIndex: null,
+      positionSource: "generated" as const,
+      firstDialogueId: "735001",
+      firstDialogueIndex: 0,
+      lastDialogueId: "735001",
+      lastDialogueIndex: 0,
+      entryDialogueId: "735001",
+      entryIndex: 0,
+      exitDialogueId: null,
+      exitIndex: null,
+    };
+    const models = new Map([
+      [200135, {
+        id: 200135,
+        configuredPath: "/Game/Test/BP_N36_Commerce_Guard",
+        generatedClassPath:
+          "/Game/Test/BP_N36_Commerce_Guard.BP_N36_Commerce_Guard_C",
+        rowNumber: 3,
+      }],
+    ]);
+    const catalogs = [{
+      modelIndex: 1,
+      blueprintClassPath:
+        "/Game/Test/BP_N36_Commerce_Guard.BP_N36_Commerce_Guard_C",
+      characterLabel: "BP_N36_Commerce_Guard",
+      status: "loaded" as const,
+      message: "",
+      actions: [],
+    }];
+
+    expect(
+      dialogueParticipantsByModelIndex(
+        [participant],
+        [],
+        catalogs,
+        models,
+      ).get(1)?.name,
+    ).toBe("商会安保");
+
+    const ambiguous = {
+      ...participant,
+      id: 101969,
+      name: "另一名安保",
+      instanceId: "generated:101969",
+    };
+    expect(
+      dialogueParticipantsByModelIndex(
+        [participant, ambiguous],
+        [],
+        catalogs,
+        models,
+      ).has(1),
+    ).toBe(false);
   });
 
   it("parses rotate, walk, and state-machine walk actions by model slot", () => {

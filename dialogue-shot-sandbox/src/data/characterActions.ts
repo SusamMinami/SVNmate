@@ -1,14 +1,17 @@
 import type {
+  BlueprintMontageCatalog,
   DialogueCharacterActionItem,
   DialogueCharacterActionTrack,
   DialogueParticipant,
   DialoguePositionTimelineRow,
   DialogueRow,
+  ModelResource,
   ParticipantSlot,
   UnrealTransform,
   Vec3,
 } from "../types";
 import { participantFacingYawDegrees } from "../director/actorActionPlanner";
+import { modelResourceMatchesClassPath } from "./blueprintFormation";
 
 export interface ParsedDialogueCharacterAction
   extends DialogueCharacterActionItem {
@@ -417,6 +420,8 @@ function facingTargetForYaw(position: Vec3, yawDegrees: number): Vec3 {
 export function dialogueParticipantsByModelIndex(
   participants: readonly DialogueParticipant[],
   rows: readonly DialogueRow[],
+  catalogs: readonly BlueprintMontageCatalog[] = [],
+  models: ReadonlyMap<number, ModelResource> = new Map(),
 ): Map<number, DialogueParticipant> {
   const byModelIndex = new Map(
     participants.flatMap((participant) =>
@@ -449,6 +454,21 @@ export function dialogueParticipantsByModelIndex(
     const participant = participantByNpcId.get(Array.from(npcIds)[0]);
     if (participant) {
       byModelIndex.set(modelIndex, participant);
+    }
+  }
+  for (const catalog of catalogs) {
+    if (byModelIndex.has(catalog.modelIndex)) {
+      continue;
+    }
+    const matches = participants.filter((participant) =>
+      participant.resourceId !== null &&
+      modelResourceMatchesClassPath(
+        catalog.blueprintClassPath,
+        models.get(participant.resourceId),
+      ),
+    );
+    if (matches.length === 1) {
+      byModelIndex.set(catalog.modelIndex, matches[0]);
     }
   }
   return byModelIndex;

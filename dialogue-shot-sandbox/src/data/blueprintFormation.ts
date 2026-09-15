@@ -39,7 +39,7 @@ function normalizedAssetPath(value: string): string {
   return packagePath;
 }
 
-function matchesResource(
+export function modelResourceMatchesClassPath(
   modelClassPath: string,
   resource: ModelResource | undefined,
 ): boolean {
@@ -112,7 +112,7 @@ function profileCandidates(
   }
   return Array.from(profiles.values())
     .filter((participant) =>
-      matchesResource(
+      modelResourceMatchesClassPath(
         modelClassPath,
         participant.resourceId === null
           ? undefined
@@ -188,7 +188,7 @@ function profileMatchesSlot(
   if (profile.id === 1) {
     return slot.modelIndex === 0;
   }
-  return matchesResource(
+  return modelResourceMatchesClassPath(
     slot.modelClassPath,
     profile.resourceId === null
       ? undefined

@@ -61,6 +61,14 @@ async function cameraPresetFixture(page: Page, moveCameraCount = 1) {
   });
   await page.route("**/api/ue/dialogue/camera/presets", async (route) => {
     const request = route.request().postDataJSON();
+    const roleLabels = new Map(
+      (request.roleHints ?? []).map(
+        (role: { modelIndex: number; label: string }) => [
+          role.modelIndex,
+          role.label,
+        ],
+      ),
+    );
     state.reads++;
     await state.readGate;
     if (state.readError) {
@@ -72,8 +80,8 @@ async function cameraPresetFixture(page: Page, moveCameraCount = 1) {
       fingerprint: "a".repeat(64), formationActorPath: "/Temp/Preview.Formation",
       formationClassPath: "/Game/Test/Formation.Formation_C",
       roles: [
-        { modelIndex: 0, label: "Player", actorPath: "/Temp/Role0", cameraClassPath: "/Game/Test/Camera.Camera_C" },
-        { modelIndex: 1, label: "BP_Guard_Long_Character_Name_For_Desktop", actorPath: "/Temp/Role1", cameraClassPath: "/Game/Test/Camera.Camera_C" },
+        { modelIndex: 0, label: roleLabels.get(0) ?? "Player", actorPath: "/Temp/Role0", cameraClassPath: "/Game/Test/Camera.Camera_C" },
+        { modelIndex: 1, label: roleLabels.get(1) ?? "BP_Guard_Long_Character_Name_For_Desktop", actorPath: "/Temp/Role1", cameraClassPath: "/Game/Test/Camera.Camera_C" },
       ].map((role) => ({ ...role, cameras: [
         { name: "1", label: "1 | +0 deg", componentPath: `${role.actorPath}.1` },
         { name: "2", label: "2 | +15 deg", componentPath: `${role.actorPath}.2` },
@@ -146,7 +154,7 @@ test("stages a preset in the existing small-window camera tab and writes only af
   await expect(role).toBeEnabled();
   await expect(role.locator("option")).toHaveText([
     "默认位置",
-    "0 · Player",
+    "0 · 玩家",
     "1 · BP_Guard_Long_Character_Name_For_Desktop",
   ]);
   await expect(role).toHaveValue("0");
@@ -188,7 +196,7 @@ test("stages a preset in the existing small-window camera tab and writes only af
   );
   await expect(write).toBeEnabled();
   const review = page.getByLabel("节点镜头写入确认");
-  await expect(review).toContainText("0 · Player · 机位 3");
+  await expect(review).toContainText("0 · 玩家 · 机位 3");
   await expect(review).toContainText("EPush · 速度 7 · Blend Out 2.5 · FOV 49");
   await expect(review).toContainText("110.0 / 240.0 / 175.0 cm");
   await expect(review).toContainText("可能覆盖主镜头");
@@ -219,7 +227,7 @@ test("stages a preset in the existing small-window camera tab and writes only af
   expect(state.writes[0]).toMatchObject({
     mode: "preset_camera", dialogueNodeId: "204801",
     roleHints: [
-      { modelIndex: 0, label: "Player" },
+      { modelIndex: 0, label: "玩家" },
       {
         modelIndex: 1,
         label: "BP_Guard_Long_Character_Name_For_Desktop",

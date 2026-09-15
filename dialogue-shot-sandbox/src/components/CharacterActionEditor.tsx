@@ -39,6 +39,7 @@ interface CharacterActionEditorProps {
   controller: CharacterActionEditorController;
   sequence: DialogueSequence;
   dialogueIds: string[];
+  roleLabelsByModelIndex: ReadonlyMap<number, string>;
   busy: boolean;
   showViewLines?: boolean;
   singleNodeMode?: boolean;
@@ -550,6 +551,7 @@ export function CharacterActionEditor({
   controller,
   sequence,
   dialogueIds,
+  roleLabelsByModelIndex,
   busy,
   showViewLines = false,
   singleNodeMode = false,
@@ -600,6 +602,7 @@ export function CharacterActionEditor({
               `bp:${catalog.blueprintClassPath}:${catalog.modelIndex}`,
             modelIndex: catalog.modelIndex,
             name:
+              roleLabelsByModelIndex.get(catalog.modelIndex) ??
               participant?.name ??
               catalog.characterLabel ??
               blueprintActorLabel(
@@ -614,7 +617,11 @@ export function CharacterActionEditor({
           };
         })
         .sort((left, right) => left.modelIndex - right.modelIndex),
-    [controller.catalogs, participantByModelIndex],
+    [
+      controller.catalogs,
+      participantByModelIndex,
+      roleLabelsByModelIndex,
+    ],
   );
   const editableParticipantByModelIndex = useMemo(
     () =>

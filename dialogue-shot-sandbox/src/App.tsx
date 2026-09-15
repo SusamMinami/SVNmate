@@ -86,7 +86,10 @@ import {
   findMissingBlueprintNpcModels,
   type MissingBlueprintNpcModel,
 } from "./data/blueprintFormation";
-import { resolveDialogueCharacterStage } from "./data/characterActions";
+import {
+  dialogueParticipantsByModelIndex,
+  resolveDialogueCharacterStage,
+} from "./data/characterActions";
 import { demoDatabase } from "./data/demo";
 import {
   participantSlotLabel,
@@ -778,6 +781,7 @@ interface ShotInspectorProps {
   configurationSelectionRefreshing: boolean;
   configurationNodeReading: boolean;
   characterActionEditor: CharacterActionEditorController;
+  characterRoleLabelsByModelIndex: ReadonlyMap<number, string>;
   onConfigurationActivityChange: (
     activity: "idle" | "read" | "write",
   ) => void;
@@ -859,6 +863,7 @@ function ShotInspector({
   configurationSelectionRefreshing,
   configurationNodeReading,
   characterActionEditor,
+  characterRoleLabelsByModelIndex,
   onConfigurationActivityChange,
   onMove,
   preference,
@@ -1187,7 +1192,11 @@ function ShotInspector({
                 roleHints={characterActionEditor.catalogs.map((catalog) => ({
                   modelIndex: catalog.modelIndex,
                   label:
-                    catalog.characterLabel || `角色 ${catalog.modelIndex}`,
+                    characterRoleLabelsByModelIndex.get(
+                      catalog.modelIndex,
+                    ) ??
+                    catalog.characterLabel ??
+                    `角色 ${catalog.modelIndex}`,
                 }))}
                 existingConfiguration={configurationNodeConfiguration}
                 configurationLoading={configurationNodeReading}
@@ -1601,6 +1610,7 @@ function ShotInspector({
               controller={characterActionEditor}
               sequence={sequence}
               dialogueIds={editableDialogueIds}
+              roleLabelsByModelIndex={characterRoleLabelsByModelIndex}
               busy={exportBusy}
               showViewLines={configurationMode}
               singleNodeMode={configurationMode}
@@ -2305,8 +2315,13 @@ export default function App() {
     inspectorTab === "shot" || inspectorTab === "audio";
 
   useEffect(() => {
-    if (!configurationMode) {
+    if (activeWorkspace !== "storyboard") {
       configurationNodeReadKeysRef.current.clear();
+    }
+  }, [activeWorkspace]);
+
+  useEffect(() => {
+    if (!configurationMode) {
       setConfigurationNodeReading(false);
       return;
     }
@@ -2318,9 +2333,7 @@ export default function App() {
       setConfigurationNodeReading(false);
       return;
     }
-    const cacheKey =
-      `${sequence.prefix}:${selectedUeDialogueNodeId}:` +
-      configurationNodeReadRevision;
+    const cacheKey = `${sequence.startId}:${selectedUeDialogueNodeId}`;
     if (configurationNodeReadKeysRef.current.has(cacheKey)) {
       return;
     }
@@ -2343,6 +2356,7 @@ export default function App() {
           (item) => item.dialogueId === selectedUeDialogueNodeId,
         );
         if (!configuration) {
+          configurationNodeReadKeysRef.current.delete(cacheKey);
           return;
         }
         setExistingNodeConfigurations((current) => [
@@ -2403,6 +2417,26 @@ export default function App() {
         : sequence.rows.length > 0 && Boolean(selectedDialogueId)),
     releaseWhenDisabled: activeWorkspace !== "storyboard",
   });
+  const characterRoleLabelsByModelIndex = useMemo(
+    () =>
+      new Map(
+        Array.from(
+          dialogueParticipantsByModelIndex(
+            sequence.participants,
+            sequence.rows,
+            characterActionEditor.catalogs,
+            database.models,
+          ),
+          ([modelIndex, participant]) => [modelIndex, participant.name],
+        ),
+      ),
+    [
+      characterActionEditor.catalogs,
+      database.models,
+      sequence.participants,
+      sequence.rows,
+    ],
+  );
   const configurationDataActivity =
     configurationCameraActivity === "write"
       ? "write"
@@ -3478,6 +3512,7 @@ export default function App() {
     traeForceRegenerateRef.current = false;
     setSequence(nextSequence);
     setShots([]);
+    configurationNodeReadKeysRef.current.clear();
     setExistingNodeConfigurations([]);
     setActiveIndex(0);
     setSelectedDialogueId(nextSequence.rows[0]?.id ?? "");
@@ -3595,6 +3630,11 @@ export default function App() {
       });
       if (formationRunId !== formationRunRef.current) {
         return;
+      }
+      for (const configuration of existing.configurations ?? []) {
+        configurationNodeReadKeysRef.current.add(
+          `${previewSequence.startId}:${configuration.dialogueId}`,
+        );
       }
       setExistingNodeConfigurations(existing.configurations ?? []);
       const imported = createExistingStoryboardPreview(
@@ -4099,6 +4139,10 @@ export default function App() {
     const shotIndex = nextShots.findIndex((shot) =>
       shot.dialogueIds.includes(dialogueNodeId),
     );
+    if (nextSequence.startId !== sequence.startId) {
+      configurationNodeReadKeysRef.current.clear();
+      setExistingNodeConfigurations([]);
+    }
     setSequence(nextSequence);
     setShots(nextShots);
     setActiveIndex(Math.max(0, shotIndex));
@@ -4199,6 +4243,8 @@ export default function App() {
     }
     setDatabase(nextDatabase);
     setContentSearch(null);
+    configurationNodeReadKeysRef.current.clear();
+    setExistingNodeConfigurations([]);
     setDesignedStoryboards(new Map());
     setQuery("");
     setSequence(emptySequence);
@@ -4465,7 +4511,9 @@ export default function App() {
     if (!selectedUeDialogueNodeId) {
       return;
     }
-    configurationNodeReadKeysRef.current.clear();
+    configurationNodeReadKeysRef.current.delete(
+      `${sequence.startId}:${selectedUeDialogueNodeId}`,
+    );
     setExistingNodeConfigurations((current) =>
       current.filter(
         (configuration) =>
@@ -6057,6 +6105,9 @@ export default function App() {
                 }
                 configurationNodeReading={configurationNodeReading}
                 characterActionEditor={characterActionEditor}
+                characterRoleLabelsByModelIndex={
+                  characterRoleLabelsByModelIndex
+                }
                 onConfigurationActivityChange={
                   setConfigurationCameraActivity
                 }
@@ -6148,7 +6199,10 @@ export default function App() {
                        (catalog) => ({
                          modelIndex: catalog.modelIndex,
                          label:
-                           catalog.characterLabel ||
+                           characterRoleLabelsByModelIndex.get(
+                             catalog.modelIndex,
+                           ) ??
+                           catalog.characterLabel ??
                            `角色 ${catalog.modelIndex}`,
                        }),
                      )}
