@@ -427,7 +427,7 @@ class LarkCliBaseClient:
         configured = os.environ.get("LARK_CLI_PATH")
         if configured and Path(configured).is_file():
             return Path(configured)
-        names = ("lark-cli.cmd", "lark-cli.exe", "lark-cli")
+        names = ("lark-cli.exe", "lark-cli.cmd", "lark-cli")
         for name in names:
             found = shutil.which(name)
             if found:

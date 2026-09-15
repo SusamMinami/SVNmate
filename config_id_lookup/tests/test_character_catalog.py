@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 from config_linker.character_catalog import (
     CharacterCatalogCache,
@@ -134,6 +135,20 @@ class FakeLarkClient(LarkCliBaseClient):
 
 
 class LarkCliBaseClientTests(unittest.TestCase):
+    def test_cli_discovery_prefers_native_executable(self) -> None:
+        paths = {
+            "lark-cli.exe": r"C:\tools\lark-cli.exe",
+            "lark-cli.cmd": r"C:\npm\lark-cli.cmd",
+        }
+
+        with patch(
+            "config_linker.character_catalog.shutil.which",
+            side_effect=lambda name: paths.get(name),
+        ):
+            discovered = LarkCliBaseClient._find_cli()
+
+        self.assertEqual(discovered, Path(paths["lark-cli.exe"]))
+
     def test_login_device_flow_is_parsed_without_storing_tokens(self) -> None:
         calls: list[list[str]] = []
 
