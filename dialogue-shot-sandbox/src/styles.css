@@ -17,10 +17,11 @@
   --motion-press: 80ms;
   --motion-probe: 110ms;
   --motion-disclosure: 140ms;
+  --motion-selection: 160ms;
+  --ease-selection: cubic-bezier(0.23, 1, 0.32, 1);
   --motion-feedback: 180ms;
   --motion-fast: 200ms;
   --motion-panel: 300ms;
-  --motion-view: 420ms;
   --motion-launch-exit: 430ms;
   --motion-workspace: 480ms;
   --motion-launch: 600ms;
@@ -9665,7 +9666,7 @@ textarea:focus-visible {
 
 .npc-migration-template-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 150px;
+  grid-template-columns: minmax(0, 1fr) 186px;
   align-items: center;
   min-height: 36px;
   gap: 10px;
@@ -9691,8 +9692,8 @@ textarea:focus-visible {
 }
 
 .npc-migration-template-segment {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  width: 150px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  width: 186px;
 }
 
 .npc-migration-template-segment button {
@@ -10413,30 +10414,31 @@ textarea:focus-visible {
 
 .shot-list__selection {
   position: absolute;
-  z-index: 0;
+  z-index: 2;
   top: 0;
-  right: 0;
   left: 0;
   display: block;
+  width: 5px;
   height: 62px;
-  background: var(--ink);
-  box-shadow: inset 5px 0 0 var(--signal);
+  background: var(--signal);
   pointer-events: none;
-  transition: transform 300ms ease;
+  transition: transform var(--motion-selection) var(--ease-selection);
 }
 
 .shot-list__selection.is-invalid {
-  background: #2b1c19;
-  box-shadow: inset 5px 0 0 #ee634f;
+  background: #ee634f;
+}
+
+.workspace[data-navigation-input="keyboard"] .shot-list__selection {
+  transition: none;
 }
 
 .app-shell[data-ark-theme="endfield"] .shot-row {
   z-index: 1;
   min-height: 62px;
   background: transparent;
-  transition:
-    color 200ms ease,
-    background-color 200ms ease;
+  /* Selected text and its background must change together, even mid-navigation. */
+  transition: none;
 }
 
 .app-shell[data-ark-theme="endfield"] .shot-row:hover {
@@ -10444,9 +10446,13 @@ textarea:focus-visible {
   transform: none;
 }
 
-.app-shell[data-ark-theme="endfield"] .shot-row.is-active,
+.app-shell[data-ark-theme="endfield"] .shot-row.is-active {
+  background: var(--ink);
+  box-shadow: none;
+}
+
 .app-shell[data-ark-theme="endfield"] .shot-row.is-invalid.is-active {
-  background: transparent;
+  background: #2b1c19;
   box-shadow: none;
 }
 
@@ -10473,25 +10479,6 @@ textarea:focus-visible {
   width: 6px;
   height: 6px;
   content: "";
-  background: var(--signal);
-}
-
-.stage-transition {
-  position: absolute;
-  z-index: 12;
-  inset: 0;
-  overflow: hidden;
-  background: rgba(242, 242, 240, 0.94);
-  pointer-events: none;
-  animation: stage-curtain-out 420ms cubic-bezier(0.22, 0.8, 0.2, 1) both;
-}
-
-.stage-transition i {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 0;
-  width: 12px;
   background: var(--signal);
 }
 
@@ -10641,7 +10628,6 @@ textarea:focus-visible {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  animation: inspector-panel-in 300ms ease both;
   scrollbar-width: none;
 }
 
@@ -11655,15 +11641,6 @@ textarea:focus-visible {
   background: transparent;
 }
 
-@keyframes stage-curtain-out {
-  0% {
-    transform: translateX(0);
-  }
-  100% {
-    transform: translateX(104%);
-  }
-}
-
 @keyframes workspace-page-enter-up {
   from {
     box-shadow: 0 -28px 52px rgba(25, 25, 25, 0.18);
@@ -11711,19 +11688,6 @@ textarea:focus-visible {
   }
   to {
     opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-@keyframes inspector-panel-in {
-  from {
-    opacity: 0;
-    clip-path: inset(0 0 100% 0);
-    transform: translateY(8px);
-  }
-  to {
-    opacity: 1;
-    clip-path: inset(0);
     transform: translateY(0);
   }
 }
@@ -12120,7 +12084,6 @@ textarea:focus-visible {
   .app-rail *,
   .app-header,
   .shot-list__selection,
-  .stage-transition,
   .stage-pointer-probe,
   .inspector-tab-panel,
   .workspace,
@@ -12151,7 +12114,17 @@ textarea:focus-visible {
     opacity: 0.58;
   }
 
-  .stage-transition {
-    display: none;
+}
+
+/* Keep focus/color feedback, but omit press displacement for keyboard/reduced motion. */
+.workspace[data-navigation-input="keyboard"]
+  :is(.button, .icon-button, .inspector-tabs button, .top-view):active:not(:disabled) {
+  transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workspace
+    :is(.button, .icon-button, .inspector-tabs button, .top-view):active:not(:disabled) {
+    transform: none;
   }
 }

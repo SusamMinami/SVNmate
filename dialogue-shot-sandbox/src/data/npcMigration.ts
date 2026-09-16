@@ -10,6 +10,19 @@ import type {
 
 const ASSET_NAME_PATTERN = /^[A-Za-z0-9_]+$/;
 const PACKAGE_PATH_PATTERN = /^\/Game(?:\/[A-Za-z0-9_]+)+$/;
+const HUMANOID_TEMPLATE_ROLES: Array<
+  keyof NpcMigrationAnimationRoleAssets
+> = [
+  "lookDown",
+  "lookForward",
+  "lookUp",
+  "idleStand",
+  "impact",
+  "interact",
+];
+const ANIMAL_TEMPLATE_ROLES: Array<
+  keyof NpcMigrationAnimationRoleAssets
+> = ["idleStand", "walk"];
 
 function normalizeSlashes(value: string): string {
   return value.trim().replaceAll("\\", "/").replace(/\/+$/, "");
@@ -26,10 +39,79 @@ export function deriveNpcName(meshName: string): string {
   return meshName.trim().replace(/^SK_/i, "");
 }
 
+export function deriveAnimalAnimationName(npcName: string): string {
+  const normalized = npcName.trim();
+  return normalized.match(/^(.+_[A-Za-z][A-Za-z0-9_]*?)\d{2}$/)?.[1] ??
+    normalized;
+}
+
+function deriveAnimalBlueprintPackagePath(
+  targetPackagePath: string,
+  animationName: string,
+): string {
+  const marker = "/biosystems/";
+  const markerIndex = targetPackagePath.toLowerCase().indexOf(marker);
+  if (markerIndex >= 0) {
+    return `${targetPackagePath.slice(0, markerIndex)}/NPC/${animationName}`;
+  }
+  return `/Game/Seria/NPC/${animationName}`;
+}
+
+export function deriveNpcMigrationIdentity(
+  npcName: string,
+  targetPackagePath: string,
+  template: NpcMigrationStandardAbpTemplate,
+): {
+  animationName: string;
+  animationPrefix: string;
+  blueprintName: string;
+  animationBlueprintName: string;
+  blueprintPackagePath: string;
+  animationPackagePath: string;
+  animationBlueprintPackagePath: string;
+  montagePackagePath: string;
+} {
+  const normalizedTargetPackagePath =
+    normalizeNpcPackagePath(targetPackagePath);
+  const isAnimal = template === "animal";
+  const animationName = isAnimal
+    ? deriveAnimalAnimationName(npcName)
+    : npcName;
+  const blueprintPackagePath = isAnimal
+    ? deriveAnimalBlueprintPackagePath(
+        normalizedTargetPackagePath,
+        animationName,
+      )
+    : normalizedTargetPackagePath;
+  const animationPackagePath =
+    `${normalizedTargetPackagePath}/Animation`;
+  return {
+    animationName,
+    animationPrefix: `A_${animationName}_`,
+    blueprintName: isAnimal
+      ? `BP_${npcName.toUpperCase()}_NPC`
+      : `BP_${npcName}`,
+    animationBlueprintName: isAnimal
+      ? `ABP_${npcName.toUpperCase()}_NPC`
+      : `ABP_${npcName}`,
+    blueprintPackagePath,
+    animationPackagePath,
+    animationBlueprintPackagePath: isAnimal
+      ? blueprintPackagePath
+      : animationPackagePath,
+    montagePackagePath: isAnimal
+      ? `${blueprintPackagePath}/Animation`
+      : animationPackagePath,
+  };
+}
+
 export function inferStandardAbpTemplate(
   npcName: string,
 ): NpcMigrationStandardAbpTemplate {
   const normalized = npcName.toLowerCase();
+  if (/(?:^|_)(?:cat|animal)(?:\d|_|$)/.test(normalized)) {
+    return "animal";
+  }
   if (/(?:female|girl|woman|lady)/.test(normalized)) {
     return "female";
   }
@@ -61,6 +143,7 @@ function fileStem(file: string): string {
 export function buildNpcMontagePlans(
   npcName: string,
   bodyAnimationFiles: readonly string[],
+  template: NpcMigrationStandardAbpTemplate = "female",
 ): {
   montages: NpcMigrationMontagePlan[];
   duplicateNames: string[];
@@ -79,6 +162,9 @@ export function buildNpcMontagePlans(
       "kind" | "montageName" | "slotName"
     > | null = null;
     const idle = normalized.match(/^idle(\d*)$/);
+    if (template === "animal") {
+      return [];
+    }
     if (idle) {
       montage = {
         kind: "idle",
@@ -148,6 +234,7 @@ export function buildNpcMontagePlans(
 export function buildNpcAnimationRoleAssets(
   npcName: string,
   bodyAnimationFiles: readonly string[],
+  template: NpcMigrationStandardAbpTemplate = "female",
 ): {
   assets: NpcMigrationAnimationRoleAssets;
   missingRoles: Array<keyof NpcMigrationAnimationRoleAssets>;
@@ -164,6 +251,7 @@ export function buildNpcAnimationRoleAssets(
     idleStand: [],
     impact: [],
     interact: [],
+    walk: [],
   };
   for (const sourceFile of bodyAnimationFiles) {
     const sourceAssetName = fileStem(sourceFile);
@@ -187,6 +275,8 @@ export function buildNpcAnimationRoleAssets(
                 ? "impact"
                 : action === "interact"
                   ? "interact"
+              : action === "walk"
+                ? "walk"
                   : null;
     if (role) {
       matches[role].push(sourceAssetName);
@@ -198,14 +288,18 @@ export function buildNpcAnimationRoleAssets(
       values.length === 1 ? values[0] : "",
     ]),
   ) as unknown as NpcMigrationAnimationRoleAssets;
+  const requiredRoles =
+    template === "animal"
+      ? ANIMAL_TEMPLATE_ROLES
+      : HUMANOID_TEMPLATE_ROLES;
   return {
     assets,
-    missingRoles: (
-      Object.keys(matches) as Array<keyof NpcMigrationAnimationRoleAssets>
-    ).filter((role) => matches[role].length === 0),
-    duplicateRoles: (
-      Object.keys(matches) as Array<keyof NpcMigrationAnimationRoleAssets>
-    ).filter((role) => matches[role].length > 1),
+    missingRoles: requiredRoles.filter(
+      (role) => matches[role].length === 0,
+    ),
+    duplicateRoles: requiredRoles.filter(
+      (role) => matches[role].length > 1,
+    ),
   };
 }
 
@@ -246,22 +340,47 @@ export function buildNpcMigrationPlan(
     request.targetPackagePath ||
       request.source.suggestedTargetPackagePath,
   );
-  const blueprintName = `BP_${npcName}`;
-  const animationBlueprintName = `ABP_${npcName}`;
-  const animationPackagePath = `${targetPackagePath}/Animation`;
-  const { body, face } = classifyNpcAnimationFiles(
-    discovered.animationFiles,
-  );
-  const { montages, duplicateNames } = buildNpcMontagePlans(npcName, body);
   const configureStandardAbp = request.configureStandardAbp ?? false;
   const standardAbpTemplate =
     request.standardAbpTemplate ?? inferStandardAbpTemplate(npcName);
   const {
+    animationName,
+    animationPrefix,
+    blueprintName,
+    animationBlueprintName,
+    blueprintPackagePath,
+    animationPackagePath,
+    animationBlueprintPackagePath,
+    montagePackagePath,
+  } = deriveNpcMigrationIdentity(
+    npcName,
+    targetPackagePath,
+    standardAbpTemplate,
+  );
+  const isAnimal = standardAbpTemplate === "animal";
+  const classifiedAnimations = classifyNpcAnimationFiles(
+    discovered.animationFiles,
+  );
+  const body = isAnimal ? [] : classifiedAnimations.body;
+  const face = classifiedAnimations.face;
+  const { montages, duplicateNames } = buildNpcMontagePlans(
+    animationName,
+    body,
+    standardAbpTemplate,
+  );
+  const animationRoles = buildNpcAnimationRoleAssets(
+    animationName,
+    body,
+    standardAbpTemplate,
+  );
+  const {
     assets: animationRoleAssets,
-    missingRoles,
-    duplicateRoles,
-  } = buildNpcAnimationRoleAssets(npcName, body);
-  const lookBlendSpaceName = `BS_${npcName}_Look`;
+  } = animationRoles;
+  const missingRoles = isAnimal ? [] : animationRoles.missingRoles;
+  const duplicateRoles = isAnimal ? [] : animationRoles.duplicateRoles;
+  const lookBlendSpaceName = isAnimal
+    ? ""
+    : `BS_${npcName}_Look`;
   const blockedReasons: string[] = [];
   const warnings = [...request.source.warnings];
 
@@ -270,6 +389,9 @@ export function buildNpcMigrationPlan(
   }
   if (!PACKAGE_PATH_PATTERN.test(targetPackagePath)) {
     blockedReasons.push("目标 UE 路径必须是 /Game 开头的有效资产目录");
+  }
+  if (!PACKAGE_PATH_PATTERN.test(blueprintPackagePath)) {
+    blockedReasons.push("BP/ABP 目录必须是 /Game 开头的有效资产目录");
   }
   if (!ASSET_NAME_PATTERN.test(blueprintName)) {
     blockedReasons.push("BP 名称只能包含英文字母、数字和下划线");
@@ -291,6 +413,9 @@ export function buildNpcMigrationPlan(
     blockedReasons.push(
       `标准 ABP 动作不唯一：${duplicateRoles.join("、")}`,
     );
+  }
+  if (isAnimal && face.length > 0) {
+    blockedReasons.push("动物模板不支持 Face FBX，请移除后重新生成计划");
   }
   if (!discovered.targetDirectoryReady) {
     blockedReasons.push("目标目录必须是现有 Unreal 项目的 Content 目录");
@@ -317,9 +442,9 @@ export function buildNpcMigrationPlan(
       `目标 Content 中已有 ${conflicts.length} 个同路径文件，当前版本不会覆盖`,
     );
   }
-  if (!discovered.animationDirectoryReady) {
+  if (!isAnimal && !discovered.animationDirectoryReady) {
     blockedReasons.push("动作源目录不存在或无法读取");
-  } else if (body.length === 0) {
+  } else if (!isAnimal && body.length === 0) {
     blockedReasons.push("动作源目录中没有可导入的 Body FBX");
   }
   if (face.length > 0) {
@@ -329,17 +454,36 @@ export function buildNpcMigrationPlan(
   }
   if (montages.length === 0) {
     warnings.push(
-      "目录中只有状态机或混合空间素材，不会自动创建 Montage",
+      isAnimal
+        ? "动物模板保留 BP_E05_CAT01_NPC 引用的 AM_Sleep，不自动创建人形 Montage"
+        : "目录中只有状态机或混合空间素材，不会自动创建 Montage",
     );
   }
-  warnings.push("胶囊体将按 Mesh 包围盒估算，完成后仍需在蓝图视口确认");
+  warnings.push(
+    isAnimal
+      ? "将套用 BP_E05_CAT01_NPC 的胶囊体参数 R40 / H40、Mesh Z -35"
+      : "胶囊体将按 Mesh 包围盒估算，完成后仍需在蓝图视口确认",
+  );
   warnings.push(
     configureStandardAbp
-      ? `将使用${
-          standardAbpTemplate === "male" ? "男性" : "女性"
-        }标准模板配置状态机、Look 和 SpecialAction`
+      ? isAnimal
+        ? "将复制 BP_E05_CAT01_NPC / ABP_E05_CAT01_NPC，并复用模板动作集"
+        : `将使用${
+            standardAbpTemplate === "male" ? "男性" : "女性"
+          }标准模板配置状态机、Look 和 SpecialAction`
       : "未启用标准 ABP 模板，状态机、Look 和 SpecialAction 需要人工配置",
   );
+  if (isAnimal) {
+    warnings.push(
+      `动物动作前缀为 ${animationPrefix}，AnimSequence 写入 ${animationPackagePath}`,
+    );
+    warnings.push(
+      `BP/ABP 写入 ${blueprintPackagePath}，Montage 写入 ${montagePackagePath}`,
+    );
+    warnings.push(
+      "首版动物模板仅支持与 SKEL_E05_Cat 相同的 Skeleton；策划 UE 预检会严格阻断其他骨架",
+    );
+  }
 
   const migrationBlocked =
     !discovered.targetDirectoryReady ||
@@ -355,10 +499,12 @@ export function buildNpcMigrationPlan(
         "目标 UE 路径",
         "BP 名称",
         "ABP 名称",
+        "BP/ABP 目录",
         "动作源目录",
         "多个动作会生成同名 Montage",
         "标准 ABP 缺少动作",
         "标准 ABP 动作不唯一",
+        "动物模板不支持 Face FBX",
       ].some((prefix) => reason.startsWith(prefix)),
     );
 
@@ -378,13 +524,16 @@ export function buildNpcMigrationPlan(
     automaticStep(
       "animations",
       "导入 Body / Face 动作",
-      `${body.length} 个 Body FBX，${face.length} 个 Face FBX`,
-      !discovered.animationDirectoryReady || body.length === 0,
+      isAnimal
+        ? `复用 ${animationPrefix} 模板动作集`
+        : `${body.length} 个 Body FBX，${face.length} 个 Face FBX`,
+      !isAnimal &&
+        (!discovered.animationDirectoryReady || body.length === 0),
     ),
     automaticStep(
       "blueprint",
       "创建并配置 NPC BP",
-      `${blueprintName} · Mesh ${request.source.skeletalMeshName}`,
+      `${blueprintPackagePath}/${blueprintName} · Mesh ${request.source.skeletalMeshName}`,
       !ASSET_NAME_PATTERN.test(blueprintName),
     ),
     automaticStep(
@@ -392,9 +541,11 @@ export function buildNpcMigrationPlan(
       "创建并绑定动画蓝图",
       configureStandardAbp
         ? `${animationBlueprintName} · ${
-            standardAbpTemplate === "male"
-              ? "ABP_N16_Villager_Male_A"
-              : "ABP_N18_Villager_Female_A"
+            standardAbpTemplate === "animal"
+              ? "ABP_E05_CAT01_NPC"
+              : standardAbpTemplate === "male"
+                ? "ABP_N16_Villager_Male_A"
+                : "ABP_N18_Villager_Female_A"
           }`
         : `${animationBlueprintName} · ${request.source.skeletonAssetPath}`,
       !ASSET_NAME_PATTERN.test(animationBlueprintName) ||
@@ -404,8 +555,10 @@ export function buildNpcMigrationPlan(
     automaticStep(
       "look_blend_space",
       "创建 Look 混合空间",
-      `${lookBlendSpaceName} · LookD / LookF / LookU`,
-      configureStandardAbp &&
+      isAnimal
+        ? "动物模板复用专用状态机，不创建人形 Look 混合空间"
+        : `${lookBlendSpaceName} · LookD / LookF / LookU`,
+      !isAnimal && configureStandardAbp &&
         (missingRoles.some((role) =>
           ["lookDown", "lookForward", "lookUp"].includes(role),
         ) ||
@@ -416,7 +569,9 @@ export function buildNpcMigrationPlan(
     automaticStep(
       "montages",
       "创建动作 Montage",
-      `${montages.length} 个 Montage，按语义写入 IdleSlot / TurnSlot`,
+      isAnimal
+        ? `复用 ${montagePackagePath}/AM_Sleep`
+        : `${montages.length} 个 Montage，按语义写入 IdleSlot / TurnSlot`,
       duplicateNames.length > 0,
     ),
     {
@@ -434,7 +589,9 @@ export function buildNpcMigrationPlan(
       label: "校准胶囊体与 Mesh",
       mode: "assisted",
       state: "ready",
-      detail: "自动按包围盒写入尺寸和 Mesh 高度；在 BP 视口确认结果",
+      detail: isAnimal
+        ? "套用猫模板 R40 / H40、Mesh Z -35；在 BP 视口确认结果"
+        : "自动按包围盒写入尺寸和 Mesh 高度；在 BP 视口确认结果",
     },
     {
       id: "finalize",
@@ -448,10 +605,15 @@ export function buildNpcMigrationPlan(
   return {
     source: request.source,
     npcName,
+    animationName,
+    animationPrefix,
     targetContentDirectory,
     targetPackagePath,
+    blueprintPackagePath,
     animationSourceDirectory,
     animationPackagePath,
+    animationBlueprintPackagePath,
+    montagePackagePath,
     blueprintName,
     animationBlueprintName,
     bodyAnimationFiles: body,

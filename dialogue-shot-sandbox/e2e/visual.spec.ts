@@ -1089,10 +1089,7 @@ test("renders nonblank shot and blocking canvases without horizontal overflow", 
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "分镜工作台" })).toBeVisible();
   await page.locator(".shot-row").nth(1).click();
-  await expect(page.locator(".stage-transition")).toHaveCSS(
-    "animation-name",
-    "stage-curtain-out",
-  );
+  await expect(page.locator(".stage-transition")).toHaveCount(0);
   await page.locator(".viewport-panel").scrollIntoViewIfNeeded();
   const movementStart = await page.locator("canvas").first().screenshot();
   await page.waitForTimeout(1_200);

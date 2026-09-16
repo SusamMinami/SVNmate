@@ -1061,7 +1061,10 @@ export interface NpcMigrationMontagePlan {
   slotName: "IdleSlot" | "TurnSlot";
 }
 
-export type NpcMigrationStandardAbpTemplate = "male" | "female";
+export type NpcMigrationStandardAbpTemplate =
+  | "male"
+  | "female"
+  | "animal";
 
 export interface NpcMigrationAnimationRoleAssets {
   lookDown: string;
@@ -1070,16 +1073,22 @@ export interface NpcMigrationAnimationRoleAssets {
   idleStand: string;
   impact: string;
   interact: string;
+  walk: string;
 }
 
 export interface NpcMigrationPlan {
   reviewToken: string;
   source: NpcMigrationSourceScan;
   npcName: string;
+  animationName: string;
+  animationPrefix: string;
   targetContentDirectory: string;
   targetPackagePath: string;
+  blueprintPackagePath: string;
   animationSourceDirectory: string;
   animationPackagePath: string;
+  animationBlueprintPackagePath: string;
+  montagePackagePath: string;
   blueprintName: string;
   animationBlueprintName: string;
   bodyAnimationFiles: string[];
@@ -1145,12 +1154,16 @@ export interface NpcMigrationTargetInspection {
   turnCurvePropertyPath: string;
   turnCurvePropertyCandidates: string[];
   montageAutomationAvailable: boolean;
+  templateBlueprintAssetPath: string;
   templateAnimationBlueprintAssetPath: string;
+  templateSkeletonAssetPath: string;
   templateAnimationAssets: {
     lookBlendSpace: string;
     idleStand: string;
     impact: string;
     interact: string;
+    walk: string;
+    sleepMontage: string;
   };
   standardAbpAutomationAvailable: boolean;
   lookBlendSpaceAutomationAvailable: boolean;
@@ -1169,6 +1182,7 @@ export interface NpcMigrationTargetResult {
   capsuleEstimate: NpcMigrationCapsuleEstimate | null;
   turnCurvePropertyPath: string;
   createdMontageAssetPaths: string[];
+  templateBlueprintAssetPath: string;
   templateAnimationBlueprintAssetPath: string;
   lookBlendSpaceAssetPath: string;
   animationBlueprintOverrideAssetPaths: string[];
@@ -1191,6 +1205,8 @@ export interface NpcSupplementTarget {
   faceSkeletonAssetPath: string;
   targetPackagePath: string;
   animationPackagePath: string;
+  montagePackagePath: string;
+  templateProfile: "humanoid" | "animal";
   existingAssetPaths: string[];
   dirtyPackageNames: string[];
   warnings: string[];

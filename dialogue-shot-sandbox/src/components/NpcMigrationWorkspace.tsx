@@ -23,6 +23,7 @@ import { useMemo, useState } from "react";
 import type {
   NpcMigrationPlan,
   NpcMigrationSourceScan,
+  NpcMigrationStandardAbpTemplate,
   NpcMigrationTargetInspection,
   NpcMigrationTargetRequest,
   NpcMigrationTargetResult,
@@ -34,7 +35,10 @@ import {
   inspectNpcMigrationTarget,
   scanNpcMigrationSource,
 } from "../ue/client";
-import { inferStandardAbpTemplate } from "../data/npcMigration";
+import {
+  deriveNpcMigrationIdentity,
+  inferStandardAbpTemplate,
+} from "../data/npcMigration";
 import { NpcSupplementWorkspace } from "./NpcSupplementWorkspace";
 
 interface NpcMigrationWorkspaceProps {
@@ -63,6 +67,16 @@ function compactPath(value: string): string {
   return value.replaceAll("\\", "/");
 }
 
+function templateLabel(
+  template: NpcMigrationStandardAbpTemplate,
+): string {
+  return template === "animal"
+    ? "动物"
+    : template === "male"
+      ? "男性"
+      : "女性";
+}
+
 export function NpcMigrationWorkspace({
   onClose,
 }: NpcMigrationWorkspaceProps) {
@@ -78,15 +92,14 @@ export function NpcMigrationWorkspace({
     setAnimationBlueprintParentClassPath,
   ] = useState("SeriaNPCAnimInstance");
   const [turnCurveAssetPath, setTurnCurveAssetPath] = useState(
-    "/Game/Seria/NPC/Animation/Npc_head_turn.Npc_head_turn",
+    "/Game/Seria/NPC/Curves/Npc_head_turn.Npc_head_turn",
   );
   const [autoFitCapsule, setAutoFitCapsule] = useState(true);
   const [bindTurnCurve, setBindTurnCurve] = useState(true);
   const [createMontages, setCreateMontages] = useState(true);
   const [configureStandardAbp, setConfigureStandardAbp] = useState(true);
-  const [standardAbpTemplate, setStandardAbpTemplate] = useState<
-    "male" | "female"
-  >("female");
+  const [standardAbpTemplate, setStandardAbpTemplate] =
+    useState<NpcMigrationStandardAbpTemplate>("female");
   const [plan, setPlan] = useState<NpcMigrationPlan | null>(null);
   const [migrated, setMigrated] = useState(false);
   const [targetInspection, setTargetInspection] =
@@ -95,8 +108,19 @@ export function NpcMigrationWorkspace({
   const [busy, setBusy] = useState<BusyAction>(null);
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
-  const blueprintName = npcName ? `BP_${npcName}` : "";
-  const animationBlueprintName = npcName ? `ABP_${npcName}` : "";
+  const migrationIdentity = useMemo(
+    () =>
+      deriveNpcMigrationIdentity(
+        npcName,
+        targetPackagePath,
+        standardAbpTemplate,
+      ),
+    [npcName, standardAbpTemplate, targetPackagePath],
+  );
+  const blueprintName = npcName ? migrationIdentity.blueprintName : "";
+  const animationBlueprintName = npcName
+    ? migrationIdentity.animationBlueprintName
+    : "";
 
   const totalBytes = useMemo(
     () =>
@@ -120,9 +144,14 @@ export function NpcMigrationWorkspace({
       setSource(next);
       setNpcName(next.suggestedNpcName);
       setTargetPackagePath(next.suggestedTargetPackagePath);
-      setStandardAbpTemplate(
-        inferStandardAbpTemplate(next.suggestedNpcName),
+      const inferredTemplate = inferStandardAbpTemplate(
+        next.suggestedNpcName,
       );
+      setStandardAbpTemplate(inferredTemplate);
+      if (inferredTemplate === "animal") {
+        setConfigureStandardAbp(true);
+        setAutoFitCapsule(true);
+      }
       setPlan(null);
       setMigrated(false);
       setTargetInspection(null);
@@ -273,7 +302,7 @@ export function NpcMigrationWorkspace({
       !window.confirm(
         `将在策划 UE 导入 ${plan!.bodyAnimationFiles.length + plan!.faceAnimationFiles.length} 个动作并创建 ${plan!.blueprintName} / ${plan!.animationBlueprintName}${
           plan!.configureStandardAbp
-            ? `，套用${plan!.standardAbpTemplate === "male" ? "男性" : "女性"}标准 ABP 模板`
+            ? `，套用${templateLabel(plan!.standardAbpTemplate)}标准模板`
             : ""
         }。继续吗？`,
       )
@@ -530,7 +559,10 @@ export function NpcMigrationWorkspace({
                 </div>
               </label>
               <label>
-                <span>动作 FBX 目录</span>
+                <span>
+                  动作 FBX 目录
+                  {standardAbpTemplate === "animal" ? "（可留空）" : ""}
+                </span>
                 <div>
                   <input
                     value={animationSourceDirectory}
@@ -579,6 +611,20 @@ export function NpcMigrationWorkspace({
                   <span>动画 BP</span>
                   <code>{animationBlueprintName || "ABP_..."}</code>
                 </div>
+                {standardAbpTemplate === "animal" && npcName && (
+                  <>
+                    <div>
+                      <span>动作前缀</span>
+                      <code>{migrationIdentity.animationPrefix}</code>
+                    </div>
+                    <div>
+                      <span>BP / ABP 目录</span>
+                      <code title={migrationIdentity.blueprintPackagePath}>
+                        {migrationIdentity.blueprintPackagePath}
+                      </code>
+                    </div>
+                  </>
+                )}
               </div>
               <button
                 className="button button--primary npc-migration-plan-button"
@@ -633,6 +679,12 @@ export function NpcMigrationWorkspace({
                   <input
                     type="checkbox"
                     checked={configureStandardAbp}
+                    disabled={standardAbpTemplate === "animal"}
+                    title={
+                      standardAbpTemplate === "animal"
+                        ? "动物管线必须使用 BP_E05_CAT01_NPC 模板"
+                        : undefined
+                    }
                     onChange={(event) => {
                       setConfigureStandardAbp(event.target.checked);
                       setPlan(null);
@@ -672,6 +724,22 @@ export function NpcMigrationWorkspace({
                   >
                     女性
                   </button>
+                  <button
+                    type="button"
+                    className={standardAbpTemplate === "animal" ? "is-active" : ""}
+                    aria-pressed={standardAbpTemplate === "animal"}
+                    disabled={!configureStandardAbp}
+                    title="使用 BP_E05_CAT01_NPC / ABP_E05_CAT01_NPC"
+                    onClick={() => {
+                      setStandardAbpTemplate("animal");
+                      setConfigureStandardAbp(true);
+                      setAutoFitCapsule(true);
+                      setPlan(null);
+                      setTargetInspection(null);
+                    }}
+                  >
+                    动物
+                  </button>
                 </div>
               </div>
               <label>
@@ -695,7 +763,11 @@ export function NpcMigrationWorkspace({
                       setTargetInspection(null);
                     }}
                   />
-                  <span>自动估算胶囊体</span>
+                  <span>
+                    {standardAbpTemplate === "animal"
+                      ? "套用模板胶囊体"
+                      : "自动估算胶囊体"}
+                  </span>
                 </label>
                 <label>
                   <input

@@ -90,6 +90,8 @@ function target(
       "/Game/Seria/NPC/N28/SKEL_N28_Face.SKEL_N28_Face",
     targetPackagePath: "/Game/Seria/NPC/N28",
     animationPackagePath: "/Game/Seria/NPC/N28/Animation",
+    montagePackagePath: "/Game/Seria/NPC/N28/Animation",
+    templateProfile: "humanoid",
     existingAssetPaths: [
       "/Game/Seria/NPC/N28/Animation/A_N28_Talk.A_N28_Talk",
     ],
@@ -225,6 +227,51 @@ describe("NPC supplement server workflow", () => {
       "asset_data_class_name(asset_data) != 'SkeletalMesh'",
     );
     expect(connection.closed).toBe(true);
+  });
+
+  it("resolves the E05 cat BP to its animal action and Montage roots", async () => {
+    const connection = new FakeSupplementConnection({
+      target_project_file: "C:/trunk/res/Seria.uproject",
+      target_content_directory: "C:/trunk/res/Content",
+      selected_asset_path:
+        "/Game/Seria/NPC/E05_Cat/BP_E05_CAT01_NPC.BP_E05_CAT01_NPC",
+      selected_asset_name: "BP_E05_CAT01_NPC",
+      selected_asset_type: "Blueprint",
+      npc_name: "E05_Cat",
+      skeletal_mesh_asset_path:
+        "/Game/Seria/BioSystems/E05_Cat/SK_E05_Cat01.SK_E05_Cat01",
+      skeleton_asset_path:
+        "/Game/Seria/BioSystems/E05_Cat/SKEL_E05_Cat.SKEL_E05_Cat",
+      face_skeletal_mesh_asset_path: "",
+      face_skeleton_asset_path: "",
+      target_package_path: "/Game/Seria/BioSystems/E05_Cat",
+      animation_package_path:
+        "/Game/Seria/BioSystems/E05_Cat/Animation",
+      montage_package_path: "/Game/Seria/NPC/E05_Cat/Animation",
+      template_profile: "animal",
+      existing_asset_paths: [
+        "/Game/Seria/BioSystems/E05_Cat/Animation/A_E05_Cat_Walk.A_E05_Cat_Walk",
+        "/Game/Seria/NPC/E05_Cat/Animation/AM_Sleep.AM_Sleep",
+      ],
+      dirty_package_names: [],
+      face_candidate_count: 0,
+    });
+
+    await expect(
+      scanNpcSupplementTarget(() => connection),
+    ).resolves.toMatchObject({
+      npcName: "E05_Cat",
+      targetPackagePath: "/Game/Seria/BioSystems/E05_Cat",
+      animationPackagePath:
+        "/Game/Seria/BioSystems/E05_Cat/Animation",
+      montagePackagePath: "/Game/Seria/NPC/E05_Cat/Animation",
+      templateProfile: "animal",
+    });
+    const expression = String(connection.calls[0].args.Expression);
+    expect(expression).toContain("variant_suffix.isdigit()");
+    expect(expression).toContain(
+      "target_root.replace('/BioSystems/', '/NPC/', 1)",
+    );
   });
 
   it("runs the native per-item face automation script", async () => {

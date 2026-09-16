@@ -26,11 +26,18 @@ NPC 迁移可以自动化，但不能安全地压缩成一次无审核的写入�
 5. 人工复核：胶囊体与 Mesh 的视觉贴合、角色正面、ABP 状态机运行效果、
    Look 三个采样点、面部曲线/Montage 输出和后处理动画蓝图。
 
+动物 NPC 是同一两阶段管线中的独立模板配置。首版以
+`BP_E05_CAT01_NPC` / `ABP_E05_CAT01_NPC` 为基准，只支持
+`SKEL_E05_Cat` 兼容资产；它复用模板动作集和 `AM_Sleep`，不套用人形 Look
+与 SpecialAction 规则。
+
 ## 工作区分流
 
 进入 NPC 迁移工作区后先选择本次任务：
 
 1. **全新 NPC**：保留原有的美术 UE 扫描、文件迁移和策划 UE 完整配置流程。
+   标准模板可选男性、女性或动物；动物模板会复制猫 BP/ABP，并使用独立命名、
+   目录和胶囊体规则。
 2. **动作补充与修改**：读取策划 UE 中已有的 NPC BP、Body Skeletal Mesh 或
    Body Skeleton，只导入本次勾选的 Body FBX。同名资产按“更新”审核，新资产
    按“新增”审核；符合规则的可播放动作会创建 Montage。若同一来源
@@ -105,11 +112,38 @@ C++ 代码。原来的 MakeTable 由镜头沙盒审核清单替代，Out 由逐�
 
 - 男性：`ABP_N16_Villager_Male_A`
 - 女性：`ABP_N18_Villager_Female_A`
+- 动物：`BP_E05_CAT01_NPC` + `ABP_E05_CAT01_NPC`
 
 文档原流程要求把模板 AnimGraph 节点复制到新 ABP。工具通过复制模板 ABP
 资产保留完整图表，随后替换目标 Skeleton，并遍历复制品内的 Sequence Player
 与 BlendSpace Player 节点，把 Look BlendSpace、IdleStand、Impact 和
 Interact 替换为当前 NPC 资产。这样不依赖编辑器剪贴板，并能在写入后编译验证。
+
+## 动物模板规则
+
+动物模板按 `BP_E05_CAT01_NPC` 的真实资产结构执行：
+
+| 项目 | 规则 |
+| --- | --- |
+| 兼容 Skeleton | `/Game/Seria/BioSystems/E05_Cat/SKEL_E05_Cat`，不一致时预检阻断 |
+| BP 模板 | `/Game/Seria/NPC/E05_Cat/BP_E05_CAT01_NPC` |
+| ABP 模板 | `/Game/Seria/NPC/E05_Cat/ABP_E05_CAT01_NPC` |
+| 动作前缀 | 从 Mesh 变体名去掉末尾两位编号；`E05_Cat02` → `A_E05_Cat_` |
+| 模型与 AnimSequence | `/Game/Seria/BioSystems/E05_Cat` 及其 `Animation` 子目录 |
+| BP 与 ABP | `/Game/Seria/NPC/E05_Cat` |
+| Montage | `/Game/Seria/NPC/E05_Cat/Animation`；完整迁移复用模板 `AM_Sleep` |
+| 胶囊体 | Radius `40`、Half Height `40`、Mesh Z `-35` |
+| 转头曲线 | `/Game/Seria/NPC/Curves/Npc_head_turn` |
+| Face | 首版不支持，发现 Face FBX 时阻断 |
+
+例如读取 `SK_E05_Cat02` 后，工具生成
+`BP_E05_CAT02_NPC` / `ABP_E05_CAT02_NPC`，但动作族仍为 `E05_Cat`。
+完整迁移不重复导入共享动作；后续动作更新通过“动作补充与修改”读取
+`A_E05_Cat_*.fbx`，并同时扫描 BioSystems 动作目录和 NPC Montage 目录。
+
+动物 BP 与 ABP 均从模板复制，以保留专用事件图、状态机和 `AM_Sleep` 引用。
+由于这些引用绑定猫骨架，不能把当前选项当作任意四足动物的通用重定向器；新增
+其他 Skeleton 家族时应增加新的动物模板配置，而不是绕过兼容性检查。
 
 ## 安全约束
 
@@ -129,6 +163,8 @@ Interact 替换为当前 NPC 资产。这样不依赖编辑器剪贴板，并能
   任一动作都会阻断。
 - 男性或女性模板不存在、模板引用资产不完整、BlendSpace 或 ABP 覆盖接口不可用
   时阻断。
+- 动物模板 BP/ABP、`IdleStand`、`Walk` 或 `AM_Sleep` 不完整，或者目标
+  Skeleton 不是 `SKEL_E05_Cat` 时阻断。
 - 高风险迁移和目标配置分别要求确认。
 
 ## 自动命名

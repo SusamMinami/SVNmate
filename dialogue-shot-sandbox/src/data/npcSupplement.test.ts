@@ -23,6 +23,8 @@ function target(
       "/Game/Seria/NPC/N28/SKEL_N28_Face.SKEL_N28_Face",
     targetPackagePath: "/Game/Seria/NPC/N28",
     animationPackagePath: "/Game/Seria/NPC/N28/Animation",
+    montagePackagePath: "/Game/Seria/NPC/N28/Animation",
+    templateProfile: "humanoid",
     existingAssetPaths: [
       "/Game/Seria/NPC/N28/Animation/A_N28_Idle.A_N28_Idle",
       "/Game/Seria/NPC/N28/Animation/A_N28_Talk.A_N28_Talk",
@@ -205,6 +207,48 @@ describe("NPC supplement planning", () => {
         "/Game/Seria/NPC/N28/Animation/Montages/AM_Talk",
       montageState: "reuse",
     });
+  });
+
+  it("accepts the E05 animal action prefix without creating human montages", () => {
+    const plan = buildNpcSupplementPlan(
+      request("actions", {
+        target: target({
+          selectedAssetPath:
+            "/Game/Seria/NPC/E05_Cat/BP_E05_CAT01_NPC.BP_E05_CAT01_NPC",
+          selectedAssetName: "BP_E05_CAT01_NPC",
+          npcName: "E05_Cat",
+          skeletalMeshAssetPath:
+            "/Game/Seria/BioSystems/E05_Cat/SK_E05_Cat01.SK_E05_Cat01",
+          skeletonAssetPath:
+            "/Game/Seria/BioSystems/E05_Cat/SKEL_E05_Cat.SKEL_E05_Cat",
+          targetPackagePath: "/Game/Seria/BioSystems/E05_Cat",
+          animationPackagePath:
+            "/Game/Seria/BioSystems/E05_Cat/Animation",
+          montagePackagePath:
+            "/Game/Seria/NPC/E05_Cat/Animation",
+          templateProfile: "animal",
+          faceSkeletalMeshAssetPath: "",
+          faceSkeletonAssetPath: "",
+          existingAssetPaths: [
+            "/Game/Seria/BioSystems/E05_Cat/Animation/A_E05_Cat_Walk.A_E05_Cat_Walk",
+            "/Game/Seria/NPC/E05_Cat/Animation/AM_Sleep.AM_Sleep",
+          ],
+        }),
+      }),
+      [
+        "D:/FBX/E05_Cat/A_E05_Cat_Idlestand.fbx",
+        "D:/FBX/E05_Cat/A_E05_Cat_sleep.fbx",
+        "D:/FBX/E05_Cat/A_E05_Cat_Walk.fbx",
+      ],
+    );
+
+    expect(plan.canApply).toBe(true);
+    expect(plan.npcPrefix).toBe("A_E05_Cat_");
+    expect(plan.items).toMatchObject([
+      { actionName: "Idlestand", state: "new", montageName: "" },
+      { actionName: "sleep", state: "new", montageName: "" },
+      { actionName: "Walk", state: "update", montageName: "" },
+    ]);
   });
 
   it("requires a refreshed review after the included set changes", () => {

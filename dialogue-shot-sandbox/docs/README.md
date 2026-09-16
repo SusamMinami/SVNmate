@@ -40,6 +40,8 @@
 
 ## 研究与历史
 
+- [2026-09-16 Emil 动效技能分析](research/motion-design-emil-2026-09-16.md)：
+  主技能安装与四轮路线；第一轮切镜/检查器反馈已修改，浮层、工作区转场与任务反馈待实施。
 - [2026-09-15 UE 崩溃调查](research/ue-editor-stability-2026-09-15.md)：
   PostLoad/GC 调用断言、Niagara/Slate 分类证据；跨模式缓存已改，原生修复仍待接入。
 - [2026-09-14 N113 身体重定向测试](research/kimodo-n113-validation-2026-09-14.md)：

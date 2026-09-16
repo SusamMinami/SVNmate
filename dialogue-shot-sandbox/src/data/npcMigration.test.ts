@@ -4,6 +4,8 @@ import {
   buildNpcAnimationRoleAssets,
   buildNpcMontagePlans,
   classifyNpcAnimationFiles,
+  deriveAnimalAnimationName,
+  deriveNpcMigrationIdentity,
   deriveNpcName,
   inferStandardAbpTemplate,
 } from "./npcMigration";
@@ -106,6 +108,28 @@ describe("NPC migration planning", () => {
       "female",
     );
     expect(inferStandardAbpTemplate("N99_Robot")).toBe("female");
+    expect(inferStandardAbpTemplate("E05_Cat01")).toBe("animal");
+    expect(deriveAnimalAnimationName("E05_Cat01")).toBe("E05_Cat");
+  });
+
+  it("derives the animal BP, ABP, action prefix and split asset roots", () => {
+    expect(
+      deriveNpcMigrationIdentity(
+        "E05_Cat01",
+        "/Game/Seria/BioSystems/E05_Cat",
+        "animal",
+      ),
+    ).toEqual({
+      animationName: "E05_Cat",
+      animationPrefix: "A_E05_Cat_",
+      blueprintName: "BP_E05_CAT01_NPC",
+      animationBlueprintName: "ABP_E05_CAT01_NPC",
+      blueprintPackagePath: "/Game/Seria/NPC/E05_Cat",
+      animationPackagePath:
+        "/Game/Seria/BioSystems/E05_Cat/Animation",
+      animationBlueprintPackagePath: "/Game/Seria/NPC/E05_Cat",
+      montagePackagePath: "/Game/Seria/NPC/E05_Cat/Animation",
+    });
   });
 
   it("maps playable actions to montage names and semantic slots", () => {
@@ -260,6 +284,58 @@ describe("NPC migration planning", () => {
     expect(plan.blockedReasons).toContain(
       "标准 ABP 缺少动作：interact",
     );
+  });
+
+  it("builds an animal plan from the E05 cat template contract", () => {
+    const plan = buildNpcMigrationPlan(
+      request({
+        source: sourceScan({
+          skeletalMeshName: "SK_E05_Cat01",
+          skeletalMeshAssetPath:
+            "/Game/Seria/BioSystems/E05_Cat/SK_E05_Cat01.SK_E05_Cat01",
+          skeletalMeshPackageName:
+            "/Game/Seria/BioSystems/E05_Cat/SK_E05_Cat01",
+          skeletonAssetPath:
+            "/Game/Seria/BioSystems/E05_Cat/SKEL_E05_Cat.SKEL_E05_Cat",
+          suggestedNpcName: "E05_Cat01",
+          suggestedTargetPackagePath:
+            "/Game/Seria/BioSystems/E05_Cat",
+        }),
+        configureStandardAbp: true,
+        standardAbpTemplate: "animal",
+      }),
+      {
+        animationFiles: [
+          "D:/Anim/A_E05_Cat_Idlestand.fbx",
+          "D:/Anim/A_E05_Cat_Walk.fbx",
+          "D:/Anim/A_E05_Cat_sleep.fbx",
+        ],
+        fileOperations: [operation()],
+        targetDirectoryReady: true,
+        animationDirectoryReady: true,
+      },
+    );
+
+    expect(plan).toMatchObject({
+      npcName: "E05_Cat01",
+      animationName: "E05_Cat",
+      animationPrefix: "A_E05_Cat_",
+      targetPackagePath: "/Game/Seria/BioSystems/E05_Cat",
+      blueprintPackagePath: "/Game/Seria/NPC/E05_Cat",
+      animationPackagePath:
+        "/Game/Seria/BioSystems/E05_Cat/Animation",
+      animationBlueprintPackagePath: "/Game/Seria/NPC/E05_Cat",
+      montagePackagePath: "/Game/Seria/NPC/E05_Cat/Animation",
+      blueprintName: "BP_E05_CAT01_NPC",
+      animationBlueprintName: "ABP_E05_CAT01_NPC",
+      standardAbpTemplate: "animal",
+      bodyAnimationFiles: [],
+      montages: [],
+      canConfigure: true,
+    });
+    expect(plan.blockedReasons).toEqual([]);
+    expect(plan.warnings.join("\n")).toContain("R40 / H40");
+    expect(plan.warnings.join("\n")).toContain("SKEL_E05_Cat");
   });
 
   it("blocks dirty source packages, target conflicts and missing body FBX", () => {

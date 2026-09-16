@@ -41,6 +41,8 @@ const SupplementTargetSchema = z.object({
   faceSkeletonAssetPath: z.string(),
   targetPackagePath: z.string().startsWith("/Game/"),
   animationPackagePath: z.string().startsWith("/Game/"),
+  montagePackagePath: z.string().startsWith("/Game/"),
+  templateProfile: z.enum(["humanoid", "animal"]),
   existingAssetPaths: z.array(z.string()),
   dirtyPackageNames: z.array(z.string()),
   warnings: z.array(z.string()),
@@ -207,6 +209,11 @@ function assertReviewToken(
 
 function packagePath(value: string): string {
   return value.split(".", 1)[0];
+}
+
+function packageDirectory(value: string): string {
+  const path = packagePath(value);
+  return path.slice(0, path.lastIndexOf("/"));
 }
 
 function normalizedDiskPath(value: string): string {
@@ -415,16 +422,43 @@ else:
         body_name = body_mesh.get_name()
         npc_name = body_name[3:] if body_name.lower().startswith('sk_') else body_name
         body_package = body_mesh.get_outermost().get_path_name()
+        body_directory = body_package.rsplit('/', 1)[0]
+        body_directory_name = body_directory.rsplit('/', 1)[-1]
+        variant_suffix = npc_name[len(body_directory_name):]
+        template_profile = 'humanoid'
+        if (
+            npc_name.lower().startswith(body_directory_name.lower())
+            and len(variant_suffix) == 2
+            and variant_suffix.isdigit()
+        ):
+            npc_name = body_directory_name
+            template_profile = 'animal'
         target_root = npc_package_root(body_package, npc_name)
         animation_root = target_root + '/Animation'
-        asset_paths = [
-            str(path)
-            for path in unreal.EditorAssetLibrary.list_assets(
-                target_root,
-                recursive=True,
-                include_folder=False
-            )
-        ]
+        selected_root = selected.get_outermost().get_path_name().rsplit('/', 1)[0]
+        blueprint_root = (
+            selected_root
+            if selected_type == 'Blueprint'
+            else target_root.replace('/BioSystems/', '/NPC/', 1)
+        )
+        montage_root = (
+            blueprint_root + '/Animation'
+            if template_profile == 'animal'
+            else animation_root
+        )
+        asset_roots = [target_root]
+        if template_profile == 'animal' and blueprint_root not in asset_roots:
+            asset_roots.append(blueprint_root)
+        asset_paths = []
+        for asset_root in asset_roots:
+            asset_paths.extend([
+                str(path)
+                for path in unreal.EditorAssetLibrary.list_assets(
+                    asset_root,
+                    recursive=True,
+                    include_folder=False
+                )
+            ])
         registry = unreal.AssetRegistryHelpers.get_asset_registry()
         face_candidates = []
         for asset_data in registry.get_assets_by_path(
@@ -474,6 +508,8 @@ else:
             'face_skeleton_asset_path': face_skeleton.get_path_name() if face_skeleton else '',
             'target_package_path': target_root,
             'animation_package_path': animation_root,
+            'montage_package_path': montage_root,
+            'template_profile': template_profile,
             'existing_asset_paths': asset_paths,
             'dirty_package_names': dirty,
             'face_candidate_count': len(unique_face_candidates),
@@ -514,6 +550,11 @@ else:
       faceSkeletonAssetPath: String(raw.face_skeleton_asset_path ?? ""),
       targetPackagePath: String(raw.target_package_path ?? ""),
       animationPackagePath: String(raw.animation_package_path ?? ""),
+      montagePackagePath: String(
+        raw.montage_package_path ?? raw.animation_package_path ?? "",
+      ),
+      templateProfile:
+        raw.template_profile === "animal" ? "animal" : "humanoid",
       existingAssetPaths: (
         Array.isArray(raw.existing_asset_paths)
           ? raw.existing_asset_paths
@@ -761,6 +802,7 @@ items = ${JSON.stringify(
         state: item.state,
         montage_name: item.montageName,
         montage_asset_path: packagePath(item.montageAssetPath),
+        montage_destination: packageDirectory(item.montageAssetPath),
         montage_state: item.montageState,
         montage_slot_name: item.montageSlotName,
       })),
@@ -845,7 +887,10 @@ def create_montage(item):
     if not sequence or sequence.get_class().get_name() != 'AnimSequence':
         raise RuntimeError('Montage 源动作不存在：' + item['source_asset_name'])
     montage = None
-    if callable(native_montage_creator):
+    if (
+        callable(native_montage_creator)
+        and item['montage_destination'] == destination
+    ):
         try:
             native_montage_creator(
                 ${JSON.stringify(plan.npcPrefix)},
@@ -861,6 +906,7 @@ def create_montage(item):
         created_montages.append(montage.get_path_name())
         return
     else:
+        asset_library.make_directory(item['montage_destination'])
         factory = montage_factory_type()
         try:
             factory.set_editor_property('target_skeleton', body_skeleton)
@@ -869,7 +915,7 @@ def create_montage(item):
             pass
         montage = asset_tools.create_asset(
             item['montage_name'],
-            ${JSON.stringify(plan.target.animationPackagePath)},
+            item['montage_destination'],
             montage_asset_type,
             factory
         )

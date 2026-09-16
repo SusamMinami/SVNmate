@@ -50,6 +50,7 @@ import { useCollaborationConnections } from "./app/useCollaborationConnections";
 import { useStoryboardExport } from "./app/useStoryboardExport";
 import { useUeDialogueSelection } from "./app/useUeDialogueSelection";
 import { useWorkspaceNavigation } from "./app/useWorkspaceNavigation";
+import { useNavigationFeedback } from "./app/useNavigationFeedback";
 import type {
   FormationOptionId,
   FormationSelectionId,
@@ -1919,6 +1920,7 @@ function ShotInspector({
 }
 
 export default function App() {
+  const navigationFeedback = useNavigationFeedback();
   const [showLaunchScreen, setShowLaunchScreen] = useState(
     () =>
       window.sessionStorage.getItem(LAUNCH_SCREEN_STORAGE_KEY) !== "1",
@@ -5270,6 +5272,7 @@ export default function App() {
 
       <div
         className="workspace"
+        {...navigationFeedback}
         data-workspace-state={
           activeWorkspace === "storyboard"
             ? outgoingWorkspace
@@ -5645,6 +5648,7 @@ export default function App() {
                       className={`shot-row ${index === activeIndex ? "is-active" : ""} is-${projectionStatus(shot.projection)}`}
                       type="button"
                       key={shot.id}
+                      aria-pressed={index === activeIndex}
                       onClick={() => selectShot(index)}
                     >
                       <span className="shot-row__number">

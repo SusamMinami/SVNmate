@@ -77,6 +77,9 @@ test("opens the NPC migration workspace without layout overflow", async ({
   await expect(
     page.getByRole("button", { name: "男性" }),
   ).toHaveAttribute("aria-pressed", "true");
+  await expect(
+    page.getByRole("button", { name: "动物" }),
+  ).toBeVisible();
   await expect(page.getByText("迁移参数")).toBeVisible();
   await expect(page.getByText("执行审核")).toBeVisible();
   await expect(
@@ -96,6 +99,95 @@ test("opens the NPC migration workspace without layout overflow", async ({
 
   await page.screenshot({
     path: testInfo.outputPath("npc-migration-workspace.png"),
+    fullPage: true,
+  });
+});
+
+test("selects the animal migration profile for an E05 cat mesh", async ({
+  page,
+}, testInfo) => {
+  await page.route("**/api/ue/npc-migration/source-scan", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          sourceProjectFile: "D:/Seria/Art/Art.uproject",
+          sourceContentDirectory: "D:/Seria/Art/Content",
+          skeletalMeshName: "SK_E05_Cat02",
+          skeletalMeshAssetPath:
+            "/Game/Seria/BioSystems/E05_Cat/SK_E05_Cat02.SK_E05_Cat02",
+          skeletalMeshPackageName:
+            "/Game/Seria/BioSystems/E05_Cat/SK_E05_Cat02",
+          skeletonAssetPath:
+            "/Game/Seria/BioSystems/E05_Cat/SKEL_E05_Cat.SKEL_E05_Cat",
+          physicsAssetPath:
+            "/Game/Seria/BioSystems/E05_Cat/PHYS_E05_Cat.PHYS_E05_Cat",
+          materialAssetPaths: [],
+          dependencyPackageNames: [
+            "/Game/Seria/BioSystems/E05_Cat/SK_E05_Cat02",
+          ],
+          sourceFiles: [],
+          dirtyPackageNames: [],
+          suggestedNpcName: "E05_Cat02",
+          suggestedTargetPackagePath:
+            "/Game/Seria/BioSystems/E05_Cat",
+          warnings: [],
+        },
+      }),
+    }),
+  );
+  await page.addInitScript(() => {
+    window.sessionStorage.setItem("shot-sandbox.launch-screen-seen", "1");
+  });
+  await page.goto("/");
+
+  await page.getByRole("button", { name: "NPC 迁移" }).click();
+  await page.getByRole("button", { name: /全新 NPC/ }).click();
+  await page.getByRole("button", { name: "读取源资产" }).click();
+
+  await expect(
+    page.getByRole("button", { name: "动物" }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(
+    page.getByText("BP_E05_CAT02_NPC", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("ABP_E05_CAT02_NPC", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("A_E05_Cat_", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("/Game/Seria/NPC/E05_Cat", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText("套用模板胶囊体")).toBeVisible();
+
+  const segment = page.getByRole("group", {
+    name: "标准 NPC ABP 模板",
+  });
+  expect(
+    await segment.locator("button").evaluateAll((buttons) =>
+      buttons.map((button) => ({
+        text: button.textContent?.trim(),
+        active: button.classList.contains("is-active"),
+        pressed: button.getAttribute("aria-pressed"),
+      })),
+    ),
+  ).toEqual([
+    { text: "男性", active: false, pressed: "false" },
+    { text: "女性", active: false, pressed: "false" },
+    { text: "动物", active: true, pressed: "true" },
+  ]);
+  const metrics = await segment.evaluate((element) => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+  }));
+  expect(metrics.scrollWidth).toBeLessThanOrEqual(metrics.clientWidth + 1);
+
+  await page.screenshot({
+    path: testInfo.outputPath("npc-migration-animal-profile.png"),
     fullPage: true,
   });
 });

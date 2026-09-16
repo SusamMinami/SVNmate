@@ -937,14 +937,6 @@ function StageViewComponent({
           </div>
         </div>
 
-        <div
-          className="stage-transition"
-          key={`${shot.id}-${viewMode}`}
-          aria-hidden="true"
-        >
-          <i />
-        </div>
-
         <div className="stage-instrumentation" aria-hidden="true">
           <div className="stage-sequence">
             <span>SHOT</span>

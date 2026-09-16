@@ -114,6 +114,9 @@ export function buildNpcSupplementPlan(
     const bodyMontage = buildNpcMontagePlans(
       request.target.npcName,
       [montageSourceFile],
+      request.target.templateProfile === "animal"
+        ? "animal"
+        : "female",
     ).montages[0];
     const configuredFaceOptions = faceOptions.get(normalizedSourceFile);
     const copyFaceCurves =
@@ -133,7 +136,7 @@ export function buildNpcSupplementPlan(
           : ""
         : bodyMontage?.montageName ?? "";
     const expectedMontageAssetPath = montageName
-      ? `${request.target.animationPackagePath}/${montageName}`
+      ? `${request.target.montagePackagePath}/${montageName}`
       : "";
     const matchingMontageAssetPaths = montageName
       ? request.target.existingAssetPaths

@@ -17,7 +17,10 @@ import {
   sep,
 } from "node:path";
 import { z } from "zod";
-import { buildNpcMigrationPlan } from "../src/data/npcMigration";
+import {
+  buildNpcMigrationPlan,
+  inferStandardAbpTemplate,
+} from "../src/data/npcMigration";
 import type {
   NpcMigrationCopyResult,
   NpcMigrationCapsuleEstimate,
@@ -49,7 +52,16 @@ const STANDARD_ABP_TEMPLATES = {
     assetName: "ABP_N18_Villager_Female_A",
     npcName: "N18_Villager_Female_A",
   },
+  animal: {
+    assetName: "ABP_E05_CAT01_NPC",
+    npcName: "E05_Cat",
+  },
 } as const;
+const ANIMAL_TEMPLATE_BLUEPRINT_NAME = "BP_E05_CAT01_NPC";
+const ANIMAL_TEMPLATE_ANIMATION_DIRECTORY =
+  "/Game/Seria/BioSystems/E05_Cat/Animation";
+const ANIMAL_TEMPLATE_SKELETON_PATH =
+  "/Game/Seria/BioSystems/E05_Cat/SKEL_E05_Cat.SKEL_E05_Cat";
 
 const PlanRequestSchema = z.object({
   source: z.object({
@@ -76,11 +88,11 @@ const PlanRequestSchema = z.object({
     warnings: z.array(z.string()),
   }),
   targetContentDirectory: z.string().min(1),
-  animationSourceDirectory: z.string().min(1),
+  animationSourceDirectory: z.string(),
   targetPackagePath: z.string().optional(),
   npcName: z.string().optional(),
   configureStandardAbp: z.boolean().optional(),
-  standardAbpTemplate: z.enum(["male", "female"]).optional(),
+  standardAbpTemplate: z.enum(["male", "female", "animal"]).optional(),
 });
 
 const TargetRequestSchema = z.object({
@@ -227,6 +239,38 @@ function packageDirectory(packageName: string): string {
 }
 
 const TARGET_AUTOMATION_PYTHON_HELPERS = `
+def blueprint_generated_class(blueprint_or_path):
+    asset_path = (
+        blueprint_or_path
+        if isinstance(blueprint_or_path, str)
+        else blueprint_or_path.get_path_name()
+    )
+    package_path = asset_path.split('.', 1)[0]
+    for path in [asset_path, package_path]:
+        try:
+            generated = unreal.EditorAssetLibrary.load_blueprint_class(path)
+            if generated:
+                return generated
+        except Exception:
+            pass
+    if not isinstance(blueprint_or_path, str):
+        try:
+            generated = blueprint_or_path.generated_class()
+            if generated:
+                return generated
+        except Exception:
+            pass
+        try:
+            generated = blueprint_or_path.get_editor_property('generated_class')
+            if generated:
+                return generated
+        except Exception:
+            pass
+    try:
+        return unreal.load_class(None, package_path + '.' + package_path.rsplit('/', 1)[-1] + '_C')
+    except Exception:
+        return None
+
 def resolve_class(path):
     if not path:
         return None
@@ -236,8 +280,8 @@ def resolve_class(path):
     loaded = unreal.load_class(None, path)
     if loaded:
         return loaded
-    asset = unreal.load_asset(path)
-    return asset.generated_class() if asset and hasattr(asset, 'generated_class') else None
+    asset = unreal.load_asset(path[:-2] if path.endswith('_C') else path)
+    return blueprint_generated_class(asset) if asset else None
 
 def seria_montage_creator():
     helper = getattr(
@@ -351,7 +395,7 @@ def read_property_path(obj, property_path):
     value = obj.get_editor_property(names[0])
     return value if len(names) == 1 else value.get_editor_property(names[1])
 
-def capsule_estimate(mesh):
+def capsule_estimate(mesh, use_animal_template=False):
     bounds = mesh.get_imported_bounds()
     try:
         origin = bounds.get_editor_property('origin')
@@ -359,12 +403,12 @@ def capsule_estimate(mesh):
     except Exception:
         origin = bounds.origin
         extent = bounds.box_extent
-    radius = round(max(abs(origin.x) + extent.x, abs(origin.y) + extent.y) + 2.0, 1)
-    half_height = round(max(extent.z + 2.0, radius), 1)
+    radius = 40.0 if use_animal_template else round(max(abs(origin.x) + extent.x, abs(origin.y) + extent.y) + 2.0, 1)
+    half_height = 40.0 if use_animal_template else round(max(extent.z + 2.0, radius), 1)
     return {
         'radius': radius,
         'half_height': half_height,
-        'mesh_offset_z': round(-origin.z, 1),
+        'mesh_offset_z': -35.0 if use_animal_template else round(-origin.z, 1),
         'bounds_origin': [origin.x, origin.y, origin.z],
         'bounds_extent': [extent.x, extent.y, extent.z],
     }
@@ -632,14 +676,24 @@ export async function inspectNpcMigrationPlan(
   const request = PlanRequestSchema.parse(rawRequest) as NpcMigrationPlanRequest;
   assertSourceFilesInsideContent(request.source);
   const targetContentDirectory = resolve(request.targetContentDirectory);
-  const animationSourceDirectory = resolve(request.animationSourceDirectory);
+  const isAnimalTemplate =
+    (
+      request.standardAbpTemplate ??
+      inferStandardAbpTemplate(
+        request.npcName || request.source.suggestedNpcName,
+      )
+    ) === "animal";
+  const animationSourceDirectory = request.animationSourceDirectory.trim()
+    ? resolve(request.animationSourceDirectory)
+    : "";
   const targetDirectoryReady =
     basename(targetContentDirectory).toLowerCase() === "content" &&
     (await isDirectory(targetContentDirectory));
-  const animationDirectoryReady = await isDirectory(
-    animationSourceDirectory,
-  );
-  const animationFiles = animationDirectoryReady
+  const animationDirectoryReady =
+    isAnimalTemplate ||
+    await isDirectory(animationSourceDirectory);
+  const animationFiles =
+    !isAnimalTemplate && animationDirectoryReady
     ? await listFbxFiles(animationSourceDirectory)
     : [];
   const fileOperations = await Promise.all(
@@ -754,6 +808,8 @@ async function inspectTargetWithConnection(
   const template = STANDARD_ABP_TEMPLATES[
     request.plan.standardAbpTemplate
   ];
+  const isAnimalTemplate =
+    request.plan.standardAbpTemplate === "animal";
   const templateAnimationBlueprintAssetPath =
     request.plan.configureStandardAbp
       ? await resolveAssetReference(
@@ -762,6 +818,44 @@ async function inspectTargetWithConnection(
           "AnimBlueprint",
         )
       : "";
+  const templateBlueprintAssetPath =
+    request.plan.configureStandardAbp && isAnimalTemplate
+      ? await resolveAssetReference(
+          connection,
+          ANIMAL_TEMPLATE_BLUEPRINT_NAME,
+          "Blueprint",
+        )
+      : "";
+  const templateSearchDirectories = isAnimalTemplate
+    ? [
+        ANIMAL_TEMPLATE_ANIMATION_DIRECTORY,
+        templateBlueprintAssetPath
+          ? `${packageDirectory(templateBlueprintAssetPath)}/Animation`
+          : "",
+      ].filter(Boolean)
+    : templateAnimationBlueprintAssetPath
+      ? [packageDirectory(templateAnimationBlueprintAssetPath)]
+      : [];
+  const expectedTemplateAssetNames = isAnimalTemplate
+    ? {
+        look_blend_space: "",
+        idle_stand: `A_${template.npcName}_Idlestand`,
+        impact: "",
+        interact: "",
+        walk: `A_${template.npcName}_Walk`,
+        sleep_montage: "AM_Sleep",
+      }
+    : {
+        look_blend_space: `BS_${template.npcName}_Look`,
+        idle_stand: `A_${template.npcName}_Idlestand`,
+        impact: `A_${template.npcName}_Impact`,
+        interact: `A_${template.npcName}_Interact`,
+        walk: "",
+        sleep_montage: "",
+      };
+  const requiredTemplateAssetRoles = isAnimalTemplate
+    ? ["idle_stand", "walk", "sleep_montage"]
+    : ["look_blend_space", "idle_stand", "impact", "interact"];
   const bodyAnimationAssetPaths = request.plan.bodyAnimationFiles.map(
     (file) =>
       `${request.plan.animationPackagePath}/${basename(file, extname(file))}`,
@@ -772,15 +866,15 @@ async function inspectTargetWithConnection(
   );
   const montageAssetPaths = request.plan.montages.map(
     (montage) =>
-      `${request.plan.animationPackagePath}/${montage.montageName}`,
+      `${request.plan.montagePackagePath}/${montage.montageName}`,
   );
   const expectedAssetPaths = [
-    `${request.plan.targetPackagePath}/${request.plan.blueprintName}`,
-    `${request.plan.animationPackagePath}/${request.plan.animationBlueprintName}`,
+    `${request.plan.blueprintPackagePath}/${request.plan.blueprintName}`,
+    `${request.plan.animationBlueprintPackagePath}/${request.plan.animationBlueprintName}`,
     ...bodyAnimationAssetPaths,
     ...faceAnimationAssetPaths,
     ...(request.createMontages === false ? [] : montageAssetPaths),
-    ...(request.plan.configureStandardAbp
+    ...(request.plan.configureStandardAbp && request.plan.lookBlendSpaceName
       ? [
           `${request.plan.animationPackagePath}/${request.plan.lookBlendSpaceName}`,
         ]
@@ -794,32 +888,43 @@ skeleton = unreal.load_asset(${JSON.stringify(request.plan.source.skeletonAssetP
 npc_parent = resolve_class(${JSON.stringify(npcBaseClassPath)})
 anim_parent = resolve_class(${JSON.stringify(animationBlueprintParentClassPath)})
 template_abp = unreal.load_asset(${JSON.stringify(templateAnimationBlueprintAssetPath)}) if ${request.plan.configureStandardAbp ? "True" : "False"} else None
+template_bp = unreal.load_asset(${JSON.stringify(templateBlueprintAssetPath)}) if ${request.plan.configureStandardAbp && isAnimalTemplate ? "True" : "False"} else None
 template_assets = {
     'look_blend_space': '',
     'idle_stand': '',
     'impact': '',
     'interact': '',
+    'walk': '',
+    'sleep_montage': '',
 }
 if template_abp:
-    template_directory = ${JSON.stringify(templateAnimationBlueprintAssetPath)}.rsplit('/', 1)[0]
-    template_paths = unreal.EditorAssetLibrary.list_assets(template_directory, recursive=True, include_folder=False)
-    expected_template_names = {
-        'look_blend_space': ${JSON.stringify(`BS_${template.npcName}_Look`)},
-        'idle_stand': ${JSON.stringify(`A_${template.npcName}_Idlestand`)},
-        'impact': ${JSON.stringify(`A_${template.npcName}_Impact`)},
-        'interact': ${JSON.stringify(`A_${template.npcName}_Interact`)},
-    }
+    template_paths = []
+    for template_directory in ${JSON.stringify(templateSearchDirectories)}:
+        template_paths.extend(
+            unreal.EditorAssetLibrary.list_assets(
+                template_directory,
+                recursive=True,
+                include_folder=False
+            )
+        )
+    expected_template_names = ${JSON.stringify(expectedTemplateAssetNames)}
     for role, expected_name in expected_template_names.items():
+        if not expected_name:
+            continue
         matches = [
             path for path in template_paths
             if path.rsplit('/', 1)[-1].split('.', 1)[0].lower() == expected_name.lower()
         ]
         if len(matches) == 1:
             template_assets[role] = matches[0]
-npc_cdo = unreal.get_default_object(npc_parent) if npc_parent else None
+npc_cdo = (
+    unreal.get_default_object(blueprint_generated_class(template_bp))
+    if template_bp
+    else unreal.get_default_object(npc_parent) if npc_parent else None
+)
 turn_component, turn_property, turn_candidates = find_turn_curve_binding(npc_cdo) if npc_cdo else (None, '', [])
 turn_curve = unreal.load_asset(${JSON.stringify(request.turnCurveAssetPath ?? "")}) if ${request.bindTurnCurve === false ? "False" : "True"} else None
-estimate = capsule_estimate(mesh) if mesh else None
+estimate = capsule_estimate(mesh, ${isAnimalTemplate ? "True" : "False"}) if mesh else None
 montage_automation_available = False
 try:
     native_montage_creator = seria_montage_creator()
@@ -853,27 +958,31 @@ try:
     )
 except Exception:
     montage_automation_available = False
-look_blend_space_automation_available = False
+look_blend_space_automation_available = ${isAnimalTemplate ? "True" : "False"}
 standard_abp_automation_available = False
 if ${request.plan.configureStandardAbp ? "True" : "False"}:
-    try:
-        blend_factory = unreal.BlendSpaceFactory1D()
-        blend_factory.set_editor_property('target_skeleton', skeleton)
-        look_blend_space_automation_available = all([
-            hasattr(unreal, 'BlendSpace1D'),
-            hasattr(unreal, 'BlendParameter'),
-            hasattr(unreal, 'BlendSample'),
-        ])
-    except Exception:
-        look_blend_space_automation_available = False
+    if not ${isAnimalTemplate ? "True" : "False"}:
+        try:
+            blend_factory = unreal.BlendSpaceFactory1D()
+            blend_factory.set_editor_property('target_skeleton', skeleton)
+            look_blend_space_automation_available = all([
+                hasattr(unreal, 'BlendSpace1D'),
+                hasattr(unreal, 'BlendParameter'),
+                hasattr(unreal, 'BlendSample'),
+            ])
+        except Exception:
+            look_blend_space_automation_available = False
     standard_abp_automation_available = bool(
         template_abp
-        and hasattr(unreal, 'ObjectIterator')
-        and hasattr(unreal, 'AnimGraphNode_SequencePlayer')
-        and (
+        and (${isAnimalTemplate ? "bool(template_bp)" : "True"})
+        and (${isAnimalTemplate ? "True" : "False"} or (
+            hasattr(unreal, 'ObjectIterator')
+            and hasattr(unreal, 'AnimGraphNode_SequencePlayer')
+            and (
             hasattr(unreal, 'AnimGraphNode_BlendSpacePlayer')
             or hasattr(unreal, 'AnimGraphNode_RotationOffsetBlendSpace')
-        )
+            )
+        ))
     )
 existing = [path for path in ${JSON.stringify(expectedAssetPaths)} if unreal.EditorAssetLibrary.does_asset_exist(path)]
 _result = {
@@ -881,14 +990,16 @@ _result = {
     'target_content_directory': os.path.abspath(unreal.Paths.project_content_dir()),
     'skeletal_mesh_found': bool(mesh),
     'skeleton_found': bool(skeleton),
-    'npc_base_class_found': bool(npc_parent),
+    'npc_base_class_found': bool(template_bp) if ${isAnimalTemplate ? "True" : "False"} else bool(npc_parent),
     'animation_blueprint_parent_class_found': bool(anim_parent),
     'capsule_estimate': estimate,
     'turn_curve_found': bool(turn_curve),
     'turn_curve_property_path': turn_property,
     'turn_curve_property_candidates': turn_candidates,
     'montage_automation_available': montage_automation_available,
+    'template_blueprint_asset_path': template_bp.get_path_name() if template_bp else '',
     'template_animation_blueprint_asset_path': template_abp.get_path_name() if template_abp else '',
+    'template_skeleton_asset_path': template_abp.get_editor_property('target_skeleton').get_path_name() if template_abp and template_abp.get_editor_property('target_skeleton') else '',
     'template_animation_assets': template_assets,
     'standard_abp_automation_available': standard_abp_automation_available,
     'look_blend_space_automation_available': look_blend_space_automation_available,
@@ -971,7 +1082,14 @@ _result = {
     idleStand: String(templateAnimationAssetsRaw.idle_stand ?? ""),
     impact: String(templateAnimationAssetsRaw.impact ?? ""),
     interact: String(templateAnimationAssetsRaw.interact ?? ""),
+    walk: String(templateAnimationAssetsRaw.walk ?? ""),
+    sleepMontage: String(
+      templateAnimationAssetsRaw.sleep_montage ?? "",
+    ),
   };
+  const templateSkeletonAssetPath = String(
+    raw.template_skeleton_asset_path ?? "",
+  );
   const standardAbpAutomationAvailable = Boolean(
     raw.standard_abp_automation_available,
   );
@@ -984,11 +1102,41 @@ _result = {
         `未找到标准模板 ${template.assetName}`,
       );
     }
-    const missingTemplateAssets = Object.entries(
-      templateAnimationAssets,
-    )
-      .filter(([, path]) => !path)
-      .map(([role]) => role);
+    if (isAnimalTemplate && !templateBlueprintAssetPath) {
+      blockedReasons.push(
+        `未找到动物 BP 模板 ${ANIMAL_TEMPLATE_BLUEPRINT_NAME}`,
+      );
+    }
+    if (
+      isAnimalTemplate &&
+      templateSkeletonAssetPath !== ANIMAL_TEMPLATE_SKELETON_PATH
+    ) {
+      blockedReasons.push(
+        `动物 ABP 模板 Skeleton 不符合预期：${templateSkeletonAssetPath || "未设置"}`,
+      );
+    }
+    if (
+      isAnimalTemplate &&
+      request.plan.source.skeletonAssetPath !==
+        ANIMAL_TEMPLATE_SKELETON_PATH
+    ) {
+      blockedReasons.push(
+        `动物模板仅支持 ${ANIMAL_TEMPLATE_SKELETON_PATH}`,
+      );
+    }
+    const templateAnimationAssetsByRole = {
+      look_blend_space: templateAnimationAssets.lookBlendSpace,
+      idle_stand: templateAnimationAssets.idleStand,
+      impact: templateAnimationAssets.impact,
+      interact: templateAnimationAssets.interact,
+      walk: templateAnimationAssets.walk,
+      sleep_montage: templateAnimationAssets.sleepMontage,
+    };
+    const missingTemplateAssets = requiredTemplateAssetRoles.filter(
+      (role) => !templateAnimationAssetsByRole[
+        role as keyof typeof templateAnimationAssetsByRole
+      ],
+    );
     if (missingTemplateAssets.length > 0) {
       blockedReasons.push(
         `标准模板缺少引用资产：${missingTemplateAssets.join("、")}`,
@@ -1016,7 +1164,9 @@ _result = {
   }
   if (request.autoFitCapsule !== false && capsuleEstimate) {
     warnings.push(
-      `胶囊体估算为半径 ${capsuleEstimate.radius}、半高 ${capsuleEstimate.halfHeight}，Mesh Z 偏移 ${capsuleEstimate.meshOffsetZ}`,
+      isAnimalTemplate
+        ? `动物模板胶囊体为半径 ${capsuleEstimate.radius}、半高 ${capsuleEstimate.halfHeight}，Mesh Z 偏移 ${capsuleEstimate.meshOffsetZ}`
+        : `胶囊体估算为半径 ${capsuleEstimate.radius}、半高 ${capsuleEstimate.halfHeight}，Mesh Z 偏移 ${capsuleEstimate.meshOffsetZ}`,
     );
   }
   if (request.bindTurnCurve !== false && turnCurvePropertyPath) {
@@ -1029,7 +1179,9 @@ _result = {
   }
   if (request.plan.configureStandardAbp) {
     warnings.push(
-      `将继承模板 ${template.assetName}，替换 Look、IdleStand、Impact、Interact`,
+      isAnimalTemplate
+        ? `将继承 ${ANIMAL_TEMPLATE_BLUEPRINT_NAME} / ${template.assetName}，复用模板动作集`
+        : `将继承模板 ${template.assetName}，替换 Look、IdleStand、Impact、Interact`,
     );
   }
   if (request.createFaceComponent) {
@@ -1051,9 +1203,13 @@ _result = {
     turnCurvePropertyPath,
     turnCurvePropertyCandidates,
     montageAutomationAvailable,
+    templateBlueprintAssetPath: String(
+      raw.template_blueprint_asset_path ?? "",
+    ),
     templateAnimationBlueprintAssetPath: String(
       raw.template_animation_blueprint_asset_path ?? "",
     ),
+    templateSkeletonAssetPath,
     templateAnimationAssets,
     standardAbpAutomationAvailable,
     lookBlendSpaceAutomationAvailable,
@@ -1102,6 +1258,28 @@ export async function configureNpcMigrationTarget(
       connection,
       request.animationBlueprintParentClassPath,
     );
+    const isAnimalTemplate =
+      request.plan.standardAbpTemplate === "animal";
+    const requiredTargetRoles = isAnimalTemplate
+      ? []
+      : [
+          "look_down",
+          "look_forward",
+          "look_up",
+          "idle_stand",
+          "impact",
+          "interact",
+        ];
+    const overrideRoles = isAnimalTemplate
+      ? []
+      : ["look_blend_space", "idle_stand", "impact", "interact"];
+    const templateOverridePaths = {
+      look_blend_space: inspection.templateAnimationAssets.lookBlendSpace,
+      idle_stand: inspection.templateAnimationAssets.idleStand,
+      impact: inspection.templateAnimationAssets.impact,
+      interact: inspection.templateAnimationAssets.interact,
+      walk: inspection.templateAnimationAssets.walk,
+    };
     const script = `
 ${TARGET_AUTOMATION_PYTHON_HELPERS}
 asset_tools = unreal.AssetToolsHelpers.get_asset_tools()
@@ -1109,8 +1287,12 @@ asset_library = unreal.EditorAssetLibrary
 skeleton = unreal.load_asset(${JSON.stringify(request.plan.source.skeletonAssetPath)})
 mesh = unreal.load_asset(${JSON.stringify(request.plan.source.skeletalMeshAssetPath)})
 animation_root = ${JSON.stringify(request.plan.animationPackagePath)}
+blueprint_root = ${JSON.stringify(request.plan.blueprintPackagePath)}
+animation_blueprint_root = ${JSON.stringify(request.plan.animationBlueprintPackagePath)}
+montage_root = ${JSON.stringify(request.plan.montagePackagePath)}
 face_root = animation_root + '/Face'
 template_abp = unreal.load_asset(${JSON.stringify(inspection.templateAnimationBlueprintAssetPath)}) if ${request.plan.configureStandardAbp ? "True" : "False"} else None
+template_bp = unreal.load_asset(${JSON.stringify(inspection.templateBlueprintAssetPath)}) if ${request.plan.configureStandardAbp && isAnimalTemplate ? "True" : "False"} else None
 target_role_names = ${JSON.stringify({
       look_down: request.plan.animationRoleAssets.lookDown,
       look_forward: request.plan.animationRoleAssets.lookForward,
@@ -1118,8 +1300,12 @@ target_role_names = ${JSON.stringify({
       idle_stand: request.plan.animationRoleAssets.idleStand,
       impact: request.plan.animationRoleAssets.impact,
       interact: request.plan.animationRoleAssets.interact,
+      walk: request.plan.animationRoleAssets.walk,
     })}
 asset_library.make_directory(animation_root)
+asset_library.make_directory(blueprint_root)
+asset_library.make_directory(animation_blueprint_root)
+asset_library.make_directory(montage_root)
 if ${request.plan.faceAnimationFiles.length > 0 ? "True" : "False"}:
     asset_library.make_directory(face_root)
 imported = []
@@ -1164,11 +1350,12 @@ look_blend_space = None
 applied_override_paths = []
 if ${request.plan.configureStandardAbp ? "True" : "False"}:
     missing_target_roles = [
-        role for role in ['look_down', 'look_forward', 'look_up', 'idle_stand', 'impact', 'interact']
+        role for role in ${JSON.stringify(requiredTargetRoles)}
         if not target_role_assets.get(role)
     ]
     if missing_target_roles:
         raise RuntimeError('标准 ABP 目标动作导入失败：' + '、'.join(missing_target_roles))
+if ${request.plan.configureStandardAbp && !isAnimalTemplate ? "True" : "False"}:
     for look_role in ['look_down', 'look_forward', 'look_up']:
         look_sequence = target_role_assets[look_role]
         look_sequence.set_editor_property(
@@ -1246,20 +1433,26 @@ if ${request.plan.configureStandardAbp ? "True" : "False"}:
     if len(actual_samples) != 3:
         raise RuntimeError('Look 混合空间样本回读不一致')
 npc_parent = resolve_class(${JSON.stringify(npcBaseClassPath)})
-bp_factory = unreal.BlueprintFactory()
-bp_factory.set_editor_property('parent_class', npc_parent)
-bp = asset_tools.create_asset(
-    ${JSON.stringify(request.plan.blueprintName)},
-    ${JSON.stringify(request.plan.targetPackagePath)},
-    unreal.Blueprint,
-    bp_factory
-)
+if template_bp:
+    bp = asset_library.duplicate_asset(
+        ${JSON.stringify(inspection.templateBlueprintAssetPath)},
+        blueprint_root + '/' + ${JSON.stringify(request.plan.blueprintName)}
+    )
+else:
+    bp_factory = unreal.BlueprintFactory()
+    bp_factory.set_editor_property('parent_class', npc_parent)
+    bp = asset_tools.create_asset(
+        ${JSON.stringify(request.plan.blueprintName)},
+        blueprint_root,
+        unreal.Blueprint,
+        bp_factory
+    )
 if not bp:
     raise RuntimeError('创建 NPC BP 失败')
 if template_abp:
     abp = asset_library.duplicate_asset(
         ${JSON.stringify(inspection.templateAnimationBlueprintAssetPath)},
-        animation_root + '/' + ${JSON.stringify(request.plan.animationBlueprintName)}
+        animation_blueprint_root + '/' + ${JSON.stringify(request.plan.animationBlueprintName)}
     )
 else:
     anim_factory = unreal.AnimBlueprintFactory()
@@ -1270,7 +1463,7 @@ else:
     )
     abp = asset_tools.create_asset(
         ${JSON.stringify(request.plan.animationBlueprintName)},
-        animation_root,
+        animation_blueprint_root,
         unreal.AnimBlueprint,
         anim_factory
     )
@@ -1278,16 +1471,16 @@ if not abp:
     raise RuntimeError('创建动画蓝图失败')
 if ${request.plan.configureStandardAbp ? "True" : "False"}:
     template_override_assets = {
-        'look_blend_space': unreal.load_asset(${JSON.stringify(inspection.templateAnimationAssets.lookBlendSpace)}),
-        'idle_stand': unreal.load_asset(${JSON.stringify(inspection.templateAnimationAssets.idleStand)}),
-        'impact': unreal.load_asset(${JSON.stringify(inspection.templateAnimationAssets.impact)}),
-        'interact': unreal.load_asset(${JSON.stringify(inspection.templateAnimationAssets.interact)}),
+        role: unreal.load_asset(path)
+        for role, path in ${JSON.stringify(templateOverridePaths)}.items()
+        if role in ${JSON.stringify(overrideRoles)}
     }
     target_override_assets = {
         'look_blend_space': look_blend_space,
-        'idle_stand': target_role_assets['idle_stand'],
-        'impact': target_role_assets['impact'],
-        'interact': target_role_assets['interact'],
+        'idle_stand': target_role_assets.get('idle_stand'),
+        'impact': target_role_assets.get('impact'),
+        'interact': target_role_assets.get('interact'),
+        'walk': target_role_assets.get('walk'),
     }
     abp.set_editor_property('target_skeleton', skeleton)
     duplicate_package = abp.get_outermost().get_path_name()
@@ -1319,7 +1512,7 @@ if ${request.plan.configureStandardAbp ? "True" : "False"}:
                 graph_node.set_editor_property('node', node_data)
                 replaced_roles.add(role)
     missing_override_roles = [
-        role for role in ['look_blend_space', 'idle_stand', 'impact', 'interact']
+        role for role in ${JSON.stringify(overrideRoles)}
         if role not in replaced_roles
     ]
     if missing_override_roles:
@@ -1328,18 +1521,22 @@ if ${request.plan.configureStandardAbp ? "True" : "False"}:
         )
     applied_override_paths = [
         target_override_assets[role].get_path_name()
-        for role in ['look_blend_space', 'idle_stand', 'impact', 'interact']
+        for role in ${JSON.stringify(overrideRoles)}
     ]
     actual_skeleton = abp.get_editor_property('target_skeleton')
     if not actual_skeleton or actual_skeleton.get_path_name() != skeleton.get_path_name():
         raise RuntimeError('ABP 目标 Skeleton 回读不一致')
-cdo = unreal.get_default_object(bp.generated_class())
+bp_class = blueprint_generated_class(bp)
+abp_class = blueprint_generated_class(abp)
+if not bp_class or not abp_class:
+    raise RuntimeError('无法加载新建 BP / ABP 的 GeneratedClass')
+cdo = unreal.get_default_object(bp_class)
 mesh_component = cdo.get_editor_property('mesh')
 mesh_component.set_editor_property('skeletal_mesh', mesh)
-mesh_component.set_editor_property('anim_class', abp.generated_class())
+mesh_component.set_editor_property('anim_class', abp_class)
 written_capsule = None
 if ${request.autoFitCapsule === false ? "False" : "True"}:
-    estimate = capsule_estimate(mesh)
+    estimate = capsule_estimate(mesh, ${isAnimalTemplate ? "True" : "False"})
     capsules = [
         component for component in actor_components(cdo)
         if isinstance(component, unreal.CapsuleComponent)
@@ -1380,12 +1577,12 @@ def create_montage(spec):
     sequence = unreal.load_asset(animation_root + '/' + spec['source_asset_name'])
     if not sequence or not isinstance(sequence, unreal.AnimSequence):
         raise RuntimeError('Montage 源动作不存在：' + spec['source_asset_name'])
-    montage_path = animation_root + '/' + spec['montage_name']
+    montage_path = montage_root + '/' + spec['montage_name']
     montage = None
-    if native_montage_creator:
+    if native_montage_creator and montage_root == animation_root:
         try:
             native_montage_creator(
-                ${JSON.stringify(`A_${request.plan.npcName}_`)},
+                ${JSON.stringify(request.plan.animationPrefix)},
                 sequence
             )
         except Exception as error:
@@ -1400,7 +1597,7 @@ def create_montage(spec):
             pass
         montage = asset_tools.create_asset(
             spec['montage_name'],
-            animation_root,
+            montage_root,
             unreal.AnimMontage,
             factory
         )
@@ -1470,6 +1667,7 @@ _result = {
     'capsule_estimate': written_capsule,
     'turn_curve_property_path': written_turn_curve_property,
     'created_montages': created_montages,
+    'template_blueprint_asset_path': template_bp.get_path_name() if template_bp else '',
     'template_animation_blueprint_asset_path': template_abp.get_path_name() if template_abp else '',
     'look_blend_space_asset_path': look_blend_space.get_path_name() if look_blend_space else '',
     'animation_blueprint_override_asset_paths': applied_override_paths,
@@ -1567,6 +1765,9 @@ _result = {
     const templateAnimationBlueprintAssetPath = String(
       raw.template_animation_blueprint_asset_path ?? "",
     );
+    const templateBlueprintAssetPath = String(
+      raw.template_blueprint_asset_path ?? "",
+    );
     const lookBlendSpaceAssetPath = String(
       raw.look_blend_space_asset_path ?? "",
     );
@@ -1576,11 +1777,18 @@ _result = {
         : []
     ).map(String);
     if (request.plan.configureStandardAbp) {
-      if (
+      const expectedOverrideCount = isAnimalTemplate ? 0 : 4;
+      const templateMismatch =
         templateAnimationBlueprintAssetPath !==
           inspection.templateAnimationBlueprintAssetPath ||
-        !lookBlendSpaceAssetPath ||
-        animationBlueprintOverrideAssetPaths.length !== 4
+        (isAnimalTemplate &&
+          templateBlueprintAssetPath !==
+            inspection.templateBlueprintAssetPath);
+      if (
+        templateMismatch ||
+        (!isAnimalTemplate && !lookBlendSpaceAssetPath) ||
+        animationBlueprintOverrideAssetPaths.length !==
+          expectedOverrideCount
       ) {
         throw new Error("标准 ABP 模板配置回读不完整");
       }
@@ -1590,7 +1798,9 @@ _result = {
       "抽查转头曲线引用与转头表现",
       "抽查动作 Montage 的源动作、名称和 IdleSlot/TurnSlot",
       request.plan.configureStandardAbp
-        ? "检查 Look 混合空间三个采样点，并运行 ABP 状态机预览"
+        ? isAnimalTemplate
+          ? "运行动物 ABP 状态机，检查 IdleStand / Walk 切换与模板 Sleep 行为"
+          : "检查 Look 混合空间三个采样点，并运行 ABP 状态机预览"
         : "配置 Look 混合空间与 ABP 状态机图表",
       "打开 Skeletal Mesh，确认后期处理动画蓝图",
       "最终重新编译 NPC BP，并检查蒙太奇列表",
@@ -1615,6 +1825,7 @@ _result = {
           ? ""
           : writtenTurnCurvePropertyPath,
       createdMontageAssetPaths,
+      templateBlueprintAssetPath,
       templateAnimationBlueprintAssetPath,
       lookBlendSpaceAssetPath,
       animationBlueprintOverrideAssetPaths,

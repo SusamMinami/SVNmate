@@ -1,5 +1,5 @@
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
 import type {
@@ -485,5 +485,171 @@ describe("NPC migration server workflow", () => {
         ),
     ).toBe(true);
     expect(connection.closed).toBe(true);
+  });
+
+  it("duplicates the E05 animal templates with fixed paths and capsule values", async () => {
+    const root = await temporaryDirectory();
+    const sourceContent = join(root, "Art", "Content");
+    const targetContent = join(root, "res", "Content");
+    const animationDirectory = join(root, "FBX", "Animation");
+    const relativeAsset = join(
+      "Seria",
+      "BioSystems",
+      "E05_Cat",
+      "SK_E05_Cat02.uasset",
+    );
+    const sourceAsset = join(sourceContent, relativeAsset);
+    await mkdir(dirname(sourceAsset), { recursive: true });
+    await mkdir(targetContent, { recursive: true });
+    await mkdir(animationDirectory, { recursive: true });
+    await writeFile(sourceAsset, "mesh");
+    await writeFile(
+      join(animationDirectory, "A_E05_Cat_Idlestand.fbx"),
+      "animation",
+    );
+    await writeFile(
+      join(animationDirectory, "A_E05_Cat_Walk.fbx"),
+      "animation",
+    );
+    const plan = await inspectNpcMigrationPlan({
+      source: {
+        sourceProjectFile: join(root, "Art", "Art.uproject"),
+        sourceContentDirectory: sourceContent,
+        skeletalMeshName: "SK_E05_Cat02",
+        skeletalMeshAssetPath:
+          "/Game/Seria/BioSystems/E05_Cat/SK_E05_Cat02.SK_E05_Cat02",
+        skeletalMeshPackageName:
+          "/Game/Seria/BioSystems/E05_Cat/SK_E05_Cat02",
+        skeletonAssetPath:
+          "/Game/Seria/BioSystems/E05_Cat/SKEL_E05_Cat.SKEL_E05_Cat",
+        physicsAssetPath:
+          "/Game/Seria/BioSystems/E05_Cat/PHYS_E05_Cat.PHYS_E05_Cat",
+        materialAssetPaths: [],
+        dependencyPackageNames: [
+          "/Game/Seria/BioSystems/E05_Cat/SK_E05_Cat02",
+        ],
+        sourceFiles: [
+          {
+            packageName:
+              "/Game/Seria/BioSystems/E05_Cat/SK_E05_Cat02",
+            sourcePath: sourceAsset,
+            relativePath: relativeAsset,
+            size: 4,
+          },
+        ],
+        dirtyPackageNames: [],
+        suggestedNpcName: "E05_Cat02",
+        suggestedTargetPackagePath:
+          "/Game/Seria/BioSystems/E05_Cat",
+        warnings: [],
+      },
+      targetContentDirectory: targetContent,
+      animationSourceDirectory: animationDirectory,
+      configureStandardAbp: true,
+      standardAbpTemplate: "animal",
+    });
+    const estimate = {
+      radius: 40,
+      half_height: 40,
+      mesh_offset_z: -35,
+      bounds_origin: [0, -4.4, 27.2],
+      bounds_extent: [9.3, 42.4, 27.2],
+    };
+    const inspectionPayload = {
+      target_project_file: join(root, "res", "res.uproject"),
+      target_content_directory: targetContent,
+      skeletal_mesh_found: true,
+      skeleton_found: true,
+      npc_base_class_found: true,
+      animation_blueprint_parent_class_found: true,
+      capsule_estimate: estimate,
+      turn_curve_found: true,
+      turn_curve_property_path: "rotate_head_x_speed",
+      turn_curve_property_candidates: ["rotate_head_x_speed"],
+      montage_automation_available: true,
+      template_blueprint_asset_path:
+        "/Game/Seria/NPC/E05_Cat/BP_E05_CAT01_NPC.BP_E05_CAT01_NPC",
+      template_animation_blueprint_asset_path:
+        "/Game/Seria/NPC/E05_Cat/ABP_E05_CAT01_NPC.ABP_E05_CAT01_NPC",
+      template_skeleton_asset_path:
+        "/Game/Seria/BioSystems/E05_Cat/SKEL_E05_Cat.SKEL_E05_Cat",
+      template_animation_assets: {
+        look_blend_space: "",
+        idle_stand:
+          "/Game/Seria/BioSystems/E05_Cat/Animation/A_E05_Cat_Idlestand.A_E05_Cat_Idlestand",
+        impact: "",
+        interact: "",
+        walk:
+          "/Game/Seria/BioSystems/E05_Cat/Animation/A_E05_Cat_Walk.A_E05_Cat_Walk",
+        sleep_montage:
+          "/Game/Seria/NPC/E05_Cat/Animation/AM_Sleep.AM_Sleep",
+      },
+      standard_abp_automation_available: true,
+      look_blend_space_automation_available: true,
+      existing_asset_paths: [],
+    };
+    const connection = new FakeNpcMigrationConnection(
+      [
+        inspectionPayload,
+        {
+          imported: [],
+          blueprint_asset_path:
+            "/Game/Seria/NPC/E05_Cat/BP_E05_CAT02_NPC.BP_E05_CAT02_NPC",
+          animation_blueprint_asset_path:
+            "/Game/Seria/NPC/E05_Cat/ABP_E05_CAT02_NPC.ABP_E05_CAT02_NPC",
+          capsule_estimate: estimate,
+          turn_curve_property_path: "rotate_head_x_speed",
+          created_montages: [],
+          template_blueprint_asset_path:
+            inspectionPayload.template_blueprint_asset_path,
+          template_animation_blueprint_asset_path:
+            inspectionPayload.template_animation_blueprint_asset_path,
+          look_blend_space_asset_path: "",
+          animation_blueprint_override_asset_paths: [],
+        },
+      ],
+      [
+        "BP_E05_CAT01_NPC [/Game/Seria/NPC/E05_Cat/BP_E05_CAT01_NPC.BP_E05_CAT01_NPC]",
+        "ABP_E05_CAT01_NPC [/Game/Seria/NPC/E05_Cat/ABP_E05_CAT01_NPC.ABP_E05_CAT01_NPC]",
+      ],
+    );
+
+    const result = await configureNpcMigrationTarget(
+      {
+        plan,
+        reviewToken: plan.reviewToken,
+        npcBaseClassPath: "BP_NPCBase",
+        animationBlueprintParentClassPath: "SeriaNPCAnimInstance",
+        turnCurveAssetPath:
+          "/Game/Seria/NPC/Curves/Npc_head_turn.Npc_head_turn",
+      },
+      () => connection,
+    );
+
+    expect(result).toMatchObject({
+      blueprintAssetPath:
+        "/Game/Seria/NPC/E05_Cat/BP_E05_CAT02_NPC.BP_E05_CAT02_NPC",
+      animationBlueprintAssetPath:
+        "/Game/Seria/NPC/E05_Cat/ABP_E05_CAT02_NPC.ABP_E05_CAT02_NPC",
+      capsuleEstimate: {
+        radius: 40,
+        halfHeight: 40,
+        meshOffsetZ: -35,
+      },
+      templateBlueprintAssetPath:
+        inspectionPayload.template_blueprint_asset_path,
+      templateAnimationBlueprintAssetPath:
+        inspectionPayload.template_animation_blueprint_asset_path,
+      animationBlueprintOverrideAssetPaths: [],
+    });
+    const scripts = connection.calls
+      .filter((call) => call.action === "script.eval_python_expression")
+      .map((call) => String(call.args.Expression));
+    expect(scripts[0]).toContain("capsule_estimate(mesh, True)");
+    expect(scripts[1]).toContain(
+      "BP_E05_CAT01_NPC.BP_E05_CAT01_NPC",
+    );
+    expect(scripts[1]).toContain("animation_blueprint_root");
+    expect(scripts[1]).toContain("capsule_estimate(mesh, True)");
   });
 });

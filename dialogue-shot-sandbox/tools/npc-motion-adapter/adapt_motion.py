@@ -115,6 +115,8 @@ def main():
     p.add_argument("--idle-frame", type=int)
     p.add_argument("--transition-frames", type=int, default=15)
     p.add_argument("--palm-forward", choices=("none", "left", "right"), default="none")
+    p.add_argument("--standing-arm", choices=("none", "left", "right"), default="none")
+    p.add_argument("--arm-smoothing-frames", type=int, default=5)
     p.add_argument("--output", type=Path, required=True)
     p.add_argument("--face", choices=("none", "neutral"), default="none")
     p.add_argument("--primary-bone-axis", choices=("X", "Y", "Z", "-X", "-Y", "-Z"), default="X")
@@ -126,6 +128,10 @@ def main():
         raise ValueError("Export axes must be orthogonal")
     if args.transition_frames < 1:
         raise ValueError("Transition frames must be positive")
+    if not 0 <= args.arm_smoothing_frames <= 15:
+        raise ValueError("Arm smoothing radius must be between 0 and 15 frames")
+    if args.standing_arm != "none" and args.palm_forward not in ("none", args.standing_arm):
+        raise ValueError("Palm correction must use the active standing arm")
     profile = json.loads(args.snapshot.read_text(encoding="utf-8"))
     if profile["schema_version"] != 1 or not profile["dirty_unchanged"]:
         raise ValueError("Unsupported/unverified target snapshot")
@@ -262,6 +268,18 @@ def main():
             idle_local[name] = generated_start[name].copy()
         if args.transition_frames * 2 >= last - first + 1:
             raise ValueError("Transition windows leave no unchanged motion middle")
+        active_arm = set()
+        if args.standing_arm != "none":
+            side = "R" if args.standing_arm == "right" else "L"
+            arm_root = f"Bip001-{side}-UpperArm"
+            if arm_root not in source_names:
+                raise ValueError("Standing arm root not found: " + arm_root)
+            for name in source_names:
+                ancestor = name
+                while ancestor and ancestor != arm_root:
+                    ancestor = source_contract[ancestor]
+                if ancestor == arm_root and name.startswith(f"Bip001-{side}-"):
+                    active_arm.add(name)
         palm_setup = None
         palm_metrics = {}
         if args.palm_forward != "none":
@@ -325,6 +343,12 @@ def main():
                     @ generated_start[name].inverted()
                     @ idle_local[name]
                 )
+                if args.standing_arm != "none":
+                    if name not in active_arm:
+                        rebased = idle_local[name]
+                    else:
+                        rebased = Matrix.LocRotScale(idle_local[name].translation,
+                            rebased.to_quaternion(), idle_local[name].to_scale())
                 prepared_local[name] = blend_transform(idle_local[name], rebased, weight)
                 parent = source_contract[name]
                 if parent and parent not in prepared_world:
@@ -333,6 +357,8 @@ def main():
                     prepared_world[parent] @ prepared_local[name]
                     if parent else prepared_local[name]
                 )
+                if active_arm and name not in active_arm:
+                    prepared_world[name] = idle_pose[name].copy()
             if palm_setup:
                 wrist = prepared_world[palm_setup["hand"]].translation
                 along = (
@@ -382,6 +408,39 @@ def main():
             frame: local_matrices(pose, source_contract)
             for frame, pose in prepared_motion.items()
         }
+        if active_arm:
+            # Smooth only the allowed local rotations. Sign-invariant quaternion
+            # means prevent q/-q flips; FK uses unchanged IdleStand translations.
+            radius = args.arm_smoothing_frames
+            rotations = {f: {n: prepared_local[f][n].to_quaternion().normalized()
+                             for n in active_arm} for f in prepared_local}
+            for frame in prepared_motion:
+                pose = {}
+                for name in source_names:
+                    value = idle_local[name].copy()
+                    if name in active_arm:
+                        mean = np.zeros((4, 4))
+                        for offset in range(-radius, radius+1):
+                            index = max(first, min(last, frame+offset))
+                            q = np.asarray(rotations[index][name], dtype=float)
+                            mean += math.exp(-0.5*(offset/max(1, radius/2))**2) * np.outer(q, q)
+                        _, vectors = np.linalg.eigh(mean)
+                        q = Quaternion(vectors[:, -1].tolist()).normalized()
+                        if frame in (first, last):
+                            q = idle_local[name].to_quaternion()
+                        else:
+                            fade = min(1.0, min(frame-first, last-frame)/max(1, radius))
+                            fade = fade*fade*(3-2*fade)
+                            q = idle_local[name].to_quaternion().slerp(q, fade)
+                        value = Matrix.LocRotScale(value.translation, q, value.to_scale())
+                    parent = source_contract[name]
+                    pose[name] = (
+                        (pose[parent] @ value if parent else value)
+                        if name in active_arm else idle_pose[name].copy()
+                    )
+                prepared_motion[frame] = pose
+            prepared_local = {f: local_matrices(pose, source_contract)
+                              for f, pose in prepared_motion.items()}
         palm_summary = None
         if palm_setup:
             active_palm = [
@@ -424,6 +483,7 @@ def main():
             # #endregion
             if palm_summary["active_minimum_projected_forward_alignment"] < 0.99:
                 raise ValueError("Palm-forward correction did not converge")
+            palm_summary["measurement_stage"] = "before standing-arm smoothing; final motion requires geometric review"
         endpoint_position_error = max(
             (prepared_local[frame][name].translation - idle_local[name].translation).length
             for frame in (first, last) for name in source_names
@@ -660,7 +720,43 @@ def main():
         # #region debug-point B:pose
         os.environ.get("DEBUG_SERVER_URL") and urllib.request.urlopen(urllib.request.Request(os.environ["DEBUG_SERVER_URL"],data=json.dumps({"sessionId":"target-bind-pose","runId":os.environ.get("DEBUG_RUN_ID","pre-fix"),"hypothesisId":"B","msg":"[DEBUG] evaluated poses","data":{"scale_min":min(v for b in rig.pose.bones for v in b.scale),"scale_max":max(v for b in rig.pose.bones for v in b.scale),"max_assignment_error":max(abs(v) for f in samples for n in common for row in samples[f][n]-(align@motion[f][n]@source_rest[n].inverted()@inv_align@rest[n]) for v in row)}}).encode(),headers={"Content-Type":"application/json"}),timeout=2).read()
         # #endregion
+        # #region debug-point A-B:gesture-layer-excursion
+        if os.environ.get("DEBUG_GESTURE_URL"):
+            excursions = {n: max((samples[f][n].translation - samples[first][n].translation).length
+                                 for f in samples) for n in native}
+            urllib.request.urlopen(urllib.request.Request(
+                os.environ["DEBUG_GESTURE_URL"], data=json.dumps({
+                    "sessionId": "n113-gesture-layer", "runId": os.environ.get("DEBUG_RUN_ID", "pre-fix"),
+                    "hypothesisId": "A-B", "msg": "[DEBUG] baked world-space excursions",
+                    "data": {"bones_m": excursions}
+                }).encode(), headers={"Content-Type": "application/json"}), timeout=2).read()
+        # #endregion
         rig.animation_data.action.name = "Target_Adapted_Motion"
+        standing_quality = None
+        if active_arm:
+            protected = set(common) - active_arm
+            protected_position = max((samples[f][n].translation - samples[first][n].translation).length
+                                     for f in samples for n in protected)
+            protected_rotation = max(rotation_angle(samples[f][n], samples[first][n])
+                                     for f in samples for n in protected)
+            active_peak_step = max(rotation_angle(samples[f-1][n], samples[f][n])
+                                   for f in range(first+1, last+1) for n in active_arm)
+            endpoint_world_position = max(
+                (samples[last][n].translation - samples[first][n].translation).length for n in native)
+            standing_quality = {
+                "protected_position_excursion_m": protected_position,
+                "protected_rotation_excursion_rad": protected_rotation,
+                "active_peak_step_deg": math.degrees(active_peak_step),
+                "first_last_position_error_m": endpoint_world_position,
+                "cloth_policy": "non-arm world poses held at authored IdleStand; no simulation",
+                "collision_review": "required_on_evaluated_mesh",
+            }
+            if protected_position > 0.0001 or protected_rotation > 0.001:
+                raise ValueError("Standing layer moved protected bones")
+            if active_peak_step > math.radians(20):
+                raise ValueError("Standing layer angular step exceeds 20 degrees/frame")
+            if endpoint_world_position > 0.0001:
+                raise ValueError("Standing layer endpoints diverged after baking")
         for modifier, visible in skin_modifiers:
             modifier.show_viewport = visible
         if any(max(abs(v) for row in rig.data.bones[n].matrix_local - m for v in row) > 1e-6
@@ -760,17 +856,36 @@ def main():
                       transition_frames=args.transition_frames,
                       endpoint_idle_max_position_error_m=endpoint_position_error,
                       endpoint_idle_max_rotation_error_rad=endpoint_rotation_error,
+                      standing_arm=args.standing_arm,
+                      active_arm_bones=sorted(active_arm),
+                      arm_smoothing_frames=args.arm_smoothing_frames if active_arm else 0,
+                      standing_quality=standing_quality,
+                      visual_quality_approved=False,
                       palm_forward=palm_summary,
                       ue_to_blender_matrix=[list(row) for row in conversion],
                       export_bone_axes=[args.primary_bone_axis, args.secondary_bone_axis],
                       frame_range=[first, last], fps=fps, fps_base=fps_base,
                       roundtrips=roundtrips,
                       target_hierarchy_exact=True, exports=exports)
+        report["motion_quality"] = {"status": "not_checked", "production_approved": False}
+        if active_arm:
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            from check_motion_quality import validate_preview
+            quality = validate_preview(args.output / "target_preview.blend",
+                                       args.standing_arm, args.output / "motion-quality.json")
+            report["motion_quality"] = {
+                key: value for key, value in quality.items() if key != "frames"
+            }
+            if quality["blocking_reasons"]:
+                report["status"] = "motion_quality_blocked_not_ue_imported"
     except Exception as error:
         report.update(status="failed", error=str(error))
         raise
     finally:
         report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    if report["status"] == "motion_quality_blocked_not_ue_imported":
+        raise RuntimeError("Diagnostic outputs only: " + ", ".join(
+            report["motion_quality"]["blocking_reasons"]))
     print(json.dumps(report))
 
 

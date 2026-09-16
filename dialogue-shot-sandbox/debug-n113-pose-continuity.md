@@ -78,3 +78,8 @@ Keep instrumentation and this record until user confirms success or aborts.
 Review `%LOCALAPPDATA%/Kimodo/runs/20260914-n113-idlestand-palm-final-v2/`
 `n113_body_preview.gif`. Keep status OPEN and retain instrumentation until the
 user confirms fixed, reports another symptom, or aborts.
+
+User replied B: full-motion quality remains unacceptable (foot sway, awkward
+gesture, severe garment intersections). This candidate is NOT accepted.
+Continuation evidence is in [debug-n113-gesture-layer.md](debug-n113-gesture-layer.md);
+that iteration corrects unwanted motion but still blocks on garment crossings.
