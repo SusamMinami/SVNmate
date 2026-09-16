@@ -23,7 +23,7 @@
   --motion-fast: 200ms;
   --motion-panel: 300ms;
   --motion-launch-exit: 430ms;
-  --motion-workspace: 480ms;
+  --motion-workspace: 300ms;
   --motion-launch: 600ms;
   font-family: var(--font-ui);
   color: #191919;
@@ -187,9 +187,9 @@ textarea:focus-visible {
 }
 
 .data-source-status .workspace-status-tooltip {
+  --tooltip-shift: 0%;
   right: 0;
   left: auto;
-  transform: none;
 }
 
 .data-source-status__popover {
@@ -250,6 +250,8 @@ textarea:focus-visible {
   border-radius: 2px;
   cursor: pointer;
   place-items: center;
+  transition: color 200ms ease, background-color 200ms ease,
+    border-color 200ms ease, transform 80ms var(--ease-selection);
 }
 
 .workspace-status-icon::after {
@@ -385,7 +387,8 @@ textarea:focus-visible {
   z-index: 60;
   top: calc(100% + 7px);
   left: 50%;
-  display: none;
+  visibility: hidden;
+  opacity: 0;
   width: max-content;
   max-width: 240px;
   padding: 5px 7px;
@@ -395,16 +398,19 @@ textarea:focus-visible {
   font-size: 9px;
   line-height: 13px;
   pointer-events: none;
-  transform: translateX(-50%);
+  transform: translateX(var(--tooltip-shift, -50%)) translateY(-2px);
+  transition: opacity 125ms var(--ease-selection), transform 125ms var(--ease-selection);
 }
 
-.workspace-status-icon:hover:not([aria-expanded="true"])
+.workspace-status-icon[data-tooltip-open="true"]:not([aria-expanded="true"])
   .workspace-status-tooltip {
-  display: block;
+  visibility: visible;
+  opacity: 1;
+  transform: translateX(var(--tooltip-shift, -50%));
 }
 
-.workspace-status-icon--data:focus-visible .workspace-status-tooltip {
-  display: block;
+.workspace-status-icon[data-tooltip-instant="true"] .workspace-status-tooltip {
+  transition: none;
 }
 
 @keyframes data-link-heartbeat {
@@ -454,13 +460,40 @@ textarea:focus-visible {
   z-index: 55;
   top: calc(100% + 10px);
   right: 0;
-  display: grid;
+  display: none;
+  opacity: 0;
+  transform: translateY(-3px) scale(0.98);
+  transform-origin: calc(100% - 16px) top;
+  transition: opacity 100ms var(--ease-selection),
+    transform 100ms var(--ease-selection), display 100ms allow-discrete;
   width: min(380px, calc(100vw - 24px));
   padding: 12px;
   color: var(--ink);
   background: #f7f7f5;
   border: 1px solid #9d9f98;
   box-shadow: 0 12px 30px rgba(25, 25, 25, 0.2);
+}
+
+.workspace-status-popover[data-open="true"] {
+  display: grid;
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  transition-duration: 160ms;
+}
+
+@starting-style {
+  .workspace-status-popover[data-open="true"] {
+    opacity: 0;
+    transform: translateY(-3px) scale(0.98);
+  }
+}
+
+.workspace-status-popover[data-instant="true"] {
+  transition: none;
+}
+
+.workspace-status-popover[inert] {
+  pointer-events: none;
 }
 
 .workspace-status-popover::before {
@@ -9158,10 +9191,6 @@ textarea:focus-visible {
   font-size: 10px;
 }
 
-.app-shell > :is(.workspace, .tool-workspace) {
-  will-change: transform, opacity;
-}
-
 .app-shell
   > :is(.workspace, .tool-workspace)[data-workspace-state="active"] {
   z-index: 1;
@@ -9171,36 +9200,20 @@ textarea:focus-visible {
 .app-shell
   > :is(.workspace, .tool-workspace)[data-workspace-state="entering"] {
   z-index: 2;
+  will-change: transform;
+  box-shadow: 0 -20px 40px rgba(25, 25, 25, 0.14);
 }
 
 .app-shell
   > :is(.workspace, .tool-workspace)[data-workspace-state="exiting"] {
   z-index: 1;
   pointer-events: none;
-}
-
-.app-shell[data-workspace-direction="up"]
-  > :is(.workspace, .tool-workspace)[data-workspace-state="entering"] {
-  animation: workspace-page-enter-up var(--motion-workspace)
-    cubic-bezier(0.455, 0.03, 0.515, 0.955) both;
-}
-
-.app-shell[data-workspace-direction="up"]
-  > :is(.workspace, .tool-workspace)[data-workspace-state="exiting"] {
-  animation: workspace-page-exit-up var(--motion-workspace)
-    cubic-bezier(0.455, 0.03, 0.515, 0.955) both;
+  will-change: transform;
 }
 
 .app-shell[data-workspace-direction="down"]
   > :is(.workspace, .tool-workspace)[data-workspace-state="entering"] {
-  animation: workspace-page-enter-down var(--motion-workspace)
-    cubic-bezier(0.455, 0.03, 0.515, 0.955) both;
-}
-
-.app-shell[data-workspace-direction="down"]
-  > :is(.workspace, .tool-workspace)[data-workspace-state="exiting"] {
-  animation: workspace-page-exit-down var(--motion-workspace)
-    cubic-bezier(0.455, 0.03, 0.515, 0.955) both;
+  box-shadow: 0 20px 40px rgba(25, 25, 25, 0.14);
 }
 
 .tool-workspace__embedded {
@@ -11641,46 +11654,6 @@ textarea:focus-visible {
   background: transparent;
 }
 
-@keyframes workspace-page-enter-up {
-  from {
-    box-shadow: 0 -28px 52px rgba(25, 25, 25, 0.18);
-    transform: translate3d(0, 100%, 0);
-  }
-  to {
-    box-shadow: 0 0 0 rgba(25, 25, 25, 0);
-    transform: translate3d(0, 0, 0);
-  }
-}
-
-@keyframes workspace-page-exit-up {
-  from {
-    transform: translate3d(0, 0, 0);
-  }
-  to {
-    transform: translate3d(0, -100%, 0);
-  }
-}
-
-@keyframes workspace-page-enter-down {
-  from {
-    box-shadow: 0 28px 52px rgba(25, 25, 25, 0.18);
-    transform: translate3d(0, -100%, 0);
-  }
-  to {
-    box-shadow: 0 0 0 rgba(25, 25, 25, 0);
-    transform: translate3d(0, 0, 0);
-  }
-}
-
-@keyframes workspace-page-exit-down {
-  from {
-    transform: translate3d(0, 0, 0);
-  }
-  to {
-    transform: translate3d(0, 100%, 0);
-  }
-}
-
 @keyframes workspace-identity-in {
   from {
     opacity: 0;
@@ -11832,6 +11805,7 @@ textarea:focus-visible {
 
 .button:active:not(:disabled),
 .icon-button:active:not(:disabled),
+.workspace-status-icon:active:not(:disabled):not([role="status"]),
 .app-rail__button:active:not(:disabled),
 .inspector-tabs button:active:not(:disabled),
 .top-view:active:not(:disabled) {
@@ -12117,14 +12091,19 @@ textarea:focus-visible {
 }
 
 /* Keep focus/color feedback, but omit press displacement for keyboard/reduced motion. */
-.workspace[data-navigation-input="keyboard"]
-  :is(.button, .icon-button, .inspector-tabs button, .top-view):active:not(:disabled) {
+.app-shell[data-navigation-input="keyboard"]
+  :is(.button, .icon-button, .app-rail__button, .workspace-status-icon, .inspector-tabs button, .top-view):active:not(:disabled) {
   transform: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .workspace
-    :is(.button, .icon-button, .inspector-tabs button, .top-view):active:not(:disabled) {
+  .app-shell
+    :is(.button, .icon-button, .app-rail__button, .workspace-status-icon, .inspector-tabs button, .top-view):active:not(:disabled) {
     transform: none;
+  }
+
+  .app-shell .workspace-status-popover,
+  .app-shell .workspace-status-tooltip {
+    transition: none;
   }
 }

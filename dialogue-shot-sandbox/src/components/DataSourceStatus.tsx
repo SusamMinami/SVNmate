@@ -7,7 +7,7 @@ import {
   Settings,
   ShieldAlert,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useStatusPopover } from "../app/useStatusPopover";
 import type { LarkStatus } from "../lark/client";
 
 interface DataSourceStatusProps {
@@ -41,8 +41,7 @@ export function DataSourceStatus({
   onCollectRevisionCasesChange,
   disabled = false,
 }: DataSourceStatusProps) {
-  const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
+  const popover = useStatusPopover(disabled);
   const directoryReady = setupStatus?.defaultDataReady ?? true;
   const baseMissingScopes =
     larkStatus?.baseMissingScopes ?? larkStatus?.missingScopes ?? [];
@@ -89,56 +88,25 @@ export function DataSourceStatus({
         ? caseStatusLabel
         : "数据源已就绪";
 
-  useEffect(() => {
-    if (disabled) {
-      setOpen(false);
-    }
-  }, [disabled]);
-
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-    const closeOnOutsidePointer = (event: PointerEvent) => {
-      if (
-        event.target instanceof Node &&
-        !rootRef.current?.contains(event.target)
-      ) {
-        setOpen(false);
-      }
-    };
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setOpen(false);
-      }
-    };
-    document.addEventListener("pointerdown", closeOnOutsidePointer);
-    document.addEventListener("keydown", closeOnEscape);
-    return () => {
-      document.removeEventListener("pointerdown", closeOnOutsidePointer);
-      document.removeEventListener("keydown", closeOnEscape);
-    };
-  }, [open]);
-
   return (
-    <div className="data-source-status" ref={rootRef}>
+    <div className="data-source-status" ref={popover.rootRef}>
       <button
         className="workspace-status-icon"
         data-state={dataState}
         type="button"
         aria-label="数据源状态"
         aria-haspopup="dialog"
-        aria-expanded={!disabled && open}
+        {...popover.triggerProps}
         disabled={disabled}
-        onClick={() => setOpen((current) => !current)}
       >
         <Database size={17} />
         <span className="workspace-status-tooltip">{statusLabel}</span>
       </button>
 
-      {open && !disabled && (
+      {!disabled && (
         <section
           className="workspace-status-popover data-source-status__popover"
+          {...popover.panelProps}
           data-state={dataState}
           role="dialog"
           aria-label="数据源配置"
@@ -212,7 +180,7 @@ export function DataSourceStatus({
                 className="button"
                 type="button"
                 onClick={() => {
-                  setOpen(false);
+                  popover.close();
                   onOpenSettings();
                 }}
               >

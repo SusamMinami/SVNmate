@@ -437,9 +437,20 @@ export function buildNpcMigrationPlan(
   const conflicts = discovered.fileOperations.filter(
     (operation) => operation.state === "conflict",
   );
+  const readyFiles = discovered.fileOperations.filter(
+    (operation) => operation.state === "ready",
+  );
+  const unchangedFiles = discovered.fileOperations.filter(
+    (operation) => operation.state === "unchanged",
+  );
   if (conflicts.length > 0) {
     blockedReasons.push(
-      `目标 Content 中已有 ${conflicts.length} 个同路径文件，当前版本不会覆盖`,
+      `目标 Content 中有 ${conflicts.length} 个同路径文件与源文件不同，当前版本不会覆盖`,
+    );
+  }
+  if (unchangedFiles.length > 0) {
+    warnings.push(
+      `目标 Content 中已有 ${unchangedFiles.length} 个内容一致的文件，将直接复用`,
     );
   }
   if (!isAnimal && !discovered.animationDirectoryReady) {
@@ -481,7 +492,10 @@ export function buildNpcMigrationPlan(
       `BP/ABP 写入 ${blueprintPackagePath}，Montage 写入 ${montagePackagePath}`,
     );
     warnings.push(
-      "首版动物模板仅支持与 SKEL_E05_Cat 相同的 Skeleton；策划 UE 预检会严格阻断其他骨架",
+      `目标 BP/ABP 将绑定所选 Mesh 自带的 Skeleton：${request.source.skeletonAssetPath}`,
+    );
+    warnings.push(
+      "BP_E05_CAT01_NPC 只提供动物逻辑模板；模板动作与新 Skeleton 的兼容性由蓝图编译和人工预览确认",
     );
   }
 
@@ -518,7 +532,9 @@ export function buildNpcMigrationPlan(
     automaticStep(
       "migration",
       "迁移模型基础资产",
-      `复制到 ${targetContentDirectory || "未指定目标 Content"}`,
+      `复制 ${readyFiles.length} 个，复用 ${unchangedFiles.length} 个${
+        conflicts.length > 0 ? `，冲突 ${conflicts.length} 个` : ""
+      }`,
       migrationBlocked,
     ),
     automaticStep(

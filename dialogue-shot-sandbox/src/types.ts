@@ -1022,7 +1022,7 @@ export interface NpcMigrationFileOperation {
   destinationPath: string;
   relativePath: string;
   size: number;
-  state: "ready" | "conflict";
+  state: "ready" | "unchanged" | "conflict";
 }
 
 export type NpcMigrationStepId =
@@ -1118,6 +1118,7 @@ export interface NpcMigrationPlanRequest {
 
 export interface NpcMigrationCopyResult {
   copiedFiles: string[];
+  reusedFiles: string[];
   copiedBytes: number;
   targetContentDirectory: string;
 }
@@ -1147,6 +1148,7 @@ export interface NpcMigrationTargetInspection {
   targetContentDirectory: string;
   skeletalMeshFound: boolean;
   skeletonFound: boolean;
+  skeletalMeshSkeletonAssetPath: string;
   npcBaseClassFound: boolean;
   animationBlueprintParentClassFound: boolean;
   capsuleEstimate: NpcMigrationCapsuleEstimate | null;

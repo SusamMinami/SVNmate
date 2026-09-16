@@ -177,11 +177,12 @@ describe("NPC migration server workflow", () => {
       warnings: [],
     };
 
-    const plan = await inspectNpcMigrationPlan({
+    const planRequest = {
       source,
       targetContentDirectory: targetContent,
       animationSourceDirectory: animationDirectory,
-    });
+    };
+    const plan = await inspectNpcMigrationPlan(planRequest);
     expect(plan.canMigrate).toBe(true);
     expect(plan.reviewToken).toMatch(/^[a-f0-9]{64}$/);
 
@@ -199,6 +200,32 @@ describe("NPC migration server workflow", () => {
         reviewToken: plan.reviewToken,
       }),
     ).rejects.toThrow("目标文件已存在");
+
+    const resumedPlan = await inspectNpcMigrationPlan(planRequest);
+    expect(resumedPlan.canMigrate).toBe(true);
+    expect(resumedPlan.fileOperations).toEqual([
+      expect.objectContaining({ state: "unchanged" }),
+    ]);
+    await expect(
+      applyNpcAssetMigration({
+        plan: resumedPlan,
+        reviewToken: resumedPlan.reviewToken,
+      }),
+    ).resolves.toMatchObject({
+      copiedFiles: [],
+      reusedFiles: [join(targetContent, relativeAsset)],
+      copiedBytes: 0,
+    });
+
+    await writeFile(join(targetContent, relativeAsset), "different one");
+    const conflictPlan = await inspectNpcMigrationPlan(planRequest);
+    expect(conflictPlan.canMigrate).toBe(false);
+    expect(conflictPlan.fileOperations).toEqual([
+      expect.objectContaining({ state: "conflict" }),
+    ]);
+    expect(conflictPlan.blockedReasons.join("\n")).toContain(
+      "同路径文件与源文件不同",
+    );
   });
 
   it("rejects a stale review token before copying", async () => {
@@ -254,6 +281,8 @@ describe("NPC migration server workflow", () => {
       target_content_directory: "E:/Other/Content",
       skeletal_mesh_found: true,
       skeleton_found: true,
+      skeletal_mesh_skeleton_asset_path:
+        "/Game/Seria/NPC/N28/SKEL_N28.SKEL_N28",
       npc_base_class_found: true,
       animation_blueprint_parent_class_found: true,
       existing_asset_paths: [],
@@ -349,6 +378,8 @@ describe("NPC migration server workflow", () => {
         target_content_directory: targetContent,
         skeletal_mesh_found: true,
         skeleton_found: true,
+        skeletal_mesh_skeleton_asset_path:
+          "/Game/Seria/NPC/N28/SKEL_N28.SKEL_N28",
         npc_base_class_found: true,
         animation_blueprint_parent_class_found: true,
         capsule_estimate: estimate,
@@ -521,7 +552,7 @@ describe("NPC migration server workflow", () => {
         skeletalMeshPackageName:
           "/Game/Seria/BioSystems/E05_Cat/SK_E05_Cat02",
         skeletonAssetPath:
-          "/Game/Seria/BioSystems/E05_Cat/SKEL_E05_Cat.SKEL_E05_Cat",
+          "/Game/Seria/BioSystems/E05_Cat/SKEL_E05_Cat02.SKEL_E05_Cat02",
         physicsAssetPath:
           "/Game/Seria/BioSystems/E05_Cat/PHYS_E05_Cat.PHYS_E05_Cat",
         materialAssetPaths: [],
@@ -560,6 +591,8 @@ describe("NPC migration server workflow", () => {
       target_content_directory: targetContent,
       skeletal_mesh_found: true,
       skeleton_found: true,
+      skeletal_mesh_skeleton_asset_path:
+        "/Game/Seria/BioSystems/E05_Cat/SKEL_E05_Cat02.SKEL_E05_Cat02",
       npc_base_class_found: true,
       animation_blueprint_parent_class_found: true,
       capsule_estimate: estimate,
@@ -651,5 +684,8 @@ describe("NPC migration server workflow", () => {
     );
     expect(scripts[1]).toContain("animation_blueprint_root");
     expect(scripts[1]).toContain("capsule_estimate(mesh, True)");
+    expect(scripts[1]).toContain(
+      "SKEL_E05_Cat02.SKEL_E05_Cat02",
+    );
   });
 });

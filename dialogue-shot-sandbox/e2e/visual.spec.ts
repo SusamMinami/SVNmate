@@ -998,21 +998,8 @@ test("keeps rail icons fixed and slides between workspace levels", async ({
     "data-workspace-direction",
     "up",
   );
-  await expect(
-    page.locator('[data-workspace-state="entering"]'),
-  ).toHaveCSS(
-    "animation-name",
-    "workspace-page-enter-up",
-  );
-  await expect(
-    page.locator('[data-workspace-state="entering"]'),
-  ).toHaveCSS("animation-duration", "0.48s");
-  await expect(
-    page.locator('[data-workspace-state="exiting"]'),
-  ).toHaveCSS(
-    "animation-name",
-    "workspace-page-exit-up",
-  );
+  // Exact mid-flight continuity is covered by workspace-motion.spec.ts.
+  // End-state checks here should not race the shorter compositor animation.
   await expect(page.locator('[data-workspace-state="exiting"]')).toHaveCount(0);
   await expect(page.locator(".workspace")).toBeHidden();
   await expect(page.locator(".tool-workspace")).toHaveCount(1);
@@ -1034,18 +1021,6 @@ test("keeps rail icons fixed and slides between workspace levels", async ({
   await expect(page.locator(".app-shell")).toHaveAttribute(
     "data-workspace-direction",
     "down",
-  );
-  await expect(
-    page.locator('[data-workspace-state="entering"]'),
-  ).toHaveCSS(
-    "animation-name",
-    "workspace-page-enter-down",
-  );
-  await expect(
-    page.locator('[data-workspace-state="exiting"]'),
-  ).toHaveCSS(
-    "animation-name",
-    "workspace-page-exit-down",
   );
   await expect(page.locator('[data-workspace-state="exiting"]')).toHaveCount(0);
   await expect(page.locator(".tool-workspace")).toHaveCount(1);
@@ -1206,7 +1181,11 @@ test("renders every participant in a multi-character dialogue", async ({
 
   await expect(page.locator(".shot-row")).toHaveCount(3);
   for (const name of ["玩家", "岑队长", "洛安", "弥莎", "赫克"]) {
-    await expect(page.getByText(name).first()).toBeVisible();
+    await expect(
+      page
+        .locator(".stage-cast__item")
+        .filter({ hasText: name }),
+    ).toHaveCount(1);
   }
   await expect(page.getByText(/未绑定 UE Blueprint 站位/)).toBeVisible();
   await expect(
@@ -2068,7 +2047,7 @@ test("keeps configuration mode aligned with the selected UE node", async ({
     "UE NODE 204801",
   );
   await expect(ueDataStatus).toHaveAttribute(
-    "title",
+    "aria-label",
     /^UE 数据链路 · (同步中|监听中 · 1\.2s) · (读取中|等待下一次同步)$/,
   );
   await expect(ueDataStatus).toHaveAttribute(
@@ -3014,7 +2993,9 @@ test("shows local content while TRAE works and applies the completed plan direct
     ),
   ).toBe(6);
   await providerStatus.hover();
-  await expect(page.getByText("内部 TRAE MCP 已连接")).toBeVisible();
+  await expect(
+    providerStatus.locator(".workspace-status-tooltip"),
+  ).toBeVisible();
   await dataSourceStatus.click();
   await expect(page.getByRole("checkbox", { name: /收集返修案例/ }))
     .toBeVisible();

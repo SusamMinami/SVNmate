@@ -125,9 +125,29 @@ export function NpcMigrationWorkspace({
   const totalBytes = useMemo(
     () =>
       plan?.fileOperations.reduce(
-        (total, operation) => total + operation.size,
+        (total, operation) =>
+          operation.state === "ready"
+            ? total + operation.size
+            : total,
         0,
       ) ?? 0,
+    [plan],
+  );
+  const fileOperationCounts = useMemo(
+    () => ({
+      ready:
+        plan?.fileOperations.filter(
+          (operation) => operation.state === "ready",
+        ).length ?? 0,
+      unchanged:
+        plan?.fileOperations.filter(
+          (operation) => operation.state === "unchanged",
+        ).length ?? 0,
+      conflict:
+        plan?.fileOperations.filter(
+          (operation) => operation.state === "conflict",
+        ).length ?? 0,
+    }),
     [plan],
   );
 
@@ -213,7 +233,15 @@ export function NpcMigrationWorkspace({
       setStatus(
         next.blockedReasons.length > 0
           ? `计划已生成，存在 ${next.blockedReasons.length} 个阻断项`
-          : `计划已就绪：${next.fileOperations.length} 个资产文件，${next.bodyAnimationFiles.length + next.faceAnimationFiles.length} 个动作`,
+          : `计划已就绪：复制 ${
+              next.fileOperations.filter(
+                (operation) => operation.state === "ready",
+              ).length
+            } 个、复用 ${
+              next.fileOperations.filter(
+                (operation) => operation.state === "unchanged",
+              ).length
+            } 个资产文件，${next.bodyAnimationFiles.length + next.faceAnimationFiles.length} 个动作`,
       );
     } catch (planError) {
       setError(
@@ -228,7 +256,7 @@ export function NpcMigrationWorkspace({
     if (
       !plan ||
       !window.confirm(
-        `将 ${plan.fileOperations.length} 个文件复制到策划工程 Content，且不覆盖已有文件。继续吗？`,
+        `将 ${fileOperationCounts.ready} 个文件复制到策划工程 Content，复用 ${fileOperationCounts.unchanged} 个内容一致的文件，且不覆盖 ${fileOperationCounts.conflict} 个内容不同的文件。继续吗？`,
       )
     ) {
       return;
@@ -239,7 +267,7 @@ export function NpcMigrationWorkspace({
       const copyResult = await applyNpcAssetMigration(plan);
       setMigrated(true);
       setStatus(
-        `基础资产迁移完成：${copyResult.copiedFiles.length} 个文件，${fileSize(copyResult.copiedBytes)}`,
+        `基础资产迁移完成：复制 ${copyResult.copiedFiles.length} 个，复用 ${copyResult.reusedFiles.length} 个文件，共写入 ${fileSize(copyResult.copiedBytes)}`,
       );
     } catch (migrationError) {
       setError(
@@ -466,21 +494,39 @@ export function NpcMigrationWorkspace({
               state: source ? "ready" : "blocked",
               detail: source ? source.skeletalMeshName : "等待读取源资产",
             },
-          ]).map((step, index) => (
-            <div
-              className={`npc-migration-step ${
-                step.state === "blocked" ? "is-blocked" : ""
-              }`}
-              key={step.id}
-            >
-              <span>{String(index + 1).padStart(2, "0")}</span>
-              <div>
-                <strong>{step.label}</strong>
-                <small>{step.detail}</small>
+          ]).map((step, index) => {
+            const targetBlocked =
+              step.id === "finalize" &&
+              Boolean(targetInspection?.blockedReasons.length);
+            const blocked = step.state === "blocked" || targetBlocked;
+            return (
+              <div
+                className={`npc-migration-step ${
+                  blocked ? "is-blocked" : ""
+                }`}
+                key={step.id}
+              >
+                <span>{String(index + 1).padStart(2, "0")}</span>
+                <div>
+                  <strong>{step.label}</strong>
+                  <small>
+                    {targetBlocked
+                      ? `策划 UE 预检存在 ${targetInspection!.blockedReasons.length} 个阻断项`
+                      : step.detail}
+                  </small>
+                </div>
+                <em>
+                  {blocked
+                    ? "阻断"
+                    : step.mode === "automatic"
+                      ? "自动"
+                      : step.mode === "assisted"
+                        ? "辅助"
+                        : "人工"}
+                </em>
               </div>
-              <em>{step.mode === "automatic" ? "自动" : step.mode === "assisted" ? "辅助" : "人工"}</em>
-            </div>
-          ))}
+            );
+          })}
         </aside>
 
         <section className="npc-migration-editor">
@@ -808,9 +854,11 @@ export function NpcMigrationWorkspace({
             <>
               <dl className="npc-migration-metrics">
                 <div>
-                  <dt>基础文件</dt>
-                  <dd title={fileSize(totalBytes)}>
-                    {plan.fileOperations.length}
+                  <dt>复制 / 复用</dt>
+                  <dd
+                    title={`待复制 ${fileOperationCounts.ready} 个（${fileSize(totalBytes)}），内容一致 ${fileOperationCounts.unchanged} 个，冲突 ${fileOperationCounts.conflict} 个`}
+                  >
+                    {fileOperationCounts.ready} / {fileOperationCounts.unchanged}
                   </dd>
                 </div>
                 <div>

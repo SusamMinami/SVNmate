@@ -2,8 +2,8 @@
 
 > 文档状态：现行专题规范
 >
-> 最近核对：2026-09-12，对应镜头沙盘 `0.24.7`。当前工作区包含“全新 NPC”、
-> “动作补充与修改”和“面部补充”三个入口。
+> 最近核对：2026-09-16，当前工作区基于镜头沙盘 `0.24.10` 继续修复。工作区包含
+> “全新 NPC”、“动作补充与修改”和“面部补充”三个入口。
 
 ## 结论
 
@@ -15,8 +15,8 @@ NPC 迁移可以自动化，但不能安全地压缩成一次无审核的写入�
 
 1. 美术 UE：读取内容浏览器中选中的 `SK_` Skeletal Mesh，递归收集项目内依赖，
    生成物理文件迁移清单。
-2. 文件迁移：保持 `/Game` 包路径复制到策划工程 `Content`，已有同路径文件时
-   整批阻断，不覆盖。
+2. 文件迁移：保持 `/Game` 包路径复制到策划工程 `Content`。同路径且内容一致的
+   文件直接复用；内容不同时整批阻断，始终不覆盖。
 3. 策划 UE：校验迁移后的 Mesh、Skeleton、`NPCBase` 和
    `SeriaNPCAnimInstance`。
 4. 自动配置：导入 Body / Face FBX，Face 动作锁定根骨骼，创建并绑定 BP 与
@@ -27,9 +27,9 @@ NPC 迁移可以自动化，但不能安全地压缩成一次无审核的写入�
    Look 三个采样点、面部曲线/Montage 输出和后处理动画蓝图。
 
 动物 NPC 是同一两阶段管线中的独立模板配置。首版以
-`BP_E05_CAT01_NPC` / `ABP_E05_CAT01_NPC` 为基准，只支持
-`SKEL_E05_Cat` 兼容资产；它复用模板动作集和 `AM_Sleep`，不套用人形 Look
-与 SpecialAction 规则。
+`BP_E05_CAT01_NPC` / `ABP_E05_CAT01_NPC` 为逻辑模板；新 BP/ABP 绑定所选
+Skeletal Mesh 自带的 Skeleton。它复用模板动作集和 `AM_Sleep`，不套用人形
+Look 与 SpecialAction 规则；模板动作兼容性由蓝图编译和人工预览确认。
 
 ## 工作区分流
 
@@ -102,7 +102,7 @@ C++ 代码。原来的 MakeTable 由镜头沙盒审核清单替代，Out 由逐�
 | 添加 Face 组件 | Face 配置 | 人工确认 Mesh 和 Socket |
 | 锁定 Face 动作根骨骼 | Face 动作导入 | 自动 |
 | 执行 `BP_FaceConfigHelper` | 原生 Seria 面部处理 | 面部补充自动，逐项审核后写入并回读 |
-| 创建 `ABP_XXX` | 动画蓝图配置 | 自动继承男性或女性标准模板并绑定 Skeleton |
+| 创建 `ABP_XXX` | 动画蓝图配置 | 自动继承所选标准模板并绑定当前 Mesh 的 Skeleton |
 | 创建动作 Montage 与插槽 | Montage 配置 | 转身与 Walk 写入 `TurnSlot`，其他可播放动作写入 `IdleSlot` |
 | 配置状态机 | 标准 ABP 模板 | 自动继承模板图表并覆盖目标动作 |
 | 配置 Look 混合空间 | Look 配置 | 自动复制模板轴与采样位置并替换 LookD/F/U |
@@ -125,7 +125,8 @@ Interact 替换为当前 NPC 资产。这样不依赖编辑器剪贴板，并能
 
 | 项目 | 规则 |
 | --- | --- |
-| 兼容 Skeleton | `/Game/Seria/BioSystems/E05_Cat/SKEL_E05_Cat`，不一致时预检阻断 |
+| 目标 Skeleton | 使用所选 Skeletal Mesh 自带的 Skeleton，不要求与模板资产路径相同 |
+| 模板 Skeleton | `ABP_E05_CAT01_NPC` 自身仍须绑定 `/Game/Seria/BioSystems/E05_Cat/SKEL_E05_Cat`，用于确认模板未被误改 |
 | BP 模板 | `/Game/Seria/NPC/E05_Cat/BP_E05_CAT01_NPC` |
 | ABP 模板 | `/Game/Seria/NPC/E05_Cat/ABP_E05_CAT01_NPC` |
 | 动作前缀 | 从 Mesh 变体名去掉末尾两位编号；`E05_Cat02` → `A_E05_Cat_` |
@@ -142,8 +143,10 @@ Interact 替换为当前 NPC 资产。这样不依赖编辑器剪贴板，并能
 `A_E05_Cat_*.fbx`，并同时扫描 BioSystems 动作目录和 NPC Montage 目录。
 
 动物 BP 与 ABP 均从模板复制，以保留专用事件图、状态机和 `AM_Sleep` 引用。
-由于这些引用绑定猫骨架，不能把当前选项当作任意四足动物的通用重定向器；新增
-其他 Skeleton 家族时应增加新的动物模板配置，而不是绕过兼容性检查。
+复制后会把 Mesh 与 ABP 重新绑定到新 NPC 自带的 Skeleton。模板中的动作引用
+仍需与新骨架结构兼容；工具通过蓝图编译与目标 Skeleton 回读拦截明显失败，最终
+仍需在 ABP 状态机中预览 IdleStand、Walk 和 Sleep。该选项不是任意四足动物的
+自动重定向器。
 
 ## 安全约束
 
@@ -151,7 +154,7 @@ Interact 替换为当前 NPC 资产。这样不依赖编辑器剪贴板，并能
 - 源依赖存在未保存包时阻断。
 - 目标目录必须是现有 Unreal 项目的 `Content` 目录。
 - 跨工程复制保持原始 `/Game` 包路径，不支持在复制时改目录。
-- 目标已有任何同路径文件时阻断，不执行覆盖。
+- 目标同路径文件与源文件内容一致时复用；内容不同时阻断，不执行覆盖。
 - 使用 SHA-256 审核令牌；参数变化后必须重新预检。
 - BP 或 ABP 已存在时阻断，避免覆盖人工资产。
 - 多个动作映射为同一 Montage 名称时阻断。
@@ -163,8 +166,9 @@ Interact 替换为当前 NPC 资产。这样不依赖编辑器剪贴板，并能
   任一动作都会阻断。
 - 男性或女性模板不存在、模板引用资产不完整、BlendSpace 或 ABP 覆盖接口不可用
   时阻断。
-- 动物模板 BP/ABP、`IdleStand`、`Walk` 或 `AM_Sleep` 不完整，或者目标
-  Skeleton 不是 `SKEL_E05_Cat` 时阻断。
+- 动物模板 BP/ABP、`IdleStand`、`Walk` 或 `AM_Sleep` 不完整时阻断。
+- 迁移后 Skeletal Mesh 未绑定计划中读取的新 NPC Skeleton 时阻断；新 Skeleton
+  不需要与模板 `SKEL_E05_Cat` 使用相同资产路径。
 - 高风险迁移和目标配置分别要求确认。
 
 ## 自动命名

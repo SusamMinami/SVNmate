@@ -1,4 +1,4 @@
-import { constants as fsConstants } from "node:fs";
+import { constants as fsConstants, createReadStream } from "node:fs";
 import {
   access,
   copyFile,
@@ -488,6 +488,35 @@ async function isDirectory(path: string): Promise<boolean> {
   );
 }
 
+async function fileSha256(path: string): Promise<string> {
+  return new Promise((resolveHash, reject) => {
+    const hash = createHash("sha256");
+    const stream = createReadStream(path);
+    stream.on("error", reject);
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.on("end", () => resolveHash(hash.digest("hex")));
+  });
+}
+
+async function filesHaveSameContent(
+  sourcePath: string,
+  destinationPath: string,
+  sourceSize: number,
+): Promise<boolean> {
+  const destinationStat = await stat(destinationPath).catch(() => null);
+  if (
+    !destinationStat?.isFile() ||
+    destinationStat.size !== sourceSize
+  ) {
+    return false;
+  }
+  const [sourceHash, destinationHash] = await Promise.all([
+    fileSha256(sourcePath),
+    fileSha256(destinationPath),
+  ]);
+  return sourceHash === destinationHash;
+}
+
 async function listFbxFiles(directory: string): Promise<string[]> {
   if (!(await isDirectory(directory))) {
     return [];
@@ -696,31 +725,38 @@ export async function inspectNpcMigrationPlan(
     !isAnimalTemplate && animationDirectoryReady
     ? await listFbxFiles(animationSourceDirectory)
     : [];
-  const fileOperations = await Promise.all(
-    request.source.sourceFiles.map(async (file) => {
-      const destinationPath = resolve(
-        targetContentDirectory,
-        file.relativePath,
-      );
-      const targetRelative = relative(targetContentDirectory, destinationPath);
-      if (
-        targetRelative.startsWith(`..${sep}`) ||
-        targetRelative === ".."
-      ) {
-        throw new Error(`迁移目标超出 Content：${file.relativePath}`);
-      }
-      return {
-        packageName: file.packageName,
-        sourcePath: resolve(file.sourcePath),
-        destinationPath,
-        relativePath: file.relativePath,
-        size: file.size,
-        state: (await pathExists(destinationPath))
-          ? "conflict" as const
-          : "ready" as const,
-      };
-    }),
-  );
+  const fileOperations: NpcMigrationPlan["fileOperations"] = [];
+  for (const file of request.source.sourceFiles) {
+    const sourcePath = resolve(file.sourcePath);
+    const destinationPath = resolve(
+      targetContentDirectory,
+      file.relativePath,
+    );
+    const targetRelative = relative(targetContentDirectory, destinationPath);
+    if (
+      targetRelative.startsWith(`..${sep}`) ||
+      targetRelative === ".."
+    ) {
+      throw new Error(`迁移目标超出 Content：${file.relativePath}`);
+    }
+    const destinationExists = await pathExists(destinationPath);
+    fileOperations.push({
+      packageName: file.packageName,
+      sourcePath,
+      destinationPath,
+      relativePath: file.relativePath,
+      size: file.size,
+      state: !destinationExists
+        ? "ready"
+        : await filesHaveSameContent(
+            sourcePath,
+            destinationPath,
+            file.size,
+          )
+          ? "unchanged"
+          : "conflict",
+    });
+  }
   const planWithoutToken = buildNpcMigrationPlan(request, {
     animationFiles,
     fileOperations,
@@ -770,13 +806,30 @@ export async function applyNpcAssetMigration(
     if (!(await pathExists(operation.sourcePath))) {
       throw new Error(`源资产文件已不存在：${operation.sourcePath}`);
     }
-    if (await pathExists(operation.destinationPath)) {
+    if (operation.state === "unchanged") {
+      if (
+        !(await filesHaveSameContent(
+          operation.sourcePath,
+          operation.destinationPath,
+          operation.size,
+        ))
+      ) {
+        throw new Error(
+          `待复用文件已变化，请重新检查迁移计划：${operation.destinationPath}`,
+        );
+      }
+    } else if (await pathExists(operation.destinationPath)) {
       throw new Error(`目标文件已存在，已停止迁移：${operation.destinationPath}`);
     }
   }
   const copiedFiles: string[] = [];
+  const reusedFiles: string[] = [];
   let copiedBytes = 0;
   for (const operation of plan.fileOperations) {
+    if (operation.state === "unchanged") {
+      reusedFiles.push(operation.destinationPath);
+      continue;
+    }
     await mkdir(dirname(operation.destinationPath), { recursive: true });
     await copyFile(
       operation.sourcePath,
@@ -788,6 +841,7 @@ export async function applyNpcAssetMigration(
   }
   return {
     copiedFiles,
+    reusedFiles,
     copiedBytes,
     targetContentDirectory: plan.targetContentDirectory,
   };
@@ -885,6 +939,7 @@ import os
 ${TARGET_AUTOMATION_PYTHON_HELPERS}
 mesh = unreal.load_asset(${JSON.stringify(request.plan.source.skeletalMeshAssetPath)})
 skeleton = unreal.load_asset(${JSON.stringify(request.plan.source.skeletonAssetPath)})
+mesh_skeleton = mesh.get_editor_property('skeleton') if mesh else None
 npc_parent = resolve_class(${JSON.stringify(npcBaseClassPath)})
 anim_parent = resolve_class(${JSON.stringify(animationBlueprintParentClassPath)})
 template_abp = unreal.load_asset(${JSON.stringify(templateAnimationBlueprintAssetPath)}) if ${request.plan.configureStandardAbp ? "True" : "False"} else None
@@ -990,6 +1045,7 @@ _result = {
     'target_content_directory': os.path.abspath(unreal.Paths.project_content_dir()),
     'skeletal_mesh_found': bool(mesh),
     'skeleton_found': bool(skeleton),
+    'skeletal_mesh_skeleton_asset_path': mesh_skeleton.get_path_name() if mesh_skeleton else '',
     'npc_base_class_found': bool(template_bp) if ${isAnimalTemplate ? "True" : "False"} else bool(npc_parent),
     'animation_blueprint_parent_class_found': bool(anim_parent),
     'capsule_estimate': estimate,
@@ -1025,6 +1081,23 @@ _result = {
   }
   if (!raw.skeleton_found) {
     blockedReasons.push("目标 UE 中未找到对应 Skeleton");
+  }
+  const skeletalMeshSkeletonAssetPath = String(
+    raw.skeletal_mesh_skeleton_asset_path ?? "",
+  );
+  if (
+    raw.skeletal_mesh_found &&
+    (
+      !skeletalMeshSkeletonAssetPath ||
+      skeletalMeshSkeletonAssetPath.toLowerCase() !==
+        request.plan.source.skeletonAssetPath.toLowerCase()
+    )
+  ) {
+    blockedReasons.push(
+      `迁移后的 Skeletal Mesh 未绑定计划中的 Skeleton：${
+        skeletalMeshSkeletonAssetPath || "未设置"
+      }`,
+    );
   }
   if (!raw.npc_base_class_found) {
     blockedReasons.push("NPCBase 父类路径无效");
@@ -1115,15 +1188,6 @@ _result = {
         `动物 ABP 模板 Skeleton 不符合预期：${templateSkeletonAssetPath || "未设置"}`,
       );
     }
-    if (
-      isAnimalTemplate &&
-      request.plan.source.skeletonAssetPath !==
-        ANIMAL_TEMPLATE_SKELETON_PATH
-    ) {
-      blockedReasons.push(
-        `动物模板仅支持 ${ANIMAL_TEMPLATE_SKELETON_PATH}`,
-      );
-    }
     const templateAnimationAssetsByRole = {
       look_blend_space: templateAnimationAssets.lookBlendSpace,
       idle_stand: templateAnimationAssets.idleStand,
@@ -1180,7 +1244,7 @@ _result = {
   if (request.plan.configureStandardAbp) {
     warnings.push(
       isAnimalTemplate
-        ? `将继承 ${ANIMAL_TEMPLATE_BLUEPRINT_NAME} / ${template.assetName}，复用模板动作集`
+        ? `将继承 ${ANIMAL_TEMPLATE_BLUEPRINT_NAME} / ${template.assetName}，并把 BP/ABP 重新绑定到 ${request.plan.source.skeletonAssetPath}；模板动作兼容性由蓝图编译和人工预览确认`
         : `将继承模板 ${template.assetName}，替换 Look、IdleStand、Impact、Interact`,
     );
   }
@@ -1194,6 +1258,7 @@ _result = {
     targetContentDirectory,
     skeletalMeshFound: Boolean(raw.skeletal_mesh_found),
     skeletonFound: Boolean(raw.skeleton_found),
+    skeletalMeshSkeletonAssetPath,
     npcBaseClassFound: Boolean(raw.npc_base_class_found),
     animationBlueprintParentClassFound: Boolean(
       raw.animation_blueprint_parent_class_found,

@@ -51,6 +51,7 @@ import { useStoryboardExport } from "./app/useStoryboardExport";
 import { useUeDialogueSelection } from "./app/useUeDialogueSelection";
 import { useWorkspaceNavigation } from "./app/useWorkspaceNavigation";
 import { useNavigationFeedback } from "./app/useNavigationFeedback";
+import { useStatusTooltips } from "./app/useStatusTooltips";
 import type {
   FormationOptionId,
   FormationSelectionId,
@@ -1921,6 +1922,7 @@ function ShotInspector({
 
 export default function App() {
   const navigationFeedback = useNavigationFeedback();
+  const statusTooltipsRef = useStatusTooltips();
   const [showLaunchScreen, setShowLaunchScreen] = useState(
     () =>
       window.sessionStorage.getItem(LAUNCH_SCREEN_STORAGE_KEY) !== "1",
@@ -2016,7 +2018,9 @@ export default function App() {
   const [showDesktopSetup, setShowDesktopSetup] = useState(false);
   const {
     activeWorkspace,
-    outgoingWorkspace,
+    shellRef,
+    visibleWorkspaces,
+    workspaceProps,
     workspaceDirection,
     switchWorkspace,
     closeToolWorkspace,
@@ -5026,6 +5030,8 @@ export default function App() {
   return (
     <main
       className="app-shell"
+      ref={shellRef}
+      {...navigationFeedback}
       data-ark-theme="endfield"
       data-ark-depth="moderate"
       data-active-workspace={activeWorkspace}
@@ -5193,12 +5199,11 @@ export default function App() {
           </div>
         </div>
 
-        <div className="app-header__status">
+        <div className="app-header__status" ref={statusTooltipsRef}>
           {activeWorkspace === "storyboard" && (
             <button
               className="workspace-status-icon configuration-mode-toggle"
               type="button"
-              title={configurationMode ? "返回完整窗口" : "进入配置小窗"}
               aria-label={
                 configurationMode ? "返回完整窗口" : "进入配置小窗"
               }
@@ -5273,21 +5278,7 @@ export default function App() {
       <div
         className="workspace"
         {...navigationFeedback}
-        data-workspace-state={
-          activeWorkspace === "storyboard"
-            ? outgoingWorkspace
-              ? "entering"
-              : "active"
-            : outgoingWorkspace === "storyboard"
-              ? "exiting"
-              : "inactive"
-        }
-        hidden={
-          activeWorkspace !== "storyboard" &&
-          outgoingWorkspace !== "storyboard"
-        }
-        aria-hidden={activeWorkspace !== "storyboard" || undefined}
-        inert={activeWorkspace !== "storyboard" || undefined}
+        {...workspaceProps("storyboard")}
       >
         {!configurationMode && (
           <aside className="left-panel">
@@ -6267,22 +6258,10 @@ export default function App() {
 
       {!configurationMode &&
         (loadedToolWorkspaces.has("npc") ||
-          activeWorkspace === "npc" ||
-          outgoingWorkspace === "npc") && (
+          visibleWorkspaces.has("npc")) && (
         <section
         className="tool-workspace"
-        data-workspace-state={
-          activeWorkspace === "npc"
-            ? outgoingWorkspace
-              ? "entering"
-              : "active"
-            : outgoingWorkspace === "npc"
-              ? "exiting"
-              : "inactive"
-        }
-        hidden={activeWorkspace !== "npc" && outgoingWorkspace !== "npc"}
-        aria-hidden={activeWorkspace !== "npc" || undefined}
-        inert={activeWorkspace !== "npc" || undefined}
+        {...workspaceProps("npc")}
         aria-label="NPC 注册工作区"
       >
           <Suspense fallback={<ToolWorkspaceLoading />}>
@@ -6296,25 +6275,10 @@ export default function App() {
 
       {!configurationMode &&
         (loadedToolWorkspaces.has("migration") ||
-          activeWorkspace === "migration" ||
-          outgoingWorkspace === "migration") && (
+          visibleWorkspaces.has("migration")) && (
         <section
         className="tool-workspace"
-        data-workspace-state={
-          activeWorkspace === "migration"
-            ? outgoingWorkspace
-              ? "entering"
-              : "active"
-            : outgoingWorkspace === "migration"
-              ? "exiting"
-              : "inactive"
-        }
-        hidden={
-          activeWorkspace !== "migration" &&
-          outgoingWorkspace !== "migration"
-        }
-        aria-hidden={activeWorkspace !== "migration" || undefined}
-        inert={activeWorkspace !== "migration" || undefined}
+        {...workspaceProps("migration")}
         aria-label="NPC 迁移工作区"
       >
           <Suspense fallback={<ToolWorkspaceLoading />}>
@@ -6325,25 +6289,10 @@ export default function App() {
 
       {!configurationMode &&
         (loadedToolWorkspaces.has("targets") ||
-          activeWorkspace === "targets" ||
-          outgoingWorkspace === "targets") && (
+          visibleWorkspaces.has("targets")) && (
         <section
         className="tool-workspace"
-        data-workspace-state={
-          activeWorkspace === "targets"
-            ? outgoingWorkspace
-              ? "entering"
-              : "active"
-            : outgoingWorkspace === "targets"
-              ? "exiting"
-              : "inactive"
-        }
-        hidden={
-          activeWorkspace !== "targets" &&
-          outgoingWorkspace !== "targets"
-        }
-        aria-hidden={activeWorkspace !== "targets" || undefined}
-        inert={activeWorkspace !== "targets" || undefined}
+        {...workspaceProps("targets")}
         aria-label="任务目标物工作区"
       >
           <Suspense fallback={<ToolWorkspaceLoading />}>
@@ -6357,13 +6306,10 @@ export default function App() {
       )}
 
       {!configurationMode &&
-        (loadedToolWorkspaces.has("animation") || activeWorkspace === "animation" || outgoingWorkspace === "animation") && (
+        (loadedToolWorkspaces.has("animation") || visibleWorkspaces.has("animation")) && (
         <section
           className="tool-workspace"
-          data-workspace-state={activeWorkspace === "animation" ? outgoingWorkspace ? "entering" : "active" : outgoingWorkspace === "animation" ? "exiting" : "inactive"}
-          hidden={activeWorkspace !== "animation" && outgoingWorkspace !== "animation"}
-          aria-hidden={activeWorkspace !== "animation" || undefined}
-          inert={activeWorkspace !== "animation" || undefined}
+          {...workspaceProps("animation")}
           aria-label="动画语音工作区"
         >
           <Suspense fallback={<ToolWorkspaceLoading />}>

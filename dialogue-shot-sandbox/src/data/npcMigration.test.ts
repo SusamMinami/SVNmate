@@ -296,7 +296,7 @@ describe("NPC migration planning", () => {
           skeletalMeshPackageName:
             "/Game/Seria/BioSystems/E05_Cat/SK_E05_Cat01",
           skeletonAssetPath:
-            "/Game/Seria/BioSystems/E05_Cat/SKEL_E05_Cat.SKEL_E05_Cat",
+            "/Game/Seria/BioSystems/E05_Cat/SKEL_E05_Cat01.SKEL_E05_Cat01",
           suggestedNpcName: "E05_Cat01",
           suggestedTargetPackagePath:
             "/Game/Seria/BioSystems/E05_Cat",
@@ -335,7 +335,34 @@ describe("NPC migration planning", () => {
     });
     expect(plan.blockedReasons).toEqual([]);
     expect(plan.warnings.join("\n")).toContain("R40 / H40");
-    expect(plan.warnings.join("\n")).toContain("SKEL_E05_Cat");
+    expect(plan.warnings.join("\n")).toContain(
+      "SKEL_E05_Cat01.SKEL_E05_Cat01",
+    );
+    expect(plan.warnings.join("\n")).toContain("绑定所选 Mesh 自带的 Skeleton");
+  });
+
+  it("reuses identical target files without blocking migration", () => {
+    const plan = buildNpcMigrationPlan(
+      request(),
+      {
+        animationFiles: [
+          "D:/Anim/A_N28_Citizen_Male_C_Idle.fbx",
+        ],
+        fileOperations: [operation("unchanged")],
+        targetDirectoryReady: true,
+        animationDirectoryReady: true,
+      },
+    );
+
+    expect(plan.canMigrate).toBe(true);
+    expect(plan.blockedReasons).toEqual([]);
+    expect(plan.warnings.join("\n")).toContain(
+      "已有 1 个内容一致的文件，将直接复用",
+    );
+    expect(plan.steps.find((step) => step.id === "migration")).toMatchObject({
+      state: "ready",
+      detail: "复制 0 个，复用 1 个",
+    });
   });
 
   it("blocks dirty source packages, target conflicts and missing body FBX", () => {
@@ -358,7 +385,9 @@ describe("NPC migration planning", () => {
     expect(plan.canMigrate).toBe(false);
     expect(plan.canConfigure).toBe(false);
     expect(plan.blockedReasons.join("\n")).toContain("尚未保存");
-    expect(plan.blockedReasons.join("\n")).toContain("不会覆盖");
+    expect(plan.blockedReasons.join("\n")).toContain(
+      "同路径文件与源文件不同",
+    );
     expect(plan.blockedReasons.join("\n")).toContain("Body FBX");
   });
 });

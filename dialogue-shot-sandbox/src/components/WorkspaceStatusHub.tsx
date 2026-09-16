@@ -9,6 +9,7 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { useStatusPopover } from "../app/useStatusPopover";
 import type { DirectorMode } from "../director/contracts";
 import type { LarkStatus } from "../lark/client";
 import type { TraeCollaborationStatus } from "../trae/client";
@@ -79,7 +80,7 @@ export function WorkspaceStatusHub({
   configurationDataStatus,
   disabled = false,
 }: WorkspaceStatusHubProps) {
-  const [open, setOpen] = useState(false);
+  const popover = useStatusPopover(disabled || Boolean(configurationDataStatus));
   const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);
   const [queueBusy, setQueueBusy] = useState(false);
   const [queueError, setQueueError] = useState("");
@@ -87,7 +88,6 @@ export function WorkspaceStatusHub({
     useState<ConfigurationDataStatus["activity"]>("idle");
   const activityReleaseTimerRef =
     useRef<ReturnType<typeof globalThis.setTimeout> | null>(null);
-  const rootRef = useRef<HTMLDivElement>(null);
   const activeTasks =
     traeStatus?.tasks ??
     (traeStatus?.queue ?? []).map((task) => ({
@@ -171,37 +171,6 @@ export function WorkspaceStatusHub({
     };
   }, [configurationDataStatus?.activity]);
 
-  useEffect(() => {
-    if (disabled || configurationDataStatus) {
-      setOpen(false);
-    }
-  }, [configurationDataStatus, disabled]);
-
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-    const closeOnOutsidePointer = (event: PointerEvent) => {
-      if (
-        event.target instanceof Node &&
-        !rootRef.current?.contains(event.target)
-      ) {
-        setOpen(false);
-      }
-    };
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setOpen(false);
-      }
-    };
-    document.addEventListener("pointerdown", closeOnOutsidePointer);
-    document.addEventListener("keydown", closeOnEscape);
-    return () => {
-      document.removeEventListener("pointerdown", closeOnOutsidePointer);
-      document.removeEventListener("keydown", closeOnEscape);
-    };
-  }, [open]);
-
   async function movePendingTask(targetRequestId: string) {
     if (
       !draggingTaskId ||
@@ -267,7 +236,7 @@ export function WorkspaceStatusHub({
   }
 
   return (
-    <div className="workspace-status-hub" ref={rootRef}>
+    <div className="workspace-status-hub" ref={popover.rootRef}>
       {configurationDataStatus ? (
         <div
           className="workspace-status-icon workspace-status-icon--data"
@@ -275,7 +244,6 @@ export function WorkspaceStatusHub({
           data-activity={displayedActivity}
           role="status"
           tabIndex={0}
-          title={configurationStatusLabel}
           aria-label={configurationStatusLabel}
         >
           <SquareTerminal
@@ -300,9 +268,8 @@ export function WorkspaceStatusHub({
           type="button"
           aria-label="协作连接状态"
           aria-haspopup="dialog"
-          aria-expanded={!disabled && open}
+          {...popover.triggerProps}
           disabled={disabled}
-          onClick={() => setOpen((current) => !current)}
         >
           {providerLoading ? (
             <LoaderCircle className="spin" size={17} />
@@ -315,9 +282,10 @@ export function WorkspaceStatusHub({
         </button>
       )}
 
-      {open && !disabled && !configurationDataStatus && (
+      {!disabled && !configurationDataStatus && (
         <section
           className="workspace-status-popover"
+          {...popover.panelProps}
           role="dialog"
           aria-label="协作连接状态"
         >
