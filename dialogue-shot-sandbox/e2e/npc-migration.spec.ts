@@ -3,32 +3,104 @@ import { expect, test } from "@playwright/test";
 test("opens the NPC migration workspace without layout overflow", async ({
   page,
 }, testInfo) => {
+  const source = {
+    sourceProjectFile: "D:/Seria/Art/Art.uproject",
+    sourceContentDirectory: "D:/Seria/Art/Content",
+    skeletalMeshName: "SK_N28_Citizen_Male_C",
+    skeletalMeshAssetPath:
+      "/Game/Seria/NPC/N28/SK_N28_Citizen_Male_C.SK_N28_Citizen_Male_C",
+    skeletalMeshPackageName:
+      "/Game/Seria/NPC/N28/SK_N28_Citizen_Male_C",
+    skeletonAssetPath:
+      "/Game/Seria/NPC/N28/SKEL_N28_Citizen_Male_C.SKEL_N28_Citizen_Male_C",
+    physicsAssetPath: "",
+    materialAssetPaths: [],
+    dependencyPackageNames: [
+      "/Game/Seria/NPC/N28/SK_N28_Citizen_Male_C",
+    ],
+    sourceFiles: [],
+    dirtyPackageNames: [],
+    suggestedNpcName: "N28_Citizen_Male_C",
+    suggestedTargetPackagePath: "/Game/Seria/NPC/N28",
+    warnings: [],
+  };
   await page.route("**/api/ue/npc-migration/source-scan", (route) =>
     route.fulfill({
       status: 200,
       contentType: "application/json",
       body: JSON.stringify({
         ok: true,
+        data: source,
+      }),
+    }),
+  );
+  await page.route("**/api/ue/npc-migration/plan", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
         data: {
-          sourceProjectFile: "D:/Seria/Art/Art.uproject",
-          sourceContentDirectory: "D:/Seria/Art/Content",
-          skeletalMeshName: "SK_N28_Citizen_Male_C",
-          skeletalMeshAssetPath:
-            "/Game/Seria/NPC/N28/SK_N28_Citizen_Male_C.SK_N28_Citizen_Male_C",
-          skeletalMeshPackageName:
-            "/Game/Seria/NPC/N28/SK_N28_Citizen_Male_C",
-          skeletonAssetPath:
-            "/Game/Seria/NPC/N28/SKEL_N28_Citizen_Male_C.SKEL_N28_Citizen_Male_C",
-          physicsAssetPath: "",
-          materialAssetPaths: [],
-          dependencyPackageNames: [
-            "/Game/Seria/NPC/N28/SK_N28_Citizen_Male_C",
+          reviewToken: "a".repeat(64),
+          source,
+          npcName: "N28_Citizen_Male_C",
+          animationName: "N28_Citizen_Male_C",
+          animationPrefix: "A_N28_Citizen_Male_C_",
+          targetContentDirectory: "D:/Seria/res/Content",
+          targetPackagePath: "/Game/Seria/NPC/N28",
+          blueprintPackagePath: "/Game/Seria/NPC/N28",
+          animationSourceDirectory: "D:/FBX/N28/Animation",
+          animationPackagePath: "/Game/Seria/NPC/N28/Animation",
+          animationBlueprintPackagePath:
+            "/Game/Seria/NPC/N28/Animation",
+          montagePackagePath: "/Game/Seria/NPC/N28/Animation",
+          blueprintName: "BP_N28_Citizen_Male_C",
+          animationBlueprintName: "ABP_N28_Citizen_Male_C",
+          bodyAnimationFiles: [
+            "D:/FBX/N28/Animation/A_N28_Citizen_Male_C_Idlestand.fbx",
           ],
-          sourceFiles: [],
-          dirtyPackageNames: [],
-          suggestedNpcName: "N28_Citizen_Male_C",
-          suggestedTargetPackagePath: "/Game/Seria/NPC/N28",
-          warnings: [],
+          faceAnimationFiles: [],
+          montages: [],
+          configureStandardAbp: true,
+          standardAbpTemplate: "male",
+          lookBlendSpaceName: "BS_N28_Citizen_Male_C_Look",
+          animationRoleAssets: {
+            lookDown: "",
+            lookForward: "",
+            lookUp: "",
+            idleStand: "A_N28_Citizen_Male_C_Idlestand",
+            impact: "",
+            interact: "",
+            walk: "",
+          },
+          fileOperations: [],
+          steps: [
+            {
+              id: "source",
+              label: "采集 Skeletal Mesh 与依赖",
+              mode: "automatic",
+              state: "ready",
+              detail: "1 个包，0 个物理文件",
+            },
+            {
+              id: "animations",
+              label: "导入 Body / Face 动作",
+              mode: "automatic",
+              state: "blocked",
+              detail: "1 个 Body FBX，0 个 Face FBX",
+            },
+            {
+              id: "blueprint",
+              label: "创建并配置 NPC BP",
+              mode: "automatic",
+              state: "ready",
+              detail: "BP_N28_Citizen_Male_C",
+            },
+          ],
+          canMigrate: false,
+          canConfigure: false,
+          blockedReasons: ["标准 ABP 缺少动作：lookDown、lookForward"],
+          warnings: ["胶囊体将按 Mesh 包围盒估算，完成后仍需在蓝图视口确认"],
         },
       }),
     }),
@@ -57,6 +129,15 @@ test("opens the NPC migration workspace without layout overflow", async ({
     fullPage: true,
   });
   await page.getByRole("button", { name: /全新 NPC/ }).click();
+  await page.evaluate(() => {
+    window.shotSandboxDesktop = {
+      resolveNpcAnimationDirectory: async () => ({
+        directoryPath: "D:/FBX/N28/Animation",
+        matchedFileCount: 7,
+        candidateDirectories: ["D:/FBX/N28/Animation"],
+      }),
+    } as unknown as NonNullable<Window["shotSandboxDesktop"]>;
+  });
   await expect(
     page.getByRole("button", { name: "读取源资产" }),
   ).toBeVisible();
@@ -71,9 +152,12 @@ test("opens the NPC migration workspace without layout overflow", async ({
     page.getByText("ABP_N28_Citizen_Male_C", { exact: true }),
   ).toBeVisible();
   await expect(
-    page.getByText("自动估算胶囊体"),
+    page.getByRole("textbox", { name: "动作 FBX 目录" }),
+  ).toHaveValue("D:/FBX/N28/Animation");
+  await expect(
+    page.getByText("动作库自动匹配", { exact: true }),
   ).toBeVisible();
-  await expect(page.getByText("标准 NPC ABP 模板")).toBeVisible();
+  await expect(page.getByText("NPC 类型", { exact: true })).toBeVisible();
   await expect(
     page.getByRole("button", { name: "男性" }),
   ).toHaveAttribute("aria-pressed", "true");
@@ -85,6 +169,28 @@ test("opens the NPC migration workspace without layout overflow", async ({
   await expect(
     page.getByRole("button", { name: "检查迁移计划" }),
   ).toBeEnabled();
+  await page
+    .getByRole("textbox", { name: "目标工程 Content", exact: true })
+    .fill("D:/Seria/res/Content");
+  await page.getByRole("button", { name: "检查迁移计划" }).click();
+  await expect(
+    page.locator(".npc-migration-section").filter({ hasText: "源资产" }),
+  ).toHaveAttribute("data-collapsed", "true");
+  await expect(
+    page.locator(".npc-migration-section").filter({ hasText: "迁移参数" }),
+  ).toHaveAttribute("data-collapsed", "true");
+  await expect(
+    page.locator(".npc-migration-steps .npc-migration-step").first(),
+  ).toContainText("导入 Body / Face 动作");
+  await expect(
+    page.locator(".npc-migration-review").getByText("人工确认"),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "校验资产" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "配置 BP 文件" }),
+  ).toBeVisible();
   await page.waitForTimeout(850);
 
   const layout = page.locator(".npc-migration-layout");
@@ -162,11 +268,10 @@ test("selects the animal migration profile for an E05 cat mesh", async ({
   await expect(
     page.getByText("/Game/Seria/NPC/E05_Cat", { exact: true }),
   ).toBeVisible();
+  await page.getByText("高级配置", { exact: true }).click();
   await expect(page.getByText("套用模板胶囊体")).toBeVisible();
 
-  const segment = page.getByRole("group", {
-    name: "标准 NPC ABP 模板",
-  });
+  const segment = page.getByRole("group", { name: "NPC 类型" });
   expect(
     await segment.locator("button").evaluateAll((buttons) =>
       buttons.map((button) => ({

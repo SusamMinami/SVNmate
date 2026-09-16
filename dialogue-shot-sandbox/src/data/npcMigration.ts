@@ -358,10 +358,13 @@ export function buildNpcMigrationPlan(
     standardAbpTemplate,
   );
   const isAnimal = standardAbpTemplate === "animal";
-  const classifiedAnimations = classifyNpcAnimationFiles(
-    discovered.animationFiles,
+  const matchingAnimationFiles = discovered.animationFiles.filter((file) =>
+    fileStem(file).toLowerCase().startsWith(animationPrefix.toLowerCase()),
   );
-  const body = isAnimal ? [] : classifiedAnimations.body;
+  const classifiedAnimations = classifyNpcAnimationFiles(
+    matchingAnimationFiles,
+  );
+  const body = classifiedAnimations.body;
   const face = classifiedAnimations.face;
   const { montages, duplicateNames } = buildNpcMontagePlans(
     animationName,
@@ -376,13 +379,23 @@ export function buildNpcMigrationPlan(
   const {
     assets: animationRoleAssets,
   } = animationRoles;
-  const missingRoles = isAnimal ? [] : animationRoles.missingRoles;
-  const duplicateRoles = isAnimal ? [] : animationRoles.duplicateRoles;
+  const usesAnimalSourceAnimations =
+    isAnimal && Boolean(animationSourceDirectory);
+  const missingRoles =
+    isAnimal && !usesAnimalSourceAnimations
+      ? []
+      : animationRoles.missingRoles;
+  const duplicateRoles =
+    isAnimal && !usesAnimalSourceAnimations
+      ? []
+      : animationRoles.duplicateRoles;
   const lookBlendSpaceName = isAnimal
     ? ""
     : `BS_${npcName}_Look`;
   const blockedReasons: string[] = [];
   const warnings = [...request.source.warnings];
+  const ignoredAnimationCount =
+    discovered.animationFiles.length - matchingAnimationFiles.length;
 
   if (!ASSET_NAME_PATTERN.test(npcName)) {
     blockedReasons.push("NPC 名称只能包含英文字母、数字和下划线");
@@ -453,14 +466,19 @@ export function buildNpcMigrationPlan(
       `目标 Content 中已有 ${unchangedFiles.length} 个内容一致的文件，将直接复用`,
     );
   }
-  if (!isAnimal && !discovered.animationDirectoryReady) {
+  if (!discovered.animationDirectoryReady) {
     blockedReasons.push("动作源目录不存在或无法读取");
-  } else if (!isAnimal && body.length === 0) {
+  } else if ((!isAnimal || usesAnimalSourceAnimations) && body.length === 0) {
     blockedReasons.push("动作源目录中没有可导入的 Body FBX");
   }
   if (face.length > 0) {
     warnings.push(
       `检测到 ${face.length} 个 Face FBX；将导入并锁定根骨骼，表情曲线仍需通过 BP_FaceConfigHelper 生成`,
+    );
+  }
+  if (ignoredAnimationCount > 0) {
+    warnings.push(
+      `动作目录中已忽略 ${ignoredAnimationCount} 个不属于 ${animationPrefix} 前缀的 FBX`,
     );
   }
   if (montages.length === 0) {
@@ -478,7 +496,9 @@ export function buildNpcMigrationPlan(
   warnings.push(
     configureStandardAbp
       ? isAnimal
-        ? "将复制 BP_E05_CAT01_NPC / ABP_E05_CAT01_NPC，并复用模板动作集"
+        ? body.length > 0
+          ? `将复制 BP_E05_CAT01_NPC / ABP_E05_CAT01_NPC，导入 ${body.length} 个新 NPC 动作，并替换模板 IdleStand / Walk`
+          : "将复制 BP_E05_CAT01_NPC / ABP_E05_CAT01_NPC，并复用模板动作集"
         : `将使用${
             standardAbpTemplate === "male" ? "男性" : "女性"
           }标准模板配置状态机、Look 和 SpecialAction`
@@ -541,10 +561,14 @@ export function buildNpcMigrationPlan(
       "animations",
       "导入 Body / Face 动作",
       isAnimal
-        ? `复用 ${animationPrefix} 模板动作集`
+        ? body.length > 0
+          ? `${body.length} 个 ${animationPrefix} Body FBX`
+          : `未提供新动作，复用 ${animationPrefix} 模板动作集`
         : `${body.length} 个 Body FBX，${face.length} 个 Face FBX`,
-      !isAnimal &&
-        (!discovered.animationDirectoryReady || body.length === 0),
+      !discovered.animationDirectoryReady ||
+        ((!isAnimal || usesAnimalSourceAnimations) && body.length === 0) ||
+        (configureStandardAbp &&
+          (missingRoles.length > 0 || duplicateRoles.length > 0)),
     ),
     automaticStep(
       "blueprint",

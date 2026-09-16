@@ -9249,7 +9249,6 @@ textarea:focus-visible {
   min-width: 0;
   min-height: 0;
   flex-direction: column;
-  padding-top: 58px;
   color: var(--ink);
   background: #f2f2f0;
 }
@@ -9258,24 +9257,27 @@ textarea:focus-visible {
   overflow: hidden;
 }
 
-.npc-migration-mode-workspace .workspace-subview-title {
-  left: 158px;
-}
-
 .npc-migration-mode-shell {
   display: grid;
   flex: 1 1 auto;
   min-height: 0;
-  padding: 46px clamp(28px, 5vw, 76px) 58px
+  padding: 42px clamp(28px, 5vw, 76px) 58px
     clamp(150px, 12vw, 180px);
   align-content: center;
 }
 
 .npc-migration-mode-shell > header {
-  display: grid;
-  gap: 5px;
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 16px;
   padding-bottom: 14px;
   border-bottom: 1px solid #c9cac4;
+}
+
+.npc-migration-mode-shell > header > div {
+  display: grid;
+  gap: 5px;
 }
 
 .npc-migration-mode-shell > header strong {
@@ -9414,7 +9416,7 @@ textarea:focus-visible {
 .npc-migration-layout {
   display: grid;
   flex: 1 1 auto;
-  grid-template-columns: 270px minmax(480px, 1fr) 340px;
+  grid-template-columns: 300px minmax(460px, 1fr) 310px;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -9459,6 +9461,10 @@ textarea:focus-visible {
   background: var(--danger);
 }
 
+.npc-migration-step.is-action-required::before {
+  background: var(--danger);
+}
+
 .npc-migration-step > span {
   color: #656862;
   font: 700 10px/22px "Cascadia Code", Consolas, monospace;
@@ -9499,6 +9505,35 @@ textarea:focus-visible {
   text-align: center;
 }
 
+.npc-migration-step.is-blocked em,
+.npc-migration-step.is-action-required em {
+  color: #8d401f;
+  background: #fff1e9;
+  border-color: #dfaa94;
+}
+
+.npc-migration-step__notices {
+  display: grid;
+  gap: 5px;
+  padding: 0;
+  margin: 8px 0 0;
+  list-style: none;
+}
+
+.npc-migration-step__notices li {
+  padding-top: 5px;
+  color: #676a64;
+  border-top: 1px solid #d6d7d1;
+  font-size: 9px;
+  line-height: 14px;
+}
+
+.npc-migration-step__notices li.is-blocked,
+.npc-migration-step__notices li.is-action {
+  color: #8d401f;
+  border-top-color: #dfaa94;
+}
+
 .npc-migration-editor {
   background: #ffffff;
 }
@@ -9516,6 +9551,79 @@ textarea:focus-visible {
   padding: 10px 16px;
   background: #f7f7f5;
   border-bottom: 1px solid #d9dad5;
+}
+
+.npc-migration-section__header {
+  justify-content: space-between;
+  padding: 0 10px 0 0 !important;
+}
+
+.npc-migration-section__toggle {
+  display: grid;
+  flex: 1 1 auto;
+  grid-template-columns: 17px minmax(0, 1fr) 15px;
+  align-items: center;
+  gap: 9px;
+  min-height: 49px;
+  padding: 8px 12px 8px 16px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.npc-migration-section__toggle > span {
+  display: grid;
+  min-width: 0;
+}
+
+.npc-migration-section__toggle > span > strong {
+  font-size: 11px;
+}
+
+.npc-migration-section__toggle > span > small {
+  overflow: hidden;
+  margin-top: 2px;
+  color: #858881;
+  font: 8px/1 "Cascadia Code", Consolas, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.npc-migration-section__toggle > svg:last-child {
+  color: #747770;
+  transition: transform 160ms ease;
+}
+
+.npc-migration-section__toggle[aria-expanded="false"] > svg:last-child {
+  transform: rotate(-90deg);
+}
+
+.npc-migration-section__toggle:hover {
+  background: #eeeeeb;
+}
+
+.npc-migration-section__toggle:focus-visible {
+  outline-offset: -2px;
+  outline: 2px solid var(--ark-cyan);
+}
+
+.npc-migration-section__actions {
+  display: flex !important;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.npc-migration-section__actions .button,
+.npc-migration-section__actions .icon-button {
+  min-height: 32px;
+  height: 32px;
+}
+
+.npc-migration-section[data-collapsed="true"] > header {
+  border-bottom: 0;
 }
 
 .npc-migration-section > header > div,
@@ -9633,6 +9741,19 @@ textarea:focus-visible {
   gap: 10px;
 }
 
+.npc-migration-form__paths {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.npc-migration-form label > span em {
+  margin-left: 6px;
+  color: #256548;
+  font-size: 8px;
+  font-style: normal;
+}
+
 .npc-migration-derived,
 .npc-migration-derived-names > div {
   display: grid;
@@ -9677,14 +9798,28 @@ textarea:focus-visible {
   border: 1px solid #d5d6d0;
 }
 
-.npc-migration-template-row {
+.npc-migration-type-choice {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 186px;
+  grid-template-columns: minmax(0, 1fr) 220px;
   align-items: center;
-  min-height: 36px;
-  gap: 10px;
-  padding: 0 0 1px;
+  gap: 16px;
+  padding: 14px 16px;
   border-bottom: 1px solid #dedfda;
+}
+
+.npc-migration-type-choice > div:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.npc-migration-type-choice > div:first-child strong {
+  font-size: 11px;
+}
+
+.npc-migration-type-choice > div:first-child small {
+  color: #70736d;
+  font-size: 9px;
+  line-height: 14px;
 }
 
 .npc-migration-template-toggle {
@@ -9706,7 +9841,7 @@ textarea:focus-visible {
 
 .npc-migration-template-segment {
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  width: 186px;
+  width: 220px;
 }
 
 .npc-migration-template-segment button {
@@ -9714,6 +9849,63 @@ textarea:focus-visible {
   height: 28px;
   padding: 0 8px;
   font-size: 9px;
+}
+
+.npc-migration-advanced {
+  border-bottom: 1px solid #d4d5d0;
+}
+
+.npc-migration-advanced > summary {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) 15px;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 7px 16px;
+  color: #5b5e58;
+  background: #f7f7f5;
+  cursor: pointer;
+  list-style: none;
+}
+
+.npc-migration-advanced > summary::-webkit-details-marker {
+  display: none;
+}
+
+.npc-migration-advanced > summary > span {
+  display: grid;
+  gap: 2px;
+}
+
+.npc-migration-advanced > summary strong {
+  font-size: 10px;
+}
+
+.npc-migration-advanced > summary small {
+  color: #858881;
+  font-size: 8px;
+}
+
+.npc-migration-advanced > summary > svg:last-child {
+  transition: transform 160ms ease;
+}
+
+.npc-migration-advanced[open] > summary > svg:last-child {
+  transform: rotate(180deg);
+}
+
+.npc-migration-advanced > summary:hover {
+  background: #eeeeeb;
+  color: var(--ink);
+}
+
+.npc-migration-advanced > summary:focus-visible {
+  outline-offset: -2px;
+  outline: 2px solid var(--ark-cyan);
+}
+
+.npc-migration-advanced .npc-migration-form {
+  border-top: 1px solid #dedfda;
 }
 
 .npc-migration-options label {
@@ -9973,6 +10165,36 @@ textarea:focus-visible {
   padding: 10px 14px;
   background: #f7f7f5;
   border-bottom: 1px solid #d9dad5;
+}
+
+.npc-supplement-setup section > header.npc-supplement-target-header {
+  justify-content: space-between;
+  padding: 8px 10px 8px 14px;
+}
+
+.npc-supplement-section-title {
+  display: flex !important;
+  align-items: center;
+  gap: 9px !important;
+}
+
+.npc-supplement-section-title > span {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.npc-supplement-section-actions {
+  display: flex !important;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px !important;
+}
+
+.npc-supplement-section-actions .button,
+.npc-supplement-section-actions .icon-button {
+  min-height: 32px;
+  height: 32px;
 }
 
 .npc-supplement-setup section > header > div,

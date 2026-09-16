@@ -28,8 +28,10 @@ NPC 迁移可以自动化，但不能安全地压缩成一次无审核的写入�
 
 动物 NPC 是同一两阶段管线中的独立模板配置。首版以
 `BP_E05_CAT01_NPC` / `ABP_E05_CAT01_NPC` 为逻辑模板；新 BP/ABP 绑定所选
-Skeletal Mesh 自带的 Skeleton。它复用模板动作集和 `AM_Sleep`，不套用人形
-Look 与 SpecialAction 规则；模板动作兼容性由蓝图编译和人工预览确认。
+Skeletal Mesh 自带的 Skeleton。动作库命中当前 NPC 时，会导入对应 Body FBX，
+并用新 NPC 的 IdleStand / Walk 替换模板状态机引用；未命中时才复用模板动作集。
+`AM_Sleep` 继续来自模板，不套用人形 Look 与 SpecialAction 规则；动作兼容性由
+蓝图编译和人工预览确认。
 
 ## 工作区分流
 
@@ -139,8 +141,9 @@ Interact 替换为当前 NPC 资产。这样不依赖编辑器剪贴板，并能
 
 例如读取 `SK_E05_Cat02` 后，工具生成
 `BP_E05_CAT02_NPC` / `ABP_E05_CAT02_NPC`，但动作族仍为 `E05_Cat`。
-完整迁移不重复导入共享动作；后续动作更新通过“动作补充与修改”读取
-`A_E05_Cat_*.fbx`，并同时扫描 BioSystems 动作目录和 NPC Montage 目录。
+完整迁移在动作库命中时导入 `A_<NPC>_*.fbx`，至少使用 IdleStand / Walk 替换
+模板状态机引用；动作库未命中时复用猫模板动作。后续动作更新通过“动作补充与修改”
+处理，并同时扫描 BioSystems 动作目录和 NPC Montage 目录。
 
 动物 BP 与 ABP 均从模板复制，以保留专用事件图、状态机和 `AM_Sleep` 引用。
 复制后会把 Mesh 与 ABP 重新绑定到新 NPC 自带的 Skeleton。模板中的动作引用
@@ -154,6 +157,9 @@ Interact 替换为当前 NPC 资产。这样不依赖编辑器剪贴板，并能
 - 源依赖存在未保存包时阻断。
 - 目标目录必须是现有 Unreal 项目的 `Content` 目录。
 - 跨工程复制保持原始 `/Game` 包路径，不支持在复制时改目录。
+- Mesh 位于 `<NPC>/body` 等子目录时，BP 与 Animation 仍以匹配到的 NPC
+  命名目录为根，不把模型分类目录当作目标根目录。
+- 动作目录只导入匹配当前 `A_<NPC>_` 前缀的 FBX；同目录其他 NPC 文件会忽略。
 - 目标同路径文件与源文件内容一致时复用；内容不同时阻断，不执行覆盖。
 - 使用 SHA-256 审核令牌；参数变化后必须重新预检。
 - BP 或 ABP 已存在时阻断，避免覆盖人工资产。
@@ -199,7 +205,8 @@ Montage 按动作语义处理：
 `make_npc_montage_by_anim_sequence`，随后按上述规则写入并回读 Slot；仅当原生
 接口不可用时才尝试 UE Python 工厂兼容路径。
 
-桌面版设置允许维护多个“NPC 动作库”根目录。读取 NPC 目标后，工具会递归查找
+桌面版设置允许维护多个“NPC 动作库”根目录。读取全新 NPC 源资产或已有 NPC
+目标后，工具会递归查找
 文件名以 `A_<NPC名>_` 开头的 Body FBX，并自动填入目录、生成清单。多个目录
 都包含该 NPC 时，优先选择 Body FBX 数量最多的目录；数量相同则选择最近有源
 文件更新的目录。若 Body 和 Face 分别位于同级 `Body` / `Face` 或
@@ -246,8 +253,9 @@ LookD、LookF、LookU 会自动设置为 Mesh Space Additive，以 LookF 第 15 
 1. 启动镜头沙盘和美术 UE，打开 `OmniMcpCore`。
 2. 在美术 UE 内容浏览器中只选择一个 `SK_` 资产。
 3. 进入“NPC 迁移”，读取源资产，选择策划工程 `Content` 与对应动作
-   `Animation` 目录。
+   `Animation` 目录；已配置 NPC 动作库且命中时，动作目录自动填入。
 4. 检查计划并执行“迁移基础资产”。
-5. 关闭美术 UE，启动策划 UE 和 `OmniMcpCore`。
-6. 校验策划 UE，通过后执行目标配置。
+5. 关闭美术 Art UE，启动目标 Res UE 和 `OmniMcpCore`。
+6. 点击“校验资产”，通过后点击“配置 BP 文件”。如果仍连接 Art UE，工具会
+   明确提示关闭 Art、打开目标 Res 并重新校验。
 7. 按工具给出的最终清单完成视觉和动作语义复核。

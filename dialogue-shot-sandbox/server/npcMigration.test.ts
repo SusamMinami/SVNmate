@@ -125,6 +125,45 @@ describe("NPC migration server workflow", () => {
     expect(connection.closed).toBe(true);
   });
 
+  it("uses the NPC package root when the selected mesh is inside a body folder", async () => {
+    const connection = new FakeNpcMigrationConnection({
+      source_project_file: "D:/Seria/Art/Art.uproject",
+      source_content_directory: "D:/Seria/Art/Content",
+      skeletal_mesh_name: "SK_N132_Nobledog",
+      skeletal_mesh_asset_path:
+        "/Game/Seria/BioSystems/N132_Nobledog/body/SK_N132_Nobledog.SK_N132_Nobledog",
+      skeletal_mesh_package_name:
+        "/Game/Seria/BioSystems/N132_Nobledog/body/SK_N132_Nobledog",
+      skeleton_asset_path:
+        "/Game/Seria/BioSystems/N132_Nobledog/body/SKEL_N132_Nobledog.SKEL_N132_Nobledog",
+      physics_asset_path: "",
+      material_asset_paths: [],
+      dependency_package_names: [
+        "/Game/Seria/BioSystems/N132_Nobledog/body/SK_N132_Nobledog",
+      ],
+      source_files: [
+        {
+          package_name:
+            "/Game/Seria/BioSystems/N132_Nobledog/body/SK_N132_Nobledog",
+          source_path:
+            "D:/Seria/Art/Content/Seria/BioSystems/N132_Nobledog/body/SK_N132_Nobledog.uasset",
+          relative_path:
+            "Seria/BioSystems/N132_Nobledog/body/SK_N132_Nobledog.uasset",
+          size: 42,
+        },
+      ],
+      dirty_package_names: [],
+    });
+
+    await expect(
+      scanNpcMigrationSource(() => connection),
+    ).resolves.toMatchObject({
+      suggestedNpcName: "N132_Nobledog",
+      suggestedTargetPackagePath:
+        "/Game/Seria/BioSystems/N132_Nobledog",
+    });
+  });
+
   it("plans and copies assets without overwriting target files", async () => {
     const root = await temporaryDirectory();
     const sourceContent = join(root, "Art", "Content");
@@ -243,7 +282,7 @@ describe("NPC migration server workflow", () => {
     ).rejects.toThrow("迁移计划已变化");
   });
 
-  it("blocks target configuration when the connected UE project differs", async () => {
+  it("distinguishes the Art UE from another incorrect target project", async () => {
     const plan = {
       reviewToken: "",
       targetContentDirectory: "D:/Seria/res/Content",
@@ -276,7 +315,18 @@ describe("NPC migration server workflow", () => {
       targetContentDirectory: "D:/missing/Content",
       animationSourceDirectory: "D:/missing/Animation",
     });
-    const connection = new FakeNpcMigrationConnection({
+    const artConnection = new FakeNpcMigrationConnection({
+      target_project_file: "D:/Seria/Art/Art.uproject",
+      target_content_directory: "D:/Seria/Art/Content",
+      skeletal_mesh_found: true,
+      skeleton_found: true,
+      skeletal_mesh_skeleton_asset_path:
+        "/Game/Seria/NPC/N28/SKEL_N28.SKEL_N28",
+      npc_base_class_found: true,
+      animation_blueprint_parent_class_found: true,
+      existing_asset_paths: [],
+    });
+    const otherConnection = new FakeNpcMigrationConnection({
       target_project_file: "E:/Other/Other.uproject",
       target_content_directory: "E:/Other/Content",
       skeletal_mesh_found: true,
@@ -288,7 +338,7 @@ describe("NPC migration server workflow", () => {
       existing_asset_paths: [],
     });
 
-    const result = await inspectNpcMigrationTarget(
+    const artResult = await inspectNpcMigrationTarget(
       {
         plan: inspectedPlan,
         reviewToken: inspectedPlan.reviewToken,
@@ -296,13 +346,27 @@ describe("NPC migration server workflow", () => {
         animationBlueprintParentClassPath:
           "/Script/Seria.SeriaNPCAnimInstance",
       },
-      () => connection,
+      () => artConnection,
+    );
+    const otherResult = await inspectNpcMigrationTarget(
+      {
+        plan: inspectedPlan,
+        reviewToken: inspectedPlan.reviewToken,
+        npcBaseClassPath: "/Game/Seria/BP_NPCBase.BP_NPCBase_C",
+        animationBlueprintParentClassPath:
+          "/Script/Seria.SeriaNPCAnimInstance",
+      },
+      () => otherConnection,
     );
 
-    expect(result.blockedReasons).toContain(
-      "当前连接的 UE 不是迁移计划中的目标工程",
+    expect(artResult.blockedReasons).toContain(
+      "当前连接的是美术 Art UE；请关闭 Art UE，打开目标 Res UE 并启动 OmniMcpCore，然后重新校验资产",
     );
-    expect(connection.closed).toBe(true);
+    expect(otherResult.blockedReasons).toContain(
+      "当前连接的 UE 与目标 Res 工程不一致；请打开迁移计划对应的 Res UE 并启动 OmniMcpCore，然后重新校验资产",
+    );
+    expect(artConnection.closed).toBe(true);
+    expect(otherConnection.closed).toBe(true);
   });
 
   it("writes capsule, turn curve and planned montages with readback checks", async () => {
@@ -515,6 +579,14 @@ describe("NPC migration server workflow", () => {
             ),
         ),
     ).toBe(true);
+    expect(
+      connection.calls
+        .filter((call) => call.action === "asset.save_asset")
+        .map((call) => call.args),
+    ).toEqual([
+      { Asset: true },
+      { Asset: true },
+    ]);
     expect(connection.closed).toBe(true);
   });
 
@@ -625,7 +697,10 @@ describe("NPC migration server workflow", () => {
       [
         inspectionPayload,
         {
-          imported: [],
+          imported: [
+            "/Game/Seria/BioSystems/E05_Cat/Animation/A_E05_Cat_Idlestand",
+            "/Game/Seria/BioSystems/E05_Cat/Animation/A_E05_Cat_Walk",
+          ],
           blueprint_asset_path:
             "/Game/Seria/NPC/E05_Cat/BP_E05_CAT02_NPC.BP_E05_CAT02_NPC",
           animation_blueprint_asset_path:
@@ -638,7 +713,10 @@ describe("NPC migration server workflow", () => {
           template_animation_blueprint_asset_path:
             inspectionPayload.template_animation_blueprint_asset_path,
           look_blend_space_asset_path: "",
-          animation_blueprint_override_asset_paths: [],
+          animation_blueprint_override_asset_paths: [
+            "/Game/Seria/BioSystems/E05_Cat/Animation/A_E05_Cat_Idlestand.A_E05_Cat_Idlestand",
+            "/Game/Seria/BioSystems/E05_Cat/Animation/A_E05_Cat_Walk.A_E05_Cat_Walk",
+          ],
         },
       ],
       [
@@ -673,7 +751,10 @@ describe("NPC migration server workflow", () => {
         inspectionPayload.template_blueprint_asset_path,
       templateAnimationBlueprintAssetPath:
         inspectionPayload.template_animation_blueprint_asset_path,
-      animationBlueprintOverrideAssetPaths: [],
+      animationBlueprintOverrideAssetPaths: [
+        "/Game/Seria/BioSystems/E05_Cat/Animation/A_E05_Cat_Idlestand.A_E05_Cat_Idlestand",
+        "/Game/Seria/BioSystems/E05_Cat/Animation/A_E05_Cat_Walk.A_E05_Cat_Walk",
+      ],
     });
     const scripts = connection.calls
       .filter((call) => call.action === "script.eval_python_expression")

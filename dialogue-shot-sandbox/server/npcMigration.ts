@@ -238,6 +238,20 @@ function packageDirectory(packageName: string): string {
   return packageName.slice(0, packageName.lastIndexOf("/"));
 }
 
+function npcPackageRoot(
+  skeletalMeshPackageName: string,
+  npcName: string,
+): string {
+  const directory = packageDirectory(skeletalMeshPackageName);
+  const parts = directory.split("/");
+  for (let index = parts.length - 1; index >= 0; index -= 1) {
+    if (parts[index].toLowerCase() === npcName.toLowerCase()) {
+      return parts.slice(0, index + 1).join("/");
+    }
+  }
+  return directory;
+}
+
 const TARGET_AUTOMATION_PYTHON_HELPERS = `
 def blueprint_generated_class(blueprint_or_path):
     asset_path = (
@@ -659,6 +673,7 @@ else:
         size: Number(item.size ?? 0),
       };
     });
+    const suggestedNpcName = skeletalMeshName.replace(/^SK_/i, "");
     const scan: NpcMigrationSourceScan = {
       sourceProjectFile: String(raw.source_project_file ?? ""),
       sourceContentDirectory: String(raw.source_content_directory ?? ""),
@@ -683,9 +698,10 @@ else:
           ? raw.dirty_package_names
           : []
       ).map(String),
-      suggestedNpcName: skeletalMeshName.replace(/^SK_/i, ""),
-      suggestedTargetPackagePath: packageDirectory(
+      suggestedNpcName,
+      suggestedTargetPackagePath: npcPackageRoot(
         skeletalMeshPackageName,
+        suggestedNpcName,
       ),
       warnings: [],
     };
@@ -712,17 +728,20 @@ export async function inspectNpcMigrationPlan(
         request.npcName || request.source.suggestedNpcName,
       )
     ) === "animal";
-  const animationSourceDirectory = request.animationSourceDirectory.trim()
+  const hasAnimationSourceDirectory =
+    Boolean(request.animationSourceDirectory.trim());
+  const animationSourceDirectory = hasAnimationSourceDirectory
     ? resolve(request.animationSourceDirectory)
     : "";
   const targetDirectoryReady =
     basename(targetContentDirectory).toLowerCase() === "content" &&
     (await isDirectory(targetContentDirectory));
   const animationDirectoryReady =
-    isAnimalTemplate ||
-    await isDirectory(animationSourceDirectory);
+    !hasAnimationSourceDirectory
+      ? isAnimalTemplate
+      : await isDirectory(animationSourceDirectory);
   const animationFiles =
-    !isAnimalTemplate && animationDirectoryReady
+    hasAnimationSourceDirectory && animationDirectoryReady
     ? await listFbxFiles(animationSourceDirectory)
     : [];
   const fileOperations: NpcMigrationPlan["fileOperations"] = [];
@@ -864,6 +883,10 @@ async function inspectTargetWithConnection(
   ];
   const isAnimalTemplate =
     request.plan.standardAbpTemplate === "animal";
+  const usesAnimalSourceAnimations =
+    isAnimalTemplate && request.plan.bodyAnimationFiles.length > 0;
+  const requiresGraphOverrides =
+    !isAnimalTemplate || usesAnimalSourceAnimations;
   const templateAnimationBlueprintAssetPath =
     request.plan.configureStandardAbp
       ? await resolveAssetReference(
@@ -1030,13 +1053,13 @@ if ${request.plan.configureStandardAbp ? "True" : "False"}:
     standard_abp_automation_available = bool(
         template_abp
         and (${isAnimalTemplate ? "bool(template_bp)" : "True"})
-        and (${isAnimalTemplate ? "True" : "False"} or (
+        and (${requiresGraphOverrides ? "False" : "True"} or (
             hasattr(unreal, 'ObjectIterator')
             and hasattr(unreal, 'AnimGraphNode_SequencePlayer')
-            and (
+            and (${isAnimalTemplate ? "True" : "False"} or (
             hasattr(unreal, 'AnimGraphNode_BlendSpacePlayer')
             or hasattr(unreal, 'AnimGraphNode_RotationOffsetBlendSpace')
-            )
+            ))
         ))
     )
 existing = [path for path in ${JSON.stringify(expectedAssetPaths)} if unreal.EditorAssetLibrary.does_asset_exist(path)]
@@ -1069,12 +1092,18 @@ _result = {
   )) as Record<string, unknown>;
   const blockedReasons: string[] = [];
   const warnings: string[] = [];
+  const targetProjectFile = String(raw.target_project_file ?? "");
   const targetContentDirectory = String(raw.target_content_directory ?? "");
   if (
     normalizedDiskPath(targetContentDirectory) !==
     normalizedDiskPath(request.plan.targetContentDirectory)
   ) {
-    blockedReasons.push("当前连接的 UE 不是迁移计划中的目标工程");
+    blockedReasons.push(
+      normalizedDiskPath(targetProjectFile) ===
+        normalizedDiskPath(request.plan.source.sourceProjectFile)
+        ? "当前连接的是美术 Art UE；请关闭 Art UE，打开目标 Res UE 并启动 OmniMcpCore，然后重新校验资产"
+        : "当前连接的 UE 与目标 Res 工程不一致；请打开迁移计划对应的 Res UE 并启动 OmniMcpCore，然后重新校验资产",
+    );
   }
   if (!raw.skeletal_mesh_found) {
     blockedReasons.push("目标 UE 中未找到迁移后的 Skeletal Mesh");
@@ -1254,7 +1283,7 @@ _result = {
     );
   }
   return {
-    targetProjectFile: String(raw.target_project_file ?? ""),
+    targetProjectFile,
     targetContentDirectory,
     skeletalMeshFound: Boolean(raw.skeletal_mesh_found),
     skeletonFound: Boolean(raw.skeleton_found),
@@ -1325,8 +1354,12 @@ export async function configureNpcMigrationTarget(
     );
     const isAnimalTemplate =
       request.plan.standardAbpTemplate === "animal";
+    const usesAnimalSourceAnimations =
+      isAnimalTemplate && request.plan.bodyAnimationFiles.length > 0;
     const requiredTargetRoles = isAnimalTemplate
-      ? []
+      ? usesAnimalSourceAnimations
+        ? ["idle_stand", "walk"]
+        : []
       : [
           "look_down",
           "look_forward",
@@ -1336,7 +1369,9 @@ export async function configureNpcMigrationTarget(
           "interact",
         ];
     const overrideRoles = isAnimalTemplate
-      ? []
+      ? usesAnimalSourceAnimations
+        ? ["idle_stand", "walk"]
+        : []
       : ["look_blend_space", "idle_stand", "impact", "interact"];
     const templateOverridePaths = {
       look_blend_space: inspection.templateAnimationAssets.lookBlendSpace,
@@ -1776,7 +1811,7 @@ _result = {
         throw new Error(`蓝图编译失败：${assetPath}`);
       }
       const saveResult = await connection.invoke("asset.save_asset", {
-        AssetPath: assetPath,
+        Asset: blueprint,
       });
       if (saveResult === false) {
         throw new Error(`蓝图保存失败：${assetPath}`);
@@ -1842,7 +1877,7 @@ _result = {
         : []
     ).map(String);
     if (request.plan.configureStandardAbp) {
-      const expectedOverrideCount = isAnimalTemplate ? 0 : 4;
+      const expectedOverrideCount = overrideRoles.length;
       const templateMismatch =
         templateAnimationBlueprintAssetPath !==
           inspection.templateAnimationBlueprintAssetPath ||
@@ -1864,7 +1899,9 @@ _result = {
       "抽查动作 Montage 的源动作、名称和 IdleSlot/TurnSlot",
       request.plan.configureStandardAbp
         ? isAnimalTemplate
-          ? "运行动物 ABP 状态机，检查 IdleStand / Walk 切换与模板 Sleep 行为"
+          ? usesAnimalSourceAnimations
+            ? "运行动物 ABP 状态机，确认新 NPC 的 IdleStand / Walk 已生效，并检查模板 Sleep 行为"
+            : "运行动物 ABP 状态机，检查模板 IdleStand / Walk / Sleep 行为"
           : "检查 Look 混合空间三个采样点，并运行 ABP 状态机预览"
         : "配置 Look 混合空间与 ABP 状态机图表",
       "打开 Skeletal Mesh，确认后期处理动画蓝图",

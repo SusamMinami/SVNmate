@@ -329,7 +329,11 @@ describe("NPC migration planning", () => {
       blueprintName: "BP_E05_CAT01_NPC",
       animationBlueprintName: "ABP_E05_CAT01_NPC",
       standardAbpTemplate: "animal",
-      bodyAnimationFiles: [],
+      bodyAnimationFiles: [
+        "D:/Anim/A_E05_Cat_Idlestand.fbx",
+        "D:/Anim/A_E05_Cat_sleep.fbx",
+        "D:/Anim/A_E05_Cat_Walk.fbx",
+      ],
       montages: [],
       canConfigure: true,
     });
@@ -339,6 +343,58 @@ describe("NPC migration planning", () => {
       "SKEL_E05_Cat01.SKEL_E05_Cat01",
     );
     expect(plan.warnings.join("\n")).toContain("绑定所选 Mesh 自带的 Skeleton");
+    expect(plan.warnings.join("\n")).toContain(
+      "导入 3 个新 NPC 动作，并替换模板 IdleStand / Walk",
+    );
+  });
+
+  it("imports only matching N132 animal actions from a mixed source directory", () => {
+    const plan = buildNpcMigrationPlan(
+      request({
+        source: sourceScan({
+          skeletalMeshName: "SK_N132_Nobledog",
+          skeletalMeshAssetPath:
+            "/Game/Seria/BioSystems/N132_Nobledog/SK_N132_Nobledog.SK_N132_Nobledog",
+          skeletalMeshPackageName:
+            "/Game/Seria/BioSystems/N132_Nobledog/SK_N132_Nobledog",
+          skeletonAssetPath:
+            "/Game/Seria/BioSystems/N132_Nobledog/SKEL_N132_Nobledog.SKEL_N132_Nobledog",
+          suggestedNpcName: "N132_Nobledog",
+          suggestedTargetPackagePath:
+            "/Game/Seria/BioSystems/N132_Nobledog",
+        }),
+        animationSourceDirectory:
+          "D:/Anim/N132_Nobledog/Animation",
+        configureStandardAbp: true,
+        standardAbpTemplate: "animal",
+      }),
+      {
+        animationFiles: [
+          "D:/Anim/N132_Nobledog/Animation/A_N132_NobleDog_Idlestand.fbx",
+          "D:/Anim/N132_Nobledog/Animation/A_N132_Nobledog_head.fbx",
+          "D:/Anim/N132_Nobledog/Animation/A_N132_Nobledog_tail.fbx",
+          "D:/Anim/N132_Nobledog/Animation/A_N132_Nobledog_walk.fbx",
+          "D:/Anim/N131/Animation/A_N131_Idlestand.fbx",
+        ],
+        fileOperations: [operation()],
+        targetDirectoryReady: true,
+        animationDirectoryReady: true,
+      },
+    );
+
+    expect(plan.bodyAnimationFiles).toHaveLength(4);
+    expect(plan.animationRoleAssets).toMatchObject({
+      idleStand: "A_N132_NobleDog_Idlestand",
+      walk: "A_N132_Nobledog_walk",
+    });
+    expect(plan.steps.find((step) => step.id === "animations")).toMatchObject({
+      state: "ready",
+      detail: "4 个 A_N132_Nobledog_ Body FBX",
+    });
+    expect(plan.blockedReasons).toEqual([]);
+    expect(plan.warnings.join("\n")).toContain(
+      "已忽略 1 个不属于 A_N132_Nobledog_ 前缀的 FBX",
+    );
   });
 
   it("reuses identical target files without blocking migration", () => {

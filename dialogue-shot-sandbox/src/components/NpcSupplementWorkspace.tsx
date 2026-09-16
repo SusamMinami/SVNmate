@@ -93,7 +93,6 @@ export function NpcSupplementWorkspace({
   const reviewRevision = useRef(0);
   const selectAllCheckboxRef = useRef<HTMLInputElement>(null);
   const isFace = kind === "face";
-  const title = isFace ? "面部补充" : "动作补充与修改";
   const currentSelectionKey = useMemo(
     () =>
       isFace
@@ -467,37 +466,6 @@ export function NpcSupplementWorkspace({
 
   return (
     <div className="npc-migration-workspace npc-supplement-workspace">
-      <div className="workspace-subview-title">
-        <strong>{title}</strong>
-        <small>{isFace ? "FACE PIPELINE" : "BODY + AUTO FACE"}</small>
-      </div>
-      <div className="workspace-floating-actions">
-        <button
-          className="button workspace-floating-command"
-          type="button"
-          disabled={busy !== null}
-          onClick={() => void readTarget()}
-          title="读取策划 UE 内容浏览器中选中的 NPC BP、Body Skeletal Mesh 或 Skeleton"
-        >
-          {busy === "target" ? (
-            <LoaderCircle className="spin" size={16} />
-          ) : (
-            <RefreshCw size={16} />
-          )}
-          读取 UE 目标
-        </button>
-        <button
-          className="icon-button"
-          type="button"
-          disabled={busy !== null}
-          onClick={onBack}
-          title="返回模块选择"
-          aria-label="返回模块选择"
-        >
-          <LayoutGrid size={17} />
-        </button>
-      </div>
-
       {(error || status) && (
         <div
           className={`npc-migration-message ${error ? "is-error" : "is-success"}`}
@@ -515,11 +483,40 @@ export function NpcSupplementWorkspace({
       <div className="npc-supplement-layout">
         <aside className="npc-supplement-setup">
           <section>
-            <header>
-              {isFace ? <ScanFace size={18} /> : <FileInput size={18} />}
-              <div>
-                <strong>已有 NPC</strong>
-                <small>TARGET UE</small>
+            <header className="npc-supplement-target-header">
+              <div className="npc-supplement-section-title">
+                {isFace ? <ScanFace size={18} /> : <FileInput size={18} />}
+                <span>
+                  <strong>已有 NPC</strong>
+                  <small>TARGET UE</small>
+                </span>
+              </div>
+              <div className="npc-supplement-section-actions">
+                <button
+                  className="button"
+                  type="button"
+                  disabled={busy !== null}
+                  onClick={() => void readTarget()}
+                  title="读取策划 UE 内容浏览器中选中的 NPC BP、Body Skeletal Mesh 或 Skeleton"
+                  aria-label="读取 UE 目标"
+                >
+                  {busy === "target" ? (
+                    <LoaderCircle className="spin" size={16} />
+                  ) : (
+                    <RefreshCw size={16} />
+                  )}
+                  读取
+                </button>
+                <button
+                  className="icon-button"
+                  type="button"
+                  disabled={busy !== null}
+                  onClick={onBack}
+                  title="返回模块选择"
+                  aria-label="返回模块选择"
+                >
+                  <LayoutGrid size={17} />
+                </button>
               </div>
             </header>
             {target ? (
