@@ -1,0 +1,117 @@
+{
+  "schemaVersion": 2,
+  "packageId": "seria-dlss5",
+  "displayName": "Seria DLSS5",
+  "packageVersion": "2026.09.22-dlss5-v1.0.27",
+  "archivePrefix": "Seria-DLSS5",
+  "targetRelativePath": "bin\\WindowsNoEditor\\Client\\Seria\\Binaries\\Win64",
+  "recoveryDirectoryName": "Seria-DLSS5-Recovery",
+  "shortcutName": "Restore Seria DLSS5",
+  "installerCmd": "Install-DLSS5.cmd",
+  "restoreCmd": "Restore-DLSS5-After-Trunk-Update.cmd",
+  "readme": "README-DLSS5.txt",
+  "iniTemplate": "ReShade.DLSS5.ini.template",
+  "obsoleteFiles": [],
+  "payloadFiles": [
+    {
+      "path": "dxgi.dll",
+      "sha256": "0CEE63F9C9F13F3AC909C5B4903F4DBB4B719A7AB3B4F13B0DEAF83C814B94F7"
+    },
+    {
+      "path": "renodx-dlss5-v2.5.addon64",
+      "sha256": "87AEF9DDD937C7241E6BF8D8EFEA0045D63559135E254C60DAB316DB3D3A4AEE"
+    },
+    {
+      "path": "dlss5-dx11-bridge.addon64",
+      "sha256": "81420DB003BD9A28F0CB17CCECB665F4E4EA7BA3528E06B2703684A7CA427841"
+    },
+    {
+      "path": "dlss5-dx11-bridge.cfg",
+      "sha256": "3FB168D17E0630399042C41005D8693D942337228E749B30A7512AD0F55748B3"
+    },
+    {
+      "path": "nvngx_dlssnr.dll",
+      "sha256": "6EB209E764F39872625DEBD6ABAF45E2BB6322F6F270F781F70C059AE30B3927"
+    },
+    {
+      "path": "nvngx_dlss.dll",
+      "sha256": "C85F971CE023C9F3492FC7455F0B01A24BA18EA39636407A846902C4360B0B7E"
+    }
+  ],
+  "payloadTrees": [
+    {
+      "path": "reshade-shaders",
+      "fileCount": 50,
+      "sha256": "179FE2CF1542D3ACDFD8EDEBFD34258886FE1C72636DDAEB62834F291CF5B79F"
+    }
+  ],
+  "iniValues": [
+    {
+      "section": "ADDON",
+      "key": "DisabledAddons",
+      "value": "Generic Depth,Effect Runtime Sync",
+      "onlyIfMissing": true,
+      "verifyExact": false
+    },
+    {
+      "section": "ADDON",
+      "key": "OverlayCollapsed",
+      "value": "DLSS 5 Neural Rendering@renodx-dlss5-v2.5.addon64",
+      "onlyIfMissing": true,
+      "verifyExact": false
+    },
+    {
+      "section": "GENERAL",
+      "key": "EffectSearchPaths",
+      "value": ".\\reshade-shaders\\Shaders\\**",
+      "onlyIfMissing": false,
+      "verifyExact": true
+    },
+    {
+      "section": "GENERAL",
+      "key": "TextureSearchPaths",
+      "value": ".\\reshade-shaders\\Textures\\**",
+      "onlyIfMissing": false,
+      "verifyExact": true
+    },
+    {
+      "section": "INPUT",
+      "key": "KeyOverlay",
+      "value": "36,0,0,0",
+      "onlyIfMissing": true,
+      "verifyExact": false
+    },
+    {
+      "section": "RenoDX.DLSS5",
+      "key": "NeuralUplift",
+      "value": "0",
+      "onlyIfMissing": false,
+      "verifyExact": true
+    },
+    {
+      "section": "RenoDX.DLSS5",
+      "key": "NRPreset",
+      "value": "0",
+      "onlyIfMissing": true,
+      "verifyExact": false
+    },
+    {
+      "section": "RenoDX.DLSS5",
+      "key": "NRStyle",
+      "value": "2",
+      "onlyIfMissing": true,
+      "verifyExact": false
+    },
+    {
+      "section": "RenoDX.DLSS5",
+      "key": "NRUICorrection",
+      "value": "0",
+      "onlyIfMissing": true,
+      "verifyExact": false
+    }
+  ],
+  "compatibleResolution": {
+    "width": 2560,
+    "height": 1440
+  }
+}

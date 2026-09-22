@@ -1,0 +1,18 @@
+[ADDON]
+DisabledAddons=Generic Depth,Effect Runtime Sync
+
+[INPUT]
+GamepadNavigation=0
+KeyOverlay=36,0,0,0
+
+[OVERLAY]
+TutorialProgress=4
+VariableListUseTabs=1
+
+[PROXY]
+EnableProxyLibrary=0
+ProxyLibrary=
+
+[SeriaQAOverlay]
+HudVisible=1
+HudOpacity=78

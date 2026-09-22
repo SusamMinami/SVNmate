@@ -3,7 +3,7 @@
 SVNmate 是 Windows 桌面工具，负责批量 SVN 更新、清理、项目脚本、定时任务与独立
 辅助模块。当前版本以 `svn_auto_tool.py` 中的 `APP_VERSION` 为准。
 
-本仓库还包含迁移核验助手、ConfigLinker 和镜头沙盘。
+本仓库还包含迁移核验助手、ConfigLinker、镜头沙盘和 Seria QA Overlay。
 AI 开发从 [AGENTS.md](AGENTS.md) 开始；全部文档见 [索引](docs/README.md)。
 
 ## 功能与使用
@@ -29,6 +29,7 @@ AI 开发从 [AGENTS.md](AGENTS.md) 开始；全部文档见 [索引](docs/READM
 | MigrationGuard | Jira/SVN 文件级证据、按需更新与分阶段 UE 迁移 | [用户指南](README_migration_guard.md) |
 | ConfigLinker | 只读配置关系、命名角色与正式服武器查询 | [README](config_id_lookup/README.md)、[使用指南](config_id_lookup/USER_GUIDE.md) |
 | 镜头沙盘 | UE4 对白、站位、分镜、NPC/目标物与动画语音制作 | [README](dialogue-shot-sandbox/README.md) |
+| Seria QA Overlay | 游戏内只读任务诊断；DLSS5 作为独立可选安装包 | [README](seria-qa-overlay/README.txt) |
 | KindleLarkStatus | 外部桌面提示板，源码不在此仓库 | [公共更新通道交接](KINDLE_PUBLIC_CHANNEL_HANDOFF.md) |
 
 SVNmate 的工具模块入口管理 ConfigLinker、MigrationGuard 与 KindleLarkStatus，

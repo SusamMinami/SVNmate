@@ -1,6 +1,6 @@
 # 工作区 AI 导航
 
-本仓库有四个独立 Windows 桌面产品，不是一个统一 Web 应用。先确定目标项目，
+本仓库包含多个独立 Windows 工具，不是一个统一 Web 应用。先确定目标项目，
 再读取该行入口；不要默认加载所有 Markdown，也不要跨项目套用 UI 或数据规则。
 
 ## 项目路由
@@ -12,6 +12,7 @@
 | MigrationGuard、迁移核验、`migration_guard/`、根目录迁移入口与测试 | Python/Tkinter，Jira/SVN 证据与 UE 迁移 | [迁移助手 AI 指南](migration_guard/AGENTS.md) |
 | ConfigLinker、配置关系检索、`config_id_lookup/` | Python/Tkinter，只读 CSV 关系查询 | [ConfigLinker AI 指南](config_id_lookup/AGENTS.md) |
 | 镜头沙盘、运镜沙盒、`dialogue-shot-sandbox/` | Electron/React/TypeScript/Three.js，UE4 制作工具 | [镜头沙盘 AI 指南](dialogue-shot-sandbox/AGENTS.md) |
+| Seria QA、任务 Overlay、DLSS5、`seria-qa-overlay/` | C++/Lua/PowerShell，游戏内只读任务工具与独立 DLSS5 安装包 | [Seria QA AI 入口](seria-qa-overlay/AGENTS.md) |
 | `rust/seria-config-*`、跨工具 CSV 核心 | Rust，只读双表头解析与关系索引；各产品私有打包 | [Rust 数据核心](rust/README.md) |
 
 KindleLarkStatus 在此仓库仅有模块启动、更新与交接资料，其产品源码不在这里。

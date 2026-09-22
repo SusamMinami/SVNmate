@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 2,
+  "packageId": "seria-qa-overlay",
+  "displayName": "Seria QA Overlay",
+  "packageVersion": "2026.09.22-seria-qa-overlay-v0.3",
+  "archivePrefix": "Seria-QA-Overlay",
+  "targetRelativePath": "bin\\WindowsNoEditor\\Client\\Seria\\Binaries\\Win64",
+  "recoveryDirectoryName": "Seria-QA-Overlay-Recovery",
+  "shortcutName": "Restore Seria QA Overlay",
+  "installerCmd": "Install-SeriaQA.cmd",
+  "restoreCmd": "Restore-After-Trunk-Update.cmd",
+  "readme": "README.txt",
+  "iniTemplate": "ReShade.QA.ini.template",
+  "obsoleteFiles": [],
+  "payloadFiles": [
+    {
+      "path": "dxgi.dll",
+      "sha256": "0CEE63F9C9F13F3AC909C5B4903F4DBB4B719A7AB3B4F13B0DEAF83C814B94F7"
+    },
+    {
+      "path": "seria-qa-overlay.addon64",
+      "sha256": "EA72E63CDC78A368D614FA924E654988CF81E0C6439D03960E558A082BE552C2"
+    },
+    {
+      "path": "TaskQADiagnostics.lua",
+      "sha256": "2F735B35CE885BE0260288953F396682195CB4399F232F95B0C59A62F7773A55"
+    },
+    {
+      "path": "SeriaQA.lua",
+      "sha256": "8CC82FAF6A81E7A5CE94FDE84A8718CD2767A2833A1DA485E88C9AE45C283D40"
+    }
+  ],
+  "payloadTrees": [],
+  "iniValues": [
+    {
+      "section": "ADDON",
+      "key": "DisabledAddons",
+      "value": "Generic Depth,Effect Runtime Sync",
+      "onlyIfMissing": true,
+      "verifyExact": false
+    },
+    {
+      "section": "INPUT",
+      "key": "KeyOverlay",
+      "value": "36,0,0,0",
+      "onlyIfMissing": true,
+      "verifyExact": false
+    },
+    {
+      "section": "SeriaQAOverlay",
+      "key": "HudVisible",
+      "value": "1",
+      "onlyIfMissing": true,
+      "verifyExact": false
+    },
+    {
+      "section": "SeriaQAOverlay",
+      "key": "HudOpacity",
+      "value": "78",
+      "onlyIfMissing": true,
+      "verifyExact": false
+    }
+  ]
+}

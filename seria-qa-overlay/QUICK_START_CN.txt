@@ -1,0 +1,35 @@
+Seria QA Overlay 快速上手
+========================
+
+安装
+  1. 完全退出 Seria.exe。
+  2. 解压 Seria-QA-Overlay 压缩包。
+  3. 双击 Install-SeriaQA.cmd。
+  4. 粘贴游戏路径并回车。
+
+  此安装包不包含 DLSS5，也不会修改分辨率。
+
+
+使用
+  1. 启动游戏并进入角色。
+  2. 按 Home 打开 ReShade。
+  3. 打开 Seria QA > 全部任务。
+  4. 点击“一键启动采集”。
+  5. 左上角出现“实时”后即可关闭 ReShade。
+
+  Ctrl+Home 可随时显示或隐藏任务窗口。
+
+
+更新后恢复
+  1. 等 trunk 更新结束并关闭 Seria.exe。
+  2. 双击桌面的 Restore Seria QA Overlay。
+  3. 启动游戏并点击“一键启动采集”。
+
+
+可选 DLSS5
+  如需 DLSS5，请单独下载 Seria-DLSS5 压缩包并运行 Install-DLSS5.cmd。
+  QA Overlay 与 DLSS5 可以任意顺序安装并同时使用。
+
+
+一键启动失败
+  保持游戏窗口在前台后重试；也可点击“复制启动命令”并手动执行。
