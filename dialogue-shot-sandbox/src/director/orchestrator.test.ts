@@ -31,6 +31,45 @@ afterEach(() => {
 });
 
 describe("designShots", () => {
+  it("publishes the beat-informed preview before candidate work and stops on cancellation", async () => {
+    const controller = new AbortController();
+    const progress: string[] = [];
+    const preview = vi.fn(() => {
+      expect(progress).toEqual(["beats"]);
+      controller.abort();
+    });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+      const { input } = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({ ok: true, data: {
+        schema_version: "rule-beat.v1", request_id: input.request_id,
+        summary: "整段维持关系", beats: [{
+          start_dialogue_id: sequence.rows[0].id, end_dialogue_id: sequence.rows.at(-1)!.id,
+          narrative_function: "development", intensity: 40,
+          coverage_strategy: "relationship_hold", reason: "无需改变观察对象",
+        }],
+      } }));
+    });
+    await expect(designShots(sequence, "rule", {
+      signal: controller.signal, onRulePreview: preview,
+      onRuleAdvisorProgress: (value) => progress.push(value.stage),
+    })).rejects.toMatchObject({ name: "AbortError" });
+    expect(preview).toHaveBeenCalledTimes(1);
+    expect(preview.mock.calls[0]).toBeDefined();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not publish or fetch for an already cancelled run", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    const preview = vi.fn();
+    await expect(designShots(sequence, "rule", {
+      signal: controller.signal, onRulePreview: preview,
+    })).rejects.toMatchObject({ name: "AbortError" });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(preview).not.toHaveBeenCalled();
+  });
+
   it("degrades to the rule director when Mira fails", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(

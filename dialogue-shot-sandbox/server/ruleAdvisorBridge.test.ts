@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   buildRuleBeatPrompt,
+  buildRuleMusicPrompt,
   buildVisualScorePrompt,
   extractRuleAdvisorJson,
+  normalizeRuleMusicCues,
 } from "./ruleAdvisorBridge";
 import { createDirectorInput } from "../src/director/contracts";
 import { createDefaultBlocking } from "../src/director/blockingResolver";
@@ -77,7 +79,7 @@ describe("rule advisor bridge", () => {
       "beat-prompt-test",
     );
     const { sound_effect_catalog: _catalog, ...advisorInput } = input;
-    const prompt = buildRuleBeatPrompt({
+    const request = {
       input: advisorInput,
       music_catalog: [
         {
@@ -90,16 +92,87 @@ describe("rule advisor bridge", () => {
         },
       ],
       existing_music: [{ dialogue_id: "204801", state_id: 18 }],
-    });
+    };
+    const prompt = buildRuleBeatPrompt(request);
 
     expect(prompt).toContain("不负责生成摄影机参数");
     expect(prompt).toContain("所有对白必须按原顺序恰好覆盖一次");
     expect(prompt).toContain("relationship_hold");
     expect(prompt).toContain("dialogue_issues");
     expect(prompt).toContain("不直接替换或改写原台词");
-    expect(prompt).toContain("music_cues");
-    expect(prompt).toContain("没有可靠建议");
-    expect(prompt).toContain("Hidden_Crisis");
-    expect(prompt).toContain('"state_id":18');
+    expect(prompt).not.toContain("music_cues");
+    expect(prompt).not.toContain("Hidden_Crisis");
+    const musicPrompt = buildRuleMusicPrompt(request);
+    expect(musicPrompt).toContain("没有可靠建议");
+    expect(musicPrompt).toContain("Hidden_Crisis");
+    expect(musicPrompt).toContain('"state_id":18');
+    expect(buildRuleBeatPrompt({ ...request, input: { ...advisorInput, request_id: "new-run" } }))
+      .toBe(prompt);
+  });
+
+  it("keeps only real music change points from repeated model output", () => {
+    const input = createDirectorInput(
+      findDialogueSequence(demoDatabase, "2048"),
+      "music-cue-normalization",
+    );
+    const { sound_effect_catalog: _catalog, ...advisorInput } = input;
+    const request = {
+      input: advisorInput,
+      music_catalog: [
+        {
+          state_id: 15,
+          state_name: "Hidden_Crisis",
+          music_name: "危机四伏",
+          tags: ["悬疑"],
+          notes: "",
+          audio_summary: null,
+        },
+        {
+          state_id: 18,
+          state_name: "Sincere",
+          music_name: "真诚",
+          tags: ["日常轻松"],
+          notes: "",
+          audio_summary: null,
+        },
+      ],
+      existing_music: [
+        { dialogue_id: input.dialogue[0].dialogue_id, state_id: 18 },
+      ],
+    };
+
+    expect(
+      normalizeRuleMusicCues(request, [
+        {
+          dialogue_id: input.dialogue[0].dialogue_id,
+          state_id: 18,
+          reason: "与现有相同。",
+        },
+        {
+          dialogue_id: input.dialogue[1].dialogue_id,
+          state_id: 15,
+          reason: "进入悬疑。",
+        },
+        {
+          dialogue_id: input.dialogue[2].dialogue_id,
+          state_id: 15,
+          reason: "继续悬疑。",
+        },
+        {
+          dialogue_id: input.dialogue[3].dialogue_id,
+          state_id: 18,
+          reason: "关系缓和。",
+        },
+      ]),
+    ).toEqual([
+      expect.objectContaining({
+        dialogue_id: input.dialogue[1].dialogue_id,
+        state_id: 15,
+      }),
+      expect.objectContaining({
+        dialogue_id: input.dialogue[3].dialogue_id,
+        state_id: 18,
+      }),
+    ]);
   });
 });

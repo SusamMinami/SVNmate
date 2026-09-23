@@ -232,6 +232,7 @@ export interface BlueprintMontageCatalog {
 export interface DialogueCharacterActionItem {
   montageName: string;
   delaySeconds: number;
+  sourceIndex?: number;
   behaviourType?: string;
   startLocation?: { x: number; y: number; z: number };
   endLocation?: { x: number; y: number; z: number };
@@ -338,6 +339,12 @@ export interface MissionTargetMapStatus {
   currentMapAssetPath: string;
   expectedMapAssetPath: string;
   matches: boolean;
+}
+
+export interface EditorMapSwitchResult {
+  status: "already_open" | "opened" | "opening" | "cancelled";
+  mapAssetPath: string;
+  previousMapAssetPath: string;
 }
 
 export interface MissionTargetBlueprintCreateResult {
@@ -518,6 +525,7 @@ export interface StoryboardExportRequest {
     dialogueId: string;
     modelIndex: number;
     characterLabel?: string;
+    editMode?: "append" | "replace_editable";
     actions: DialogueCharacterActionItem[];
   }>;
   viewLines?: DialogueViewLine[];
@@ -679,6 +687,12 @@ export interface DialogueContentBatchUpdateResult {
 
 export type DialogueSchoolCameraRole = "ERing" | "ENino" | "EJodie";
 
+export interface DialogueSchoolCameraHeightAdjustment {
+  sourceRole: "ENone" | DialogueSchoolCameraRole;
+  targetRole: DialogueSchoolCameraRole;
+  deltaZCm: number;
+}
+
 export interface DialogueSchoolCameraCopy {
   sourceRole: DialogueSchoolCameraRole;
   targetRole: DialogueSchoolCameraRole;
@@ -719,6 +733,7 @@ export type DialogueCameraQuickActionMode =
   | "copy_previous"
   | "default"
   | "preset_camera"
+  | "look_at_push"
   | "blend_curve"
   | "school_cameras"
   | "copy_school_cameras";
@@ -731,6 +746,7 @@ export interface DialogueCameraQuickActionRequest {
   previousDialogueNodeIds?: string[];
   blendCurveAssetName?: string;
   blendDuration?: number;
+  lookAtActorModelIndex?: number;
   schoolCameraCopies?: DialogueSchoolCameraCopy[];
   presetCamera?: {
     modelIndex: number;
@@ -765,10 +781,15 @@ export interface DialogueCameraQuickActionPreview {
   addedSchoolCameraKeys: string[];
   desiredSchoolCameraKeys: string[];
   schoolCameraCopies: DialogueSchoolCameraCopy[];
+  schoolCameraHeightAdjustments?: DialogueSchoolCameraHeightAdjustment[];
   existingSchoolCameraCount: number;
   desiredSchoolCameraCount: number;
   changed: boolean;
   blockedReasons: string[];
+  lookAtActor?: {
+    modelIndex: number;
+    label: string;
+  };
   presetCamera?: {
     roleLabel: string;
     cameraName: string;
@@ -1493,6 +1514,7 @@ export interface ShotAdvisorReview {
 }
 
 export interface ShotPlan {
+  directorDecision?: import("./director/contracts").DirectorDecision;
   id: string;
   index: number;
   dialogueId: string;

@@ -103,8 +103,50 @@ async function cameraPresetFixture(page: Page, moveCameraCount = 1) {
     } } });
   });
   await page.route("**/api/ue/dialogue/camera/inspect", async (route) => {
-    state.inspections.push(route.request().postDataJSON());
-    await route.fulfill({ status: 400, json: { ok: false, error: { message: "Unexpected preview request" } } });
+    const request = route.request().postDataJSON();
+    state.inspections.push(request);
+    if (request.mode !== "look_at_push") {
+      await route.fulfill({ status: 400, json: { ok: false, error: { message: "Unexpected preview request" } } });
+      return;
+    }
+    const actor = (request.roleHints ?? []).find(
+      (role: { modelIndex: number }) =>
+        role.modelIndex === request.lookAtActorModelIndex,
+    );
+    await route.fulfill({ json: { ok: true, data: {
+      reviewToken: "b".repeat(64),
+      dialogueId: "2048",
+      startId: "204800",
+      dialogueNodeId: request.dialogueNodeId,
+      dialogueAssetPath: "/Game/Test/204800.204800",
+      mode: request.mode,
+      sourceDialogueNodeId: null,
+      existingCameraPosition: "c1",
+      desiredCameraPosition: "c1",
+      existingMoveCount: 1,
+      desiredMoveCount: 1,
+      cameraMoveType: "ELookAtPush",
+      velocity: 7,
+      blendOutTime: 2.5,
+      fov: 49,
+      existingBlendCameraType: "EBlend",
+      desiredBlendCameraType: "EBlend",
+      existingBlendCurve: "/Game/Test/trans_6015.trans_6015",
+      desiredBlendCurve: "/Game/Test/trans_6015.trans_6015",
+      blendDuration: 3,
+      existingSchoolCameraKeys: ["ERing"],
+      addedSchoolCameraKeys: [],
+      desiredSchoolCameraKeys: [],
+      schoolCameraCopies: [],
+      existingSchoolCameraCount: 1,
+      desiredSchoolCameraCount: 1,
+      changed: true,
+      blockedReasons: [],
+      lookAtActor: {
+        modelIndex: request.lookAtActorModelIndex,
+        label: actor?.label ?? `槽位 ${request.lookAtActorModelIndex}`,
+      },
+    } } });
   });
   await page.route("**/api/ue/dialogue/camera/apply", async (route) => {
     const request = route.request().postDataJSON();
@@ -135,7 +177,7 @@ async function cameraPresetFixture(page: Page, moveCameraCount = 1) {
   await page.goto("/");
   await page.getByRole("button", { name: "进入配置小窗" }).click();
   await expect(page.locator(".inspector-header")).toContainText("UE NODE 204801");
-  await expect(page.getByRole("button", { name: "添加默认镜头" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "修改当前镜头" })).toBeEnabled();
   return state;
 }
 
@@ -146,7 +188,7 @@ test("stages a preset in the existing small-window camera tab and writes only af
   await page.getByRole("tab", { name: "UE" }).click();
   await expect.poll(() => state.actionReads).toBe(1);
   await page.getByRole("tab", { name: "镜头" }).click();
-  await page.getByRole("button", { name: "添加默认镜头" }).click();
+  await page.getByRole("button", { name: "修改当前镜头" }).click();
   const role = page.getByLabel("预设机位角色");
   const cameraButtons = page.getByRole("radio", { name: /^机位 / });
   const write = page.getByRole("button", { name: "写入节点", exact: true });
@@ -242,10 +284,76 @@ test("stages a preset in the existing small-window camera tab and writes only af
   await expect(role).toHaveCount(0);
 });
 
+test("converts the configured EPush to ELookAtPush with a UE role target", async ({ page }, testInfo) => {
+  const state = await cameraPresetFixture(page);
+  await page.setViewportSize({ width: 420, height: 820 });
+  await page.getByRole("tab", { name: "UE" }).click();
+  await expect.poll(() => state.actionReads).toBe(1);
+  await page.getByRole("tab", { name: "镜头" }).click();
+  await page.getByRole("button", { name: "修改当前镜头" }).click();
+
+  const actor = page.getByLabel("ELookAtPush 注视 Actor");
+  const paste = page.getByRole("button", {
+    name: "粘贴到 ELookAtPush",
+  });
+  const write = page.getByRole("button", {
+    name: "写入节点",
+    exact: true,
+  });
+  await expect(actor.locator("option")).toHaveText([
+    "选择角色",
+    "0 · 玩家",
+    "1 · BP_Guard_Long_Character_Name_For_Desktop",
+  ]);
+  await expect(actor).toHaveValue("");
+  await expect(paste).toBeDisabled();
+  await actor.selectOption("1");
+  await expect(paste).toBeEnabled();
+  await paste.click();
+
+  await expect.poll(() => state.inspections).toHaveLength(1);
+  expect(state.inspections[0]).toMatchObject({
+    mode: "look_at_push",
+    dialogueNodeId: "204801",
+    lookAtActorModelIndex: 1,
+    roleHints: [
+      { modelIndex: 0, label: "玩家" },
+      {
+        modelIndex: 1,
+        label: "BP_Guard_Long_Character_Name_For_Desktop",
+      },
+    ],
+  });
+  const review = page.getByLabel("节点镜头写入确认");
+  await expect(review).toContainText("EPush");
+  await expect(review).toContainText("ELookAtPush");
+  await expect(review).toContainText(
+    "1 · BP_Guard_Long_Character_Name_For_Desktop",
+  );
+  await expect(review).toContainText(
+    "起终点 · 速度 7 · Blend Out 2.5 · FOV 49",
+  );
+  await expect(write).toBeEnabled();
+  await page.screenshot({
+    path: testInfo.outputPath("look-at-push-conversion.png"),
+  });
+
+  await write.click();
+  await expect(
+    page.getByText("节点 204801 的镜头配置已写入并保存"),
+  ).toBeVisible();
+  expect(state.writes[0]).toMatchObject({
+    mode: "look_at_push",
+    dialogueNodeId: "204801",
+    lookAtActorModelIndex: 1,
+    reviewToken: "b".repeat(64),
+  });
+});
+
 test("invalidates a preset review on role changes, refreshes and node switches", async ({ page }) => {
   const state = await cameraPresetFixture(page);
   const write = page.getByRole("button", { name: "写入节点", exact: true });
-  await page.getByRole("button", { name: "添加默认镜头" }).click();
+  await page.getByRole("button", { name: "修改当前镜头" }).click();
   await expect.poll(() => state.reads).toBe(1);
   const role = page.getByLabel("预设机位角色");
   await page.getByRole("radio", { name: "机位 3" }).click();
@@ -282,7 +390,7 @@ test("invalidates a preset review on role changes, refreshes and node switches",
 test("shows missing-preview and stale-snapshot errors without reporting a successful write", async ({ page }) => {
   const state = await cameraPresetFixture(page);
   state.readError = "请打开当前对话预览并初始化角色";
-  await page.getByRole("button", { name: "添加默认镜头" }).click();
+  await page.getByRole("button", { name: "修改当前镜头" }).click();
   await expect(page.getByRole("alert")).toContainText(state.readError);
   const role = page.getByLabel("预设机位角色");
   await expect(role).toBeDisabled();
@@ -299,7 +407,7 @@ test("shows missing-preview and stale-snapshot errors without reporting a succes
 
 test("labels a multi-segment preset as blocked, never as already matching", async ({ page }, testInfo) => {
   const state = await cameraPresetFixture(page, 2);
-  await page.getByRole("button", { name: "添加默认镜头" }).click();
+  await page.getByRole("button", { name: "修改当前镜头" }).click();
   await expect.poll(() => state.reads).toBe(1);
   await page.getByRole("radio", { name: "机位 3" }).click();
   const review = page.getByLabel("节点镜头写入确认");

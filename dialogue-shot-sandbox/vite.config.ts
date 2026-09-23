@@ -24,6 +24,9 @@ export default defineConfig(async () => {
     ],
     server: {
       host: "127.0.0.1",
+      watch: {
+        ignored: ["**/artifacts/**", "**/desktop-dist/**", "**/test-results/**"],
+      },
     },
   };
 });

@@ -111,6 +111,22 @@ Blend、FOV 覆盖和角色走位后的跟随行为，避免旧参数遮盖新�
 本操作保留 `DialogBlendCameraData` 和职业覆盖；差异区在有职业覆盖时提示
 它可能覆盖主镜头。选择其他角色、刷新或切换节点后原确认草稿失效。
 
+职业覆盖使用固定的玩家胶囊体高度分组，不在每次操作时重新读取角色体型。
+2026-09-23 对正式角色 BP 的 `CollisionCylinder.CapsuleHalfHeight` 只读核对：
+Eric、Serena、Lan、Sylvan 为 `92 cm`，Ring 为 `78 cm`、Nino 为 `80 cm`、
+Jodie 为 `68 cm`、Tritz 为 `93 cm`。Ring 与 Nino 归为同组并采用中值
+`79 cm`；Jodie 作为最矮体型单独处理。Camera BP 的机位 Z 同时包含距离与
+构图意图，不再作为角色高矮的直接证据。补齐或职业间复制统一计算：
+
+```text
+Z 偏移 = 目标职业高度锚点 - 来源职业高度锚点
+```
+
+从主镜头补齐 Ring、Nino、Jodie 分别为 `-13 cm / -13 cm / -24 cm`。
+只平移结构完整的 `EPush.PushCameraArg.StartPoint.Z / EndPoint.Z`；旋转、FOV、
+速度、Blend Out 与未知扩展字段保持不变。其他运镜继续完整复制，不猜测其坐标
+语义；声明为 EPush 但坐标不完整时阻断写入。确认区必须显示实际 Z 偏移。
+
 ## 自动化验证
 
 - `server/ue/cameraPresets.test.ts`：13 项，覆盖局部/世界坐标、默认值、

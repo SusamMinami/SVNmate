@@ -31,7 +31,7 @@ import {
   requestRuleAdvice,
   requestRuleBeatAdvice,
 } from "./ruleAdvisor";
-import { generateRuleCameraCandidates } from "./shotCandidateGenerator";
+import { generateRuleCameraCandidatesAsync } from "./shotCandidateGenerator";
 import type { RuleAdvisorProgress } from "./ruleAdvisorContracts";
 import { RuleDirectorProvider } from "./ruleDirector";
 import { resolveShotDecisions } from "./shotResolver";
@@ -94,6 +94,7 @@ interface DirectorRunOptions {
   useRuleAdvisor?: boolean;
   onRuleAdvisorProgress?: (progress: RuleAdvisorProgress) => void;
   onRuleBeatAdvice?: (advice: RuleBeatAdvice) => void;
+  onRulePreview?: (result: DirectorRunResult) => void;
   onRequestCreated?: (input: DirectorInput) => void;
 }
 
@@ -108,6 +109,7 @@ async function runProvider(
   mode: DirectorMode,
   options: DirectorRunOptions = {},
 ): Promise<Omit<DirectorRunResult, "requestedMode" | "fallbackReason">> {
+  options.signal?.throwIfAborted();
   const input = createDirectorInput(sequence, undefined, {
     preserveInputFormation: options.preserveInputPositions,
     lockPlayerPosition: options.lockPlayerPosition,
@@ -123,17 +125,17 @@ async function runProvider(
       total: 1,
       current_shot_index: null,
       current_candidate_label: null,
-      message: "端侧模型正在分析叙事节拍、台词与配乐",
+      message: "规则基线已就绪，端侧模型正在分析节拍与台词",
     });
   }
   const beatAdvice =
     mode === "rule" && options.useRuleAdvisor !== false
       ? await requestRuleBeatAdvice(input, {
-          musicCatalog: options.musicCatalog,
-          existingConfigurations: options.existingNodeConfigurations,
+          forceRegenerate: options.forceRegenerate,
           signal: options.signal,
         })
       : null;
+  options.signal?.throwIfAborted();
   if (beatAdvice) {
     options.onRuleBeatAdvice?.(beatAdvice);
   }
@@ -160,28 +162,39 @@ async function runProvider(
     );
     const baselineDecisions = baseline.decisions;
     const baselineShots = baseline.shots;
-    options.onRuleAdvisorProgress?.({
+    options.signal?.throwIfAborted();
+    options.onRulePreview?.({
+      shots: baselineShots, participants, input, analysis,
+      blocking: providerResult.blocking,
+      soundEffects: providerResult.soundEffects,
+      musicRecommendations: [],
+      dialogueIssues: beatAdvice?.dialogue_issues ?? [],
+      requestedMode: "rule", appliedMode: "rule", fallbackReason: null,
+    });
+    if (options.useRuleAdvisor !== false) options.onRuleAdvisorProgress?.({
       request_id: input.request_id,
       stage: "generating_candidates",
       completed: 0,
       total: baselineShots.length,
       current_shot_index: null,
       current_candidate_label: null,
-      message: `几何系统正在为 ${baselineShots.length} 个镜头生成合法机位`,
+      message: `${beatAdvice ? "节拍方案" : "规则基线"}已显示，正在为 ${baselineShots.length} 个镜头生成合法机位`,
     });
     const candidateSets =
       options.useRuleAdvisor === false
         ? []
-        : generateRuleCameraCandidates(
+        : await generateRuleCameraCandidatesAsync(
             stagedSequence,
             baselineDecisions,
             baselineShots,
+            options.signal,
           );
     const candidateVisuals =
       candidateSets.length === 0
         ? null
-        : (await import("./candidateFrameRenderer"))
-            .renderRuleCandidateFrames(participants, candidateSets);
+        : await (await import("./candidateFrameRenderer"))
+            .renderRuleCandidateFramesAsync(participants, candidateSets, options.signal);
+    options.signal?.throwIfAborted();
     const stagedInput: DirectorInput = {
       ...input,
       participants: input.participants.map((participant) => {
@@ -205,8 +218,10 @@ async function runProvider(
             candidateVisuals,
             options.signal,
             options.onRuleAdvisorProgress,
+            options.forceRegenerate,
           )
         : null;
+    options.signal?.throwIfAborted();
     if (advice && analysis) {
       const ranked = applyRuleCandidateRanking(
         stagedSequence,
@@ -266,7 +281,7 @@ async function runProvider(
                 ? "端侧节拍已参与，视觉候选评分未完成"
                 : "端侧模型未返回有效结果，已保留规则基线",
             };
-      options.onRuleAdvisorProgress?.({
+      if (options.useRuleAdvisor !== false) options.onRuleAdvisorProgress?.({
         request_id: input.request_id,
         stage: "unavailable",
         completed: 0,
@@ -358,7 +373,7 @@ export async function designShots(
   }
 }
 
-function sequenceFromDirectorInput(input: DirectorInput): DialogueSequence {
+export function sequenceFromDirectorInput(input: DirectorInput): DialogueSequence {
   const npcIdBySlot = new Map(
     input.participants.map((participant) => [
       participant.slot,

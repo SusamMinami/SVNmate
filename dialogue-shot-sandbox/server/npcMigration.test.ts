@@ -369,11 +369,37 @@ describe("NPC migration server workflow", () => {
     expect(otherConnection.closed).toBe(true);
   });
 
-  it("writes capsule, turn curve and planned montages with readback checks", async () => {
+  it.each([
+    {
+      template: "male" as const,
+      templateNpcName: "N16_Villager_Male_A",
+      templateRoot: "/Game/Seria/NPC/N16",
+    },
+    {
+      template: "female" as const,
+      templateNpcName: "N18_Villager_Female_A",
+      templateRoot: "/Game/Seria/NPC/N18",
+    },
+  ])("configures the $template standard NPC pipeline with readback checks", async ({
+    template,
+    templateNpcName,
+    templateRoot,
+  }) => {
     const root = await temporaryDirectory();
     const sourceContent = join(root, "Art", "Content");
     const targetContent = join(root, "res", "Content");
     const animationDirectory = join(root, "FBX", "Animation");
+    const templateAbpName = `ABP_${templateNpcName}`;
+    const templateAnimationBlueprintAssetPath =
+      `${templateRoot}/${templateAbpName}.${templateAbpName}`;
+    const templateLookBlendSpaceAssetPath =
+      `${templateRoot}/BS_${templateNpcName}_Look.BS_${templateNpcName}_Look`;
+    const templateIdleStandAssetPath =
+      `${templateRoot}/A_${templateNpcName}_Idlestand.A_${templateNpcName}_Idlestand`;
+    const templateImpactAssetPath =
+      `${templateRoot}/A_${templateNpcName}_Impact.A_${templateNpcName}_Impact`;
+    const templateInteractAssetPath =
+      `${templateRoot}/A_${templateNpcName}_Interact.A_${templateNpcName}_Interact`;
     const relativeAsset = join("Seria", "NPC", "N28", "SK_N28.uasset");
     const sourceAsset = join(sourceContent, relativeAsset);
     await mkdir(join(sourceContent, "Seria", "NPC", "N28"), {
@@ -427,8 +453,23 @@ describe("NPC migration server workflow", () => {
       animationSourceDirectory: animationDirectory,
       npcName: "N28",
       configureStandardAbp: true,
-      standardAbpTemplate: "female",
+      standardAbpTemplate: template,
     });
+    expect(plan).toMatchObject({
+      standardAbpTemplate: template,
+      canConfigure: true,
+      animationRoleAssets: {
+        lookDown: "A_N28_LookD",
+        lookForward: "A_N28_LookF",
+        lookUp: "A_N28_LookU",
+        idleStand: "A_N28_Idlestand",
+        impact: "A_N28_Impact",
+        interact: "A_N28_Interact",
+      },
+    });
+    expect(
+      plan.steps.find((step) => step.id === "animation_blueprint")?.detail,
+    ).toContain(templateAbpName);
     const estimate = {
       radius: 42,
       half_height: 91,
@@ -452,16 +493,16 @@ describe("NPC migration server workflow", () => {
         turn_curve_property_candidates: ["turn.turn_curve"],
         montage_automation_available: true,
         template_animation_blueprint_asset_path:
-          "/Game/Seria/NPC/N18/ABP_N18_Villager_Female_A.ABP_N18_Villager_Female_A",
+          templateAnimationBlueprintAssetPath,
         template_animation_assets: {
           look_blend_space:
-            "/Game/Seria/NPC/N18/BS_N18_Villager_Female_A_Look.BS_N18_Villager_Female_A_Look",
+            templateLookBlendSpaceAssetPath,
           idle_stand:
-            "/Game/Seria/NPC/N18/A_N18_Villager_Female_A_Idlestand.A_N18_Villager_Female_A_Idlestand",
+            templateIdleStandAssetPath,
           impact:
-            "/Game/Seria/NPC/N18/A_N18_Villager_Female_A_Impact.A_N18_Villager_Female_A_Impact",
+            templateImpactAssetPath,
           interact:
-            "/Game/Seria/NPC/N18/A_N18_Villager_Female_A_Interact.A_N18_Villager_Female_A_Interact",
+            templateInteractAssetPath,
         },
         standard_abp_automation_available: true,
         look_blend_space_automation_available: true,
@@ -483,7 +524,7 @@ describe("NPC migration server workflow", () => {
         capsule_estimate: estimate,
         turn_curve_property_path: "turn.turn_curve",
         template_animation_blueprint_asset_path:
-          "/Game/Seria/NPC/N18/ABP_N18_Villager_Female_A.ABP_N18_Villager_Female_A",
+          templateAnimationBlueprintAssetPath,
         look_blend_space_asset_path:
           "/Game/Seria/NPC/N28/Animation/BS_N28_Look.BS_N28_Look",
         animation_blueprint_override_asset_paths: [
@@ -514,7 +555,7 @@ describe("NPC migration server workflow", () => {
         ],
       },
     ], [
-      "ABP_N18_Villager_Female_A [/Game/Seria/NPC/N18/ABP_N18_Villager_Female_A.ABP_N18_Villager_Female_A]",
+      `${templateAbpName} [${templateAnimationBlueprintAssetPath}]`,
     ]);
 
     const result = await configureNpcMigrationTarget(
@@ -543,7 +584,7 @@ describe("NPC migration server workflow", () => {
         "/Game/Seria/NPC/N28/Animation/AM_Interact.AM_Interact",
       ],
       templateAnimationBlueprintAssetPath:
-        "/Game/Seria/NPC/N18/ABP_N18_Villager_Female_A.ABP_N18_Villager_Female_A",
+        templateAnimationBlueprintAssetPath,
       lookBlendSpaceAssetPath:
         "/Game/Seria/NPC/N28/Animation/BS_N28_Look.BS_N28_Look",
       animationBlueprintOverrideAssetPaths: [

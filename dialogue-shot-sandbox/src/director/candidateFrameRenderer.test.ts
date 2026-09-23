@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { demoDatabase } from "../data/demo";
 import { findDialogueSequence } from "../data/dialogueRepository";
 import { createShotPreview } from "./shotPlanner";
-import { renderRuleCandidateFrames } from "./candidateFrameRenderer";
+import { renderRuleCandidateFrames, renderRuleCandidateFramesAsync } from "./candidateFrameRenderer";
 import type { RuleCameraCandidateSet } from "./shotCandidateGenerator";
 
 const gpu = vi.hoisted(() => ({
@@ -82,6 +82,17 @@ afterEach(() => {
 });
 
 describe("renderRuleCandidateFrames resource ownership", () => {
+  it("cancels between shots and releases the shared renderer", async () => {
+    const controller = new AbortController();
+    gpu.render.mockImplementationOnce(() => controller.abort());
+    await expect(renderRuleCandidateFramesAsync(
+      sequence.participants, [...candidates(1), ...candidates(1)], controller.signal,
+    )).rejects.toMatchObject({ name: "AbortError" });
+    expect(gpu.render).toHaveBeenCalledTimes(1);
+    expect(gpu.dispose).toHaveBeenCalledTimes(1);
+    expect(gpu.forceContextLoss).toHaveBeenCalledTimes(1);
+  });
+
   it("renders every candidate using one context, scene, camera and output buffer", () => {
     const result = renderRuleCandidateFrames(sequence.participants, candidates(9));
     expect(result?.candidate_frames).toHaveLength(9);

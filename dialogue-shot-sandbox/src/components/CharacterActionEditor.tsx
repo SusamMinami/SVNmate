@@ -11,6 +11,7 @@ import {
   RefreshCw,
   RotateCcw,
   Trash2,
+  UnlockKeyhole,
 } from "lucide-react";
 import {
   memo,
@@ -578,8 +579,9 @@ export function CharacterActionEditor({
       dialogueParticipantsByModelIndex(
         sequence.participants,
         sequence.rows,
+        controller.catalogs,
       ),
-    [sequence.participants, sequence.rows],
+    [controller.catalogs, sequence.participants, sequence.rows],
   );
   const catalogByModelIndex = useMemo(
     () =>
@@ -667,9 +669,11 @@ export function CharacterActionEditor({
   const existingTracksByDialogue = useMemo(
     () =>
       groupTracksByDialogue<DialogueCharacterActionTrack>(
-        controller.existingTracks,
+        singleNodeMode
+          ? controller.ueTracks
+          : controller.existingTracks,
       ),
-    [controller.existingTracks],
+    [controller.existingTracks, controller.ueTracks, singleNodeMode],
   );
   const pendingTracksByDialogue = useMemo(
     () =>
@@ -840,19 +844,32 @@ export function CharacterActionEditor({
           )
             ? requestedModel
             : -1;
-          const actionCount =
-            existingTracks.reduce(
-              (total, track) => total + track.actions.length,
-              0,
-            ) +
-            pendingTracks.reduce(
-              (total, track) => total + track.actions.length,
-              0,
-            );
-          const pendingActionCount = pendingTracks.reduce(
-            (total, track) => total + track.actions.length,
+          const actionCount = modelIndexes.reduce(
+            (total, modelIndex) => {
+              const existingCount =
+                existingTracks.find(
+                  (track) => track.modelIndex === modelIndex,
+                )?.actions.length ?? 0;
+              const pendingTrack = pendingTracks.find(
+                (track) => track.modelIndex === modelIndex,
+              );
+              return total +
+                (pendingTrack?.editMode === "replace_editable"
+                  ? pendingTrack.actions.length +
+                    (existingTracks
+                      .find(
+                        (track) => track.modelIndex === modelIndex,
+                      )
+                      ?.actions.filter(
+                        (action) => action.sourceIndex === undefined,
+                      ).length ?? 0)
+                  : existingCount + (pendingTrack?.actions.length ?? 0));
+            },
             0,
           );
+          const pendingActionCount = controller.exportActions.filter(
+            (track) => track.dialogueId === row.id,
+          ).length;
           const actionsExpanded = sectionExpanded(row.id, "actions");
           const viewLinesExpanded = sectionExpanded(
             row.id,
@@ -861,7 +878,7 @@ export function CharacterActionEditor({
           const actionSummary =
             `${modelIndexes.length} 角色 · ${actionCount} 动作` +
             (pendingActionCount > 0
-              ? ` · ${pendingActionCount} 待写入`
+              ? ` · ${pendingActionCount} 轨待写入`
               : "");
           const viewLineSummary =
             `${effectiveViewLines.length} 项` +
@@ -1168,6 +1185,12 @@ export function CharacterActionEditor({
                     const pendingTrack = pendingTracks.find(
                       (track) => track.modelIndex === modelIndex,
                     );
+                    const visibleExistingActions =
+                      pendingTrack?.editMode === "replace_editable"
+                        ? existingTrack?.actions.filter(
+                            (action) => action.sourceIndex === undefined,
+                          ) ?? []
+                        : existingTrack?.actions ?? [];
                     return (
                       <section
                         className="character-action-track"
@@ -1192,8 +1215,16 @@ export function CharacterActionEditor({
                             <button
                               className="icon-button"
                               type="button"
-                              title="移除本次新增动作"
-                              aria-label={`移除 ${participant?.name ?? `BP 槽 ${modelIndex}`} 的新增动作`}
+                              title={
+                                pendingTrack.editMode === "replace_editable"
+                                  ? "撤销该角色的动作调整"
+                                  : "移除本次新增动作"
+                              }
+                              aria-label={
+                                pendingTrack.editMode === "replace_editable"
+                                  ? `撤销 ${participant?.name ?? `BP 槽 ${modelIndex}`} 的动作调整`
+                                  : `移除 ${participant?.name ?? `BP 槽 ${modelIndex}`} 的新增动作`
+                              }
                               disabled={editingDisabled}
                               onClick={() =>
                                 controller.removeParticipant(
@@ -1202,19 +1233,47 @@ export function CharacterActionEditor({
                                 )
                               }
                             >
-                              <Trash2 size={14} />
+                              {pendingTrack.editMode ===
+                              "replace_editable" ? (
+                                <RotateCcw size={14} />
+                              ) : (
+                                <Trash2 size={14} />
+                              )}
                             </button>
                           )}
                         </header>
 
-                        {(existingTrack?.actions.length ?? 0) > 0 && (
+                        {visibleExistingActions.length > 0 && (
                           <div className="character-action-existing-list">
-                            {existingTrack!.actions.map((action, index) => (
+                            {visibleExistingActions.map((action, index) => (
                               <div
                                 className="character-action-existing-row"
                                 key={`${action.montageName}:${index}`}
                               >
-                                <LockKeyhole size={12} aria-hidden="true" />
+                                {singleNodeMode &&
+                                action.sourceIndex !== undefined ? (
+                                  <button
+                                    className="character-action-existing-row__lock"
+                                    type="button"
+                                    title="解锁后可调整延迟和顺序"
+                                    aria-label={`解锁 ${participant?.name ?? `BP 槽 ${modelIndex}`} 的现有动作 ${action.montageName}`}
+                                    disabled={editingDisabled}
+                                    onClick={() =>
+                                      controller.toggleExistingActionLock(
+                                        row.id,
+                                        modelIndex,
+                                        action.sourceIndex!,
+                                      )
+                                    }
+                                  >
+                                    <LockKeyhole size={12} />
+                                  </button>
+                                ) : (
+                                  <LockKeyhole
+                                    size={12}
+                                    aria-hidden="true"
+                                  />
+                                )}
                                 <code>{action.montageName}</code>
                                 <span>
                                   {actionTypeLabel(action)} ·{" "}
@@ -1235,17 +1294,38 @@ export function CharacterActionEditor({
 
                         {pendingTrack && (
                           <div className="character-action-list">
-                            {pendingTrack.actions.map(
-                              (action, actionIndex) => (
+                            {pendingTrack.actions.map((action, actionIndex) => {
+                              const existingAction =
+                                action.sourceIndex !== undefined;
+                              const unlocked =
+                                !existingAction ||
+                                pendingTrack.unlockedSourceIndexes.includes(
+                                  action.sourceIndex!,
+                                );
+                              const actionDisabled =
+                                editingDisabled || !unlocked;
+                              return (
                                 <div
                                   className={`character-action-row ${
+                                    existingAction
+                                      ? "is-existing "
+                                      : ""
+                                  }${
+                                    existingAction && unlocked
+                                      ? "is-unlocked "
+                                      : ""
+                                  }${
                                     draggedAction?.actionId === action.id
                                       ? "is-dragging"
                                       : ""
                                   }`}
-                                  draggable={!editingDisabled}
+                                  draggable={!actionDisabled}
                                   key={action.id}
                                   onDragStart={(event) => {
+                                    if (actionDisabled) {
+                                      event.preventDefault();
+                                      return;
+                                    }
                                     event.dataTransfer.effectAllowed = "move";
                                     event.dataTransfer.setData(
                                       "text/plain",
@@ -1296,28 +1376,67 @@ export function CharacterActionEditor({
                                   }}
                                   onDragEnd={() => setDraggedAction(null)}
                                 >
-                                  <GripVertical
-                                    aria-hidden="true"
-                                    className="character-action-row__handle"
-                                    size={14}
-                                  />
-                                  <MontagePicker
-                                    actions={
-                                      catalog?.actions ??
-                                      EMPTY_MONTAGE_ACTIONS
-                                    }
-                                    actionByName={
-                                      actionByNameByModelIndex.get(modelIndex) ??
-                                      EMPTY_MONTAGE_ACTION_INDEX
-                                    }
-                                    disabled={editingDisabled}
-                                    dialogueId={row.id}
-                                    label={`${participant?.name ?? "角色"} 新增动作 ${actionIndex + 1}`}
-                                    modelIndex={modelIndex}
-                                    actionId={action.id}
-                                    onUpdate={controller.updateAction}
-                                    value={action.montageName}
-                                  />
+                                  {existingAction ? (
+                                    <button
+                                      className="character-action-row__lock"
+                                      type="button"
+                                      title={
+                                        unlocked
+                                          ? "锁定动作并保留当前调整"
+                                          : "解锁后可调整延迟和顺序"
+                                      }
+                                      aria-label={`${
+                                        unlocked ? "锁定" : "解锁"
+                                      } ${participant?.name ?? `BP 槽 ${modelIndex}`} 的现有动作 ${action.montageName}`}
+                                      disabled={editingDisabled}
+                                      onClick={() =>
+                                        controller.toggleExistingActionLock(
+                                          row.id,
+                                          modelIndex,
+                                          action.sourceIndex!,
+                                        )
+                                      }
+                                    >
+                                      {unlocked ? (
+                                        <UnlockKeyhole size={12} />
+                                      ) : (
+                                        <LockKeyhole size={12} />
+                                      )}
+                                    </button>
+                                  ) : (
+                                    <GripVertical
+                                      aria-hidden="true"
+                                      className="character-action-row__handle"
+                                      size={14}
+                                    />
+                                  )}
+                                  {existingAction ? (
+                                    <code
+                                      className="character-action-row__name"
+                                      title={action.montageName}
+                                    >
+                                      {action.montageName}
+                                    </code>
+                                  ) : (
+                                    <MontagePicker
+                                      actions={
+                                        catalog?.actions ??
+                                        EMPTY_MONTAGE_ACTIONS
+                                      }
+                                      actionByName={
+                                        actionByNameByModelIndex.get(
+                                          modelIndex,
+                                        ) ?? EMPTY_MONTAGE_ACTION_INDEX
+                                      }
+                                      disabled={editingDisabled}
+                                      dialogueId={row.id}
+                                      label={`${participant?.name ?? "角色"} 新增动作 ${actionIndex + 1}`}
+                                      modelIndex={modelIndex}
+                                      actionId={action.id}
+                                      onUpdate={controller.updateAction}
+                                      value={action.montageName}
+                                    />
+                                  )}
                                   <label>
                                     <span>延迟</span>
                                     <input
@@ -1326,7 +1445,8 @@ export function CharacterActionEditor({
                                       max="120"
                                       step="0.1"
                                       value={action.delaySeconds}
-                                      disabled={editingDisabled}
+                                      aria-label={`${participant?.name ?? "角色"} 动作 ${action.montageName || actionIndex + 1} 的延迟`}
+                                      disabled={actionDisabled}
                                       onChange={(event) =>
                                         controller.updateAction(
                                           row.id,
@@ -1346,25 +1466,27 @@ export function CharacterActionEditor({
                                     />
                                     <small>s</small>
                                   </label>
-                                  <button
-                                    className="icon-button"
-                                    type="button"
-                                    title="删除新增动作"
-                                    aria-label={`删除新增动作 ${action.montageName || "未选择"}`}
-                                    disabled={editingDisabled}
-                                    onClick={() =>
-                                      controller.removeAction(
-                                        row.id,
-                                        modelIndex,
-                                        action.id,
-                                      )
-                                    }
-                                  >
-                                    <Trash2 size={13} />
-                                  </button>
+                                  {!existingAction && (
+                                    <button
+                                      className="icon-button"
+                                      type="button"
+                                      title="删除新增动作"
+                                      aria-label={`删除新增动作 ${action.montageName || "未选择"}`}
+                                      disabled={editingDisabled}
+                                      onClick={() =>
+                                        controller.removeAction(
+                                          row.id,
+                                          modelIndex,
+                                          action.id,
+                                        )
+                                      }
+                                    >
+                                      <Trash2 size={13} />
+                                    </button>
+                                  )}
                                 </div>
-                              ),
-                            )}
+                              );
+                            })}
                           </div>
                         )}
 

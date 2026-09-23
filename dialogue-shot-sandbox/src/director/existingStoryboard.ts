@@ -6,6 +6,7 @@ import type {
 import { assessProjection } from "./shotGeometry";
 import { createShotPreview } from "./shotPlanner";
 import { estimateShotDuration } from "./shotTiming";
+import { inspectExistingStoryboard } from "./existingStoryboardReview";
 
 export function createExistingStoryboardPreview(
   sequence: DialogueSequence,
@@ -107,6 +108,7 @@ export function createExistingStoryboardPreview(
       rationale: "已有 UE 镜头，只执行读取与投影验收。",
       visualSubjectSlot: subject.slot,
       actorActions: [],
+      facingOverrides: {},
       projection: {
         ...assessment,
         expectedShotSize: sourceShot.projection.expectedShotSize,
@@ -119,10 +121,14 @@ export function createExistingStoryboardPreview(
   if (shots.length === 0) {
     return null;
   }
+  const { previewShots } = inspectExistingStoryboard(sequence, shots);
   return {
     ...baseline,
     sequence,
-    shots,
+    shots: shots.map((shot, index) => ({
+      ...shot,
+      projection: previewShots[index].projection,
+    })),
     soundEffects: [],
   };
 }

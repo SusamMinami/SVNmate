@@ -62,12 +62,6 @@ function hasOffscreenThreatCue(content: string): boolean {
   );
 }
 
-function hasPressureCue(content: string): boolean {
-  return /危险|必须|不能|现在|立刻|到底|威胁|逼问|住手|滚开|没有选择/.test(
-    content,
-  );
-}
-
 function visualAnchorFor(
   slot: ParticipantSlot,
   input: DirectorInput,
@@ -188,6 +182,15 @@ function lookTargetFor(
   activeParticipants: DirectorInput["participants"],
   input: DirectorInput,
 ): DirectorDecision["look_target"] {
+  // Only treat a leading vocative as an address, not a name mentioned in passing.
+  const content = input.dialogue[index]?.content.trim() ?? "";
+  const addressed = activeParticipants.filter((participant) =>
+    participant.slot !== speaker &&
+    participant.name.length > 0 &&
+    content.startsWith(participant.name) &&
+    /^[，,、：:！!？?\s]/.test(content.slice(participant.name.length)),
+  );
+  if (addressed.length === 1) return addressed[0].slot;
   if (
     previousSpeaker &&
     previousSpeaker !== speaker &&
@@ -197,6 +200,11 @@ function lookTargetFor(
   ) {
     return previousSpeaker;
   }
+  const recentSpeaker = input.dialogue.slice(0, index).reverse().find((line) =>
+    line.speaker !== speaker &&
+    activeParticipants.some((participant) => participant.slot === line.speaker),
+  )?.speaker;
+  if (recentSpeaker) return recentSpeaker;
   const nextSpeaker = input.dialogue
     .slice(index + 1)
     .find(
@@ -206,12 +214,8 @@ function lookTargetFor(
           (participant) => participant.slot === line.speaker,
         ),
     )?.speaker;
-  return (
-    nextSpeaker ??
-    activeParticipants.find((participant) => participant.slot !== speaker)
-      ?.slot ??
-    "group_center"
-  );
+  const others = activeParticipants.filter((participant) => participant.slot !== speaker);
+  return nextSpeaker ?? (others.length === 1 ? others[0].slot : "group_center");
 }
 
 function decisionFor(
@@ -230,7 +234,6 @@ function decisionFor(
   );
   const isolationCue = hasIsolationCue(row.content);
   const offscreenThreatCue = hasOffscreenThreatCue(row.content);
-  const pressureCue = hasPressureCue(row.content);
   const lookTarget = lookTargetFor(
     row.speaker,
     index,
@@ -322,8 +325,8 @@ function decisionFor(
       end_lens_mm: 85,
       lens_intent: "compressed_intimacy",
       depth_of_field: "shallow",
-      camera_movement: "dolly_in",
-      movement_intensity: "subtle",
+      camera_movement: "static",
+      movement_intensity: "none",
       camera_roll_degrees: hasDisorientationCue(row.content) ? 18 : 0,
       composition_mode: "golden_ratio",
       visual_anchor:
@@ -332,13 +335,11 @@ function decisionFor(
           : screenPosition === "right_third"
             ? "right_golden"
             : "center",
-      negative_space: pressureCue ? "pressure" : "look_room",
+      negative_space: "look_room",
       composition_transition: "progressive_shift",
       coverage_intent: "individual_emphasis",
       camera_height: "eye",
-      intent: pressureCue
-        ? "台词形成明确压力，使用轻微推近和短边构图集中注意力并制造受阻感。"
-        : "台词包含追问或强调信息，使用轻微推近和常规视线空间提高情绪权重。",
+      intent: "台词包含追问或强调信息，以稳定近景和常规视线空间集中注意力。",
     };
   }
   return {
@@ -430,9 +431,29 @@ export function createRuleAnalysis(
     dramaticGoal: "规则导演未进行深层剧情推理",
     emotionalProgression: "根据句长、停顿、标点和说话人切换判断节奏",
     visualStrategy: isGroupDialogue
-      ? "前三镜建立关系全景，进出场后重新建立空间；普通关系段优先自然焦段的带群或群像，重要情绪才以长焦收紧并轻微推拉"
-      : "先用自然焦段双人镜头建立关系，共同反应保留同框，重要台词用长焦轻微推近、停顿反应用长焦轻微拉远，并在连续紧景后回到双人空间",
+      ? "前三镜建立关系全景，进出场后重新建立空间；普通关系段优先自然焦段的带群或群像，重要信息用稳定近景，运动需要具体叙事动机"
+      : "先用自然焦段双人镜头建立关系，共同反应保留同框，重要台词和停顿优先稳定近景；明确孤立才拉远，并在连续紧景后回到双人空间",
   };
+}
+
+function visualMotivationFor(
+  beat: RuleBeatAdvice["beats"][number],
+  rows: DirectorInput["dialogue"],
+): RuleBeatAdvice["beats"][number]["visual_motivation"] {
+  const motive = beat.visual_motivation;
+  return motive && motive.evidence.trim().length >= 2 &&
+    rows.some((row) => row.dialogue_id === motive.dialogue_id &&
+      row.content.includes(motive.evidence))
+    ? motive : undefined;
+}
+
+function combineIntent(parts: string[]): string {
+  const unique = [...new Set(parts.filter(Boolean))];
+  if (unique.join("；").length <= 240) return unique.join("；");
+  // Keep a short explanation for every beat within shot-plan.v5's intent limit.
+  const perPart = Math.floor((240 - unique.length + 1) / unique.length);
+  return unique.map((part) => part.length <= perPart
+    ? part : `${part.slice(0, perPart - 1)}…`).join("；");
 }
 
 function applyBeatCoverageStrategy(
@@ -445,18 +466,44 @@ function applyBeatCoverageStrategy(
   const activeSlots = new Set(
     activeParticipants.map((participant) => participant.slot),
   );
-  const fallbackFocus = segmentRows.at(-1)?.speaker ?? selected.subject;
+  const reversedRows = [...segmentRows].reverse();
+  const fallbackFocus = reversedRows.find((row) => activeSlots.has(row.speaker))?.speaker ?? selected.subject;
   const focus =
     beat.focus_slot && activeSlots.has(beat.focus_slot)
       ? beat.focus_slot
       : fallbackFocus !== "both" && fallbackFocus !== "group"
         ? fallbackFocus
         : segmentRows[0].speaker;
-  const lookTarget =
-    activeParticipants.find((participant) => participant.slot !== focus)
-      ?.slot ?? "group_center";
+  const focusRow = reversedRows.find((row) => row.speaker === focus) ?? segmentRows.at(-1)!;
+  const focusIndex = input.dialogue.findIndex((row) => row.dialogue_id === focusRow.dialogue_id);
+  const reactionSpeaker = beat.coverage_strategy === "reaction_focus"
+    ? reversedRows.find((row) => row.speaker !== focus && activeSlots.has(row.speaker))?.speaker
+    : undefined;
+  const explicitTarget = beat.interaction_target_slot;
+  const lookTarget = explicitTarget && explicitTarget !== focus && activeSlots.has(explicitTarget)
+    ? explicitTarget
+    : reactionSpeaker ?? lookTargetFor(
+      focus, focusIndex, input.dialogue[focusIndex - 1]?.speaker ?? null,
+      activeParticipants, input,
+    );
   const anchor = visualAnchorFor(focus, input);
-  const intent = `${beat.reason}（端侧模型识别为 ${beat.narrative_function} 节拍，规则导演负责执行。）`;
+  const isRelationshipCoverage = beat.coverage_strategy === "relationship_hold" ||
+    beat.coverage_strategy === "reestablish";
+  const motive = isRelationshipCoverage ? undefined : visualMotivationFor(beat, segmentRows);
+  const movement = motive?.kind === "reveal" || motive?.kind === "realization"
+    ? "dolly_in" : motive?.kind === "isolation" ? "dolly_out" : "static";
+  const space = motive?.kind === "entrapment" ? "pressure"
+    : motive?.kind === "isolation" ? "isolation" : "look_room";
+  const visualIntent = {
+    camera_movement: movement,
+    movement_intensity: movement === "static" ? "none" : "subtle",
+    camera_roll_degrees: 0,
+    negative_space: space,
+  } satisfies Partial<DirectorDecision>;
+  const intent = combineIntent([
+    beat.reason,
+    ...(motive ? [`视觉动机 ${motive.kind}，依据 ${motive.dialogue_id}：“${motive.evidence}”`] : []),
+  ]);
 
   if (
     activeParticipants.length >= 2 &&
@@ -482,16 +529,14 @@ function applyBeatCoverageStrategy(
       end_lens_mm: beat.intensity >= 75 ? 100 : 85,
       lens_intent: "compressed_intimacy",
       depth_of_field: "shallow",
-      camera_movement: "static",
-      movement_intensity: "none",
-      composition_mode: "golden_ratio",
+      ...visualIntent,
+      composition_mode: space === "isolation" ? "negative_space" : "golden_ratio",
       visual_anchor:
         anchor === "left_third"
           ? "left_golden"
           : anchor === "right_third"
             ? "right_golden"
             : "center",
-      negative_space: "look_room",
       composition_transition: "contrast",
       coverage_intent: "reaction",
       intent,
@@ -507,16 +552,14 @@ function applyBeatCoverageStrategy(
       end_lens_mm: beat.intensity >= 80 ? 100 : 85,
       lens_intent: "compressed_intimacy",
       depth_of_field: "shallow",
-      camera_movement: beat.intensity >= 65 ? "dolly_in" : "static",
-      movement_intensity: beat.intensity >= 65 ? "subtle" : "none",
-      composition_mode: "golden_ratio",
+      ...visualIntent,
+      composition_mode: space === "isolation" ? "negative_space" : "golden_ratio",
       visual_anchor:
         anchor === "left_third"
           ? "left_golden"
           : anchor === "right_third"
             ? "right_golden"
             : "center",
-      negative_space: beat.intensity >= 80 ? "pressure" : "look_room",
       composition_transition: "progressive_shift",
       coverage_intent: "individual_emphasis",
       intent,
@@ -539,11 +582,9 @@ function applyBeatCoverageStrategy(
         ? "natural_perspective"
         : "subject_isolation",
     depth_of_field: "moderate",
-    camera_movement: "static",
-    movement_intensity: "none",
-    composition_mode: "rule_of_thirds",
+    ...visualIntent,
+    composition_mode: space === "isolation" ? "negative_space" : "rule_of_thirds",
     visual_anchor: anchor,
-    negative_space: "look_room",
     composition_transition: "match_eye_trace",
     coverage_intent:
       activeParticipants.length > 2
@@ -571,7 +612,6 @@ export function createRuleDecisions(
     number,
     RuleBeatAdvice["beats"][number]
   >();
-  const advisedBoundaryIndexes = new Set<number>();
   for (const beat of beatAdvice?.beats ?? []) {
     const startIndex = dialogueIndexById.get(beat.start_dialogue_id);
     const endIndex = dialogueIndexById.get(beat.end_dialogue_id);
@@ -582,7 +622,6 @@ export function createRuleDecisions(
     ) {
       continue;
     }
-    advisedBoundaryIndexes.add(startIndex);
     for (let index = startIndex; index <= endIndex; index += 1) {
       advisedBeatByDialogueIndex.set(index, beat);
     }
@@ -598,6 +637,30 @@ export function createRuleDecisions(
     previousSpeaker = row.speaker;
     return decision;
   });
+  // A beat labels narrative meaning. Only a changed coverage requirement needs
+  // a cut; intensity and narrative-function labels alone do not change coverage.
+  const advisedCoverageBoundaryIndexes = new Set<number>();
+  const coverageKey = (index: number, beat: RuleBeatAdvice["beats"][number]) => {
+    const rows = input.dialogue.slice(
+      dialogueIndexById.get(beat.start_dialogue_id)!,
+      dialogueIndexById.get(beat.end_dialogue_id)! + 1,
+    );
+    const decision = applyBeatCoverageStrategy(
+      rawDecisions[index], beat, rows, activeParticipantsAt(index, input, attendance), input,
+    );
+    return JSON.stringify([
+      decision.template, decision.subject, decision.look_target,
+      decision.camera_movement, decision.negative_space,
+    ]);
+  };
+  for (const [index, beat] of advisedBeatByDialogueIndex) {
+    const previousBeat = advisedBeatByDialogueIndex.get(index - 1);
+    if (index > 0 && previousBeat !== beat &&
+      (!previousBeat || beat.coverage_strategy === "reestablish" ||
+        coverageKey(index - 1, previousBeat) !== coverageKey(index, beat))) {
+      advisedCoverageBoundaryIndexes.add(index);
+    }
+  }
   const entryDialogueIds = new Set(
     [...attendance.entryIndexBySlot.entries()]
       .filter(([slot]) => dialogueParticipantSlots.has(slot))
@@ -661,17 +724,17 @@ export function createRuleDecisions(
     const currentHasEnoughLines =
       current.decision.dialogue_ids.length >=
       MINIMUM_DIALOGUE_LINES_PER_SHOT;
-    const withinAdvisedBeat =
+    const withinAdvisedCoverage =
       advisedBeatByDialogueIndex.get(current.endIndex) !== undefined &&
-      advisedBeatByDialogueIndex.get(current.endIndex) ===
-        advisedBeatByDialogueIndex.get(index);
+      advisedBeatByDialogueIndex.get(index) !== undefined &&
+      !advisedCoverageBoundaryIndexes.has(index);
     const shouldStartNewShot =
       hasHardBoundaryBefore(index) ||
-      advisedBoundaryIndexes.has(index) ||
+      advisedCoverageBoundaryIndexes.has(index) ||
       pauseCut ||
       (currentHasEnoughLines &&
         (currentIsTooLong ||
-          (!withinAdvisedBeat &&
+          (!withinAdvisedCoverage &&
             currentIsLongEnough &&
             (speakerChanged || dramaticCut))));
 
@@ -694,7 +757,7 @@ export function createRuleDecisions(
     if (
       current.duration >= MINIMUM_SHOT_DURATION_SECONDS ||
       hasHardBoundaryBefore(current.startIndex) ||
-      advisedBoundaryIndexes.has(current.startIndex) ||
+      advisedCoverageBoundaryIndexes.has(current.startIndex) ||
       previous.duration + current.duration >
         PREFERRED_MAXIMUM_SHOT_DURATION_SECONDS
     ) {
@@ -754,6 +817,16 @@ export function createRuleDecisions(
       let selected = keepsGroupComposition
         ? decision
         : (pauseDecision ?? emphasisDecision ?? segmentDecisions.at(-1) ?? decision);
+      const segmentBeats = [...new Set(segmentRows.map((row) =>
+        advisedBeatByDialogueIndex.get(dialogueIndexById.get(row.dialogue_id)!),
+      ).filter((beat): beat is RuleBeatAdvice["beats"][number] => beat !== undefined))];
+      const selectedBeat = segmentBeats.find((beat) => beat.coverage_strategy === "reestablish") ??
+        segmentBeats.at(-1);
+      if (selectedBeat) {
+        selected = applyBeatCoverageStrategy(
+          selected, selectedBeat, segmentRows, activeParticipants, input,
+        );
+      }
       const currentRelationshipPair =
         selected.subject !== "both" &&
         selected.subject !== "group" &&
@@ -807,15 +880,7 @@ export function createRuleDecisions(
             : "reestablish_geography",
           reason,
         );
-      } else if (advisedBeatByDialogueIndex.has(startIndex)) {
-        selected = applyBeatCoverageStrategy(
-          selected,
-          advisedBeatByDialogueIndex.get(startIndex)!,
-          segmentRows,
-          activeParticipants,
-          input,
-        );
-      } else if (
+      } else if (!selectedBeat &&
         activeParticipants.length === 2 &&
         (segmentSpeakers.size >= 2 || needsClosingRelationshipShot) &&
         !hasPauseBeat &&
@@ -842,7 +907,7 @@ export function createRuleDecisions(
             ? "连续紧景后在段落结尾回到双人镜头，交代双方共享结果并恢复关系空间。"
             : "当前段落的重点是双方互动和共同反应，使用双人镜头保留身体语言并避免机械正反打。",
         };
-      } else if (
+      } else if (!selectedBeat &&
         activeParticipants.length > 2 &&
         segmentSpeakers.size >= 2 &&
         TIGHT_SINGLE_TEMPLATES.has(selected.template) &&
@@ -887,8 +952,8 @@ export function createRuleDecisions(
       return {
         ...selected,
         dialogue_ids: [...decision.dialogue_ids],
-        intent: retainedForTiming
-          ? `${selected.intent} 连续台词保留在同一镜头内，普通镜头至少承载两句，避免随说话人频繁切换。`
+        intent: retainedForTiming && !selectedBeat
+          ? combineIntent([selected.intent, "连续台词保留在同一镜头内，避免随说话人频繁切换。"])
           : selected.intent,
       };
     },
@@ -911,7 +976,7 @@ export function createRuleDecisions(
       decision.coverage_intent === "relationship" &&
       !entryDialogueIds.has(decision.dialogue_ids[0]) &&
       !exitDialogueIds.has(previous.dialogue_ids.at(-1)!) &&
-      !advisedBoundaryIndexes.has(
+      !advisedCoverageBoundaryIndexes.has(
         input.dialogue.findIndex(
           (line) => line.dialogue_id === decision.dialogue_ids[0],
         ),
@@ -919,12 +984,25 @@ export function createRuleDecisions(
       ordinary && combinedDuration <= 24;
     if (canHold) {
       previous.dialogue_ids.push(...decision.dialogue_ids);
-      previous.intent = "持续观察人物关系与身体语言，在叙事变化前保持机位，不因说话人轮换重复切镜。";
+      if (previous.intent !== decision.intent) {
+        previous.intent = combineIntent([previous.intent, decision.intent]);
+      }
     } else {
       result.push({ ...decision, dialogue_ids: [...decision.dialogue_ids] });
     }
   }
-  return result;
+  return result.map((decision) => {
+    const beats = [...new Set(decision.dialogue_ids.map((id) =>
+      advisedBeatByDialogueIndex.get(dialogueIndexById.get(id)!),
+    ).filter((beat): beat is RuleBeatAdvice["beats"][number] => beat !== undefined))];
+    return {
+      ...decision,
+      intent: combineIntent([
+        decision.intent,
+        ...beats.map((beat) => beat.reason),
+      ]),
+    };
+  });
 }
 
 export function reviseRuleDecisionsForProjection(

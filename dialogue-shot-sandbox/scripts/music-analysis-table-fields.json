@@ -1,0 +1,303 @@
+[
+  {
+    "name": "资源标识",
+    "type": "text",
+    "description": "稳定主键，对应 DialogMusicState.WwiseState"
+  },
+  {
+    "name": "BGM名称",
+    "type": "text"
+  },
+  {
+    "name": "源记录ID",
+    "type": "text",
+    "description": "BGM资产表中的 record_id，供程序稳定关联"
+  },
+  {
+    "name": "源音乐记录",
+    "type": "link",
+    "link_table": "tblXRZRyNviXeFSr"
+  },
+  {
+    "name": "状态ID",
+    "type": "number",
+    "style": {
+      "type": "plain",
+      "precision": 0
+    }
+  },
+  {
+    "name": "文件Token",
+    "type": "text"
+  },
+  {
+    "name": "文件名",
+    "type": "text"
+  },
+  {
+    "name": "文件大小MB",
+    "type": "number",
+    "style": {
+      "type": "plain",
+      "precision": 2
+    }
+  },
+  {
+    "name": "时长秒",
+    "type": "number",
+    "style": {
+      "type": "plain",
+      "precision": 2
+    }
+  },
+  {
+    "name": "分析采样秒",
+    "type": "number",
+    "style": {
+      "type": "plain",
+      "precision": 2
+    }
+  },
+  {
+    "name": "编码",
+    "type": "text"
+  },
+  {
+    "name": "采样率Hz",
+    "type": "number",
+    "style": {
+      "type": "plain",
+      "precision": 0
+    }
+  },
+  {
+    "name": "声道数",
+    "type": "number",
+    "style": {
+      "type": "plain",
+      "precision": 0
+    }
+  },
+  {
+    "name": "估算BPM",
+    "type": "number",
+    "style": {
+      "type": "plain",
+      "precision": 1
+    },
+    "description": "基于起音强度自相关估算；应结合节奏置信度使用"
+  },
+  {
+    "name": "BPM来源",
+    "type": "text",
+    "description": "资源标识表示来自资产命名中的明确 BPM；音频估算表示由波形分析得出"
+  },
+  {
+    "name": "节奏置信度",
+    "type": "number",
+    "style": {
+      "type": "progress",
+      "percentage": true,
+      "color": "Blue"
+    }
+  },
+  {
+    "name": "综合响度LUFS",
+    "type": "number",
+    "style": {
+      "type": "plain",
+      "precision": 2
+    }
+  },
+  {
+    "name": "响度范围LU",
+    "type": "number",
+    "style": {
+      "type": "plain",
+      "precision": 2
+    }
+  },
+  {
+    "name": "真峰值dBFS",
+    "type": "number",
+    "style": {
+      "type": "plain",
+      "precision": 2
+    }
+  },
+  {
+    "name": "RMS电平dBFS",
+    "type": "number",
+    "style": {
+      "type": "plain",
+      "precision": 2
+    }
+  },
+  {
+    "name": "动态范围dB",
+    "type": "number",
+    "style": {
+      "type": "plain",
+      "precision": 2
+    }
+  },
+  {
+    "name": "频谱重心Hz",
+    "type": "number",
+    "style": {
+      "type": "plain",
+      "precision": 1
+    }
+  },
+  {
+    "name": "低频占比",
+    "type": "number",
+    "style": {
+      "type": "progress",
+      "percentage": true,
+      "color": "Orange"
+    }
+  },
+  {
+    "name": "中频占比",
+    "type": "number",
+    "style": {
+      "type": "progress",
+      "percentage": true,
+      "color": "Green"
+    }
+  },
+  {
+    "name": "高频占比",
+    "type": "number",
+    "style": {
+      "type": "progress",
+      "percentage": true,
+      "color": "Purple"
+    }
+  },
+  {
+    "name": "速度等级",
+    "type": "select",
+    "multiple": false,
+    "options": [
+      {
+        "name": "慢",
+        "hue": "Wathet"
+      },
+      {
+        "name": "中",
+        "hue": "Blue"
+      },
+      {
+        "name": "快",
+        "hue": "Orange"
+      },
+      {
+        "name": "未知",
+        "hue": "Gray"
+      }
+    ]
+  },
+  {
+    "name": "能量等级",
+    "type": "select",
+    "multiple": false,
+    "options": [
+      {
+        "name": "低",
+        "hue": "Wathet"
+      },
+      {
+        "name": "中",
+        "hue": "Green"
+      },
+      {
+        "name": "高",
+        "hue": "Red"
+      },
+      {
+        "name": "未知",
+        "hue": "Gray"
+      }
+    ]
+  },
+  {
+    "name": "音色明暗",
+    "type": "select",
+    "multiple": false,
+    "options": [
+      {
+        "name": "偏暗",
+        "hue": "Purple"
+      },
+      {
+        "name": "均衡",
+        "hue": "Green"
+      },
+      {
+        "name": "明亮",
+        "hue": "Yellow"
+      },
+      {
+        "name": "未知",
+        "hue": "Gray"
+      }
+    ]
+  },
+  {
+    "name": "来源标签",
+    "type": "text"
+  },
+  {
+    "name": "来源备注",
+    "type": "text"
+  },
+  {
+    "name": "推荐场景",
+    "type": "text"
+  },
+  {
+    "name": "语义画像JSON",
+    "type": "text",
+    "description": "music-semantic-profile.v3 结构化画像，供镜头沙盘候选召回和端侧模型重排"
+  },
+  {
+    "name": "音频特征摘要",
+    "type": "text"
+  },
+  {
+    "name": "分析器版本",
+    "type": "text"
+  },
+  {
+    "name": "分析时间",
+    "type": "datetime",
+    "style": {
+      "format": "yyyy-MM-dd HH:mm"
+    }
+  },
+  {
+    "name": "分析状态",
+    "type": "select",
+    "multiple": false,
+    "options": [
+      {
+        "name": "完成",
+        "hue": "Green"
+      },
+      {
+        "name": "缺少附件",
+        "hue": "Orange"
+      },
+      {
+        "name": "失败",
+        "hue": "Red"
+      }
+    ]
+  },
+  {
+    "name": "错误信息",
+    "type": "text"
+  }
+]

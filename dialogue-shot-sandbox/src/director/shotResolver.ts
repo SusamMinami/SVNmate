@@ -35,6 +35,9 @@ export interface ShotCameraOverride {
 export interface ShotResolutionOptions {
   cameraCandidateIndexes?: ReadonlyMap<number, number>;
   cameraOverrides?: ReadonlyMap<number, ShotCameraOverride>;
+  motionOverrides?: ReadonlyMap<number, { endPosition: Vec3; endTarget: Vec3 }>;
+  // Local refinement preserves the existing actor direction on every shot.
+  facingOverrides?: ReadonlyMap<number, Partial<Record<ParticipantSlot, Vec3>>>;
 }
 
 function cameraHeight(
@@ -658,6 +661,7 @@ export function resolveShotDecisions(
       .map((participant) => ({
         ...participant,
         facingTarget:
+          options.facingOverrides?.get(index)?.[participant.slot] ??
           currentFacingTargets.get(participant.slot) ??
           participant.facingTarget,
       }));
@@ -787,7 +791,9 @@ export function resolveShotDecisions(
         `镜头 ${index + 1} 的带群中景需要至少两位在场角色并指定单个主体`,
       );
     }
-    const actorActionPlan = planActorTurns(
+    const actorActionPlan = options.facingOverrides?.has(index)
+      ? { participants: activeDialogueParticipants, actions: [], warnings: [] }
+      : planActorTurns(
       activeDialogueParticipants,
       groupSubject
         ? { kind: "group" }
@@ -836,7 +842,7 @@ export function resolveShotDecisions(
       options.cameraCandidateIndexes?.get(index) ?? 0,
       options.cameraOverrides?.get(index),
     );
-    const motionGeometry = resolveMotionGeometry(
+    const motionGeometry = options.motionOverrides?.get(index) ?? resolveMotionGeometry(
       decision,
       geometry,
       subject,
@@ -1040,6 +1046,7 @@ export function resolveShotDecisions(
         );
 
     const shot = {
+      directorDecision: decision,
       id: `shot-${String(index + 1).padStart(2, "0")}`,
       index,
       dialogueId: firstRow.id,

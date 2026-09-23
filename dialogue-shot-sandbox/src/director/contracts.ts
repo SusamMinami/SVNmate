@@ -101,6 +101,12 @@ export const RULE_BEAT_COVERAGE_STRATEGIES = [
   "reestablish",
 ] as const;
 
+export const RuleBeatVisualMotivationSchema = z.object({
+  kind: z.enum(["reveal", "realization", "isolation", "entrapment"]),
+  dialogue_id: z.string().min(1),
+  evidence: z.string().trim().min(2).max(240),
+});
+
 export const RULE_DIALOGUE_ISSUE_CATEGORIES = [
   "clarity",
   "continuity",
@@ -615,6 +621,8 @@ export interface RuleBeatAdvice {
     intensity: number;
     coverage_strategy: (typeof RULE_BEAT_COVERAGE_STRATEGIES)[number];
     focus_slot?: ParticipantSlot;
+    interaction_target_slot?: ParticipantSlot;
+    visual_motivation?: z.infer<typeof RuleBeatVisualMotivationSchema>;
     reason: string;
   }>;
   dialogue_issues?: RuleDialogueIssue[];

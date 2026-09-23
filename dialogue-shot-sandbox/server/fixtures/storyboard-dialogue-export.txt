@@ -25,6 +25,8 @@ Begin Object Class=/Script/SeriaDialogEditor.SeriaDialogGraph Name="735200"
          DialogGraphNodeData=SeriaDialogGraphNodeData'"SeriaDialogGraphNodeData_0"'
       End Object
       Formation=/Game/Seria/Task/Mod/Test/BP_735200.BP_735200_C
+      DialogModels(0)="BP_Player"
+      DialogModels(1)="BP_Npc"
       Nodes(0)=SeriaEdDialogGraphNode'"SeriaEdDialogGraphNode_0"'
       Nodes(1)=SeriaEdDialogGraphNode'"SeriaEdDialogGraphNode_1"'
       Nodes(2)=SeriaEdDialogGraphNode'"SeriaEdDialogGraphNode_2"'

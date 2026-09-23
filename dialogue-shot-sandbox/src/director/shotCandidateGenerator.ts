@@ -71,11 +71,36 @@ export function generateRuleCameraCandidates(
   decisions: DirectorDecision[],
   baselineShots: ShotPlan[],
 ): RuleCameraCandidateSet[] {
+  return [...iterateRuleCameraCandidates(sequence, decisions, baselineShots)];
+}
+
+export async function generateRuleCameraCandidatesAsync(
+  sequence: DialogueSequence,
+  decisions: DirectorDecision[],
+  baselineShots: ShotPlan[],
+  signal?: AbortSignal,
+): Promise<RuleCameraCandidateSet[]> {
+  const result: RuleCameraCandidateSet[] = [];
+  const iterator = iterateRuleCameraCandidates(sequence, decisions, baselineShots);
+  while (true) {
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    signal?.throwIfAborted();
+    const next = iterator.next();
+    if (next.done) return result;
+    result.push(next.value);
+  }
+}
+
+function* iterateRuleCameraCandidates(
+  sequence: DialogueSequence,
+  decisions: DirectorDecision[],
+  baselineShots: ShotPlan[],
+): Generator<RuleCameraCandidateSet> {
   const baselineInvalidCount = baselineShots.filter(
     (shot) => !shot.projection.valid,
   ).length;
 
-  return baselineShots.map((baselineShot, shotIndex) => {
+  for (const [shotIndex, baselineShot] of baselineShots.entries()) {
     const candidates: RuleCameraCandidate[] = [];
     const seen = new Set<string>();
 
@@ -118,10 +143,10 @@ export function generateRuleCameraCandidates(
       candidates.push(candidateFromShot(baselineShot, 0, false));
     }
 
-    return {
+    yield {
       shotIndex,
       dialogueIds: [...baselineShot.dialogueIds],
       candidates,
     };
-  });
+  }
 }

@@ -101,6 +101,130 @@ describe("character actions", () => {
     ).toBe(false);
   });
 
+  it("respects a legacy nonzero player slot and resolves an unnamed NPC alias", () => {
+    const participant = (
+      id: number,
+      name: string,
+      resourceId: number | null,
+      slot: DialogueParticipant["slot"],
+    ): DialogueParticipant => ({
+      id,
+      name,
+      note: "",
+      introduction: "",
+      resourceId,
+      instanceId: `generated:${id}`,
+      slot,
+      color: "#fff",
+      position: [0, 0, 0],
+      facingTarget: [0, 0, -2],
+      modelIndex: null,
+      positionSource: "generated",
+      firstDialogueId: "733602",
+      firstDialogueIndex: 0,
+      lastDialogueId: "733638",
+      lastDialogueIndex: 1,
+      entryDialogueId: "733602",
+      entryIndex: 0,
+      exitDialogueId: null,
+      exitIndex: null,
+    });
+    const participants = [
+      participant(1, "玩家", null, "A"),
+      participant(101928, "？？？", 200172, "B"),
+      participant(101917, "阿尔德里奇", 200478, "C"),
+      participant(101916, "爱莲娜", 200172, "D"),
+    ];
+    const models = new Map([
+      [200172, {
+        id: 200172,
+        configuredPath:
+          "/Game/Seria/NPC/N25_Citizen_Female_A01/BP_N25_Citizen_Female_A01",
+        generatedClassPath:
+          "/Game/Seria/NPC/N25_Citizen_Female_A01/BP_N25_Citizen_Female_A01.BP_N25_Citizen_Female_A01_C",
+        rowNumber: 1,
+      }],
+      [200478, {
+        id: 200478,
+        configuredPath:
+          "/Game/Seria/NPC/N111_Aldridge/BP_N111_Aldridge",
+        generatedClassPath:
+          "/Game/Seria/NPC/N111_Aldridge/BP_N111_Aldridge.BP_N111_Aldridge_C",
+        rowNumber: 2,
+      }],
+    ]);
+    const catalogs = [
+      {
+        modelIndex: 0,
+        blueprintClassPath:
+          "/Game/Seria/NPC/N111_Aldridge/BP_N111_Aldridge.BP_N111_Aldridge_C",
+        characterLabel: "N111_Aldridge",
+        status: "loaded" as const,
+        message: "",
+        actions: [],
+      },
+      {
+        modelIndex: 1,
+        blueprintClassPath:
+          "/Game/Seria/NPC/N25_Citizen_Female_A01/BP_N25_Citizen_Female_A01.BP_N25_Citizen_Female_A01_C",
+        characterLabel: "N25_Citizen_Female_A01",
+        status: "loaded" as const,
+        message: "",
+        actions: [],
+      },
+      {
+        modelIndex: 2,
+        blueprintClassPath:
+          "/Game/Seria/Characters/Eric/BP_Eric.BP_Eric_C",
+        characterLabel: "player",
+        status: "loaded" as const,
+        message: "",
+        actions: [],
+      },
+    ];
+
+    const byModelIndex = dialogueParticipantsByModelIndex(
+      participants,
+      [],
+      catalogs,
+      models,
+    );
+    expect(byModelIndex.get(0)?.name).toBe("阿尔德里奇");
+    expect(byModelIndex.get(1)?.name).toBe("爱莲娜");
+    expect(byModelIndex.get(2)?.name).toBe("玩家");
+
+    const rows: DialogueRow[] = [{
+      id: "733602",
+      npcId: 101928,
+      content: "测试",
+      nextId: null,
+      isEnd: true,
+      rowNumber: 1,
+      state: 0,
+      speakerSlot: "B",
+      speakerModelIndex: null,
+      relativeTransformsString: "",
+      characterBehaviourString: "",
+    }];
+    const stage = resolveDialogueCharacterStage(
+      participants,
+      rows,
+      0,
+      [],
+      [{
+        dialogueId: "733602",
+        modelIndex: 0,
+        actions: [{
+          montageName: "AM_TurnRight90",
+          delaySeconds: 0,
+        }],
+      }],
+      catalogs,
+      models,
+    );
+    expect(stage.affectedParticipantSlots).toEqual(new Set(["C"]));
+  });
+
   it("parses rotate, walk, and state-machine walk actions by model slot", () => {
     expect(
       parseDialogueCharacterBehaviourString(
@@ -435,5 +559,72 @@ describe("character actions", () => {
 
     expect(stage.participants[0].facingTarget[0]).toBeCloseTo(2);
     expect(stage.participants[0].facingTarget[2]).toBeCloseTo(0);
+  });
+
+  it("previews a replacement draft without replaying the existing actions", () => {
+    const participant: DialogueParticipant = {
+      id: 101,
+      name: "测试角色",
+      note: "",
+      introduction: "",
+      resourceId: null,
+      instanceId: "bp:test:1",
+      slot: "A",
+      color: "#fff",
+      position: [0, 0, 0],
+      facingTarget: [0, 0, -2],
+      modelIndex: 1,
+      modelClassPath: "/Game/Test/BP_Test.BP_Test_C",
+      positionSource: "blueprint",
+      firstDialogueId: "100001",
+      firstDialogueIndex: 0,
+      lastDialogueId: "100001",
+      lastDialogueIndex: 0,
+      entryDialogueId: "100001",
+      entryIndex: 0,
+      exitDialogueId: null,
+      exitIndex: null,
+    };
+    const rows: DialogueRow[] = [{
+      id: "100001",
+      npcId: 101,
+      content: "测试",
+      nextId: null,
+      isEnd: true,
+      rowNumber: 1,
+      state: 0,
+      speakerSlot: "A",
+      speakerModelIndex: 1,
+      relativeTransformsString: "",
+      characterBehaviourString: "",
+    }];
+
+    const stage = resolveDialogueCharacterStage(
+      [participant],
+      rows,
+      0,
+      [{
+        dialogueId: "100001",
+        modelIndex: 1,
+        actions: [{
+          montageName: "AM_TurnRight90",
+          delaySeconds: 0,
+          behaviourType: "ERotate",
+        }],
+      }],
+      [{
+        dialogueId: "100001",
+        modelIndex: 1,
+        editMode: "replace_editable",
+        actions: [{
+          montageName: "AM_TurnLeft45",
+          delaySeconds: 0.2,
+          behaviourType: "ERotate",
+        }],
+      }],
+    );
+
+    expect(stage.participants[0].facingTarget[0]).toBeCloseTo(-Math.SQRT2);
+    expect(stage.participants[0].facingTarget[2]).toBeCloseTo(-Math.SQRT2);
   });
 });

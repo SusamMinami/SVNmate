@@ -15,6 +15,7 @@ import {
   readSelectedLevelActors,
   registerBlueprintDialogueModels,
   resetMissionTargetPreviewState,
+  switchEditorToAutoTest,
 } from "./ueBridge";
 import {
   configureUnrealMcpPort,
@@ -768,6 +769,72 @@ describe("UE editor connection settings", () => {
   it("rejects invalid port values", () => {
     expect(() => configureUnrealMcpPort(Number.NaN)).toThrow("1-65535");
     expect(() => configureUnrealMcpPort(65536)).toThrow("1-65535");
+  });
+});
+
+describe("UE editor AutoTest switch", () => {
+  it("opens AutoTest through the native UE flow without prechecking dirty maps", async () => {
+    const connection = new FakeUnrealConnection({
+      currentMaps: [
+        "/Game/Seria/Maps/02_01_City/02_01_City",
+        "/Game/Seria/Maps/AutoTest",
+      ],
+      dirtyMaps: ["/Game/Seria/Maps/02_01_City/02_01_City"],
+    });
+
+    await expect(
+      switchEditorToAutoTest(() => connection),
+    ).resolves.toEqual({
+      status: "opened",
+      mapAssetPath: "/Game/Seria/Maps/AutoTest",
+      previousMapAssetPath:
+        "/Game/Seria/Maps/02_01_City/02_01_City",
+    });
+    expect(
+      connection.calls.find((call) => call.action === "world.open_level"),
+    ).toEqual({
+      action: "world.open_level",
+      args: { LevelName: "/Game/Seria/Maps/AutoTest" },
+      options: { timeoutMs: 180_000 },
+    });
+    expect(
+      connection.calls.some(
+        (call) =>
+          call.action === "script.eval_python_expression" &&
+          String(call.args.Expression).includes("get_dirty_map_packages"),
+      ),
+    ).toBe(false);
+    expect(connection.closed).toBe(true);
+  });
+
+  it("does not reload AutoTest when it is already the editor map", async () => {
+    const connection = new FakeUnrealConnection({
+      currentMaps: ["/Game/Seria/Maps/AutoTest.AutoTest"],
+    });
+
+    await expect(
+      switchEditorToAutoTest(() => connection),
+    ).resolves.toMatchObject({
+      status: "already_open",
+      mapAssetPath: "/Game/Seria/Maps/AutoTest",
+    });
+    expect(
+      connection.calls.some((call) => call.action === "world.open_level"),
+    ).toBe(false);
+  });
+
+  it("reports an in-progress switch when UE closes the MCP connection", async () => {
+    const connection = new FakeUnrealConnection({
+      currentMaps: ["/Game/Seria/Maps/02_01_City/02_01_City"],
+      openLevelError: new Error("UE 编辑器连接已关闭"),
+    });
+
+    await expect(
+      switchEditorToAutoTest(() => connection),
+    ).resolves.toMatchObject({
+      status: "opening",
+      mapAssetPath: "/Game/Seria/Maps/AutoTest",
+    });
   });
 });
 

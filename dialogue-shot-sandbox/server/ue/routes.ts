@@ -264,6 +264,13 @@ export async function routeUeRequest(
       });
       return true;
     }
+    if (url.pathname === "/api/ue/editor/auto-test") {
+      sendJson(response, 200, {
+        ok: true,
+        data: await services.switchEditorToAutoTest(),
+      });
+      return true;
+    }
     if (url.pathname === "/api/ue/dialogue/storyboard/read") {
       sendJson(response, 200, {
         ok: true,

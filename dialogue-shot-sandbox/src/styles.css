@@ -869,12 +869,6 @@ textarea:focus-visible {
   padding: 0 12px;
 }
 
-.query-formation-button {
-  width: 100%;
-  min-height: 32px;
-  margin-top: 7px;
-}
-
 .input-row input {
   width: 100%;
   height: 36px;
@@ -969,6 +963,13 @@ textarea:focus-visible {
   display: grid;
   min-width: 0;
   gap: 1px;
+}
+
+.rule-advisor-state > button {
+  grid-column: 2;
+  justify-self: start;
+  min-height: 28px;
+  padding: 4px 8px;
 }
 
 .rule-advisor-state strong,
@@ -1223,6 +1224,30 @@ textarea:focus-visible {
   font-size: 8px;
   line-height: 12px;
   opacity: 0.82;
+}
+
+.formation-status__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+.formation-status__read {
+  min-height: 28px;
+  padding: 0 8px;
+  color: inherit;
+  background: rgba(255, 255, 255, 0.66);
+  border-color: currentColor;
+  border-radius: 4px;
+  font-size: var(--type-body);
+  white-space: nowrap;
+}
+
+.formation-status__read:hover:not(:disabled) {
+  color: var(--paper);
+  background: var(--control-hover);
+  border-color: var(--control-hover);
 }
 
 .formation-status__switch {
@@ -2948,13 +2973,46 @@ textarea:focus-visible {
   display: grid;
   min-width: 0;
   min-height: 27px;
-  grid-template-columns: 16px minmax(0, 1fr) auto;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
   align-items: center;
   gap: 5px;
   padding: 3px 6px;
   color: #686f75;
   background: #eceeeb;
   border-left: 2px solid #aeb2ad;
+}
+
+.character-action-existing-row__lock,
+.character-action-row__lock {
+  display: grid;
+  width: 20px;
+  height: 24px;
+  place-items: center;
+  padding: 0;
+  color: #737a75;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.character-action-existing-row__lock:hover:not(:disabled),
+.character-action-row__lock:hover:not(:disabled),
+.character-action-row__lock:focus-visible {
+  color: var(--ink);
+  background: #dde1dc;
+  outline: none;
+}
+
+.character-action-existing-row__lock:focus-visible {
+  color: var(--ink);
+  outline: 2px solid var(--ark-cyan);
+  outline-offset: -2px;
+}
+
+.character-action-existing-row__lock:disabled,
+.character-action-row__lock:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .character-action-existing-row svg {
@@ -2984,9 +3042,22 @@ textarea:focus-visible {
 .character-action-row {
   display: grid;
   min-width: 0;
-  grid-template-columns: 16px minmax(0, 1fr) 26px;
+  grid-template-columns: 20px minmax(0, 1fr) 26px;
   align-items: center;
   gap: 5px;
+}
+
+.character-action-row.is-existing {
+  padding: 4px 5px;
+  color: #686f75;
+  background: #eceeeb;
+  border: 1px solid transparent;
+}
+
+.character-action-row.is-existing.is-unlocked {
+  color: var(--ink);
+  background: var(--surface);
+  border-color: var(--border);
 }
 
 .character-action-row[draggable="true"] {
@@ -3000,6 +3071,29 @@ textarea:focus-visible {
 .character-action-row__handle {
   grid-row: 1 / span 2;
   color: #929891;
+}
+
+.character-action-row__lock {
+  grid-row: 1 / span 2;
+}
+
+.character-action-row__name {
+  grid-column: 2;
+  grid-row: 1;
+  overflow: hidden;
+  align-self: stretch;
+  padding: 7px;
+  color: inherit;
+  background: transparent;
+  border: 1px solid transparent;
+  font: 9px/14px "Cascadia Code", Consolas, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.character-action-row.is-unlocked .character-action-row__name {
+  background: #f7f8f7;
+  border-color: var(--border);
 }
 
 .character-action-picker__input,
@@ -11007,6 +11101,22 @@ textarea:focus-visible {
   gap: 6px;
 }
 
+.node-camera-look-at-push {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 6px;
+  padding-bottom: 8px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.node-camera-look-at-push .button {
+  min-height: 30px;
+  padding: 0 8px;
+  white-space: nowrap;
+}
+
 .node-camera-preset-picker label {
   display: grid;
   min-width: 0;
@@ -12310,6 +12420,135 @@ textarea:focus-visible {
     opacity: 0.58;
   }
 
+}
+
+.existing-review-control {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  font-size: var(--type-body);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.existing-review-control p {
+  margin: 0;
+}
+
+.existing-review-control .button {
+  color: var(--text);
+  background: var(--surface);
+  border-color: var(--border-strong);
+}
+
+.existing-review-control .button:hover:not(:disabled) {
+  color: var(--paper);
+  background: var(--control-hover);
+}
+
+.existing-shot-review p {
+  overflow-wrap: anywhere;
+}
+
+.existing-shot-review > .projection-issue--warning {
+  color: #8a5612;
+}
+
+.existing-shot-review > .projection-issue--error {
+  color: #ad3c30;
+}
+
+.existing-shot-review__scores {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 12px 0;
+  font-size: var(--type-body);
+  font-variant-numeric: tabular-nums;
+}
+
+.existing-shot-review__scores div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.existing-shot-review__scores dd {
+  margin: 0;
+}
+
+.existing-shot-review__scope {
+  color: var(--text-muted);
+}
+
+.existing-shot-suggestion p {
+  overflow-wrap: anywhere;
+}
+
+.existing-shot-suggestion__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.existing-shot-suggestion .button {
+  min-height: 32px;
+}
+
+.existing-shot-suggestion [aria-pressed="true"] {
+  background: var(--text);
+  color: var(--paper);
+}
+
+.existing-suggestion-preview-label {
+  font-size: var(--type-body);
+  color: var(--text);
+}
+
+.shot-refinement label {
+  display: grid;
+  gap: 8px;
+  font-size: var(--type-body);
+}
+
+.shot-refinement textarea {
+  width: 100%;
+  min-height: 64px;
+  resize: vertical;
+  padding: 8px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  font: inherit;
+}
+
+.shot-refinement textarea::placeholder {
+  color: var(--text-muted);
+}
+
+.shot-refinement__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.shot-refinement__actions .button {
+  min-height: 32px;
+  color: var(--text);
+  background: var(--surface-muted);
+  border-color: var(--border);
+}
+
+.shot-refinement__actions .button:hover:not(:disabled),
+.shot-refinement__actions .button[aria-pressed="true"] {
+  color: var(--paper);
+  background: var(--control-hover);
+  border-color: var(--control-hover);
 }
 
 /* Keep focus/color feedback, but omit press displacement for keyboard/reduced motion. */

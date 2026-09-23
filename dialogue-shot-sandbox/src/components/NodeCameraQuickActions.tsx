@@ -4,6 +4,7 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  ClipboardPaste,
   Copy,
   GitMerge,
   GripVertical,
@@ -37,6 +38,9 @@ import {
   inspectDialogueCameraQuickAction,
   readDialogueCameraPresets,
 } from "../ue/client";
+import {
+  schoolCameraHeightDeltaCm,
+} from "../ue/schoolCameraHeight";
 
 interface NodeCameraQuickActionsProps {
   dialogueId: string;
@@ -89,6 +93,7 @@ function actionLabel(mode: DialogueCameraQuickActionMode): string {
     copy_previous: "使用上一相机参数",
     default: "添加默认镜头",
     preset_camera: "使用预设机位",
+    look_at_push: "粘贴到 ELookAtPush",
     blend_curve: "添加镜头曲线",
     school_cameras: "添加角色相机",
     copy_school_cameras: "复制角色相机",
@@ -111,6 +116,10 @@ const DIALOGUE_BLEND_CURVE_DIRECTORY =
 
 function schoolCameraRoleLabel(role: DialogueSchoolCameraRole): string {
   return SCHOOL_CAMERA_ROLES.find(({ key }) => key === role)?.label ?? role;
+}
+
+function signedCentimetres(value: number): string {
+  return `${value > 0 ? "+" : ""}${value} cm`;
 }
 
 function isSchoolCameraRole(value: string): value is DialogueSchoolCameraRole {
@@ -185,6 +194,11 @@ function schoolCameraConfirmationPreview(
     addedSchoolCameraKeys: missingKeys,
     desiredSchoolCameraKeys: [...existingKeys, ...missingKeys],
     schoolCameraCopies: [],
+    schoolCameraHeightAdjustments: missingKeys.map((targetRole) => ({
+      sourceRole: "ENone",
+      targetRole,
+      deltaZCm: schoolCameraHeightDeltaCm("ENone", targetRole),
+    })),
     existingSchoolCameraCount: existingKeys.length,
     desiredSchoolCameraCount: existingKeys.length + missingKeys.length,
     changed: missingKeys.length > 0,
@@ -372,6 +386,13 @@ function schoolCameraCopyDraftPreview(
     addedSchoolCameraKeys: addedKeys,
     desiredSchoolCameraKeys: desiredKeys,
     schoolCameraCopies: copies,
+    schoolCameraHeightAdjustments: copies.map(
+      ({ sourceRole, targetRole }) => ({
+        sourceRole,
+        targetRole,
+        deltaZCm: schoolCameraHeightDeltaCm(sourceRole, targetRole),
+      }),
+    ),
     existingSchoolCameraCount: existingKeys.length,
     desiredSchoolCameraCount: desiredKeys.length,
     changed: copies.length > 0,
@@ -404,6 +425,7 @@ export const NodeCameraQuickActions = forwardRef<
   const [presetError, setPresetError] = useState("");
   const [presetRole, setPresetRole] = useState("");
   const [presetName, setPresetName] = useState("");
+  const [lookAtActorModelIndex, setLookAtActorModelIndex] = useState("");
   const [preview, setPreview] =
     useState<DialogueCameraQuickActionPreview | null>(null);
   const [request, setRequest] =
@@ -428,6 +450,8 @@ export const NodeCameraQuickActions = forwardRef<
     existingConfiguration?.cameraPosition ||
       existingConfiguration?.moveCameraCount,
   );
+  const currentCameraMoveType =
+    existingConfiguration?.cameraMoveTypes[0] ?? "";
   const cameraSummary = configurationLoading
     ? "正在读取当前节点参数..."
     : cameraConfigured
@@ -485,6 +509,27 @@ export const NodeCameraQuickActions = forwardRef<
   const presetOrbitPoints = selectedPresetRole
     ? cameraOrbitPoints(selectedPresetRole.cameras)
     : [];
+  const lookAtActorOptions = Array.from(
+    new Map(
+      [
+        ...roleHints,
+        ...(presets?.roles.map(({ modelIndex, label }) => ({
+          modelIndex,
+          label,
+        })) ?? []),
+      ].map((role) => [role.modelIndex, role]),
+    ).values(),
+  ).sort((left, right) => left.modelIndex - right.modelIndex);
+  const lookAtPushBlockedReason =
+    existingConfiguration?.moveCameraCount !== 1
+      ? "当前节点必须恰好包含一段 EPush 运镜"
+      : currentCameraMoveType !== "EPush"
+        ? "当前节点主镜头不是 EPush"
+        : lookAtActorOptions.length === 0
+          ? "尚未读取到可用角色槽"
+          : !lookAtActorModelIndex
+            ? "请先选择注视 Actor"
+            : "";
 
   useEffect(() => {
     operationRunRef.current += 1;
@@ -493,6 +538,7 @@ export const NodeCameraQuickActions = forwardRef<
     setPresets(null);
     setPresetRole("");
     setPresetName("");
+    setLookAtActorModelIndex("");
     setPresetLoading(false);
     setPresetError("");
     setPreview(null);
@@ -537,16 +583,6 @@ export const NodeCameraQuickActions = forwardRef<
           : String(snapshot.roles[0]?.modelIndex ?? "");
         setPresets(snapshot);
         setPresetRole(nextRole);
-        if (nextRole) {
-          setRequest({
-            dialogueId,
-            startId,
-            dialogueNodeId,
-            mode: "preset_camera",
-            roleHints,
-          });
-          setPreview(null);
-        }
       }
     } catch (reason) {
       if (run === presetReadRunRef.current) {
@@ -614,7 +650,7 @@ export const NodeCameraQuickActions = forwardRef<
   async function inspect(mode: DialogueCameraQuickActionMode) {
     const operationRun = ++operationRunRef.current;
     setPreview(null);
-    if (mode !== "default") {
+    if (mode !== "default" && mode !== "look_at_push") {
       setPresetOpen(false);
       presetReadRunRef.current += 1;
       setPresetLoading(false);
@@ -630,6 +666,12 @@ export const NodeCameraQuickActions = forwardRef<
         ? {
             blendCurveAssetName: blendCurveAssetName.trim(),
             blendDuration,
+          }
+        : {}),
+      ...(mode === "look_at_push"
+        ? {
+            roleHints,
+            lookAtActorModelIndex: Number(lookAtActorModelIndex),
           }
         : {}),
       mode,
@@ -854,6 +896,7 @@ export const NodeCameraQuickActions = forwardRef<
       setPresetOpen(false);
       presetReadRunRef.current += 1;
       setPresetLoading(false);
+      setLookAtActorModelIndex("");
       setSelectedSchoolCameraSource(null);
       setDraggedSchoolCameraSource(null);
       setSchoolCameraDropTarget(null);
@@ -949,7 +992,9 @@ export const NodeCameraQuickActions = forwardRef<
           title={
             configurationLoading || !existingConfiguration
               ? "等待读取当前节点镜头配置"
-              : "确认后写入 c1、EPush、速度 1、Blend Out 1、FOV 62"
+              : cameraConfigured
+                ? "展开当前镜头修改与预设机位"
+                : "确认后写入 c1、EPush、速度 1、Blend Out 1、FOV 62"
           }
           onClick={() => {
             if (presetOpen) {
@@ -957,7 +1002,16 @@ export const NodeCameraQuickActions = forwardRef<
               return;
             }
             setPresetOpen(true);
-            void inspect("default");
+            if (cameraConfigured) {
+              operationRunRef.current += 1;
+              setPreview(null);
+              setRequest(null);
+              setBusy(null);
+              setError("");
+              setStatus("");
+            } else {
+              void inspect("default");
+            }
             if (!presets && !presetLoading) {
               void loadPresets();
             }
@@ -965,13 +1019,63 @@ export const NodeCameraQuickActions = forwardRef<
         >
           <Camera size={16} />
           <span>
-            <strong>添加默认镜头</strong>
+            <strong>
+              {cameraConfigured ? "修改当前镜头" : "添加默认镜头"}
+            </strong>
             <small>{cameraSummary}</small>
           </span>
           {presetOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
         </button>
         {presetOpen && (
           <div className="node-camera-preset-picker" id={`camera-preset-picker-${dialogueNodeId}`}>
+            {cameraConfigured && (
+              <div className="node-camera-look-at-push">
+                <label>
+                  <span>注视 Actor</span>
+                  <select
+                    aria-label="ELookAtPush 注视 Actor"
+                    value={lookAtActorModelIndex}
+                    disabled={busy !== null || lookAtActorOptions.length === 0}
+                    onChange={(event) => {
+                      setLookAtActorModelIndex(event.target.value);
+                      if (request?.mode === "look_at_push") {
+                        operationRunRef.current += 1;
+                        setRequest(null);
+                        setPreview(null);
+                        setBusy(null);
+                      }
+                      setError("");
+                      setStatus("");
+                    }}
+                  >
+                    <option value="">选择角色</option>
+                    {lookAtActorOptions.map((role) => (
+                      <option key={role.modelIndex} value={role.modelIndex}>
+                        {role.modelIndex} · {role.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  className="button"
+                  type="button"
+                  disabled={busy !== null || Boolean(lookAtPushBlockedReason)}
+                  title={
+                    lookAtPushBlockedReason ||
+                    "复制当前 EPush 的起终点、速度和 Blend Out，并改为持续注视所选 Actor"
+                  }
+                  onClick={() => void inspect("look_at_push")}
+                >
+                  {busy === "inspect" &&
+                  request?.mode === "look_at_push" ? (
+                    <LoaderCircle className="spin" size={14} />
+                  ) : (
+                    <ClipboardPaste size={14} />
+                  )}
+                  粘贴到 ELookAtPush
+                </button>
+              </div>
+            )}
             <div className="node-camera-preset-picker__fields">
               <label>
                 <span>角色</span>
@@ -1219,6 +1323,10 @@ export const NodeCameraQuickActions = forwardRef<
                     const stagedCopy = schoolCameraCopies.find(
                       (copy) => copy.targetRole === key,
                     );
+                    const heightAdjustment =
+                      preview.schoolCameraHeightAdjustments?.find(
+                        (adjustment) => adjustment.targetRole === key,
+                      );
                     const activeSource =
                       draggedSchoolCameraSource ??
                       selectedSchoolCameraSource;
@@ -1316,10 +1424,16 @@ export const NodeCameraQuickActions = forwardRef<
                             <strong>{label}</strong>
                             <small>
                               {stagedCopy
-                                ? `${schoolCameraRoleLabel(stagedCopy.sourceRole)} → ${label}`
+                                ? `Z ${signedCentimetres(
+                                    heightAdjustment?.deltaZCm ?? 0,
+                                  )}`
                                 : configured
                                   ? "已配置"
-                                  : "未配置"}
+                                  : heightAdjustment
+                                    ? `Z ${signedCentimetres(
+                                        heightAdjustment.deltaZCm,
+                                      )}`
+                                    : "未配置"}
                             </small>
                           </span>
                         </button>
@@ -1400,6 +1514,43 @@ export const NodeCameraQuickActions = forwardRef<
                         <dd>
                           {preview.cameraMoveType || "-"} · 速度{" "}
                           {preview.velocity ?? "-"} · Blend Out{" "}
+                          {preview.blendOutTime ?? "-"} · FOV{" "}
+                          {preview.fov ?? "-"}
+                        </dd>
+                      </div>
+                    </>
+                  )}
+                  {preview.mode === "look_at_push" && (
+                    <>
+                      <div>
+                        <dt>Camera Position</dt>
+                        <dd>
+                          <code>
+                            {preview.existingCameraPosition || "空"}
+                          </code>
+                          <span>保持不变</span>
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>Camera Config</dt>
+                        <dd>
+                          <code>{currentCameraMoveType || "-"}</code>
+                          <ChevronRight size={12} />
+                          <code>{preview.cameraMoveType}</code>
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>注视 Actor</dt>
+                        <dd>
+                          {preview.lookAtActor
+                            ? `${preview.lookAtActor.modelIndex} · ${preview.lookAtActor.label}`
+                            : "-"}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>复制参数</dt>
+                        <dd>
+                          起终点 · 速度 {preview.velocity ?? "-"} · Blend Out{" "}
                           {preview.blendOutTime ?? "-"} · FOV{" "}
                           {preview.fov ?? "-"}
                         </dd>

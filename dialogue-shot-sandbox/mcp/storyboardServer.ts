@@ -30,6 +30,9 @@ import {
   type StoryboardRevisionReference,
 } from "../server/storyboardCaseLibrary";
 import { runLark } from "../server/larkBridge";
+import {
+  refinementTaskPacket, mergeRefinementPatch, resolveRefinement, ShotRefinementPatchSchema,
+} from "../src/director/shotRefinement";
 
 const MAX_PROJECTION_REVISION_ATTEMPTS = 1;
 
@@ -52,7 +55,8 @@ export function createStoryboardMcpServer(): McpServer {
       ? {
           found: true,
           request_id: task.requestId,
-          request: task.input,
+          task_type: task.refinement ? "refine_shots" : "design_plan",
+          request: task.refinement ? refinementTaskPacket(task.refinement) : task.input,
         }
       : {
           found: false,
@@ -132,6 +136,9 @@ export function createStoryboardMcpServer(): McpServer {
     const sourceTask = await getStoryboardTask(request_id);
     if (!sourceTask) {
       throw new Error(`未找到分镜任务 ${request_id}`);
+    }
+    if (sourceTask.refinement) {
+      throw new Error("局部精修任务请使用 storyboard_submit_shot_patch");
     }
     let acceptedPlan = parsedPlan;
     let projectionFailures: ReturnType<typeof inspectDirectorProjection> = [];
@@ -255,6 +262,30 @@ export function createStoryboardMcpServer(): McpServer {
     };
   },
 );
+
+  server.registerTool(
+    "storyboard_submit_shot_patch",
+    {
+      description: "提交指定镜头的局部精修决策。原样回传基线版本，零基镜头索引；验收失败保留任务并返回反馈，不覆盖当前方案。",
+      inputSchema: { request_id: z.string().min(1), patch: ShotRefinementPatchSchema },
+    },
+    async ({ request_id, patch }) => {
+      const source = await getStoryboardTask(request_id);
+      if (!source?.refinement || source.status !== "processing") {
+        throw new Error("未找到正在处理的局部精修任务");
+      }
+      const plan = mergeRefinementPatch(source.refinement, patch);
+      const { failures } = resolveRefinement(source.refinement, plan);
+      if (failures.length) {
+        const result = { accepted: false, request_id, failed_shots: failures,
+          message: "请根据投影/连续性反馈修正原选中范围，保留基线版本。" };
+        return { content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: result };
+      }
+      await completeStoryboardTask(request_id, plan);
+      const result = { accepted: true, request_id, baseline_version: source.refinement.baseline_version };
+      return { content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: result };
+    },
+  );
 
   server.registerTool(
   "storyboard_fail_request",

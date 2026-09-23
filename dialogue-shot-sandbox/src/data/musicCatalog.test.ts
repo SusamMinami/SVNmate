@@ -5,6 +5,7 @@ import {
   activeMusicRecommendationForDialogueIds,
   musicRecommendationsFromCues,
   recommendMusic,
+  shortlistMusicCatalog,
   type MusicAudioAnalysis,
   type MusicCatalogEntry,
   type MusicRecommendation,
@@ -259,6 +260,73 @@ describe("recommendMusic", () => {
         ["204805"],
       )?.stateName,
     ).toBe("Sincere");
+  });
+});
+
+describe("shortlistMusicCatalog", () => {
+  it("keeps the semantic match and current music while bounding model input", () => {
+    const generic = Array.from({ length: 20 }, (_, index) => ({
+      recordId: `generic-${index}`,
+      name: `普通候选${index}`,
+      stateName: `Generic_${index}`,
+      stateId: 300 + index,
+      tags: ["日常轻松"],
+      notes: "普通场景音乐",
+      fileToken: `generic-file-${index}`,
+      fileName: `generic-${index}.wav`,
+    } satisfies MusicCatalogEntry));
+    const suspense = {
+      recordId: "semantic-suspense",
+      name: "暗线浮现",
+      stateName: "Semantic_Suspense",
+      stateId: 401,
+      tags: ["备战/悬疑/危机"],
+      notes: "真相逐步显露",
+      fileToken: "semantic-suspense-file",
+      fileName: "semantic-suspense.wav",
+      analysis: {
+        ...audioAnalysis({}),
+        recommendedUse: "叙事功能：悬疑调查；情绪：神秘、暗涌",
+        semanticProfile: {
+          schemaVersion: "music-semantic-profile.v3",
+          narrativeFunctions: ["悬疑调查", "信息揭示"],
+          moods: ["神秘", "暗涌"],
+          valence: -0.3,
+          arousal: 0.4,
+          tension: 0.8,
+          intensityTrajectory: "渐强",
+          entryMode: "慢铺垫",
+          dialogueFit: "高",
+          specialUseOnly: false,
+          confidence: 0.9,
+        },
+      },
+    } satisfies MusicCatalogEntry;
+    const currentSpecial = {
+      recordId: "current-special",
+      name: "当前角色主题",
+      stateName: "Current_Theme",
+      stateId: 499,
+      tags: ["特殊"],
+      notes: "角色主题曲",
+      fileToken: "current-special-file",
+      fileName: "current-special.wav",
+    } satisfies MusicCatalogEntry;
+
+    const shortlist = shortlistMusicCatalog(
+      [...generic, suspense, currentSpecial],
+      {
+        outline: "调查隐藏的秘密，真相逐步显露。",
+        dialogue: [{ content: "这里一定还有我们不知道的线索。" }],
+      },
+      [currentSpecial.stateId],
+    );
+
+    expect(shortlist).toHaveLength(12);
+    expect(shortlist[0].stateId).toBe(currentSpecial.stateId);
+    expect(shortlist.some((entry) => entry.stateId === suspense.stateId)).toBe(
+      true,
+    );
   });
 });
 

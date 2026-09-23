@@ -10,6 +10,50 @@ import { getConfigCsvDirectory } from "./configRepository";
 
 const MUSIC_STATE_FILENAME = "d对话音乐状态映射表.csv";
 
+function parseSemanticProfile(
+  raw: unknown,
+): MusicAudioAnalysis["semanticProfile"] {
+  let value = raw;
+  if (typeof value === "string") {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      return undefined;
+    }
+  }
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const profile = value as Record<string, unknown>;
+  const stringList = (key: string) =>
+    Array.isArray(profile[key])
+      ? (profile[key] as unknown[])
+          .map(String)
+          .map((item) => item.trim())
+          .filter(Boolean)
+      : [];
+  const finiteNumber = (key: string) => {
+    const number = Number(profile[key]);
+    return Number.isFinite(number) ? number : 0;
+  };
+  if (profile.schema_version !== "music-semantic-profile.v3") {
+    return undefined;
+  }
+  return {
+    schemaVersion: "music-semantic-profile.v3",
+    narrativeFunctions: stringList("narrative_functions"),
+    moods: stringList("moods"),
+    valence: finiteNumber("valence"),
+    arousal: finiteNumber("arousal"),
+    tension: finiteNumber("tension"),
+    intensityTrajectory: String(profile.intensity_trajectory ?? "平稳"),
+    entryMode: String(profile.entry_mode ?? "柔和进入"),
+    dialogueFit: String(profile.dialogue_fit ?? "中"),
+    specialUseOnly: profile.special_use_only === true,
+    confidence: finiteNumber("confidence"),
+  };
+}
+
 function root(): string {
   return process.env.STORYBOARD_PROJECT_ROOT || process.cwd();
 }
@@ -158,6 +202,10 @@ async function loadMusicAnalysis(
         energyLevel: String(value("energy_level", "能量等级") ?? "未知"),
         brightness: String(value("brightness", "音色明暗") ?? "未知"),
         summary: String(value("analysis_summary", "音频特征摘要") ?? ""),
+        recommendedUse: String(value("recommended_use", "推荐场景") ?? ""),
+        semanticProfile: parseSemanticProfile(
+          value("semantic_profile", "语义画像JSON"),
+        ),
       },
     });
   }
