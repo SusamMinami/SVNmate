@@ -19,6 +19,10 @@ import {
   type ReadyDirectorResponse,
 } from "../src/director/contracts";
 import { storyboardRuntimeRoot } from "./storyboardRuntime";
+import {
+  ShotRefinementRequestSchema, refinementBaselinePlan, resolveRefinement,
+  type VersionedRefinement,
+} from "../src/director/shotRefinement";
 
 export type StoryboardTaskStatus =
   | "pending"
@@ -39,6 +43,7 @@ export interface StoryboardTask {
   cacheSourceRequestId?: string;
   cachePropagationDisabled?: boolean;
   input: DirectorInput;
+  refinement?: VersionedRefinement;
   result?: MiraDirectorResponse;
   error?: string;
   projectionRevisionAttempts?: number;
@@ -355,10 +360,11 @@ export async function getStoryboardTask(
 
 export async function createStoryboardTask(
   rawInput: unknown,
-  options: { forceRegenerate?: boolean } = {},
+  options: { forceRegenerate?: boolean; refinement?: VersionedRefinement } = {},
 ): Promise<StoryboardTask> {
   const input = DirectorInputSchema.parse(rawInput) as DirectorInput;
-  const cacheKey = storyboardInputCacheKey(input);
+  const cacheKey = options.refinement
+    ? `refinement:${input.request_id}` : storyboardInputCacheKey(input);
   const tasks = await readAllTasks();
   const existing = tasks.find(
     (task) => task.requestId === input.request_id,
@@ -407,11 +413,21 @@ export async function createStoryboardTask(
     createdAt: timestamp,
     updatedAt: timestamp,
     cacheKey,
-    cachePropagationDisabled: options.forceRegenerate || undefined,
+    cachePropagationDisabled: options.forceRegenerate || Boolean(options.refinement) || undefined,
     input,
+    refinement: options.refinement,
   };
   await writeTask(task);
   return task;
+}
+
+export async function createShotRefinementTask(raw: unknown): Promise<StoryboardTask> {
+  const request = ShotRefinementRequestSchema.parse(raw);
+  const baseline_version = createHash("sha256")
+    .update(JSON.stringify(sortObjectKeys(request))).digest("hex");
+  return createStoryboardTask(request.input, {
+    forceRegenerate: true, refinement: { ...request, baseline_version },
+  });
 }
 
 function processingLeaseExpired(
@@ -473,6 +489,22 @@ export async function completeStoryboardTask(
   const result = MiraDirectorResponseSchema.parse(rawResult);
   if (result.request_id !== requestId) {
     throw new Error("提交结果的 request_id 与任务不一致");
+  }
+  if (task.refinement) {
+    if (task.status !== "processing" || result.status !== "ready") {
+      throw new Error("局部精修只接受正在处理任务的 ready 结果");
+    }
+    const base = refinementBaselinePlan(task.refinement);
+    const expected = { ...base, shots: base.shots.map((shot, index) =>
+      task.refinement!.target_indexes.includes(index) ? result.shots[index] : shot) };
+    if (JSON.stringify(sortObjectKeys(expected)) !== JSON.stringify(sortObjectKeys(result)) ||
+        result.shots.some((shot, index) =>
+          JSON.stringify(shot.dialogue_ids) !== JSON.stringify(base.shots[index]?.dialogue_ids))) {
+      throw new Error("局部精修不能改动未选镜头、站位、分析、音效或对白覆盖");
+    }
+    if (resolveRefinement(task.refinement, result).failures.length) {
+      throw new Error("局部精修未通过投影或连续性验收");
+    }
   }
   if (result.status === "ready") {
     const expectedSlots = task.input.participants.map(

@@ -55,6 +55,56 @@ interface AudioLibraryBrowserProps {
 
 const UNCATEGORIZED_MUSIC = "__uncategorized__";
 
+function normalizeAudioSearchText(value: string): string {
+  return value
+    .normalize("NFKC")
+    .toLocaleLowerCase()
+    .replace(/[\p{Punctuation}\p{White_Space}]+/gu, "");
+}
+
+function matchesAudioSearch(
+  values: Array<string | number | null | undefined>,
+  query: string,
+): boolean {
+  return values
+    .filter((value) => value !== null && value !== undefined)
+    .some((value) => normalizeAudioSearchText(String(value)).includes(query));
+}
+
+export function filterMusicLibraryEntries(
+  entries: readonly MusicCatalogEntry[],
+  category: string | null,
+  query: string,
+): MusicCatalogEntry[] {
+  const normalizedQuery = normalizeAudioSearchText(query);
+  if (normalizedQuery) {
+    return entries.filter((entry) =>
+      matchesAudioSearch(
+        [
+          entry.name,
+          entry.stateName,
+          entry.stateId,
+          ...entry.tags,
+          entry.notes,
+          entry.analysis?.summary,
+          entry.analysis?.recommendedUse,
+          ...(entry.analysis?.semanticProfile?.narrativeFunctions ?? []),
+          ...(entry.analysis?.semanticProfile?.moods ?? []),
+        ],
+        normalizedQuery,
+      ),
+    );
+  }
+  if (!category) {
+    return [];
+  }
+  return entries.filter((entry) =>
+    category === UNCATEGORIZED_MUSIC
+      ? entry.tags.every((tag) => !tag.trim())
+      : entry.tags.some((tag) => tag.trim() === category),
+  );
+}
+
 function musicCategories(
   entries: readonly MusicCatalogEntry[],
 ): AudioLibraryCategory[] {
@@ -121,46 +171,26 @@ export function AudioLibraryBrowser({
   );
   const categories =
     library === "sound-effect" ? soundCategories : availableMusicCategories;
-  const searchTerms = searchQuery
-    .trim()
-    .toLocaleLowerCase()
-    .split(/\s+/)
-    .filter(Boolean);
-  const searchActive = configurationMode && searchTerms.length > 0;
-  const matchesSearch = (values: Array<string | number | null | undefined>) => {
-    const searchable = values
-      .filter((value) => value !== null && value !== undefined)
-      .join(" ")
-      .toLocaleLowerCase();
-    return searchTerms.every((term) => searchable.includes(term));
-  };
+  const normalizedSearchQuery = normalizeAudioSearchText(searchQuery);
+  const searchActive = configurationMode && Boolean(normalizedSearchQuery);
   const soundEffects =
     library === "sound-effect" && (category || searchActive)
       ? soundEffectCatalog.entries.filter(
           (entry) =>
-            (!category || entry.category === category) &&
-            (!searchActive ||
-              matchesSearch([entry.assetName, entry.description])),
+            searchActive
+              ? matchesAudioSearch(
+                  [entry.assetName, entry.description],
+                  normalizedSearchQuery,
+                )
+              : entry.category === category,
         )
       : [];
   const music =
     library === "music" && (category || searchActive)
-      ? musicCatalog.entries.filter((entry) =>
-          (
-            !category ||
-            (category === UNCATEGORIZED_MUSIC
-              ? entry.tags.every((tag) => !tag.trim())
-              : entry.tags.some((tag) => tag.trim() === category))
-          ) &&
-          (!searchActive ||
-            matchesSearch([
-              entry.name,
-              entry.stateName,
-              entry.stateId,
-              ...entry.tags,
-              entry.notes,
-              entry.analysis?.summary,
-            ])),
+      ? filterMusicLibraryEntries(
+          musicCatalog.entries,
+          category,
+          searchActive ? searchQuery : "",
         )
       : [];
   const dialogueById = useMemo(

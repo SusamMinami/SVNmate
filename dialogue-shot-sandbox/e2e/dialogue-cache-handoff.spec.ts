@@ -5,6 +5,8 @@ async function handoffFixture(page: Page) {
     node: "204801",
     actionReads: [] as Array<{ dialogueIds: string[]; includeCatalogs: boolean }>,
     configurationReads: [] as string[][],
+    inspectedRequests: [] as Array<Record<string, any>>,
+    exportedRequests: [] as Array<Record<string, any>>,
     selectionReads: 0,
     gate: Promise.resolve(),
     emptyNodes: false,
@@ -48,11 +50,103 @@ async function handoffFixture(page: Page) {
       }] : [],
       tracks: state.emptyNodes ? [] : request.dialogueIds.map((dialogueId: string) => ({
         dialogueId, modelIndex: 0, preservedComplexActionCount: 0,
-        actions: [{ montageName: "AM_Idle", delaySeconds: 0.4, behaviourType: "ENone" }],
+        actions: [
+          {
+            montageName: "AM_Idle",
+            delaySeconds: 0.4,
+            sourceIndex: 0,
+            behaviourType: "ENone",
+          },
+          {
+            montageName: "None",
+            delaySeconds: 0,
+            behaviourType: "EStateMachineWalk",
+          },
+          {
+            montageName: "AM_TurnRight90",
+            delaySeconds: 0.2,
+            sourceIndex: 2,
+            behaviourType: "ERotate",
+          },
+        ],
       })),
       viewLineNodes: state.emptyNodes ? [] : request.dialogueIds.map((dialogueId: string) => ({
         dialogueId, lines: [], lockedObserverModelIndexes: [], preservedComplexLineCount: 0,
       })),
+    } } });
+  });
+  await page.route("**/api/ue/storyboard/inspect", async (route) => {
+    const request = route.request().postDataJSON();
+    state.inspectedRequests.push(request);
+    const characterActions = (request.characterActions ?? []).map(
+      (item: Record<string, any>, characterActionIndex: number) => ({
+        characterActionIndex,
+        ...item,
+        characterLabel: "Player",
+        existingActions: [
+          {
+            montageName: "AM_Idle",
+            delaySeconds: 0.4,
+            sourceIndex: 0,
+            behaviourType: "ENone",
+          },
+          {
+            montageName: "None",
+            delaySeconds: 0,
+            behaviourType: "EStateMachineWalk",
+          },
+          {
+            montageName: "AM_TurnRight90",
+            delaySeconds: 0.2,
+            sourceIndex: 2,
+            behaviourType: "ERotate",
+          },
+        ],
+        desiredActions: item.actions,
+        preservedComplexActionCount: 0,
+        action: "replace",
+      }),
+    );
+    await route.fulfill({ json: { ok: true, data: {
+      reviewToken: "a".repeat(64),
+      dialogueId: "2048",
+      startId: "204800",
+      dialogueAssetPath: "/Game/Test/204800.204800",
+      formationAssetPath: "/Game/Test/BP_204800.BP_204800",
+      cameraName: "c1",
+      shotCount: 0,
+      changedNodeCount: 0,
+      overwrittenNodeCount: 0,
+      clearedNodeCount: 0,
+      invalidShotCount: 0,
+      globalBlockedReasons: [],
+      blockedReasons: [],
+      warnings: [],
+      shots: [],
+      nodes: [],
+      characterActions,
+      characterActionBlockedReasons: [],
+      characterActionCount: characterActions.length,
+      changedCharacterActionCount: characterActions.length,
+      changedViewLineCount: 0,
+      soundEffects: [],
+      music: [],
+    } } });
+  });
+  await page.route("**/api/ue/storyboard/export", async (route) => {
+    const request = route.request().postDataJSON();
+    state.exportedRequests.push(request);
+    await route.fulfill({ json: { ok: true, data: {
+      status: "exported",
+      dialogueId: "2048",
+      startId: "204800",
+      dialogueAssetPath: "/Game/Test/204800.204800",
+      changedNodeCount: 0,
+      changedCharacterActionCount: request.characterActions.length,
+      changedViewLineCount: 0,
+      changedSoundEffectCount: 0,
+      changedMusicCount: 0,
+      saved: true,
     } } });
   });
   await page.addInitScript(() => {
@@ -76,6 +170,88 @@ async function handoffFixture(page: Page) {
   return state;
 }
 
+test("unlocks compact existing actions for delay edits and drag ordering", async ({
+  page,
+}, testInfo) => {
+  const state = await handoffFixture(page);
+  await page.setViewportSize({ width: 310, height: 900 });
+  await page.getByRole("tab", { name: "UE", exact: true }).click();
+  await expect(page.getByText("已读取 1 个 BP、1 个动作")).toBeVisible();
+
+  const actionTrack = page.locator(".character-action-track").first();
+  const lockedRows = actionTrack.locator(".character-action-existing-row");
+  await expect(lockedRows).toHaveCount(3);
+  await expect(lockedRows.getByRole("spinbutton")).toHaveCount(0);
+  await lockedRows
+    .filter({ hasText: "AM_Idle" })
+    .getByRole("button", { name: /解锁.*AM_Idle/ })
+    .click();
+
+  const editableRows = actionTrack.locator(".character-action-row");
+  await expect(editableRows).toHaveCount(2);
+  await expect(
+    page.locator(
+      ".character-action-section--actions > .character-action-section__toggle",
+    ),
+  ).toContainText("3 动作");
+  const idleRow = editableRows.filter({ hasText: "AM_Idle" });
+  const turnRow = editableRows.filter({ hasText: "AM_TurnRight90" });
+  await expect(
+    idleRow.getByRole("spinbutton", { name: /AM_Idle.*延迟/ }),
+  ).toBeEnabled();
+  await expect(
+    turnRow.getByRole("spinbutton", { name: /AM_TurnRight90.*延迟/ }),
+  ).toBeDisabled();
+  await idleRow
+    .getByRole("spinbutton", { name: /AM_Idle.*延迟/ })
+    .fill("0.8");
+  await idleRow.dragTo(turnRow);
+  await expect(
+    editableRows.nth(0).locator(".character-action-row__name"),
+  ).toHaveText("AM_TurnRight90");
+  await expect(
+    editableRows.nth(1).locator(".character-action-row__name"),
+  ).toHaveText("AM_Idle");
+
+  await page.screenshot({
+    path: testInfo.outputPath("compact-existing-action-edit.png"),
+    fullPage: true,
+  });
+  await page.getByRole("button", { name: "写入节点" }).click();
+  await expect.poll(() => state.inspectedRequests.length).toBe(1);
+  await expect.poll(() => state.exportedRequests.length).toBe(1);
+  expect(state.inspectedRequests[0]).toMatchObject({
+    dialogueAssetDirtyPolicy: "save_existing",
+    characterActions: [{
+      dialogueId: "204801",
+      modelIndex: 0,
+      editMode: "replace_editable",
+      actions: [
+        {
+          montageName: "AM_TurnRight90",
+          delaySeconds: 0.2,
+          sourceIndex: 2,
+        },
+        {
+          montageName: "AM_Idle",
+          delaySeconds: 0.8,
+          sourceIndex: 0,
+        },
+      ],
+    }],
+  });
+  expect(state.exportedRequests[0]).toMatchObject({
+    characterActions: state.inspectedRequests[0].characterActions,
+  });
+  await expect(
+    page.getByText("节点 204801 的动作与视线已写入并保存"),
+  ).toBeVisible();
+  await expect(actionTrack.locator(".character-action-existing-row")).toHaveCount(3);
+  await expect(
+    actionTrack.locator(".character-action-existing-row").first(),
+  ).toContainText("AM_TurnRight90");
+});
+
 test("reuses compact node snapshots when expanding to the storyboard", async ({ page }, testInfo) => {
   const state = await handoffFixture(page);
   await page.getByRole("tab", { name: "UE", exact: true }).click();
@@ -96,7 +272,7 @@ test("reuses compact node snapshots when expanding to the storyboard", async ({ 
   await expect(page.getByText("已读取 1 个 BP、1 个动作")).toBeVisible();
   expect(state.actionReads).toHaveLength(2);
   await page.getByRole("tab", { name: "镜头", exact: true }).click();
-  await expect(page.getByRole("button", { name: "添加默认镜头" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "修改当前镜头" })).toBeEnabled();
   expect(state.configurationReads).toEqual([["204801"]]);
 });
 
@@ -134,7 +310,11 @@ test("keeps cached actions visible while loading the remaining nodes", async ({ 
   try {
     await page.getByRole("button", { name: "返回完整窗口" }).click();
     await expect.poll(() => state.actionReads.length).toBe(2);
-    await expect(page.locator(".character-action-existing-row")).toContainText("AM_Idle");
+    await expect(
+      page
+        .locator(".character-action-existing-row")
+        .filter({ hasText: "AM_Idle" }),
+    ).toBeVisible();
     expect(state.actionReads[1].dialogueIds).not.toContain("204801");
   } finally {
     release();
@@ -271,6 +451,9 @@ test("prefers configured character names over Blueprint labels in compact mode",
   });
 
   await page.goto("/");
+  await expect(page.locator(".query-section .section-label").first()).toContainText(
+    "2 条台词",
+  );
   await page.getByPlaceholder("例如 7352 或台词关键词").fill("7350");
   await page.getByRole("button", { name: "加载对白内容" }).click();
   await expect(page.getByRole("button", { name: "进入配置小窗" })).toBeEnabled();
@@ -282,7 +465,7 @@ test("prefers configured character names over Blueprint labels in compact mode",
   await expect(rolePicker).toContainText("1 商会安保");
   await expect(rolePicker).not.toContainText("BP_N36_Commerce_Guard");
   await page.getByRole("tab", { name: "镜头", exact: true }).click();
-  await page.getByRole("button", { name: "添加默认镜头" }).click();
+  await page.getByRole("button", { name: "修改当前镜头" }).click();
   await expect(page.getByLabel("预设机位角色")).toContainText(
     "1 · 商会安保",
   );

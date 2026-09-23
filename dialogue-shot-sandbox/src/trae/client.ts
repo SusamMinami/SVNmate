@@ -2,6 +2,7 @@ import type {
   DirectorInput,
   ReadyDirectorResponse,
 } from "../director/contracts";
+import type { ShotRefinementRequest } from "../director/shotRefinement";
 
 export interface TraePendingTask {
   requestId: string;
@@ -71,6 +72,27 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 
 export function getTraeStatus(): Promise<TraeCollaborationStatus> {
   return api<TraeCollaborationStatus>("/api/trae/status");
+}
+
+export interface TraeRefinementStatus {
+  requestId: string;
+  baselineVersion: string;
+  status: "pending" | "processing" | "completed" | "failed" | "cancelled";
+  result?: ReadyDirectorResponse;
+  error?: string;
+}
+
+export function submitTraeRefinement(request: ShotRefinementRequest) {
+  // Always receive the creation acknowledgement so cancellation can target
+  // the persisted task even when the user stops while POST is in flight.
+  return api<{ requestId: string; baselineVersion: string }>("/api/trae/refinements", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request),
+  });
+}
+
+export function getTraeRefinement(requestId: string, signal: AbortSignal) {
+  return api<TraeRefinementStatus>(
+    `/api/trae/refinements/status?request_id=${encodeURIComponent(requestId)}`, { signal });
 }
 
 export function getTraeMcpConfig(): Promise<TraeMcpConfig> {

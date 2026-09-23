@@ -15,6 +15,7 @@ import type {
   DialogueContentUpdateResult,
   DialogueStoryboardExportPreview,
   DialogueStoryboardExportResult,
+  EditorMapSwitchResult,
   ExistingDialogueStoryboardResult,
   DialogueModelRegistrationResult,
   DialogueModelRegistrationSlot,
@@ -484,6 +485,10 @@ export function applyDialoguePreviewSchool(
     { ...request, reviewToken },
     false,
   );
+}
+
+export function switchEditorToAutoTest(): Promise<EditorMapSwitchResult> {
+  return postUe("/api/ue/editor/auto-test", {}, false);
 }
 
 export function readExistingDialogueStoryboard(request: {

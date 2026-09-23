@@ -6,7 +6,7 @@ import {
   createDefaultBlocking,
   resolveBlocking,
 } from "./blockingResolver";
-import { createDirectorInput, type RuleBeatAdvice } from "./contracts";
+import { createDirectorInput, type DirectorInput, type RuleBeatAdvice } from "./contracts";
 import { createRuleDecisions } from "./ruleDirector";
 import { horizontalViewDelta } from "./shotGeometry";
 import { resolveShotDecisions } from "./shotResolver";
@@ -20,6 +20,33 @@ function facingTargetAt(position: Vec3, angleDegrees: number): Vec3 {
     position[1],
     position[2] + Math.sin(radians) * 2,
   ];
+}
+
+function motivatedAdvice(
+  input: DirectorInput,
+  index: number,
+  kind: "reveal" | "entrapment",
+): RuleBeatAdvice {
+  const row = input.dialogue[index];
+  return {
+    schema_version: "rule-beat.v1", request_id: input.request_id, summary: "有原文依据的视觉动机",
+    beats: [
+      {
+        start_dialogue_id: input.dialogue[0].dialogue_id,
+        end_dialogue_id: input.dialogue[index - 1].dialogue_id,
+        narrative_function: "establish", intensity: 30,
+        coverage_strategy: "relationship_hold", reason: "先建立空间。",
+      },
+      {
+        start_dialogue_id: row.dialogue_id,
+        end_dialogue_id: input.dialogue.at(-1)!.dialogue_id,
+        narrative_function: "reveal", intensity: 60,
+        coverage_strategy: "emphasis_focus", focus_slot: row.speaker,
+        visual_motivation: { kind, dialogue_id: row.dialogue_id, evidence: row.content },
+        reason: "依据具体台词集中注意。",
+      },
+    ],
+  };
 }
 
 describe("createShotPlan", () => {
@@ -126,7 +153,12 @@ describe("createShotPlan", () => {
   });
 
   it("uses restrained movement only for motivated emotional beats", () => {
-    const pushIn = shots.find(
+    const input = createDirectorInput(sequence, "motivated-push-test");
+    input.dialogue[2].content = "钥匙是我拿走的。";
+    const motivatedShots = resolveShotDecisions(
+      sequence, createRuleDecisions(input, undefined, motivatedAdvice(input, 2, "reveal")),
+    );
+    const pushIn = motivatedShots.find(
       (shot) => shot.cameraMovement === "dolly_in",
     );
     const pauseReaction = shots.find((shot) =>
@@ -408,7 +440,7 @@ describe("createShotPlan", () => {
 
   it("uses rear negative space only for motivated short-side pressure", () => {
     const input = createDirectorInput(sequence, "short-side-test");
-    input.dialogue[3].content = "你现在必须说出真相！";
+    input.dialogue[3].content = "出口已经封死，我们被困在这里了！";
     const blocking = createDefaultBlocking(input);
     const participants = resolveBlocking(
       sequence.participants,
@@ -417,7 +449,7 @@ describe("createShotPlan", () => {
     );
     const pressureShot = resolveShotDecisions(
       { ...sequence, participants },
-      createRuleDecisions(input, blocking),
+      createRuleDecisions(input, blocking, motivatedAdvice(input, 3, "entrapment")),
     ).find(
       (shot) => shot.compositionPlan.negativeSpace === "pressure",
     );
@@ -683,7 +715,7 @@ describe("createShotPlan", () => {
 });
 
 describe("rule beat guidance", () => {
-  it("keeps advised beat boundaries and applies constrained coverage", () => {
+  it("cuts at an advised coverage change and applies constrained coverage", () => {
     const sequence = findDialogueSequence(demoDatabase, "2048");
     const input = createDirectorInput(sequence, "beat-guidance-test");
     const boundaryIndex = 2;

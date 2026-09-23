@@ -20,6 +20,7 @@ interface DirectorControlProps {
   loading: boolean;
   advisorProgress: RuleAdvisorProgress | null;
   advisorSummary: RuleAdvisorRunSummary | null;
+  onCancelAdvisor?: () => void;
   onModeChange: (mode: DirectorMode) => void;
 }
 
@@ -41,6 +42,7 @@ export function DirectorControl({
   loading,
   advisorProgress,
   advisorSummary,
+  onCancelAdvisor,
   onModeChange,
 }: DirectorControlProps) {
   const advisorBusy =
@@ -130,6 +132,11 @@ export function DirectorControl({
             <strong>{advisorSummary?.model ?? "端侧 VLM"}</strong>
             <small>{advisorMessage ?? "将在生成时逐镜检查合法机位"}</small>
           </span>
+          {advisorBusy && onCancelAdvisor && (
+            <button type="button" className="button" onClick={onCancelAdvisor}>
+              停止分析
+            </button>
+          )}
         </div>
       )}
     </div>

@@ -48,6 +48,9 @@ import {
 } from "./app/useCharacterActionEditor";
 import { useCollaborationConnections } from "./app/useCollaborationConnections";
 import { useStoryboardExport } from "./app/useStoryboardExport";
+import { useRuleAdvisorSession } from "./app/useRuleAdvisorSession";
+import { useShotRefinement } from "./app/useShotRefinement";
+import { ShotRefinementPanel } from "./components/ShotRefinementPanel";
 import { useUeDialogueSelection } from "./app/useUeDialogueSelection";
 import { useWorkspaceNavigation } from "./app/useWorkspaceNavigation";
 import { useNavigationFeedback } from "./app/useNavigationFeedback";
@@ -128,10 +131,14 @@ import {
   type DirectorRunResult,
   type RuleAdvisorRunSummary,
 } from "./director/orchestrator";
-import { releaseIdleRuleAdvisorResources } from "./director/ruleAdvisor";
+import { releaseIdleRuleAdvisorResources, requestRuleMusicAdvice } from "./director/ruleAdvisor";
 import type { RuleAdvisorProgress } from "./director/ruleAdvisorContracts";
 import { participantFacingYawDegrees } from "./director/actorActionPlanner";
 import { createExistingStoryboardPreview } from "./director/existingStoryboard";
+import { useExistingStoryboardReview } from "./app/useExistingStoryboardReview";
+import { ExistingStoryboardReviewControl, ExistingShotReviewPanel, ExistingShotSuggestionPanel } from "./components/ExistingStoryboardReview";
+import { useExistingStoryboardSuggestions } from "./app/useExistingStoryboardSuggestions";
+import type { ExistingShotReview } from "./director/existingStoryboardReview";
 import { createShotPreview } from "./director/shotPlanner";
 import { estimateShotDuration } from "./director/shotTiming";
 import {
@@ -751,6 +758,10 @@ function dialogueIssueCategoryLabel(
 }
 
 interface ShotInspectorProps {
+  existingReview?: ExistingShotReview;
+  existingReviewModel?: string;
+  existingSuggestionPanel?: React.ReactNode;
+  refinementPanel?: React.ReactNode;
   shot?: ShotPlan;
   sequence: DialogueSequence;
   activeDialogueId: string;
@@ -835,6 +846,10 @@ function ConfigurationSelectionState({
 }
 
 function ShotInspector({
+  existingReview,
+  existingReviewModel,
+  existingSuggestionPanel,
+  refinementPanel,
   shot,
   sequence,
   activeDialogueId,
@@ -1496,6 +1511,9 @@ function ShotInspector({
                   </div>
                   <p>{shot.rationale}</p>
                 </section>
+                {existingReview && <ExistingShotReviewPanel review={existingReview} model={existingReviewModel} />}
+                {existingSuggestionPanel}
+                {refinementPanel}
                 {shot.advisorReview && (
                   <section className="inspector-section advisor-review">
                     <div className="section-label">
@@ -2111,16 +2129,39 @@ export default function App() {
   const [inspectorTab, setInspectorTab] =
     useState<InspectorTab>("direction");
   const [configurationMode, setConfigurationMode] = useState(false);
+  const existingReview = useExistingStoryboardReview(sequence, shots,
+    awaitingDirectorDesign && !directorLoading && !formationChecking && !configurationMode);
+  const existingSuggestions = useExistingStoryboardSuggestions(sequence, shots,
+    awaitingDirectorDesign && !directorLoading && !formationChecking && !configurationMode, setShots);
   const [configurationModeBusy, setConfigurationModeBusy] = useState(false);
   const [configurationCameraActivity, setConfigurationCameraActivity] =
     useState<"idle" | "read" | "write">("idle");
+  const [configurationMapSwitching, setConfigurationMapSwitching] =
+    useState(false);
   const [configurationModeTransition, setConfigurationModeTransition] =
     useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const directorySelectionKindRef = useRef<"live" | "config">("live");
   const dialogueEditorRef = useRef<HTMLDivElement>(null);
   const directorRunRef = useRef(0);
+  const ruleSession = useRuleAdvisorSession(
+    shots, !configurationMode && activeWorkspace === "storyboard",
+    () => {
+      setRuleAdvisorProgress(null);
+      setRuleAdvisorSummary({
+        state: "partial", model: null, reviewedShotCount: 0,
+        candidateCount: 0, selectedAlternativeCount: 0,
+        message: "端侧分析已停止，已保留当前方案",
+      });
+    },
+  );
   const formationRunRef = useRef(0);
+  const shotRefinement = useShotRefinement(
+    sequence, shots,
+    !configurationMode && activeWorkspace === "storyboard" && !directorLoading &&
+      !formationChecking && !awaitingDirectorDesign,
+    directorBlocking, directorAnalysis, setShots, ruleSession.cancel,
+  );
   const traeForceRegenerateRef = useRef(false);
   const activeIndexRef = useRef(activeIndex);
   const directorModeRef = useRef(directorMode);
@@ -2153,6 +2194,7 @@ export default function App() {
     pollIntervalMs: ueDialogueSelectionPollIntervalMs,
   } = useUeDialogueSelection(
     configurationMode && activeWorkspace === "storyboard",
+    configurationMapSwitching,
   );
   const selectedUeDialogueNodeId =
     ueDialogueSelection?.status === "selected"
@@ -2405,6 +2447,12 @@ export default function App() {
   ]);
 
   const activeShot: ShotPlan | undefined = shots[activeIndex] ?? shots[0];
+  const activeExistingReview = existingReview.report?.shots.find((review) => review.shotId === activeShot?.id);
+  const activeSuggestion = existingSuggestions.state?.shotId === activeShot?.id ? existingSuggestions.state : null;
+  const suggestionPreview = activeSuggestion?.preview && !activeSuggestion.adopted && !activeSuggestion.dismissed
+    ? activeSuggestion.suggestion?.proposed
+    : shotRefinement.state?.preview && shotRefinement.state.shotId === activeShot?.id
+      ? shotRefinement.state.proposed?.find((shot) => shot.id === activeShot.id) : undefined;
   const characterActionDialogueIds = useMemo(
     () =>
       configurationMode && selectedUeDialogueNodeId
@@ -2708,14 +2756,20 @@ export default function App() {
     sequence.prefix,
     sequence.startId,
   ]);
+  const activeFormationSnapshot =
+    formationChoice?.snapshot ?? loadedFormationSnapshot;
   const activeFormationName =
-    activeFormationVariant === "blueprint" && formationChoice
-      ? blueprintDisplayName(formationChoice.snapshot.blueprintAssetPath)
+    activeFormationVariant === "blueprint" && activeFormationSnapshot
+      ? blueprintDisplayName(activeFormationSnapshot.blueprintAssetPath)
       : activeFormationVariant === "ai"
         ? `${directorLabel(
             formationChoice?.ai?.result.appliedMode ?? appliedDirector,
           )} 占位`
         : "规则导演占位";
+  const canReadBlueprintPlacement =
+    Boolean(sequence.prefix) &&
+    !contentSearch &&
+    database.sourceName !== "内置演示数据";
   const availableFormationOptionCount = formationChoice
     ? 2 + Number(Boolean(formationChoice.ai))
     : 1;
@@ -2864,7 +2918,8 @@ export default function App() {
         fileToken: entry.fileToken,
         fileName: entry.fileName,
         recordId: entry.recordId,
-        audioSummary: entry.analysis?.summary ?? null,
+        audioSummary:
+          entry.analysis?.recommendedUse ?? entry.analysis?.summary ?? null,
         source: "manual",
       });
       return next;
@@ -3056,6 +3111,7 @@ export default function App() {
 
   async function refreshSoundEffectCatalogFromLark() {
     const snapshot = await syncSoundEffectCatalog();
+    ruleSession.cancel();
     directorRunRef.current += 1;
     setDirectorLoading(false);
     setDirectorLoadingMode(null);
@@ -3069,6 +3125,7 @@ export default function App() {
 
   async function refreshMusicCatalogFromLark() {
     const snapshot = await syncMusicCatalog();
+    ruleSession.cancel();
     musicCatalogRef.current = snapshot;
     setMusicCatalog(snapshot);
     setGeneratedMusicRecommendations([]);
@@ -3092,15 +3149,9 @@ export default function App() {
     options: ApplySequenceOptions = {},
   ) {
     nextSequence = sceneReference.attach(nextSequence);
+    ruleSession.cancel();
     if (requestedMode !== "rule" && soundEffectCatalogLoadRef.current) {
       await soundEffectCatalogLoadRef.current.catch(() => undefined);
-    }
-    if (
-      requestedMode === "rule" &&
-      options.useRuleAdvisor !== false &&
-      musicCatalogLoadRef.current
-    ) {
-      await musicCatalogLoadRef.current.catch(() => undefined);
     }
     const {
       preserveInputPositions = false,
@@ -3108,7 +3159,6 @@ export default function App() {
       keepCurrentPreview = false,
     } = options;
     const activeSoundEffectCatalog = soundEffectCatalogRef.current;
-    const activeMusicCatalog = musicCatalogRef.current;
     const dialogueIdSet = new Set(nextSequence.rows.map((row) => row.id));
     const activeNodeConfigurations = existingNodeConfigurations.filter(
       (configuration) => dialogueIdSet.has(configuration.dialogueId),
@@ -3123,6 +3173,8 @@ export default function App() {
       lockPlayerPosition,
       soundEffectCatalog: activeSoundEffectCatalog.entries,
     });
+    const ruleRun = requestedMode === "rule"
+      ? ruleSession.start(preview.shots) : null;
     setFallbackReason(null);
     if (requestedMode === "rule" && options.useRuleAdvisor !== false) {
       setRuleAdvisorSummary(null);
@@ -3136,6 +3188,7 @@ export default function App() {
     }
     setError("");
     if (!keepCurrentPreview || requestedMode === "rule") {
+      setAwaitingDirectorDesign(false);
       setSequence(preview.sequence);
       setShots(preview.shots);
       setAppliedDirector("rule");
@@ -3171,14 +3224,20 @@ export default function App() {
           options.fallbackPreserveInputPositions,
         collectRevisionCases,
         soundEffectCatalog: activeSoundEffectCatalog.entries,
-        musicCatalog: activeMusicCatalog.entries,
         existingNodeConfigurations: activeNodeConfigurations,
         forceRegenerate: options.forceRegenerate,
-        signal: traeAbortController?.signal,
+        signal: ruleRun?.signal ?? traeAbortController?.signal,
+        onRulePreview: ruleRun
+          ? (result) => {
+              if (runId !== directorRunRef.current || ruleRun.signal.aborted) return;
+              ruleRun.publish(result.shots);
+              applyDirectorResult(nextSequence, result);
+            }
+          : undefined,
         onRuleAdvisorProgress:
           requestedMode === "rule"
             ? (progress) => {
-                if (runId === directorRunRef.current) {
+                if (runId === directorRunRef.current && !ruleRun?.signal.aborted) {
                   setRuleAdvisorProgress(progress);
                 }
               }
@@ -3186,27 +3245,8 @@ export default function App() {
         onRuleBeatAdvice:
           requestedMode === "rule"
             ? (advice) => {
-                if (runId === directorRunRef.current) {
+                if (runId === directorRunRef.current && !ruleRun?.signal.aborted) {
                   setDialogueIssues(advice.dialogue_issues ?? []);
-                  setGeneratedMusicRecommendations(
-                    musicRecommendationsFromCues(
-                      (advice.music_cues ?? []).map((cue) => ({
-                        dialogueId: cue.dialogue_id,
-                        stateId: cue.state_id,
-                        reason: cue.reason,
-                      })),
-                      activeMusicCatalog.entries,
-                      activeNodeConfigurations.flatMap((configuration) =>
-                        configuration.backgroundMusicStateId === null
-                          ? []
-                          : [{
-                              dialogueId: configuration.dialogueId,
-                              stateId:
-                                configuration.backgroundMusicStateId,
-                            }],
-                      ),
-                    ),
-                  );
                 }
               }
             : undefined,
@@ -3220,11 +3260,47 @@ export default function App() {
               }
             : undefined,
       });
-      if (runId !== directorRunRef.current) {
+      if (runId !== directorRunRef.current || ruleRun?.signal.aborted) {
         return;
       }
       if (requestedMode === "rule") {
+        ruleRun?.publish(result.shots);
         applyDirectorResult(nextSequence, result);
+        if (options.useRuleAdvisor !== false && ruleRun) {
+          setRuleAdvisorProgress({
+            request_id: result.input.request_id, stage: "music",
+            completed: 0, total: 0, current_shot_index: null,
+            current_candidate_label: null,
+            message: "镜头方案已就绪，正在单独分析配乐",
+          });
+          await musicCatalogLoadRef.current?.catch(() => undefined);
+          ruleRun.signal.throwIfAborted();
+          if (runId !== directorRunRef.current) return;
+          const catalog = musicCatalogRef.current.entries;
+          const cues = catalog.length > 0 ? await requestRuleMusicAdvice(result.input, {
+            musicCatalog: catalog,
+            existingConfigurations: activeNodeConfigurations,
+            forceRegenerate: options.forceRegenerate,
+            signal: ruleRun.signal,
+          }) : [];
+          if (runId !== directorRunRef.current || ruleRun.signal.aborted) return;
+          setGeneratedMusicRecommendations(musicRecommendationsFromCues(
+            (cues ?? []).map((cue) => ({
+              dialogueId: cue.dialogue_id, stateId: cue.state_id, reason: cue.reason,
+            })),
+            catalog,
+            activeNodeConfigurations.flatMap((configuration) =>
+              configuration.backgroundMusicStateId === null ? [] : [{
+                dialogueId: configuration.dialogueId,
+                stateId: configuration.backgroundMusicStateId,
+              }]),
+          ));
+          setRuleAdvisorProgress(null);
+          if (cues === null) setRuleAdvisorSummary({
+            ...result.ruleAdvisor!,
+            message: `${result.ruleAdvisor?.message ?? "镜头方案已就绪"}；配乐分析未完成`,
+          });
+        }
         return;
       }
       if (result.appliedMode !== "rule" && result.analysis) {
@@ -3300,10 +3376,11 @@ export default function App() {
         void refreshTraeConnection();
       }
     } catch (directorError) {
-      if (!traeAbortController?.signal.aborted) {
+      if (!traeAbortController?.signal.aborted && !ruleRun?.signal.aborted) {
         throw directorError;
       }
     } finally {
+      ruleRun?.finish();
       if (requestedMode !== "rule" && runId === directorRunRef.current) {
         setDirectorLoading(false);
         setDirectorLoadingMode(null);
@@ -3507,6 +3584,7 @@ export default function App() {
     prefix: string,
     options: { loadUeConfiguration?: boolean } = {},
   ) {
+    ruleSession.cancel();
     const loadUeConfiguration =
       options.loadUeConfiguration !== false;
     const nextSequence = findDialogueSequence(nextDatabase, prefix);
@@ -3903,6 +3981,7 @@ export default function App() {
     if (!sequence.prefix) {
       return;
     }
+    ruleSession.cancel();
     const formationRunId = ++formationRunRef.current;
     setFormationChecking(true);
     setFormationStatus("正在重新读取 UE Blueprint 站位...");
@@ -4285,14 +4364,16 @@ export default function App() {
   function changeDirectorMode(mode: DirectorMode) {
     setSelectedDirectorMode(mode);
     const forceRegenerate =
-      mode === "trae" && directorMode === "trae";
+      (mode === "trae" && directorMode === "trae") ||
+      (mode === "rule" && directorMode === "rule" && !awaitingDirectorDesign);
     if (
       mode === directorMode &&
-      mode !== "trae" &&
+      mode === "mira" &&
       !awaitingDirectorDesign
     ) {
       return;
     }
+    ruleSession.cancel();
     setDirectorMode(mode);
     setFallbackReason(null);
     if (formationChecking && mode === "rule") {
@@ -4446,6 +4527,7 @@ export default function App() {
           formationChoice?.playerPositionLocked ?? true,
         preserveActiveShot: true,
         keepBackgroundRequest: directorLoading,
+        forceRegenerate,
       });
     }
   }
@@ -4474,6 +4556,16 @@ export default function App() {
     setError("");
     try {
       if (enabled) {
+        const musicRequest = getMusicCatalog();
+        musicCatalogLoadRef.current = musicRequest;
+        void musicRequest
+          .then((snapshot) => {
+            if (snapshot.revision >= musicCatalogRef.current.revision) {
+              musicCatalogRef.current = snapshot;
+              setMusicCatalog(snapshot);
+            }
+          })
+          .catch(() => undefined);
         if (
           inspectorTab !== "shot" &&
           inspectorTab !== "audio" &&
@@ -4829,6 +4921,7 @@ export default function App() {
     if (!activeDialogueRow || database.sourceName === "内置演示数据") {
       return;
     }
+    ruleSession.cancel();
     setEditingDialogueId(activeDialogueRow.id);
     setDialogueDraft(activeDialogueRow.content);
     setDialogueSaveError("");
@@ -5330,38 +5423,9 @@ export default function App() {
                 </button>
               </div>
             </form>
-            {sequence.prefix &&
-              !contentSearch &&
-              database.sourceName !== "内置演示数据" && (
-                <button
-                  className="button query-formation-button"
-                  type="button"
-                  title="按需读取当前对话的 Formation BP 站位与已有镜头"
-                  disabled={
-                    loading || directorLoading || formationChecking
-                  }
-                  onClick={() => {
-                    void applySearch(database, sequence.prefix, {
-                      loadUeConfiguration: true,
-                    }).catch((searchError) => {
-                      setError(
-                        searchError instanceof Error
-                          ? searchError.message
-                          : "读取 BP 站位失败",
-                      );
-                      setFormationChecking(false);
-                    });
-                  }}
-                >
-                  {formationChecking ? (
-                    <LoaderCircle className="spin" size={15} />
-                  ) : (
-                    <Boxes size={15} />
-                  )}
-                  {formationChecking ? "正在读取 BP" : "读取 BP 站位"}
-                </button>
-              )}
-            {(formationStatus || formationChoice) && (
+            {(formationStatus ||
+              formationChoice ||
+              canReadBlueprintPlacement) && (
               <div
                 className={`formation-status formation-status--${activeFormationSource}`}
                 role="status"
@@ -5408,20 +5472,70 @@ export default function App() {
                   )}
                   {formationStatus && <span>{formationStatus}</span>}
                 </div>
-                {formationChoice &&
-                  formationChoiceMode !== "initial" &&
-                  availableFormationOptionCount > 1 && (
+                <div className="formation-status__actions">
+                  {canReadBlueprintPlacement && !formationChoice && (
                     <button
-                      className="icon-button formation-status__switch"
+                      className="button formation-status__read"
                       type="button"
-                      title={`切换占位方案，共 ${availableFormationOptionCount} 个可用方案`}
-                      aria-label="切换占位方案"
-                      disabled={directorLoading || formationChecking}
-                      onClick={() => setFormationChoiceMode("switch")}
+                      title={
+                        loadedFormationSnapshot
+                          ? "重新读取当前对话的 Formation BP 站位与已有镜头"
+                          : "按需读取当前对话的 Formation BP 站位与已有镜头"
+                      }
+                      aria-label={
+                        formationChecking
+                          ? "正在读取 BP 站位"
+                          : loadedFormationSnapshot
+                            ? "重新读取 BP 站位"
+                            : "读取 BP 站位"
+                      }
+                      disabled={
+                        loading || directorLoading || formationChecking
+                      }
+                      onClick={() => {
+                        void applySearch(database, sequence.prefix, {
+                          loadUeConfiguration: true,
+                        }).catch((searchError) => {
+                          setError(
+                            searchError instanceof Error
+                              ? searchError.message
+                              : "读取 BP 站位失败",
+                          );
+                          setFormationChecking(false);
+                        });
+                      }}
                     >
-                      <ArrowLeftRight size={15} />
+                      {formationChecking ? (
+                        <LoaderCircle className="spin" size={13} />
+                      ) : loadedFormationSnapshot ? (
+                        <RefreshCw size={13} />
+                      ) : (
+                        <Boxes size={13} />
+                      )}
+                      <span>
+                        {formationChecking
+                          ? "正在读取"
+                          : loadedFormationSnapshot
+                            ? "重新读取 BP"
+                            : "读取 BP"}
+                      </span>
                     </button>
                   )}
+                  {formationChoice &&
+                    formationChoiceMode !== "initial" &&
+                    availableFormationOptionCount > 1 && (
+                      <button
+                        className="icon-button formation-status__switch"
+                        type="button"
+                        title={`切换占位方案，共 ${availableFormationOptionCount} 个可用方案`}
+                        aria-label="切换占位方案"
+                        disabled={directorLoading || formationChecking}
+                        onClick={() => setFormationChoiceMode("switch")}
+                      >
+                        <ArrowLeftRight size={15} />
+                      </button>
+                    )}
+                </div>
               </div>
             )}
             {!activeShot && dialogueSaveStatus && (
@@ -5447,8 +5561,28 @@ export default function App() {
               loading={directorLoading || formationChecking}
               advisorProgress={ruleAdvisorProgress}
               advisorSummary={ruleAdvisorSummary}
+              onCancelAdvisor={ruleSession.cancel}
               onModeChange={changeDirectorMode}
             />
+            {awaitingDirectorDesign && shots.length > 0 && (
+              <ExistingStoryboardReviewControl
+                report={existingReview.report}
+                busy={existingReview.busy}
+                progress={existingReview.progress}
+                disabled={directorLoading || formationChecking || Boolean(existingSuggestions.state?.busy)}
+                onStart={() => { setInspectorTab("direction"); void existingReview.start(); }}
+                onCancel={existingReview.cancel}
+              />
+            )}
+            {existingSuggestions.state?.busy && (
+              <div className="existing-review-control">
+                <p role="status" aria-live="polite">{existingSuggestions.state.message}</p>
+                <button type="button" className="button" onClick={() => {
+                  existingSuggestions.cancel();
+                  document.querySelector<HTMLElement>('[aria-label="已有分镜评估"]')?.focus({ preventScroll: true });
+                }}>停止生成建议</button>
+              </div>
+            )}
             {error && (
               <div className="inline-error" role="alert">
                 <AlertTriangle size={16} />
@@ -5736,6 +5870,7 @@ export default function App() {
               <div>
                   <Camera size={16} />
                   <span>镜头 {String(activeIndex + 1).padStart(2, "0")}</span>
+                  {suggestionPreview && <strong className="existing-suggestion-preview-label">建议预览 · 尚未采纳</strong>}
                   <small>
                     台词节点 {activeDialogueRow?.id ?? activeShot.dialogueId}
                   </small>
@@ -5767,7 +5902,7 @@ export default function App() {
                     participants={characterActionStage.participants}
                     dialogueParticipantSlots={dialogueParticipantSlotSet}
                     showCastRoster
-                    shot={stageShot ?? activeShot}
+                    shot={suggestionPreview ? { ...suggestionPreview, facingOverrides: stageShot?.facingOverrides ?? {} } : stageShot ?? activeShot}
                     shotIndex={activeIndex}
                     shotCount={shots.length}
                     active={activeWorkspace === "storyboard"}
@@ -6045,10 +6180,38 @@ export default function App() {
               dialogueNodeId={selectedUeConfigurationNodeId}
               careers={database.careers}
               onActivityChange={setConfigurationCameraActivity}
+              onMapSwitchingChange={setConfigurationMapSwitching}
             />
           ) : configurationMode || hasLoadedDialogue ? (
             <>
               <ShotInspector
+                refinementPanel={!configurationMode && !awaitingDirectorDesign && activeShot?.directorDecision ? (
+                  <ShotRefinementPanel
+                    shot={activeShot}
+                    state={shotRefinement.state}
+                    disabled={directorLoading || formationChecking}
+                    onStart={(instruction) => void shotRefinement.start(activeShot.index, instruction)}
+                    onCancel={shotRefinement.cancel}
+                    onAdopt={shotRefinement.adopt}
+                    onDismiss={shotRefinement.dismiss}
+                    onPreview={shotRefinement.togglePreview}
+                  />
+                ) : undefined}
+                existingReview={activeExistingReview}
+                existingReviewModel={existingReview.report?.model}
+                existingSuggestionPanel={activeShot && (activeExistingReview || activeSuggestion) ? (
+                  <ExistingShotSuggestionPanel
+                    state={activeSuggestion}
+                    canStart={Boolean(activeExistingReview)}
+                    subjectName={activeShot.speakerName}
+                    disabled={existingReview.busy || Boolean(existingSuggestions.state?.busy) || directorLoading || formationChecking}
+                    onStart={() => { if (activeExistingReview) void existingSuggestions.start(activeExistingReview); }}
+                    onPreview={existingSuggestions.togglePreview}
+                    onAdopt={existingSuggestions.adopt}
+                    onDismiss={existingSuggestions.dismiss}
+                    onRevert={existingSuggestions.revert}
+                  />
+                ) : undefined}
                 shot={activeShot}
                 sequence={
                   configurationMode ? configurationSequence : sequence

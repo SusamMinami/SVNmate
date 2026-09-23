@@ -16,6 +16,7 @@ import {
   cancelStoryboardTaskForInput,
   completeStoryboardTask,
   createStoryboardTask,
+  createShotRefinementTask,
   deletePendingStoryboardTask,
   expireAbandonedProcessingTasks,
   getStoryboardTask,
@@ -314,6 +315,24 @@ export async function routeTraeRequest(
         ok: true,
         data: await collaborationStatus(),
       });
+      return true;
+    }
+    if (request.method === "POST" && url.pathname === "/api/trae/refinements") {
+      const task = await createShotRefinementTask(await readJson(request));
+      sendJson(response, 200, { ok: true, data: {
+        requestId: task.requestId, baselineVersion: task.refinement!.baseline_version,
+      } });
+      return true;
+    }
+    if (request.method === "GET" && url.pathname === "/api/trae/refinements/status") {
+      const task = await getStoryboardTask(url.searchParams.get("request_id") || "");
+      if (!task?.refinement) throw new Error("未找到局部精修任务");
+      await expireAbandonedProcessingTasks([task]);
+      const current = (await getStoryboardTask(task.requestId))!;
+      sendJson(response, 200, { ok: true, data: {
+        requestId: current.requestId, baselineVersion: current.refinement!.baseline_version,
+        status: current.status, result: current.result, error: current.error,
+      } });
       return true;
     }
     if (

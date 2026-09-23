@@ -9,6 +9,7 @@ import { createDirectorInput } from "./contracts";
 import {
   applyRuleCandidateRanking,
   requestRuleBeatAdvice,
+  requestRuleMusicAdvice,
 } from "./ruleAdvisor";
 import type { RuleAdvisorResponse } from "./ruleAdvisorContracts";
 import { generateRuleCameraCandidates } from "./shotCandidateGenerator";
@@ -141,7 +142,26 @@ describe("rule advisor camera ranking", () => {
   });
 });
 
-describe("requestRuleBeatAdvice", () => {
+describe("separate beat and music requests", () => {
+  it("keeps music out of the beat payload and propagates cancellation", async () => {
+    const input = createDirectorInput(findDialogueSequence(demoDatabase, "2048"));
+    const controller = new AbortController();
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+      expect(JSON.parse(String(init?.body))).not.toHaveProperty("music_catalog");
+      controller.abort();
+      throw new DOMException("Aborted", "AbortError");
+    });
+    await expect(requestRuleBeatAdvice(input, { signal: controller.signal }))
+      .rejects.toMatchObject({ name: "AbortError" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns no music on failure without requesting beats", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("", { status: 503 }));
+    const input = createDirectorInput(findDialogueSequence(demoDatabase, "2048"));
+    expect(await requestRuleMusicAdvice(input)).toBeNull();
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/rule-advisor/music");
+  });
   it("sends the music catalog and existing UE music to the local advisor", async () => {
     const input = createDirectorInput(
       findDialogueSequence(demoDatabase, "2048"),
@@ -184,7 +204,7 @@ describe("requestRuleBeatAdvice", () => {
       );
     });
 
-    const advice = await requestRuleBeatAdvice(input, {
+    const advice = await requestRuleMusicAdvice(input, {
       musicCatalog: [
         {
           recordId: "music-15",
@@ -195,6 +215,37 @@ describe("requestRuleBeatAdvice", () => {
           notes: "逐步积累压力",
           fileToken: null,
           fileName: null,
+          analysis: {
+            estimatedBpm: 82,
+            bpmSource: "音频估算",
+            tempoConfidence: 0.7,
+            integratedLufs: -22,
+            loudnessRangeLu: 6,
+            truePeakDbfs: -1,
+            dynamicRangeDb: 11,
+            spectralCentroidHz: 1_100,
+            lowFrequencyRatio: 0.4,
+            midFrequencyRatio: 0.5,
+            highFrequencyRatio: 0.1,
+            tempoLevel: "中",
+            energyLevel: "中",
+            brightness: "偏暗",
+            summary: "中速、中能量、音色偏暗",
+            recommendedUse: "叙事功能：悬疑调查；情绪：神秘",
+            semanticProfile: {
+              schemaVersion: "music-semantic-profile.v3",
+              narrativeFunctions: ["悬疑调查"],
+              moods: ["神秘"],
+              valence: -0.3,
+              arousal: 0.4,
+              tension: 0.8,
+              intensityTrajectory: "渐强",
+              entryMode: "慢铺垫",
+              dialogueFit: "高",
+              specialUseOnly: false,
+              confidence: 0.9,
+            },
+          },
         },
       ],
       existingConfigurations: [
@@ -224,6 +275,12 @@ describe("requestRuleBeatAdvice", () => {
           state_id: 15,
           state_name: "Hidden_Crisis",
           music_name: "危机四伏",
+          recommended_use: "叙事功能：悬疑调查；情绪：神秘",
+          semantic_profile: {
+            schema_version: "music-semantic-profile.v3",
+            narrative_functions: ["悬疑调查"],
+            dialogue_fit: "高",
+          },
         },
       ],
       existing_music: [
@@ -233,7 +290,7 @@ describe("requestRuleBeatAdvice", () => {
         },
       ],
     });
-    expect(advice?.music_cues).toEqual([
+    expect(advice).toEqual([
       expect.objectContaining({ state_id: 15 }),
     ]);
   });

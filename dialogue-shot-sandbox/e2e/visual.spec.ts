@@ -410,6 +410,9 @@ test("reviews every rule shot and exposes VLM camera rankings", async ({
   await expect(page.locator(".dialogue-strip__advisor-note")).toContainText(
     "表达清晰度",
   );
+  await expect(page.locator(".shot-row").first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "停止分析", exact: true })).toBeVisible();
+  await expect(page.locator(".director-control")).toContainText("方案已显示");
   releaseRanking();
   await expect(page.getByText(/已逐镜评分/)).toBeVisible();
   await page.getByRole("tab", { name: "导演" }).click();
@@ -433,6 +436,97 @@ test("reviews every rule shot and exposes VLM camera rankings", async ({
     path: testInfo.outputPath("vlm-camera-ranking.png"),
     fullPage: true,
   });
+});
+
+test.describe("rule advisor at 125% DPI", () => {
+test.use({ deviceScaleFactor: 1.25 });
+for (const action of ["stop", "switch-workspace", "switch-dialogue"] as const) {
+  test(`preserves rule preview after ${action} while beats arrive late`, async ({ page }, testInfo) => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let visualRequests = 0;
+    await page.unroute("**/api/rule-advisor/beats");
+    await page.route("**/api/rule-advisor/beats", async (route) => {
+      const { input } = route.request().postDataJSON();
+      await gate;
+      await route.fulfill({ json: { ok: true, data: {
+        schema_version: "rule-beat.v1", request_id: input.request_id,
+        summary: "不应显示的过期方案",
+        beats: [{
+          start_dialogue_id: input.dialogue[0].dialogue_id,
+          end_dialogue_id: input.dialogue.at(-1).dialogue_id,
+          narrative_function: "development", intensity: 40,
+          coverage_strategy: "relationship_hold", reason: "不应显示的过期建议",
+        }],
+      } } }).catch(() => undefined);
+    });
+    await page.unroute("**/api/rule-advisor/analyze");
+    await page.route("**/api/rule-advisor/analyze", async (route) => {
+      visualRequests++;
+      await route.fulfill({ json: { ok: true, data: null } });
+    });
+    await page.addInitScript(() => sessionStorage.setItem("shot-sandbox.launch-screen-seen", "1"));
+    await page.goto("/");
+    await page.getByRole("button", { name: "加载对白内容" }).click();
+    await page.getByRole("button", { name: "规则导演", exact: true }).click();
+    const stop = page.getByRole("button", { name: "停止分析", exact: true });
+    await expect(stop).toBeVisible();
+    await expect(page.locator(".director-control")).toContainText("实际：规则导演");
+    const before = await page.locator(".shot-row").allTextContents();
+    if (action === "stop") {
+      await page.screenshot({ path: testInfo.outputPath("rule-beats-pending-125dpi.png") });
+      await stop.click();
+    } else if (action === "switch-dialogue") {
+      await page.getByLabel("四位数对话 ID 或对白内容").fill("3099");
+      await page.getByRole("button", { name: "加载对白内容" }).click();
+    } else {
+      await page.getByRole("button", { name: "注册 NPC", exact: true }).click();
+    }
+    await expect(stop).toHaveCount(0);
+    release();
+    await expect(page.getByText("不应显示的过期方案", { exact: false })).toHaveCount(0);
+    if (action === "stop") expect(await page.locator(".shot-row").allTextContents()).toEqual(before);
+    if (action === "switch-dialogue") await expect(page.locator(".shot-row")).toHaveCount(0);
+    expect(visualRequests).toBe(0);
+    await page.screenshot({ path: testInfo.outputPath(`rule-${action}.png`) });
+  });
+}
+});
+
+test("shows rule shots while the music catalog is pending and retains them on music failure", async ({ page }) => {
+  let releaseCatalog!: () => void;
+  const catalogGate = new Promise<void>((resolve) => { releaseCatalog = resolve; });
+  let releaseMusic!: () => void;
+  const musicGate = new Promise<void>((resolve) => { releaseMusic = resolve; });
+  let musicRequests = 0;
+  await page.unroute("**/api/lark/music/catalog");
+  await page.route("**/api/lark/music/catalog", async (route) => {
+    await catalogGate;
+    await route.fulfill({ json: { ok: true, data: {
+      entries: [{ recordId: "music-test", name: "悬疑", stateName: "Suspense", stateId: 15,
+        tags: [], notes: "", fileToken: null, fileName: null }],
+      revision: 1, syncedAt: null, unmappedCount: 0, missingAttachmentCount: 0, analyzedCount: 0,
+    } } });
+  });
+  await page.route("**/api/rule-advisor/music", async (route) => {
+    musicRequests++;
+    await musicGate;
+    await route.fulfill({ status: 503, json: { ok: false } });
+  });
+  await page.addInitScript(() => sessionStorage.setItem("shot-sandbox.launch-screen-seen", "1"));
+  await page.goto("/");
+  await page.getByRole("button", { name: "加载对白内容" }).click();
+  await page.getByRole("button", { name: "规则导演", exact: true }).click();
+  await expect(page.locator(".shot-row").first()).toBeVisible();
+  await expect(page.locator(".director-control")).toContainText("镜头方案已就绪");
+  const before = await page.locator(".shot-row").allTextContents();
+  expect(musicRequests).toBe(0);
+  releaseCatalog();
+  await expect.poll(() => musicRequests).toBe(1);
+  releaseMusic();
+  await expect(page.locator(".director-control")).toContainText("配乐分析未完成");
+  expect(await page.locator(".shot-row").allTextContents()).toEqual(before);
+  await expect(page.getByRole("button", { name: "停止分析", exact: true })).toHaveCount(0);
 });
 
 test("shows the launch screen once per window session", async ({
@@ -591,7 +685,7 @@ test("loads dialogue content before explicitly starting the director", async ({
   expect(beatRequests).toBe(0);
   await page.getByRole("button", { name: "进入配置小窗" }).click();
   await expect(
-    page.getByRole("button", { name: "添加默认镜头" }),
+    page.getByRole("button", { name: "修改当前镜头" }),
   ).toBeVisible();
   await expect(page.locator(".stage-view")).toHaveCount(0);
   await page.getByRole("button", { name: "返回完整窗口" }).click();
@@ -1066,10 +1160,11 @@ test("renders nonblank shot and blocking canvases without horizontal overflow", 
   await page.locator(".shot-row").nth(1).click();
   await expect(page.locator(".stage-transition")).toHaveCount(0);
   await page.locator(".viewport-panel").scrollIntoViewIfNeeded();
-  const movementStart = await page.locator("canvas").first().screenshot();
+  // An emphasized question keeps a static close-up without a movement motive.
+  const staticStart = await page.locator("canvas").first().screenshot();
   await page.waitForTimeout(1_200);
-  const movementProgress = await page.locator("canvas").first().screenshot();
-  expect(changedPixelRatio(movementStart, movementProgress)).toBeGreaterThan(
+  const staticProgress = await page.locator("canvas").first().screenshot();
+  expect(changedPixelRatio(staticStart, staticProgress)).toBeLessThan(
     0.005,
   );
 
@@ -1139,7 +1234,7 @@ test("renders nonblank shot and blocking canvases without horizontal overflow", 
   await expect(page.getByText("摄影参数", { exact: true })).toBeVisible();
   await expect(page.getByText("构图策略", { exact: true })).toBeVisible();
   await expect(page.getByText("浅景深", { exact: true })).toBeVisible();
-  await expect(page.getByText("推近 · 轻微", { exact: true })).toBeVisible();
+  await expect(page.getByText("固定机位", { exact: true })).toBeVisible();
   await expect(page.getByText("压缩亲密", { exact: true })).toBeVisible();
   await expect(page.getByText("黄金分割", { exact: true })).toBeVisible();
   await expect(page.getByText("渐进转移", { exact: true })).toBeVisible();
@@ -1526,6 +1621,7 @@ test("keeps configuration mode aligned with the selected UE node", async ({
   const cameraApplyRequests: Array<Record<string, unknown>> = [];
   const previewSchoolInspectRequests: Array<Record<string, unknown>> = [];
   const previewSchoolApplyRequests: Array<Record<string, unknown>> = [];
+  const autoTestSwitchRequests: Array<Record<string, unknown>> = [];
   const nodeWriteInspectRequests: Array<Record<string, unknown>> = [];
   const nodeWriteExportRequests: Array<Record<string, unknown>> = [];
   let cameraPresetReadRequests = 0;
@@ -1599,6 +1695,38 @@ test("keeps configuration mode aligned with the selected UE node", async ({
       }),
     });
   });
+  await page.route("**/api/ue/dialogue/camera/presets", async (route) => {
+    const request = route.request().postDataJSON() as Record<string, unknown>;
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          dialogueNodeId: request.dialogueNodeId,
+          fingerprint: "d".repeat(64),
+          formationActorPath: "/Temp/Preview.Formation",
+          formationClassPath: "/Game/Test/Formation.Formation_C",
+          roles: [
+            {
+              modelIndex: 0,
+              label: "玩家",
+              actorPath: "/Temp/Preview.Player",
+              cameraClassPath: "/Game/Test/Camera_Player.Camera_Player_C",
+              cameras: [],
+            },
+            {
+              modelIndex: 1,
+              label: "林澈",
+              actorPath: "/Temp/Preview.LinChe",
+              cameraClassPath: "/Game/Test/Camera_Npc.Camera_Npc_C",
+              cameras: [],
+            },
+          ],
+        },
+      }),
+    });
+  });
   await page.route("**/api/ue/dialogue/camera/inspect", async (route) => {
     const request = route.request().postDataJSON() as Record<string, unknown>;
     cameraInspectRequests.push(request);
@@ -1612,6 +1740,7 @@ test("keeps configuration mode aligned with the selected UE node", async ({
       ? previousDialogueNodeIds.at(-1) ?? null
       : null;
     const addsCurve = request.mode === "blend_curve";
+    const convertsToLookAtPush = request.mode === "look_at_push";
     const addsSchoolCameras = request.mode === "school_cameras";
     const copiesSchoolCameras =
       request.mode === "copy_school_cameras";
@@ -1658,11 +1787,13 @@ test("keeps configuration mode aligned with the selected UE node", async ({
           dialogueAssetPath: "/Game/Test/204800.204800",
           mode: request.mode,
           sourceDialogueNodeId,
-          existingCameraPosition: "",
+          existingCameraPosition: convertsToLookAtPush ? "c1" : "",
           desiredCameraPosition: "c1",
-          existingMoveCount: 0,
+          existingMoveCount: convertsToLookAtPush ? 1 : 0,
           desiredMoveCount: 1,
-          cameraMoveType: "EPush",
+          cameraMoveType: convertsToLookAtPush
+            ? "ELookAtPush"
+            : "EPush",
           velocity: 1,
           blendOutTime: 1,
           fov: 62,
@@ -1687,6 +1818,15 @@ test("keeps configuration mode aligned with the selected UE node", async ({
           desiredSchoolCameraCount: desiredSchoolCameraKeys.length,
           changed: true,
           blockedReasons: [],
+          ...(convertsToLookAtPush
+            ? {
+                lookAtActor: {
+                  modelIndex: request.lookAtActorModelIndex,
+                  label:
+                    request.lookAtActorModelIndex === 0 ? "玩家" : "林澈",
+                },
+              }
+            : {}),
         },
       }),
     });
@@ -1758,6 +1898,23 @@ test("keeps configuration mode aligned with the selected UE node", async ({
       });
     },
   );
+  await page.route("**/api/ue/editor/auto-test", async (route) => {
+    const request = route.request().postDataJSON() as Record<string, unknown>;
+    autoTestSwitchRequests.push(request);
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          status: "opened",
+          mapAssetPath: "/Game/Seria/Maps/AutoTest",
+          previousMapAssetPath:
+            "/Game/Seria/Maps/02_01_City/02_01_City",
+        },
+      }),
+    });
+  });
   await page.route("**/api/ue/storyboard/inspect", async (route) => {
     const request = route.request().postDataJSON() as {
       dialogueId: string;
@@ -2068,7 +2225,7 @@ test("keeps configuration mode aligned with the selected UE node", async ({
     page.getByRole("button", { name: "使用上一相机参数" }),
   ).toBeDisabled();
   const defaultCameraAction = page.getByRole("button", {
-    name: "添加默认镜头",
+    name: "修改当前镜头",
   });
   await expect(defaultCameraAction).toHaveClass(/is-configured/);
   await expect(defaultCameraAction).toContainText("c1 · EPush · FOV 62");
@@ -2092,18 +2249,27 @@ test("keeps configuration mode aligned with the selected UE node", async ({
     ueDataStatus.locator(".workspace-status-light--link"),
   ).toHaveCSS("animation-direction", "alternate");
   await page
-    .getByRole("button", { name: "添加默认镜头" })
+    .getByRole("button", { name: "修改当前镜头" })
+    .click();
+  const lookAtActor = page.getByLabel("ELookAtPush 注视 Actor");
+  await expect(lookAtActor).toBeEnabled();
+  await expect(lookAtActor).toHaveValue("");
+  await lookAtActor.selectOption("1");
+  await page
+    .getByRole("button", { name: "粘贴到 ELookAtPush" })
     .click();
   const cameraReview = page.getByLabel("节点镜头写入确认");
   await expect(cameraReview).toContainText("c1");
   await expect(cameraReview).toContainText(
-    "EPush · 速度 1 · Blend Out 1 · FOV 62",
+    "EPush",
   );
-  expect(cameraInspectRequests).toHaveLength(0);
+  await expect(cameraReview).toContainText("ELookAtPush");
+  await expect(cameraReview).toContainText("1 · 林澈");
+  expect(cameraInspectRequests).toHaveLength(1);
   expect(cameraPresetReadRequests).toBe(1);
   await expect(cameraReview.locator(".button--primary")).toHaveCount(0);
   await expect(
-    page.getByRole("button", { name: "添加默认镜头" }),
+    page.getByRole("button", { name: "修改当前镜头" }),
   ).toHaveClass(/is-selected/);
   cameraApplyResponseDelayMs = 1_200;
   const cameraApplyRequest = page.waitForRequest(
@@ -2143,9 +2309,10 @@ test("keeps configuration mode aligned with the selected UE node", async ({
   ]);
   expect(cameraApplyRequests[0]).toMatchObject({
     dialogueNodeId: "204801",
-    mode: "default",
+    mode: "look_at_push",
+    lookAtActorModelIndex: 1,
+    reviewToken: "a".repeat(64),
   });
-  expect(cameraApplyRequests[0]).not.toHaveProperty("reviewToken");
   const curveInspectCount = cameraInspectRequests.length;
   await expect(
     page.getByLabel("镜头混合曲线资产名"),
@@ -2200,6 +2367,7 @@ test("keeps configuration mode aligned with the selected UE node", async ({
     cameraApplyRequests.length;
   await page.getByRole("button", { name: "添加角色相机" }).click();
   await expect(cameraReview).toContainText("确认补齐角色相机");
+  await expect(cameraReview).toContainText("Z -13 cm");
   await expect(cameraReview.locator("dl")).toHaveCount(0);
   await expect(
     cameraReview.getByRole("button", { name: "取消当前镜头方案" }),
@@ -2253,7 +2421,13 @@ test("keeps configuration mode aligned with the selected UE node", async ({
     "hidden",
   );
   await page
-    .getByRole("button", { name: "添加默认镜头" })
+    .getByRole("button", { name: "修改当前镜头" })
+    .click();
+  await page
+    .getByLabel("ELookAtPush 注视 Actor")
+    .selectOption("1");
+  await page
+    .getByRole("button", { name: "粘贴到 ELookAtPush" })
     .click();
   await expect(page.getByLabel("节点镜头写入确认")).toBeVisible();
   const cameraReviewDock = page.locator(".node-camera-review-dock");
@@ -2343,7 +2517,7 @@ test("keeps configuration mode aligned with the selected UE node", async ({
     name: "Nino 角色相机未配置，可作为覆盖目标",
   });
   await expect(ringCameraSource).toHaveAttribute("draggable", "true");
-  await expect(ninoCameraTarget).toContainText("未配置");
+  await expect(ninoCameraTarget).toContainText("Z -13 cm");
   await ringCameraSource.focus();
   await page.keyboard.press("Enter");
   await expect(ringCameraSource).toHaveAttribute("aria-pressed", "true");
@@ -2371,6 +2545,7 @@ test("keeps configuration mode aligned with the selected UE node", async ({
   expect(cameraApplyRequests).toHaveLength(roleCopyApplyCount);
   await expect(cameraReview).toContainText("确认角色相机覆盖");
   await expect(cameraReview).toContainText("Ring → Nino");
+  await expect(ninoCameraTarget).toContainText("Z 0 cm");
   await expect(
     cameraReview.getByRole("button", { name: "取消角色相机覆盖" }),
   ).toBeVisible();
@@ -2595,6 +2770,9 @@ test("keeps configuration mode aligned with the selected UE node", async ({
     page.getByRole("heading", { name: "预览角色" }),
   ).toBeVisible();
   await expect(page.getByRole("tab")).toHaveCount(0);
+  await page.getByRole("button", { name: /切到 AutoTest/ }).click();
+  await expect(page.getByText("UE 已切换到 AutoTest")).toBeVisible();
+  expect(autoTestSwitchRequests).toEqual([{}]);
   await page.getByLabel("预览角色").selectOption("100");
   await page
     .getByRole("button", { name: /预览角色/ })
@@ -6276,10 +6454,37 @@ test("offers the detected Blueprint formation before designing shots", async ({
     name: "读取 BP 站位",
   });
   await expect(readBlueprintPlacement).toBeEnabled();
+  const formationStatusBeforeRead = page.locator(".formation-status").first();
+  await expect(formationStatusBeforeRead).toContainText("占位方案");
+  await expect(
+    formationStatusBeforeRead.getByRole("button", {
+      name: "读取 BP 站位",
+    }),
+  ).toBeVisible();
+  await expect(page.locator(".query-formation-button")).toHaveCount(0);
+  const [statusBounds, actionBounds] = await Promise.all([
+    formationStatusBeforeRead.boundingBox(),
+    readBlueprintPlacement.boundingBox(),
+  ]);
+  expect(statusBounds).not.toBeNull();
+  expect(actionBounds).not.toBeNull();
+  expect(actionBounds!.width).toBeLessThan(statusBounds!.width / 2);
   await page.screenshot({
     path: testInfo.outputPath("dialogue-local-before-bp.png"),
     fullPage: true,
   });
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await expect(readBlueprintPlacement).toBeInViewport();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
+  await page.screenshot({
+    path: testInfo.outputPath("dialogue-local-before-bp-1280.png"),
+    fullPage: true,
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
   await readBlueprintPlacement.click();
   await expect(
     page.getByRole("button", { name: "加载对白内容" }),
@@ -6339,10 +6544,15 @@ test("offers the detected Blueprint formation before designing shots", async ({
     .toHaveAttribute("title", /模型包围盒 180 cm/);
   await expect(page.locator(".stage-cast__item").filter({ hasText: "商会安保" }))
     .toHaveAttribute("title", /模型包围盒 230 cm/);
-  for (const canvas of await page.locator("canvas").all()) {
-    const metrics = imageMetrics(await canvas.screenshot());
-    expect(metrics.sampledColors).toBeGreaterThan(18);
-    expect(metrics.luminanceSpan).toBeGreaterThan(24);
+  await expect(reopenedDialog).toBeHidden();
+  await expect(page.locator(".stage-transition")).toHaveCount(0);
+  await expect(page.locator(".stage-view canvas")).toHaveCount(2);
+  for (const canvas of await page.locator(".stage-view canvas").all()) {
+    await expect.poll(async () => {
+      const metrics = imageMetrics(await canvas.screenshot());
+      return metrics.sampledColors > 18 && metrics.luminanceSpan > 24;
+    }, { message: "BP formation canvas finishes rendering actors and lighting" })
+      .toBe(true);
   }
   await page.locator(".stage-view").screenshot({ path: testInfo.outputPath("height-aware-blueprint.png") });
   await page.getByRole("button", { name: "切换占位方案" }).click();

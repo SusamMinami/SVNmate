@@ -258,6 +258,34 @@ export function renderRuleCandidateFrames(
   participants: DialogueParticipant[],
   candidateSets: RuleCameraCandidateSet[],
 ): RuleCandidateVisualSet | null {
+  const iterator = iterateCandidateFrames(participants, candidateSets);
+  let step = iterator.next();
+  while (!step.done) step = iterator.next();
+  return step.value;
+}
+
+export async function renderRuleCandidateFramesAsync(
+  participants: DialogueParticipant[],
+  candidateSets: RuleCameraCandidateSet[],
+  signal?: AbortSignal,
+): Promise<RuleCandidateVisualSet | null> {
+  const iterator = iterateCandidateFrames(participants, candidateSets);
+  try {
+    while (true) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      signal?.throwIfAborted();
+      const step = iterator.next();
+      if (step.done) return step.value;
+    }
+  } finally {
+    iterator.return(null);
+  }
+}
+
+function* iterateCandidateFrames(
+  participants: DialogueParticipant[],
+  candidateSets: RuleCameraCandidateSet[],
+): Generator<void, RuleCandidateVisualSet | null> {
   if (typeof document === "undefined") {
     return null;
   }
@@ -310,6 +338,7 @@ export function renderRuleCandidateFrames(
         return null;
       }
       frames.push(...shotFrames);
+      yield;
     }
     return {
       candidate_frames: frames,

@@ -21,6 +21,7 @@ export interface ParsedDialogueCharacterAction
 export interface CharacterActionTrackLike {
   dialogueId: string;
   modelIndex: number;
+  editMode?: "append" | "replace_editable";
   actions: readonly DialogueCharacterActionItem[];
 }
 
@@ -434,8 +435,30 @@ export function dialogueParticipantsByModelIndex(
     participants.map((participant) => [participant.id, participant]),
   );
   const player = participantByNpcId.get(1);
-  if (player && !byModelIndex.has(0)) {
-    byModelIndex.set(0, player);
+  const playerCatalog = catalogs.find((catalog) => {
+    const values = [
+      catalog.characterLabel ?? "",
+      catalog.blueprintClassPath
+        .replaceAll("\\", "/")
+        .split("/")
+        .at(-1)
+        ?.split(".")
+        .at(-1) ?? "",
+    ];
+    return values.some((value) =>
+      ["player", "bp_player", "bp_eric", "bp_eric_c"].includes(
+        value.trim().toLowerCase(),
+      ),
+    );
+  });
+  const implicitPlayerModelIndex =
+    playerCatalog?.modelIndex ?? (catalogs.length === 0 ? 0 : null);
+  if (
+    player &&
+    implicitPlayerModelIndex !== null &&
+    !byModelIndex.has(implicitPlayerModelIndex)
+  ) {
+    byModelIndex.set(implicitPlayerModelIndex, player);
   }
   const npcIdsByModelIndex = new Map<number, Set<number>>();
   for (const row of rows) {
@@ -469,6 +492,23 @@ export function dialogueParticipantsByModelIndex(
     );
     if (matches.length === 1) {
       byModelIndex.set(catalog.modelIndex, matches[0]);
+      continue;
+    }
+    const namedAliases = matches.filter(
+      (participant) =>
+        !/^NPC\s+\d+$/i.test(participant.name.trim()) &&
+        /[\p{L}\p{N}]/u.test(participant.name),
+    );
+    if (
+      matches.length > 1 &&
+      namedAliases.length === 1 &&
+      matches.every(
+        (participant) =>
+          participant.resourceId !== null &&
+          participant.resourceId === namedAliases[0].resourceId,
+      )
+    ) {
+      byModelIndex.set(catalog.modelIndex, namedAliases[0]);
     }
   }
   return byModelIndex;
@@ -480,10 +520,14 @@ export function resolveDialogueCharacterStage(
   dialogueEndIndex: number,
   existingTracks: readonly CharacterActionTrackLike[] = [],
   pendingTracks: readonly CharacterActionTrackLike[] = [],
+  catalogs: readonly BlueprintMontageCatalog[] = [],
+  models: ReadonlyMap<number, ModelResource> = new Map(),
 ): DialogueCharacterStage {
   const participantByModelIndex = dialogueParticipantsByModelIndex(
     participants,
     rows,
+    catalogs,
+    models,
   );
   const stateByParticipantSlot = new Map(
     participants.map((participant) => [
@@ -503,7 +547,7 @@ export function resolveDialogueCharacterStage(
   const pendingByTrack = new Map(
     pendingTracks.map((track) => [
       `${track.dialogueId}:${track.modelIndex}`,
-      track.actions,
+      track,
     ]),
   );
   const affectedModelIndexes = new Set<number>();
@@ -538,14 +582,18 @@ export function resolveDialogueCharacterStage(
       }
       const key = `${row.id}:${modelIndex}`;
       const localActions = localByModelIndex.get(modelIndex) ?? [];
-      const actions = [
-        ...localActions,
-        ...unmatchedTrackActions(
-          localActions,
-          existingByTrack.get(key) ?? [],
-        ),
-        ...(pendingByTrack.get(key) ?? []),
-      ];
+      const pendingTrack = pendingByTrack.get(key);
+      const actions =
+        pendingTrack?.editMode === "replace_editable"
+          ? pendingTrack.actions
+          : [
+              ...localActions,
+              ...unmatchedTrackActions(
+                localActions,
+                existingByTrack.get(key) ?? [],
+              ),
+              ...(pendingTrack?.actions ?? []),
+            ];
       for (const action of actions) {
         const type = normalizedBehaviourType(action);
         if (type === "erotate") {

@@ -161,6 +161,14 @@ test("opens the NPC migration workspace without layout overflow", async ({
   await expect(
     page.getByRole("button", { name: "男性" }),
   ).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("button", { name: "女性" }).click();
+  await expect(
+    page.getByRole("button", { name: "女性" }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(
+    page.getByRole("button", { name: "男性" }),
+  ).toHaveAttribute("aria-pressed", "false");
+  await page.getByRole("button", { name: "男性" }).click();
   await expect(
     page.getByRole("button", { name: "动物" }),
   ).toBeVisible();

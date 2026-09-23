@@ -27,6 +27,7 @@ import type {
   DialogueContentUpdateResult,
   DialogueStoryboardExportPreview,
   DialogueStoryboardExportResult,
+  EditorMapSwitchResult,
   DialogueModelRegistrationResult,
   DialogueModelRegistrationSlot,
   DialoguePositionTimelineRow,
@@ -85,11 +86,16 @@ import {
   UnrealMcpConnection,
   type UnrealInvoker,
 } from "./ue/transport";
+import {
+  adaptSchoolCameraMovesForHeight,
+  schoolCameraHeightDeltaCm,
+} from "../src/ue/schoolCameraHeight";
 
 const PREVIEW_MARKER_CLASS = "/Script/Engine.TargetPoint";
 const PREVIEW_ACTOR_PREFIX = "ShotSandboxMissionTargetPreview";
 const PREVIEW_DELETE_RETRY_DELAYS_MS = [50, 100, 200, 400, 800, 1_200];
 const LEVEL_OPEN_TIMEOUT_MS = 3 * 60_000;
+const AUTO_TEST_LEVEL_PATH = "/Game/Seria/Maps/AutoTest";
 const BLUEPRINT_SEARCH_PATH = "/Game/Seria/Task/Mod";
 const PLAYER_CLASS =
   "/Game/Seria/Characters/Eric/BP_Eric.BP_Eric_C";
@@ -351,6 +357,7 @@ const BlueprintClassPathSchema = z
 const DialogueCharacterActionItemSchema = z.object({
   montageName: z.string().regex(/^AM_[A-Za-z0-9_]+$/),
   delaySeconds: z.number().finite().min(0).max(120),
+  sourceIndex: z.number().int().nonnegative().max(4095).optional(),
 });
 
 const DialogueCharacterActionReadRequestSchema = z.object({
@@ -436,6 +443,10 @@ const StoryboardExportRequestSchema = z.object({
         dialogueId: z.string().regex(/^\d+$/),
         modelIndex: z.number().int().nonnegative().max(255),
         characterLabel: z.string().trim().max(128).optional().default(""),
+        editMode: z
+          .enum(["append", "replace_editable"])
+          .optional()
+          .default("append"),
         actions: z.array(DialogueCharacterActionItemSchema).min(1).max(32),
       }),
     )
@@ -555,6 +566,7 @@ const DialogueCameraQuickActionRequestSchema = z.object({
     .max(128)
     .optional(),
   blendDuration: z.number().finite().min(0).max(3600).optional(),
+  lookAtActorModelIndex: z.number().int().min(0).max(127).optional(),
   schoolCameraCopies: DialogueSchoolCameraCopiesSchema.optional(),
   presetCamera: z.object({
     modelIndex: z.number().int().min(0).max(127),
@@ -565,6 +577,7 @@ const DialogueCameraQuickActionRequestSchema = z.object({
     "copy_previous",
     "default",
     "preset_camera",
+    "look_at_push",
     "blend_curve",
     "school_cameras",
     "copy_school_cameras",
@@ -1600,13 +1613,22 @@ function isReadableCharacterActionItem(
   );
 }
 
+function isReplaceableCharacterActionItem(
+  value: unknown,
+): value is ReflectedCharacterBehaviourItem {
+  return (
+    isReadableCharacterActionItem(value) &&
+    /^AM_[A-Za-z0-9_]+$/.test(String(value.MontageName ?? ""))
+  );
+}
+
 function configuredCharacterActions(
   value: ReflectedCharacterBehaviourTrack | undefined,
 ): DialogueCharacterActionItem[] {
   const items = Array.isArray(value?.CharacterBehaviourItems)
     ? value.CharacterBehaviourItems
     : [];
-  return items.flatMap((item) => {
+  return items.flatMap((item, sourceIndex) => {
     if (!isReadableCharacterActionItem(item)) {
       return [];
     }
@@ -1623,6 +1645,9 @@ function configuredCharacterActions(
     return [{
       montageName: String(item.MontageName ?? "None") || "None",
       delaySeconds: rounded(Number(item.StartTime ?? 0)),
+      ...(isReplaceableCharacterActionItem(item)
+        ? { sourceIndex }
+        : {}),
       behaviourType,
       ...(spatial
         ? {
@@ -1792,10 +1817,59 @@ function newCharacterBehaviourItem(
   };
 }
 
+function replaceEditableCharacterActionItems(
+  existingItems: unknown[],
+  actions: DialogueCharacterActionItem[],
+): unknown[] {
+  const editableSourceIndexes = existingItems.flatMap((item, index) =>
+    isReplaceableCharacterActionItem(item) ? [index] : [],
+  );
+  const requestedSourceIndexes = actions.flatMap((action) =>
+    action.sourceIndex === undefined ? [] : [action.sourceIndex],
+  );
+  if (
+    new Set(requestedSourceIndexes).size !== requestedSourceIndexes.length ||
+    requestedSourceIndexes.length !== editableSourceIndexes.length ||
+    editableSourceIndexes.some(
+      (sourceIndex) => !requestedSourceIndexes.includes(sourceIndex),
+    )
+  ) {
+    throw new Error("现有动作快照已变化，请重新读取后再调整");
+  }
+
+  const desiredEditableItems = actions.map((action) => {
+    if (action.sourceIndex === undefined) {
+      return newCharacterBehaviourItem(action);
+    }
+    const existingItem = existingItems[action.sourceIndex];
+    if (
+      !isReplaceableCharacterActionItem(existingItem) ||
+      String(existingItem.MontageName ?? "") !== action.montageName
+    ) {
+      throw new Error("现有动作快照已变化，请重新读取后再调整");
+    }
+    return {
+      ...clonedValue(existingItem),
+      StartTime: action.delaySeconds,
+    };
+  });
+
+  let desiredIndex = 0;
+  const desiredItems = existingItems.map((item) => {
+    if (!isReplaceableCharacterActionItem(item)) {
+      return clonedValue(item);
+    }
+    return desiredEditableItems[desiredIndex++];
+  });
+  desiredItems.push(...desiredEditableItems.slice(desiredIndex));
+  return desiredItems;
+}
+
 export function appendCharacterActions(
   existing: ReflectedCharacterBehaviourTrack[],
   additions: Array<{
     modelIndex: number;
+    editMode?: "append" | "replace_editable";
     actions: DialogueCharacterActionItem[];
   }>,
 ): ReflectedCharacterBehaviourTrack[] {
@@ -1814,12 +1888,24 @@ export function appendCharacterActions(
     const existingItems = Array.isArray(track.CharacterBehaviourItems)
       ? track.CharacterBehaviourItems
       : [];
+    if (
+      addition.editMode !== "replace_editable" &&
+      addition.actions.some((action) => action.sourceIndex !== undefined)
+    ) {
+      throw new Error("追加动作不能引用现有动作位置");
+    }
     desired[addition.modelIndex] = {
       ...track,
-      CharacterBehaviourItems: [
-        ...existingItems,
-        ...addition.actions.map(newCharacterBehaviourItem),
-      ],
+      CharacterBehaviourItems:
+        addition.editMode === "replace_editable"
+          ? replaceEditableCharacterActionItems(
+              existingItems,
+              addition.actions,
+            )
+          : [
+              ...existingItems,
+              ...addition.actions.map(newCharacterBehaviourItem),
+            ],
       bStop: unrealBoolean(track.bStop),
     };
   }
@@ -2609,7 +2695,13 @@ async function existingNodeConfiguration(
       Boolean(move) && typeof move === "object" && !Array.isArray(move),
   );
   const firstFov = Number(moveRecords[0]?.FOV);
-  const firstPushValue = moveRecords[0]?.PushCameraArg;
+  const firstMoveType = String(
+    moveRecords[0]?.CameraMoveType ?? "",
+  ).trim();
+  const firstPushValue =
+    firstMoveType === "ELookAtPush"
+      ? moveRecords[0]?.LookAtPushArg
+      : moveRecords[0]?.PushCameraArg;
   const firstPush =
     firstPushValue &&
     typeof firstPushValue === "object" &&
@@ -2872,6 +2964,7 @@ export async function readDialogueCharacterActions(
                 false,
                 false,
                 true,
+                exportedDialogue.dialogueModels,
               )
             ).modelClassPaths,
             ([modelIndex, blueprintClassPath]) => ({
@@ -3016,6 +3109,7 @@ async function readFormationExportLayout(
   requireCamera = true,
   requireLocations = true,
   includeAllModelSlots = false,
+  dialogueModels: readonly string[] = [],
 ): Promise<FormationExportLayout> {
   const assetPath = await resolveAssetPath(
     connection,
@@ -3052,30 +3146,59 @@ async function readFormationExportLayout(
       };
     }),
   );
+  const hasLegacyDialogueModels = dialogueModels.some(
+    (modelName) =>
+      !["", "none", "null"].includes(modelName.trim().toLowerCase()),
+  );
+  const useLegacyNamedSlots =
+    hasLegacyDialogueModels &&
+    !requireCamera &&
+    !requireLocations &&
+    !namedNodes.some(({ variableName }) => /^\d+$/.test(variableName));
   const relevantNodes = namedNodes.filter(({ variableName }) => {
     if (requireCamera && variableName.toLowerCase() === "c1") {
       return true;
     }
     return (
-      /^\d+$/.test(variableName) &&
-      (includeAllModelSlots || requestedIndexes.has(Number(variableName)))
+      useLegacyNamedSlots ||
+      (
+        /^\d+$/.test(variableName) &&
+        (includeAllModelSlots || requestedIndexes.has(Number(variableName)))
+      )
     );
   });
   const componentNodes = await Promise.all(
     relevantNodes.map(async ({ nodePath, variableName }) => {
-      const isRequestedSlot =
+      const componentClass = String(
+        await readProperty(connection, nodePath, "ComponentClass"),
+      );
+      const isNumericSlot =
         /^\d+$/.test(variableName) &&
         (includeAllModelSlots || requestedIndexes.has(Number(variableName)));
-      const [componentClass, componentTemplate] = await Promise.all([
-        readProperty(connection, nodePath, "ComponentClass"),
-        isRequestedSlot
+      const isCharacterComponent = componentClass.endsWith(
+        "ChildActorComponent",
+      );
+      const componentTemplate =
+        (isNumericSlot || useLegacyNamedSlots) && isCharacterComponent
           ? readProperty(connection, nodePath, "ComponentTemplate")
-          : Promise.resolve(""),
-      ]);
+          : Promise.resolve("");
+      const resolvedComponentTemplate = await componentTemplate;
+      const modelClassPath =
+        isCharacterComponent &&
+        hasUnrealObjectReference(resolvedComponentTemplate)
+          ? unrealReferenceText(
+              await readProperty(
+                connection,
+                String(resolvedComponentTemplate),
+                "ChildActorClass",
+              ),
+            )
+          : "";
       return {
         variableName,
-        componentClass: String(componentClass),
-        componentTemplate,
+        componentClass,
+        componentTemplate: resolvedComponentTemplate,
+        modelClassPath,
       };
     }),
   );
@@ -3083,6 +3206,7 @@ async function readFormationExportLayout(
     variableName,
     componentClass,
     componentTemplate,
+    modelClassPath,
   } of componentNodes) {
     if (
       variableName.toLowerCase() === "c1" &&
@@ -3099,22 +3223,16 @@ async function readFormationExportLayout(
     ) {
       continue;
     }
-    const [locationValue, modelClassPath] = await Promise.all([
+    const locationValue =
       requireLocations
         ? readProperty(
             connection,
             String(componentTemplate),
             "RelativeLocation",
           )
-        : Promise.resolve(null),
-      readProperty(
-        connection,
-        String(componentTemplate),
-        "ChildActorClass",
-      ),
-    ]);
+        : Promise.resolve(null);
     if (requireLocations) {
-      const location = vector(locationValue);
+      const location = vector(await locationValue);
       locations.set(Number(variableName), {
         x: location.x,
         y: location.y,
@@ -3122,8 +3240,58 @@ async function readFormationExportLayout(
     }
     modelClassPaths.set(
       Number(variableName),
-      unrealReferenceText(modelClassPath),
+      modelClassPath,
     );
+  }
+  if (useLegacyNamedSlots) {
+    const usedComponents = new Set<string>();
+    const normalizedIdentity = (value: string) => {
+      const referencedPath =
+        value.match(/'([^']+)'/)?.[1] ?? value;
+      const objectName =
+        referencedPath
+          .trim()
+          .replaceAll("\\", "/")
+          .split("/")
+          .at(-1)
+          ?.split(".")
+          .at(-1) ?? "";
+      return objectName
+        .replace(/_C$/i, "")
+        .replace(/^BP_/i, "")
+        .toLowerCase();
+    };
+    const legacyComponents = componentNodes.filter(
+      (component) =>
+        !/^\d+$/.test(component.variableName) &&
+        component.componentClass.endsWith("ChildActorComponent") &&
+        component.modelClassPath,
+    );
+    for (const [modelIndex, modelName] of dialogueModels.entries()) {
+      if (
+        modelClassPaths.has(modelIndex) ||
+        (!includeAllModelSlots && !requestedIndexes.has(modelIndex))
+      ) {
+        continue;
+      }
+      const modelIdentity = normalizedIdentity(modelName);
+      if (!modelIdentity || ["none", "null"].includes(modelIdentity)) {
+        continue;
+      }
+      const matches = legacyComponents.filter(
+        (component) =>
+          !usedComponents.has(component.variableName) &&
+          (
+            normalizedIdentity(component.variableName) === modelIdentity ||
+            normalizedIdentity(component.modelClassPath) === modelIdentity
+          ),
+      );
+      if (matches.length !== 1) {
+        continue;
+      }
+      usedComponents.add(matches[0].variableName);
+      modelClassPaths.set(modelIndex, matches[0].modelClassPath);
+    }
   }
   if (requireCamera && !cameraName) {
     throw new Error(`Formation BP ${assetPath} 中没有 c1 摄像机组件`);
@@ -3265,6 +3433,8 @@ async function prepareStoryboardExport(
           request.participantModelIndexes,
           request.shots.length > 0,
           request.shots.length > 0,
+          false,
+          exportedDialogue.dialogueModels,
         )
       : null;
   const requestedDialogueIds = Array.from(
@@ -3459,15 +3629,9 @@ async function prepareStoryboardExport(
         const existingActions = configuredCharacterActions(
           node.existingCharacterBehaviours[edit.modelIndex],
         );
-        const desiredActions = [
-          ...existingActions,
-          ...edit.actions.map((action) => ({
-            ...action,
-            behaviourType: behaviourTypeForMontageName(
-              action.montageName,
-            ),
-          })),
-        ];
+        const desiredActions = configuredCharacterActions(
+          desiredCharacterBehaviours[edit.modelIndex],
+        );
         const unchanged =
           unrealValueMismatch(
             existingActions,
@@ -3490,7 +3654,11 @@ async function prepareStoryboardExport(
           preservedComplexActionCount: complexCharacterActionCount(
             node.existingCharacterBehaviours[edit.modelIndex],
           ),
-          action: unchanged ? "unchanged" : "add",
+          action: unchanged
+            ? "unchanged"
+            : edit.editMode === "replace_editable"
+              ? "replace"
+              : "add",
         });
       }
     }
@@ -4199,16 +4367,21 @@ function cameraMovePreview(
     moves[0] && typeof moves[0] === "object"
       ? moves[0] as Record<string, unknown>
       : null;
+  const cameraMoveType = String(move?.CameraMoveType ?? "");
+  const movementArg =
+    cameraMoveType === "ELookAtPush"
+      ? move?.LookAtPushArg
+      : move?.PushCameraArg;
   const push =
-    move?.PushCameraArg && typeof move.PushCameraArg === "object"
-      ? move.PushCameraArg as Record<string, unknown>
+    movementArg && typeof movementArg === "object"
+      ? movementArg as Record<string, unknown>
       : null;
   const finiteNumber = (value: unknown): number | null => {
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : null;
   };
   return {
-    cameraMoveType: String(move?.CameraMoveType ?? ""),
+    cameraMoveType,
     velocity: finiteNumber(push?.Velocity),
     blendOutTime: finiteNumber(push?.BlendOutTime),
     fov: finiteNumber(move?.FOV),
@@ -4223,6 +4396,67 @@ function reflectedRecord(
     throw new Error(`UE 节点属性 ${propertyName} 不是对象`);
   }
   return value as Record<string, unknown>;
+}
+
+function convertPushCameraToLookAtPush(
+  moves: unknown[],
+  lookAtActorModelIndex: number,
+): unknown[] {
+  if (moves.length !== 1) {
+    throw new Error("当前节点必须恰好包含一段 EPush 运镜");
+  }
+  const move = reflectedRecord(moves[0], "MoveCameras[0]");
+  if (String(move.CameraMoveType ?? "") !== "EPush") {
+    throw new Error("当前节点主镜头不是 EPush，无法粘贴到 ELookAtPush");
+  }
+  const push = reflectedRecord(
+    move.PushCameraArg,
+    "MoveCameras[0].PushCameraArg",
+  );
+  const startPoint = reflectedRecord(
+    push.StartPoint,
+    "MoveCameras[0].PushCameraArg.StartPoint",
+  );
+  const endPoint = reflectedRecord(
+    push.EndPoint,
+    "MoveCameras[0].PushCameraArg.EndPoint",
+  );
+  for (const [name, point] of [
+    ["StartPoint", startPoint],
+    ["EndPoint", endPoint],
+  ] as const) {
+    for (const axis of ["X", "Y", "Z"]) {
+      if (typeof point[axis] !== "number" || !Number.isFinite(point[axis])) {
+        throw new Error(`当前 EPush 的 ${name}.${axis} 必须是有限数值`);
+      }
+    }
+  }
+  const existingLookAtPush =
+    move.LookAtPushArg &&
+    typeof move.LookAtPushArg === "object" &&
+    !Array.isArray(move.LookAtPushArg)
+      ? move.LookAtPushArg as Record<string, unknown>
+      : {};
+  const velocity = Number(push.Velocity ?? 0);
+  const blendOutTime = Number(push.BlendOutTime ?? 0);
+  if (!Number.isFinite(velocity) || !Number.isFinite(blendOutTime)) {
+    throw new Error("当前 EPush 的速度或 Blend Out 无效");
+  }
+  return [{
+    ...clonedValue(move),
+    CameraMoveType: "ELookAtPush",
+    LookAtPushArg: {
+      ...clonedValue(existingLookAtPush),
+      bRelative:
+        typeof push.bRelative === "boolean" ? push.bRelative : true,
+      Velocity: velocity,
+      StartPoint: clonedValue(startPoint),
+      EndPoint: clonedValue(endPoint),
+      BlendOutTime: blendOutTime,
+      LookAtActor: lookAtActorModelIndex,
+      DialogLookAtType: "EActor",
+    },
+  }];
 }
 
 function reflectedSchoolCameraValues(
@@ -4373,6 +4607,19 @@ async function prepareDialogueCameraQuickAction(
     throw new Error("预设机位仅适用于预设相机模式");
   }
   if (
+    request.mode === "look_at_push" &&
+    (request.lookAtActorModelIndex === undefined ||
+      request.dialogueNodeId.endsWith("00"))
+  ) {
+    throw new Error("请选择普通对白节点的注视角色");
+  }
+  if (
+    request.mode !== "look_at_push" &&
+    request.lookAtActorModelIndex !== undefined
+  ) {
+    throw new Error("注视角色只能用于 ELookAtPush 转换");
+  }
+  if (
     request.mode === "copy_previous" &&
     !request.previousDialogueNodeIds?.length
   ) {
@@ -4483,6 +4730,13 @@ async function prepareDialogueCameraQuickAction(
     originalSchoolMoveCamerasMap,
   );
   let addedSchoolCameraKeys: string[] = [];
+  let schoolCameraHeightAdjustments:
+    NonNullable<
+      DialogueCameraQuickActionPreview["schoolCameraHeightAdjustments"]
+    > = [];
+  let lookAtActorPreview:
+    | DialogueCameraQuickActionPreview["lookAtActor"]
+    | undefined;
   let presetPreview: DialogueCameraQuickActionPreview["presetCamera"];
 
   if (request.mode === "copy_previous" && sourceNode) {
@@ -4530,6 +4784,21 @@ async function prepareDialogueCameraQuickAction(
       pose: push.bRelative ? camera.local : camera.world,
     };
     await assertCameraPresetSelection(connection, request.dialogueNodeId);
+  } else if (
+    request.mode === "look_at_push" &&
+    request.lookAtActorModelIndex !== undefined
+  ) {
+    desiredMoveCameras = convertPushCameraToLookAtPush(
+      currentNode.existingMoveCameras,
+      request.lookAtActorModelIndex,
+    );
+    lookAtActorPreview = {
+      modelIndex: request.lookAtActorModelIndex,
+      label:
+        request.roleHints?.find(
+          (role) => role.modelIndex === request.lookAtActorModelIndex,
+        )?.label ?? `槽位 ${request.lookAtActorModelIndex}`,
+    };
   } else if (request.mode === "blend_curve") {
     const curveName =
       request.blendCurveAssetName ?? DEFAULT_DIALOGUE_BLEND_CURVE_NAME;
@@ -4567,6 +4836,13 @@ async function prepareDialogueCameraQuickAction(
         (key) => !schoolCameraMap.indexByRole.has(key),
       );
       addedSchoolCameraKeys = [...missingSchoolCameraKeys];
+      schoolCameraHeightAdjustments = missingSchoolCameraKeys.map(
+        (targetRole) => ({
+          sourceRole: "ENone",
+          targetRole,
+          deltaZCm: schoolCameraHeightDeltaCm("ENone", targetRole),
+        }),
+      );
       desiredSchoolMoveCamerasMap = {
         Keys: [
           ...clonedValue(schoolCameraMap.keys),
@@ -4574,8 +4850,12 @@ async function prepareDialogueCameraQuickAction(
         ],
         Values: [
           ...clonedValue(schoolCameraMap.values),
-          ...missingSchoolCameraKeys.map(() => ({
-            MoveCameras: clonedValue(currentNode.existingMoveCameras),
+          ...missingSchoolCameraKeys.map((targetRole) => ({
+            MoveCameras: adaptSchoolCameraMovesForHeight(
+              currentNode.existingMoveCameras,
+              "ENone",
+              targetRole,
+            ),
           })),
         ],
       };
@@ -4603,14 +4883,30 @@ async function prepareDialogueCameraQuickAction(
             `来源角色 ${copy.sourceRole} 的角色相机为空，无法复制`,
           );
         }
+        const desiredSourceValue = {
+          ...clonedValue(sourceValue),
+          MoveCameras: adaptSchoolCameraMovesForHeight(
+            sourceMoves,
+            copy.sourceRole,
+            copy.targetRole,
+          ),
+        };
+        schoolCameraHeightAdjustments.push({
+          sourceRole: copy.sourceRole,
+          targetRole: copy.targetRole,
+          deltaZCm: schoolCameraHeightDeltaCm(
+            copy.sourceRole,
+            copy.targetRole,
+          ),
+        });
         const targetIndex = desiredIndexByRole.get(copy.targetRole);
         if (targetIndex === undefined) {
           desiredIndexByRole.set(copy.targetRole, desiredKeys.length);
           desiredKeys.push(copy.targetRole);
-          desiredValues.push(clonedValue(sourceValue));
+          desiredValues.push(desiredSourceValue);
           addedSchoolCameraKeys.push(copy.targetRole);
         } else {
-          desiredValues[targetIndex] = clonedValue(sourceValue);
+          desiredValues[targetIndex] = desiredSourceValue;
         }
       }
       desiredSchoolMoveCamerasMap = {
@@ -4699,11 +4995,15 @@ async function prepareDialogueCameraQuickAction(
           ? reflectedSchoolCameraKeys(desiredSchoolMoveCamerasMap)
           : [],
       schoolCameraCopies,
+      schoolCameraHeightAdjustments,
       existingSchoolCameraCount: existingSchoolCameraKeys.length,
       desiredSchoolCameraCount:
         reflectedSchoolCameraKeys(desiredSchoolMoveCamerasMap).length,
       changed,
       blockedReasons: [],
+      ...(lookAtActorPreview
+        ? { lookAtActor: lookAtActorPreview }
+        : {}),
       ...(presetPreview ? { presetCamera: presetPreview } : {}),
     },
     dialogueAsset: String(dialogueAsset),
@@ -9770,6 +10070,74 @@ export async function inspectUnrealMcpConnection(
       ...endpoint,
       message:
         error instanceof Error ? error.message : "UE 编辑器连接检查失败",
+    };
+  } finally {
+    connection.close();
+  }
+}
+
+export async function switchEditorToAutoTest(
+  connectionFactory: () => UnrealInvoker = () => new UnrealMcpConnection(),
+): Promise<EditorMapSwitchResult> {
+  const connection = connectionFactory();
+  await connectUnreal(connection);
+  try {
+    const previousMapAssetPath = await currentMapName(connection);
+    if (sameLevelPath(previousMapAssetPath, AUTO_TEST_LEVEL_PATH)) {
+      return {
+        status: "already_open",
+        mapAssetPath: AUTO_TEST_LEVEL_PATH,
+        previousMapAssetPath,
+      };
+    }
+
+    try {
+      await connection.invoke(
+        "world.open_level",
+        { LevelName: AUTO_TEST_LEVEL_PATH },
+        { timeoutMs: LEVEL_OPEN_TIMEOUT_MS },
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "UE 地图切换失败";
+      if (message.includes("超时") || message.includes("连接已关闭")) {
+        activeMissionPreviewActors = [];
+        activeMissionPreviewMap = "";
+        return {
+          status: "opening",
+          mapAssetPath: AUTO_TEST_LEVEL_PATH,
+          previousMapAssetPath,
+        };
+      }
+      throw new Error(`UE 切换到 AutoTest 失败：${message}`);
+    }
+
+    let currentMapAssetPath: string;
+    try {
+      currentMapAssetPath = await currentMapName(connection);
+    } catch {
+      activeMissionPreviewActors = [];
+      activeMissionPreviewMap = "";
+      return {
+        status: "opening",
+        mapAssetPath: AUTO_TEST_LEVEL_PATH,
+        previousMapAssetPath,
+      };
+    }
+    if (!sameLevelPath(currentMapAssetPath, AUTO_TEST_LEVEL_PATH)) {
+      return {
+        status: "cancelled",
+        mapAssetPath: AUTO_TEST_LEVEL_PATH,
+        previousMapAssetPath,
+      };
+    }
+
+    activeMissionPreviewActors = [];
+    activeMissionPreviewMap = "";
+    return {
+      status: "opened",
+      mapAssetPath: AUTO_TEST_LEVEL_PATH,
+      previousMapAssetPath,
     };
   } finally {
     connection.close();

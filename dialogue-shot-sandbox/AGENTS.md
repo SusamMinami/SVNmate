@@ -9,6 +9,7 @@
 | 修改范围 | 现行规范 | 主要代码 |
 | --- | --- | --- |
 | 搜索、加载、导演切换、TRAE 排队/缓存 | [分镜工作流](docs/storyboard-workflow.md) | `src/App.tsx`、`src/app/`、`server/traeBridge.ts` |
+| 已有镜头评估/建议、TRAE 当前镜头精修 | [分镜工作流](docs/storyboard-workflow.md)、[端侧顾问](docs/rule-director-edge-advisor.md) | `src/director/existingStoryboard*.ts`、`src/director/shotRefinement.ts`、`src/app/useShotRefinement.ts` |
 | BP 站位、角色身份、体型/坐标 | [BP 集成](docs/ue-formation-integration.md) | `src/data/blueprintFormation.ts`、`server/ue/characterBody.ts` |
 | 镜头语言、构图、投影 | [镜头规则](docs/shot-language-rulebook.md) | `src/director/` |
 | 端侧节拍/VLM、偏好反馈 | [端侧顾问](docs/rule-director-edge-advisor.md) | `server/ruleAdvisorBridge.ts`、`src/director/` |

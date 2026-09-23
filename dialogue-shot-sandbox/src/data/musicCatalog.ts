@@ -3,6 +3,21 @@ import type { DialogueSequence } from "../types";
 export const MUSIC_BASE_TOKEN = "TxRLbFH2zalbTSsw4O3cFQUAnkb";
 export const MUSIC_TABLE_ID = "tblXRZRyNviXeFSr";
 export const MUSIC_ANALYSIS_TABLE_ID = "tblyINACQE4xtUGx";
+export const MUSIC_ADVISOR_CANDIDATE_LIMIT = 12;
+
+export interface MusicSemanticProfile {
+  schemaVersion: "music-semantic-profile.v3";
+  narrativeFunctions: string[];
+  moods: string[];
+  valence: number;
+  arousal: number;
+  tension: number;
+  intensityTrajectory: string;
+  entryMode: string;
+  dialogueFit: string;
+  specialUseOnly: boolean;
+  confidence: number;
+}
 
 export interface MusicAudioAnalysis {
   estimatedBpm: number | null;
@@ -20,6 +35,8 @@ export interface MusicAudioAnalysis {
   energyLevel: string;
   brightness: string;
   summary: string;
+  recommendedUse?: string;
+  semanticProfile?: MusicSemanticProfile;
 }
 
 export interface MusicCatalogEntry {
@@ -85,6 +102,8 @@ interface MoodRule {
   preferred: string[];
   tags: string[];
   metadataTerms: string[];
+  semanticFunctions: string[];
+  semanticMoods: string[];
   featureTarget: {
     bpm: number;
     lufs: number;
@@ -98,9 +117,16 @@ const moodRules: MoodRule[] = [
     label: "备战",
     pattern:
       /备战|准备(?:好|战斗|出发|行动|进入|前往)?|制定计划|集结|整装|部署|分工|动身|启程|汇合|会合|目的地/,
-    preferred: ["PrepareBattle01", "Bena_prepare_for_war", "Fleet_Fight_hopeful"],
+    preferred: [
+      "PrepareBattle_01",
+      "PrepareBattle01",
+      "Bena_prepare_for_war",
+      "Fleet_Fight_hopeful",
+    ],
     tags: ["备战7", "备战/悬疑/危机", "危险战斗"],
     metadataTerms: ["备战", "准备", "集结", "希望"],
+    semanticFunctions: ["备战推进", "冲突升级"],
+    semanticMoods: ["坚定", "希望", "紧张", "庄严"],
     featureTarget: { bpm: 112, lufs: -17, centroidHz: 1_600 },
   },
   {
@@ -111,6 +137,8 @@ const moodRules: MoodRule[] = [
     preferred: ["Crisis_Breakout", "Fight42_hard_battle", "Hidden_Crisis_2"],
     tags: ["危险战斗", "备战/悬疑/危机"],
     metadataTerms: ["危险", "战斗", "紧张", "压迫"],
+    semanticFunctions: ["冲突升级", "危机压迫"],
+    semanticMoods: ["紧张", "压迫", "危险", "激烈"],
     featureTarget: { bpm: 128, lufs: -14, centroidHz: 1_900 },
   },
   {
@@ -121,6 +149,8 @@ const moodRules: MoodRule[] = [
     preferred: ["Hidden_Crisis", "Suspence", "Common_Suspence_light_60bpm_v2"],
     tags: ["备战/悬疑/危机"],
     metadataTerms: ["悬疑", "神秘", "阴谋", "危机四伏"],
+    semanticFunctions: ["悬疑调查", "信息揭示"],
+    semanticMoods: ["神秘", "不安", "暗涌", "压迫"],
     featureTarget: { bpm: 82, lufs: -22, centroidHz: 1_100 },
   },
   {
@@ -131,6 +161,8 @@ const moodRules: MoodRule[] = [
     preferred: ["Sad", "Common_Sadness_120bpm", "LoneLiness"],
     tags: ["忧伤低落"],
     metadataTerms: ["悲伤", "忧伤", "孤独", "沉痛"],
+    semanticFunctions: ["悲伤失落"],
+    semanticMoods: ["悲伤", "孤独", "绝望", "沉痛"],
     featureTarget: { bpm: 72, lufs: -23, centroidHz: 900 },
   },
   {
@@ -141,6 +173,8 @@ const moodRules: MoodRule[] = [
     preferred: ["Happy", "Victory", "Sincere"],
     tags: ["日常轻松"],
     metadataTerms: ["快乐", "庆典", "胜利", "愉悦"],
+    semanticFunctions: ["喜悦庆祝", "胜利收束"],
+    semanticMoods: ["喜悦", "庆祝", "明亮", "胜利"],
     featureTarget: { bpm: 118, lufs: -17, centroidHz: 1_800 },
   },
   {
@@ -150,6 +184,8 @@ const moodRules: MoodRule[] = [
     preferred: ["Humour_01", "Common_Humor_2_BPM100_Without_FX"],
     tags: ["日常轻松"],
     metadataTerms: ["搞笑", "荒诞", "幽默", "滑稽"],
+    semanticFunctions: ["幽默调剂"],
+    semanticMoods: ["幽默", "滑稽", "轻快", "荒诞"],
     featureTarget: { bpm: 108, lufs: -18, centroidHz: 2_000 },
   },
   {
@@ -160,6 +196,8 @@ const moodRules: MoodRule[] = [
     preferred: ["Sincere", "Common_01", "Forest01_Majestic_calm"],
     tags: ["日常轻松"],
     metadataTerms: ["温馨", "圆满", "和平", "感人"],
+    semanticFunctions: ["关系缓和", "温情交流"],
+    semanticMoods: ["温暖", "真诚", "感人", "平和"],
     featureTarget: { bpm: 78, lufs: -22, centroidHz: 1_100 },
   },
   {
@@ -170,6 +208,8 @@ const moodRules: MoodRule[] = [
     preferred: ["Common_01", "Common_Delightful_63bpm", "Village_Dusk"],
     tags: ["日常轻松"],
     metadataTerms: ["平静", "安宁", "舒缓", "悠闲"],
+    semanticFunctions: ["日常铺垫", "环境氛围"],
+    semanticMoods: ["平静", "舒缓", "悠闲", "宁静"],
     featureTarget: { bpm: 68, lufs: -24, centroidHz: 800 },
   },
 ];
@@ -234,43 +274,123 @@ function pickMusic(
         ? generalCandidates
         : catalog;
   return candidates
-    .map((entry) => {
-      const metadata = `${entry.name} ${entry.notes}`;
-      const preferredIndex = rule.preferred.indexOf(entry.stateName);
-      let score =
-        (preferredIndex >= 0 ? 12 - preferredIndex * 2 : 0) +
-        (entry.fileToken ? 1 : 0) +
-        (entry.tags.some((tag) => rule.tags.includes(tag)) ? 2 : 0);
-      score += rule.metadataTerms.reduce(
-        (total, term) => total +
-          (metadata.includes(term) ? 1 : 0) +
-          (context.includes(term) && metadata.includes(term) ? 3 : 0),
-        0,
-      );
-      if (entry.analysis) {
-        const { estimatedBpm, tempoConfidence, integratedLufs, spectralCentroidHz } =
-          entry.analysis;
-        if (estimatedBpm !== null && tempoConfidence >= 0.12) {
-          score +=
-            Math.max(
-              0,
-              3 - Math.abs(estimatedBpm - rule.featureTarget.bpm) / 18,
-            ) * tempoConfidence;
-        }
-        if (integratedLufs !== null) {
-          score += Math.max(
-            0,
-            2 - Math.abs(integratedLufs - rule.featureTarget.lufs) / 5,
-          );
-        }
-        score += Math.max(
+    .map((entry) => ({ entry, score: scoreMusic(entry, rule, context) }))
+    .sort(
+      (left, right) =>
+        right.score - left.score ||
+        left.entry.stateId - right.entry.stateId,
+    )[0]?.entry ?? null;
+}
+
+function scoreMusic(
+  entry: MusicCatalogEntry,
+  rule: MoodRule,
+  context: string,
+): number {
+  const profile = entry.analysis?.semanticProfile;
+  const metadata = [
+    entry.name,
+    entry.stateName,
+    entry.tags.join(" "),
+    entry.notes,
+    entry.analysis?.recommendedUse ?? "",
+    profile?.narrativeFunctions.join(" ") ?? "",
+    profile?.moods.join(" ") ?? "",
+  ].join(" ");
+  const preferredIndex = rule.preferred.indexOf(entry.stateName);
+  let score =
+    (preferredIndex >= 0 ? 18 - preferredIndex * 2 : 0) +
+    (entry.fileToken ? 1 : 0) +
+    (entry.tags.some((tag) => rule.tags.includes(tag)) ? 4 : 0);
+  score += rule.metadataTerms.reduce(
+    (total, term) =>
+      total +
+      (metadata.includes(term) ? 2 : 0) +
+      (context.includes(term) && metadata.includes(term) ? 3 : 0),
+    0,
+  );
+  if (profile) {
+    const confidence = Math.max(0.35, Math.min(1, profile.confidence));
+    score +=
+      profile.narrativeFunctions.filter((value) =>
+        rule.semanticFunctions.includes(value),
+      ).length *
+      10 *
+      confidence;
+    score +=
+      profile.moods.filter((value) => rule.semanticMoods.includes(value)).length *
+      4 *
+      confidence;
+    score += profile.dialogueFit === "高" ? 2 : profile.dialogueFit === "低" ? -3 : 0;
+  }
+  if (entry.analysis) {
+    const {
+      estimatedBpm,
+      tempoConfidence,
+      integratedLufs,
+      spectralCentroidHz,
+    } = entry.analysis;
+    if (estimatedBpm !== null && tempoConfidence >= 0.12) {
+      score +=
+        Math.max(
           0,
-          1.5 -
-            Math.abs(
-              spectralCentroidHz - rule.featureTarget.centroidHz,
-            ) /
-              800,
-        );
+          3 - Math.abs(estimatedBpm - rule.featureTarget.bpm) / 18,
+        ) * tempoConfidence;
+    }
+    if (integratedLufs !== null) {
+      score += Math.max(
+        0,
+        2 - Math.abs(integratedLufs - rule.featureTarget.lufs) / 5,
+      );
+    }
+    score += Math.max(
+      0,
+      1.5 -
+        Math.abs(spectralCentroidHz - rule.featureTarget.centroidHz) / 800,
+    );
+  }
+  return score;
+}
+
+export interface MusicShortlistContext {
+  outline: string;
+  dialogue: readonly { content: string }[];
+  adjacentText?: string;
+}
+
+export function shortlistMusicCatalog(
+  catalog: readonly MusicCatalogEntry[],
+  context: MusicShortlistContext,
+  existingStateIds: readonly number[] = [],
+  limit = MUSIC_ADVISOR_CANDIDATE_LIMIT,
+): MusicCatalogEntry[] {
+  if (catalog.length <= limit) {
+    return [...catalog];
+  }
+  const primaryText = [
+    context.outline,
+    ...context.dialogue.map((line) => line.content),
+  ].join(" ");
+  const moodMatch = dominantMood([
+    { text: context.outline, weight: 3 },
+    { text: primaryText, weight: 1 },
+    { text: context.adjacentText ?? "", weight: 0.35 },
+  ]);
+  const explicitSpecialUse =
+    /主题曲|角色主题|专属|PV|演出|舞台|庆典|节日/.test(primaryText);
+  const ranked = catalog
+    .map((entry) => {
+      const profile = entry.analysis?.semanticProfile;
+      let score = moodMatch
+        ? scoreMusic(entry, moodMatch.rule, primaryText)
+        : (profile?.dialogueFit === "高" ? 3 : profile?.dialogueFit === "低" ? -2 : 0) +
+          (profile?.confidence ?? 0) +
+          (entry.fileToken ? 1 : 0);
+      if (
+        !explicitSpecialUse &&
+        (entry.tags.includes("特殊") || profile?.specialUseOnly)
+      ) {
+        score -= 24;
       }
       return { entry, score };
     })
@@ -278,7 +398,13 @@ function pickMusic(
       (left, right) =>
         right.score - left.score ||
         left.entry.stateId - right.entry.stateId,
-    )[0]?.entry ?? null;
+    );
+  const existing = new Set(existingStateIds);
+  const selected = [
+    ...ranked.filter(({ entry }) => existing.has(entry.stateId)),
+    ...ranked.filter(({ entry }) => !existing.has(entry.stateId)),
+  ];
+  return selected.slice(0, Math.max(1, limit)).map(({ entry }) => entry);
 }
 
 export function recommendMusic(
@@ -324,7 +450,10 @@ export function recommendMusic(
     fileToken: openingMusic.fileToken,
     fileName: openingMusic.fileName,
     recordId: openingMusic.recordId,
-    audioSummary: openingMusic.analysis?.summary ?? null,
+    audioSummary:
+      openingMusic.analysis?.recommendedUse ??
+      openingMusic.analysis?.summary ??
+      null,
   });
 
   let activeMood: Mood = openingRule.mood;
@@ -365,7 +494,8 @@ export function recommendMusic(
       fileToken: music.fileToken,
       fileName: music.fileName,
       recordId: music.recordId,
-      audioSummary: music.analysis?.summary ?? null,
+      audioSummary:
+        music.analysis?.recommendedUse ?? music.analysis?.summary ?? null,
     });
     activeMood = transitionMatch.rule.mood;
     lastSwitchIndex = index;
@@ -407,7 +537,8 @@ export function musicRecommendationsFromCues(
       fileToken: entry.fileToken,
       fileName: entry.fileName,
       recordId: entry.recordId,
-      audioSummary: entry.analysis?.summary ?? null,
+      audioSummary:
+        entry.analysis?.recommendedUse ?? entry.analysis?.summary ?? null,
       source: "rule-advisor" as const,
       replacesStateId: existingStateId,
     }];

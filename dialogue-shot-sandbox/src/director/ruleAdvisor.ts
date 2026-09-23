@@ -4,7 +4,10 @@ import type {
   ShotAdvisorCandidateReview,
   ShotPlan,
 } from "../types";
-import type { MusicCatalogEntry } from "../data/musicCatalog";
+import {
+  shortlistMusicCatalog,
+  type MusicCatalogEntry,
+} from "../data/musicCatalog";
 import type {
   DirectorDecision,
   DirectorInput,
@@ -21,6 +24,7 @@ import {
   RuleAdvisorProgressSchema,
   RuleAdvisorResponseSchema,
   RuleBeatAdviceSchema,
+  RuleMusicAdviceSchema,
   type RuleAdvisorProgress,
   type RuleAdvisorResponse,
 } from "./ruleAdvisorContracts";
@@ -44,21 +48,85 @@ function compactAdvisorInput(input: DirectorInput) {
   return advisorInput;
 }
 
+function compactMusicNotes(notes: string): string {
+  return notes.replace(/[；;]文件[:：][\s\S]*$/u, "").trim().slice(0, 500);
+}
+
 export async function requestRuleBeatAdvice(
   input: DirectorInput,
-  options: {
-    musicCatalog?: readonly MusicCatalogEntry[];
-    existingConfigurations?: readonly ExistingDialogueNodeConfiguration[];
-    signal?: AbortSignal;
-  } = {},
+  options: { signal?: AbortSignal; forceRegenerate?: boolean } = {},
 ): Promise<RuleBeatAdvice | null> {
   try {
+    options.signal?.throwIfAborted();
     const response = await fetch("/api/rule-advisor/beats", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         input: compactAdvisorInput(input),
-        music_catalog: (options.musicCatalog ?? [])
+        force_regenerate: options.forceRegenerate,
+      }),
+      signal: options.signal,
+    });
+    if (!response.ok) return null;
+    const envelope = (await response.json()) as AdvisorEnvelope;
+    options.signal?.throwIfAborted();
+    const parsed = RuleBeatAdviceSchema.safeParse(envelope.data);
+    return envelope.ok && parsed.success && parsed.data.request_id === input.request_id
+      ? parsed.data : null;
+  } catch {
+    options.signal?.throwIfAborted();
+    return null;
+  }
+}
+
+export async function requestRuleMusicAdvice(
+  input: DirectorInput,
+  options: {
+    musicCatalog?: readonly MusicCatalogEntry[];
+    existingConfigurations?: readonly ExistingDialogueNodeConfiguration[];
+    signal?: AbortSignal;
+    forceRegenerate?: boolean;
+  } = {},
+): Promise<RuleBeatAdvice["music_cues"] | null> {
+  try {
+    options.signal?.throwIfAborted();
+    const existingMusic = (options.existingConfigurations ?? [])
+      .flatMap((configuration) =>
+        configuration.backgroundMusicStateId === null
+          ? []
+          : [{
+              dialogue_id: configuration.dialogueId,
+              state_id: configuration.backgroundMusicStateId,
+            }],
+      )
+      .slice(0, 500);
+    const musicCatalog = shortlistMusicCatalog(
+      options.musicCatalog ?? [],
+      {
+        outline: input.outline,
+        dialogue: input.dialogue,
+        adjacentText: [
+          input.adjacent_context.previous?.outline,
+          ...(input.adjacent_context.previous?.dialogue.map(
+            (line) => line.content,
+          ) ?? []),
+          input.adjacent_context.next?.outline,
+          ...(input.adjacent_context.next?.dialogue.map(
+            (line) => line.content,
+          ) ?? []),
+        ]
+          .filter(Boolean)
+          .join(" "),
+      },
+      existingMusic.map((item) => item.state_id),
+    );
+    const response = await fetch("/api/rule-advisor/music", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        input: compactAdvisorInput(input),
+        force_regenerate: options.forceRegenerate,
+        music_catalog: musicCatalog
           .filter(
             (entry) =>
               Number.isInteger(entry.stateId) &&
@@ -66,7 +134,6 @@ export async function requestRuleBeatAdvice(
               entry.stateName.trim() &&
               entry.name.trim(),
           )
-          .slice(0, 256)
           .map((entry) => ({
             state_id: entry.stateId,
             state_name: entry.stateName.trim().slice(0, 128),
@@ -75,26 +142,39 @@ export async function requestRuleBeatAdvice(
               .map((tag) => tag.trim().slice(0, 80))
               .filter(Boolean)
               .slice(0, 16),
-            notes: entry.notes.trim().slice(0, 500),
+            notes: compactMusicNotes(entry.notes),
             audio_summary:
               entry.analysis?.summary.trim().slice(0, 240) || null,
+            recommended_use:
+              entry.analysis?.recommendedUse?.trim().slice(0, 500) ?? "",
+            semantic_profile: entry.analysis?.semanticProfile
+              ? {
+                  schema_version:
+                    entry.analysis.semanticProfile.schemaVersion,
+                  narrative_functions:
+                    entry.analysis.semanticProfile.narrativeFunctions,
+                  moods: entry.analysis.semanticProfile.moods,
+                  valence: entry.analysis.semanticProfile.valence,
+                  arousal: entry.analysis.semanticProfile.arousal,
+                  tension: entry.analysis.semanticProfile.tension,
+                  intensity_trajectory:
+                    entry.analysis.semanticProfile.intensityTrajectory,
+                  entry_mode: entry.analysis.semanticProfile.entryMode,
+                  dialogue_fit: entry.analysis.semanticProfile.dialogueFit,
+                  special_use_only:
+                    entry.analysis.semanticProfile.specialUseOnly,
+                  confidence: entry.analysis.semanticProfile.confidence,
+                }
+              : null,
           })),
-        existing_music: (options.existingConfigurations ?? [])
-          .flatMap((configuration) =>
-            configuration.backgroundMusicStateId === null
-              ? []
-              : [{
-                  dialogue_id: configuration.dialogueId,
-                  state_id: configuration.backgroundMusicStateId,
-                }],
-          )
-          .slice(0, 500),
+        existing_music: existingMusic,
       }),
       signal: options.signal,
     });
     if (!response.ok) return null;
     const envelope = (await response.json()) as AdvisorEnvelope;
-    const parsed = RuleBeatAdviceSchema.safeParse(envelope.data);
+    options.signal?.throwIfAborted();
+    const parsed = RuleMusicAdviceSchema.safeParse(envelope.data);
     if (
       !envelope.ok ||
       !parsed.success ||
@@ -102,8 +182,9 @@ export async function requestRuleBeatAdvice(
     ) {
       return null;
     }
-    return parsed.data;
+    return parsed.data.music_cues;
   } catch {
+    options.signal?.throwIfAborted();
     return null;
   }
 }
@@ -126,9 +207,10 @@ export async function releaseIdleRuleAdvisorResources(): Promise<boolean> {
   }
 }
 
-async function readAdvisorProgress(
+export async function readAdvisorProgress(
   requestId: string,
   onProgress: (progress: RuleAdvisorProgress) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
   if (
     document.hidden ||
@@ -144,11 +226,13 @@ async function readAdvisorProgress(
   try {
     const response = await fetch(
       `/api/rule-advisor/progress?request_id=${encodeURIComponent(requestId)}`,
+      { signal },
     );
     if (!response.ok) return;
     const envelope = (await response.json()) as AdvisorEnvelope;
     const parsed = RuleAdvisorProgressSchema.safeParse(envelope.data);
-    if (envelope.ok && parsed.success) {
+    if (!signal?.aborted && envelope.ok && parsed.success &&
+      parsed.data.request_id === requestId) {
       onProgress(parsed.data);
     }
   } catch {
@@ -165,19 +249,26 @@ export async function requestRuleAdvice(
   candidateVisuals: RuleCandidateVisualSet,
   signal?: AbortSignal,
   onProgress?: (progress: RuleAdvisorProgress) => void,
+  forceRegenerate = false,
 ): Promise<RuleAdvisorResponse | null> {
+  let finished = false;
+  const report = (progress: RuleAdvisorProgress) => {
+    if (!finished && !signal?.aborted) onProgress?.(progress);
+  };
   const progressTimer = onProgress
     ? globalThis.setInterval(
-        () => void readAdvisorProgress(input.request_id, onProgress),
+        () => void readAdvisorProgress(input.request_id, report, signal),
         500,
       )
     : null;
   try {
+    signal?.throwIfAborted();
     const response = await fetch("/api/rule-advisor/analyze", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         input: compactAdvisorInput(input),
+        force_regenerate: forceRegenerate,
         baseline: {
           shots: baseline.decisions,
           analysis: baseline.analysis,
@@ -190,6 +281,7 @@ export async function requestRuleAdvice(
       return null;
     }
     const envelope = (await response.json()) as AdvisorEnvelope;
+    signal?.throwIfAborted();
     const parsed = RuleAdvisorResponseSchema.safeParse(envelope.data);
     if (
       !envelope.ok ||
@@ -200,8 +292,10 @@ export async function requestRuleAdvice(
     }
     return parsed.data;
   } catch {
+    signal?.throwIfAborted();
     return null;
   } finally {
+    finished = true;
     if (progressTimer !== null) {
       globalThis.clearInterval(progressTimer);
     }

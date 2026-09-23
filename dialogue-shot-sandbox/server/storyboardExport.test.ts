@@ -74,6 +74,13 @@ function normalizeUnrealReadback(value: unknown): unknown {
   return value;
 }
 
+function completePushCameraMove(fov: number): Record<string, unknown> {
+  return {
+    ...buildDefaultDialogueCameraMove(),
+    FOV: fov,
+  };
+}
+
 class FakeStoryboardExportConnection implements UnrealInvoker {
   readonly calls: Array<{
     action: string;
@@ -385,6 +392,55 @@ class FakeStoryboardExportConnection implements UnrealInvoker {
 
   close(): void {
     this.closed = true;
+  }
+}
+
+class FakeLegacyNamedFormationConnection extends FakeStoryboardExportConnection {
+  override async invoke(
+    action: string,
+    args: Record<string, unknown>,
+  ): Promise<unknown> {
+    if (action === "reflect.read_object_property") {
+      const object = String(args.ThisPtr);
+      const property = String(args.PropertyName);
+      if (
+        object.endsWith(":SimpleConstructionScript_0") &&
+        property === "AllNodes"
+      ) {
+        return [
+          "SCS_Legacy_Player",
+          "SCS_Legacy_Npc",
+          "SCS_Node_c1",
+        ];
+      }
+      if (object === "SCS_Legacy_Player") {
+        if (property === "InternalVariableName") return "BP_Player";
+        if (property === "ComponentClass") {
+          return "/Script/Engine.ChildActorComponent";
+        }
+        if (property === "ComponentTemplate") return "Template_Legacy_Player";
+      }
+      if (object === "SCS_Legacy_Npc") {
+        if (property === "InternalVariableName") return "BP_Npc";
+        if (property === "ComponentClass") {
+          return "/Script/Engine.ChildActorComponent";
+        }
+        if (property === "ComponentTemplate") return "Template_Legacy_Npc";
+      }
+      if (
+        object === "Template_Legacy_Player" &&
+        property === "ChildActorClass"
+      ) {
+        return "/Game/Test/BP_Player.BP_Player_C";
+      }
+      if (
+        object === "Template_Legacy_Npc" &&
+        property === "ChildActorClass"
+      ) {
+        return "/Game/Test/BP_Npc.BP_Npc_C";
+      }
+    }
+    return super.invoke(action, args);
   }
 }
 
@@ -783,6 +839,9 @@ describe("dialogue storyboard export", () => {
         },
       ],
     });
+    expect(
+      result.tracks[0].actions.map((action) => action.sourceIndex),
+    ).toEqual([0, undefined]);
   });
 
   it("reads node actions without reloading cached BP Montage catalogs", async () => {
@@ -948,6 +1007,61 @@ describe("dialogue storyboard export", () => {
     ]);
   });
 
+  it("discovers legacy named Formation actors from DialogModels for node actions", async () => {
+    const connection = new FakeLegacyNamedFormationConnection();
+
+    const result = await readDialogueCharacterActions(
+      {
+        startId: "735200",
+        dialogueIds: ["735201"],
+        models: [],
+      },
+      () => connection,
+    );
+
+    expect(
+      result.catalogs.map((catalog) => ({
+        modelIndex: catalog.modelIndex,
+        blueprintClassPath: catalog.blueprintClassPath,
+        characterLabel: catalog.characterLabel,
+      })),
+    ).toEqual([
+      {
+        modelIndex: 0,
+        blueprintClassPath: "/Game/Test/BP_Player.BP_Player_C",
+        characterLabel: "BP_Player",
+      },
+      {
+        modelIndex: 1,
+        blueprintClassPath: "/Game/Test/BP_Npc.BP_Npc_C",
+        characterLabel: "BP_Npc",
+      },
+    ]);
+
+    const request = exportRequest();
+    request.dialogueIds = [];
+    request.shots = [];
+    request.participantModelIndexes = [1];
+    request.characterActions = [{
+      dialogueId: "735201",
+      modelIndex: 1,
+      actions: [{ montageName: "AM_Wave", delaySeconds: 0.4 }],
+    }];
+
+    await expect(
+      inspectDialogueStoryboardExport(request, () => connection),
+    ).resolves.toMatchObject({
+      changedCharacterActionCount: 1,
+      characterActions: [
+        expect.objectContaining({
+          dialogueId: "735201",
+          modelIndex: 1,
+          action: "add",
+        }),
+      ],
+    });
+  });
+
   it("appends ordered Montage actions and maps AM_Turn to ERotate", async () => {
     const connection = new FakeStoryboardExportConnection();
     connection.behavioursByData.set("ActionData1", [
@@ -1054,6 +1168,106 @@ describe("dialogue storyboard export", () => {
     ]);
   });
 
+  it("replaces the editable action order and delay after review", async () => {
+    const connection = new FakeStoryboardExportConnection();
+    connection.behavioursByData.set("ActionData1", [
+      {
+        CharacterBehaviourItems: [
+          {
+            StartTime: 0,
+            MontageName: "AM_Idle1",
+            CharacterBehaviourType: "ENone",
+            ExistingBlend: "idle",
+          },
+          {
+            StartTime: 0,
+            MontageName: "None",
+            CharacterBehaviourType: "ESpecial",
+            SpecialPayload: { Value: 7 },
+          },
+          {
+            StartTime: 0.2,
+            MontageName: "AM_TurnRight45",
+            CharacterBehaviourType: "ERotate",
+            ExistingBlend: "turn",
+          },
+        ],
+        bStop: true,
+      },
+    ]);
+    const request = exportRequest();
+    request.characterActions = [
+      {
+        dialogueId: "735201",
+        modelIndex: 0,
+        characterLabel: "玩家",
+        editMode: "replace_editable",
+        actions: [
+          {
+            montageName: "AM_TurnRight45",
+            delaySeconds: 0.7,
+            sourceIndex: 2,
+          },
+          {
+            montageName: "AM_Idle1",
+            delaySeconds: 0.3,
+            sourceIndex: 0,
+          },
+        ],
+      },
+    ];
+
+    const preview = await inspectDialogueStoryboardExport(
+      request,
+      () => connection,
+    );
+    expect(preview.characterActions).toEqual([
+      expect.objectContaining({
+        dialogueId: "735201",
+        modelIndex: 0,
+        action: "replace",
+        preservedComplexActionCount: 1,
+        desiredActions: [
+          expect.objectContaining({
+            montageName: "AM_TurnRight45",
+            delaySeconds: 0.7,
+          }),
+          expect.objectContaining({
+            montageName: "AM_Idle1",
+            delaySeconds: 0.3,
+          }),
+        ],
+      }),
+    ]);
+
+    await exportDialogueStoryboard(
+      { ...request, reviewToken: preview.reviewToken },
+      () => connection,
+    );
+    expect(connection.behavioursByData.get("ActionData1")).toEqual([
+      expect.objectContaining({
+        bStop: true,
+        CharacterBehaviourItems: [
+          expect.objectContaining({
+            MontageName: "AM_TurnRight45",
+            StartTime: 0.7,
+            ExistingBlend: "turn",
+          }),
+          expect.objectContaining({
+            MontageName: "None",
+            CharacterBehaviourType: "ESpecial",
+            SpecialPayload: { Value: 7 },
+          }),
+          expect.objectContaining({
+            MontageName: "AM_Idle1",
+            StartTime: 0.3,
+            ExistingBlend: "idle",
+          }),
+        ],
+      }),
+    ]);
+  });
+
   it("limits an action-only preview to the requested actor and properties", async () => {
     const connection = new FakeStoryboardExportConnection();
     const request = exportRequest();
@@ -1149,6 +1363,109 @@ describe("dialogue storyboard export", () => {
         ],
       }),
     ]);
+  });
+
+  it("reorders editable actions while preserving locked UE action data", () => {
+    expect(
+      appendCharacterActions(
+        [
+          {
+            CharacterBehaviourItems: [
+              {
+                StartTime: 0.1,
+                MontageName: "AM_Old",
+                CharacterBehaviourType: "ENone",
+                ExistingBlend: "preserved-old",
+              },
+              {
+                StartTime: 0,
+                MontageName: "None",
+                CharacterBehaviourType: "EStateMachineWalk",
+                SpecialPayload: { Value: 7 },
+              },
+              {
+                StartTime: 0.2,
+                MontageName: "AM_TurnLeft45",
+                CharacterBehaviourType: "ERotate",
+                ExistingBlend: "preserved-turn",
+              },
+            ],
+            bStop: true,
+          },
+        ],
+        [
+          {
+            modelIndex: 0,
+            editMode: "replace_editable",
+            actions: [
+              {
+                montageName: "AM_TurnLeft45",
+                delaySeconds: 0.8,
+                sourceIndex: 2,
+              },
+              { montageName: "AM_Wave", delaySeconds: 0.3 },
+              {
+                montageName: "AM_Old",
+                delaySeconds: 0.6,
+                sourceIndex: 0,
+              },
+            ],
+          },
+        ],
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        bStop: true,
+        CharacterBehaviourItems: [
+          expect.objectContaining({
+            MontageName: "AM_TurnLeft45",
+            StartTime: 0.8,
+            CharacterBehaviourType: "ERotate",
+            ExistingBlend: "preserved-turn",
+          }),
+          {
+            StartTime: 0,
+            MontageName: "None",
+            CharacterBehaviourType: "EStateMachineWalk",
+            SpecialPayload: { Value: 7 },
+          },
+          expect.objectContaining({
+            MontageName: "AM_Wave",
+            StartTime: 0.3,
+            CharacterBehaviourType: "ENone",
+          }),
+          expect.objectContaining({
+            MontageName: "AM_Old",
+            StartTime: 0.6,
+            CharacterBehaviourType: "ENone",
+            ExistingBlend: "preserved-old",
+          }),
+        ],
+      }),
+    ]);
+  });
+
+  it("rejects stale editable action indexes before replacing a track", () => {
+    expect(() =>
+      appendCharacterActions(
+        [{
+          CharacterBehaviourItems: [{
+            StartTime: 0,
+            MontageName: "AM_Old",
+            CharacterBehaviourType: "ENone",
+          }],
+        }],
+        [{
+          modelIndex: 0,
+          editMode: "replace_editable",
+          actions: [{
+            montageName: "AM_Changed",
+            delaySeconds: 0.2,
+            sourceIndex: 0,
+          }],
+        }],
+      ),
+    ).toThrow("现有动作快照已变化");
   });
 
   it("accepts UE float32 normalization and additional default fields", async () => {
@@ -1780,6 +2097,201 @@ describe("dialogue camera quick actions", () => {
     });
   });
 
+  it("converts one EPush camera to ELookAtPush for the selected actor", async () => {
+    const connection = new FakeStoryboardExportConnection();
+    const originalMove = {
+      CameraMoveType: "EPush",
+      PushCameraArg: {
+        bRelative: true,
+        Velocity: 6,
+        StartPoint: { X: 120, Y: -30, Z: 160 },
+        EndPoint: { X: 180, Y: -10, Z: 175 },
+        StartRotation: { Pitch: -8, Yaw: 25, Roll: 1 },
+        EndRotation: { Pitch: -6, Yaw: 30, Roll: 1 },
+        BlendOutTime: 1.25,
+        bWaitOptionShow: true,
+      },
+      LookAtPushArg: {
+        LookAtActor: 0,
+        DialogLookAtType: "EActor",
+        CenterOffset: { X: 0, Y: 0, Z: 40 },
+        bOverrideRoll: false,
+        Roll: 0,
+        bRelative: true,
+        Velocity: 0,
+        StartPoint: { X: 0, Y: 0, Z: 0 },
+        EndPoint: { X: 0, Y: 0, Z: 0 },
+        BlendOutTime: 0,
+      },
+      FOV: 52,
+      FutureField: "preserved",
+    };
+    connection.commonByData.get("ActionData1")![1].CurrentString = "c1";
+    connection.movesByData.set("ActionData1", [originalMove]);
+    const request = {
+      dialogueId: "7352",
+      startId: "735200",
+      dialogueNodeId: "735201",
+      mode: "look_at_push" as const,
+      lookAtActorModelIndex: 1,
+      roleHints: [{ modelIndex: 1, label: "NPC 甲" }],
+    };
+
+    const preview = await inspectDialogueCameraQuickAction(
+      request,
+      () => connection,
+    );
+
+    expect(preview).toMatchObject({
+      cameraMoveType: "ELookAtPush",
+      velocity: 6,
+      blendOutTime: 1.25,
+      fov: 52,
+      lookAtActor: {
+        modelIndex: 1,
+        label: "NPC 甲",
+      },
+      changed: true,
+      blockedReasons: [],
+    });
+    expect(connection.calls.some(
+      (call) => call.action === "reflect.write_object_property",
+    )).toBe(false);
+
+    await applyDialogueCameraQuickAction(
+      { ...request, reviewToken: preview.reviewToken },
+      () => connection,
+    );
+    expect(connection.movesByData.get("ActionData1")).toEqual([{
+      ...originalMove,
+      CameraMoveType: "ELookAtPush",
+      LookAtPushArg: {
+        ...originalMove.LookAtPushArg,
+        LookAtActor: 1,
+        DialogLookAtType: "EActor",
+        Velocity: 6,
+        StartPoint: originalMove.PushCameraArg.StartPoint,
+        EndPoint: originalMove.PushCameraArg.EndPoint,
+        BlendOutTime: 1.25,
+      },
+    }]);
+    expect(connection.commonByData.get("ActionData1")![1].CurrentString).toBe(
+      "c1",
+    );
+  });
+
+  it("rejects ELookAtPush conversion unless the node has one EPush move", async () => {
+    const connection = new FakeStoryboardExportConnection();
+    const request = {
+      dialogueId: "7352",
+      startId: "735200",
+      dialogueNodeId: "735201",
+      mode: "look_at_push" as const,
+      lookAtActorModelIndex: 1,
+    };
+
+    await expect(
+      inspectDialogueCameraQuickAction(request, () => connection),
+    ).rejects.toThrow("恰好包含一段 EPush");
+
+    connection.movesByData.set("ActionData1", [
+      buildDefaultDialogueCameraMove(),
+      buildDefaultDialogueCameraMove(),
+    ]);
+    await expect(
+      inspectDialogueCameraQuickAction(request, () => connection),
+    ).rejects.toThrow("恰好包含一段 EPush");
+
+    connection.movesByData.set("ActionData1", [
+      {
+        CameraMoveType: "ERotate",
+        PushCameraArg: {
+          StartPoint: { X: 0, Y: 0, Z: 0 },
+          EndPoint: { X: 0, Y: 0, Z: 0 },
+        },
+      },
+    ]);
+    await expect(
+      inspectDialogueCameraQuickAction(request, () => connection),
+    ).rejects.toThrow("主镜头不是 EPush");
+  });
+
+  it.each([
+    ["StartPoint", "X", undefined],
+    ["StartPoint", "Y", Number.NaN],
+    ["StartPoint", "Z", Number.POSITIVE_INFINITY],
+    ["EndPoint", "X", "120"],
+    ["EndPoint", "Y", null],
+    ["EndPoint", "Z", Number.NEGATIVE_INFINITY],
+  ])("blocks invalid EPush %s.%s before writing", async (point, axis, value) => {
+    const connection = new FakeStoryboardExportConnection();
+    const move = buildDefaultDialogueCameraMove();
+    const push = move.PushCameraArg as Record<string, unknown>;
+    (push[point as string] as Record<string, unknown>)[axis as string] = value;
+    connection.movesByData.set("ActionData1", [move]);
+    const request = {
+      dialogueId: "7352",
+      startId: "735200",
+      dialogueNodeId: "735201",
+      mode: "look_at_push",
+      lookAtActorModelIndex: 0,
+    };
+    await expect(
+      inspectDialogueCameraQuickAction(request, () => connection),
+    ).rejects.toThrow(`${point}.${axis} 必须是有限数值`);
+    await expect(
+      applyDialogueCameraQuickAction(request, () => connection),
+    ).rejects.toThrow(`${point}.${axis} 必须是有限数值`);
+    expect(connection.calls.some(({ action }) =>
+      action === "reflect.write_object_property" || action === "asset.save_asset",
+    )).toBe(false);
+  });
+
+  it("invalidates LookAtPush review when LinkCamera coordinates change", async () => {
+    const connection = new FakeStoryboardExportConnection();
+    const move = buildDefaultDialogueCameraMove();
+    connection.movesByData.set("ActionData1", [move]);
+    const request = {
+      dialogueId: "7352",
+      startId: "735200",
+      dialogueNodeId: "735201",
+      mode: "look_at_push",
+      lookAtActorModelIndex: 0,
+    };
+    const preview = await inspectDialogueCameraQuickAction(request, () => connection);
+    expect(preview.lookAtActor?.modelIndex).toBe(0);
+    const push = move.PushCameraArg as Record<string, unknown>;
+    (push.EndPoint as Record<string, unknown>).X = 123;
+    await expect(applyDialogueCameraQuickAction(
+      { ...request, reviewToken: preview.reviewToken }, () => connection,
+    )).rejects.toThrow("节点相机数据已变化");
+    expect(connection.calls.some(({ action }) =>
+      action === "reflect.write_object_property" || action === "asset.save_asset",
+    )).toBe(false);
+  });
+
+  it("restores EPush when saving a LookAtPush conversion fails", async () => {
+    const connection = new FakeStoryboardExportConnection();
+    const original = [buildDefaultDialogueCameraMove()];
+    connection.movesByData.set("ActionData1", structuredClone(original));
+    const request = {
+      dialogueId: "7352",
+      startId: "735200",
+      dialogueNodeId: "735201",
+      mode: "look_at_push",
+      lookAtActorModelIndex: 0,
+    };
+    const preview = await inspectDialogueCameraQuickAction(request, () => connection);
+    connection.saveResult = false;
+    await expect(applyDialogueCameraQuickAction(
+      { ...request, reviewToken: preview.reviewToken }, () => connection,
+    )).rejects.toThrow("保存失败");
+    expect(connection.movesByData.get("ActionData1")).toEqual(original);
+    expect(connection.calls.filter(({ action }) =>
+      action === "reflect.write_object_property",
+    ).map(({ args }) => args.PropertyName)).toEqual(["MoveCameras", "MoveCameras"]);
+  });
+
   it("adds the default blend curve with duration zero without a review request", async () => {
     const connection = new FakeStoryboardExportConnection();
     connection.blendByData.set("ActionData1", {
@@ -1843,6 +2355,8 @@ describe("dialogue camera quick actions", () => {
   it("copies the main camera config to Ring, Nino and Jodie", async () => {
     const connection = new FakeStoryboardExportConnection();
     connection.selectedDialogueNodeId = "735202";
+    const mainMove = completePushCameraMove(90);
+    connection.movesByData.set("ActionData2", [mainMove]);
     const request = {
       dialogueId: "7352",
       startId: "735200",
@@ -1856,6 +2370,11 @@ describe("dialogue camera quick actions", () => {
 
     expect(preview).toMatchObject({
       desiredSchoolCameraKeys: ["ERing", "ENino", "EJodie"],
+      schoolCameraHeightAdjustments: [
+        { sourceRole: "ENone", targetRole: "ERing", deltaZCm: -13 },
+        { sourceRole: "ENone", targetRole: "ENino", deltaZCm: -13 },
+        { sourceRole: "ENone", targetRole: "EJodie", deltaZCm: -24 },
+      ],
       existingSchoolCameraCount: 0,
       desiredSchoolCameraCount: 3,
       changed: true,
@@ -1864,19 +2383,34 @@ describe("dialogue camera quick actions", () => {
       { ...request, reviewToken: preview.reviewToken },
       () => connection,
     );
-    expect(connection.schoolCamerasByData.get("ActionData2")).toEqual({
-      Keys: ["ERing", "ENino", "EJodie"],
-      Values: [
-        { MoveCameras: [{ CameraMoveType: "EPush", FOV: 90 }] },
-        { MoveCameras: [{ CameraMoveType: "EPush", FOV: 90 }] },
-        { MoveCameras: [{ CameraMoveType: "EPush", FOV: 90 }] },
-      ],
-    });
+    const schoolMap = connection.schoolCamerasByData.get("ActionData2") as {
+      Keys: string[];
+      Values: Array<{ MoveCameras: Array<Record<string, unknown>> }>;
+    };
+    expect(schoolMap.Keys).toEqual(["ERing", "ENino", "EJodie"]);
+    expect(schoolMap.Values.map(({ MoveCameras }) => ({
+      fov: MoveCameras[0].FOV,
+      startZ: (
+        MoveCameras[0].PushCameraArg as {
+          StartPoint: { Z: number };
+        }
+      ).StartPoint.Z,
+      endZ: (
+        MoveCameras[0].PushCameraArg as {
+          EndPoint: { Z: number };
+        }
+      ).EndPoint.Z,
+    }))).toEqual([
+      { fov: 90, startZ: -13, endZ: -13 },
+      { fov: 90, startZ: -13, endZ: -13 },
+      { fov: 90, startZ: -24, endZ: -24 },
+    ]);
   });
 
   it("writes role cameras directly after confirmation without a review token", async () => {
     const connection = new FakeStoryboardExportConnection();
     connection.selectedDialogueNodeId = "735202";
+    connection.movesByData.set("ActionData2", [completePushCameraMove(90)]);
 
     await expect(
       applyDialogueCameraQuickAction(
@@ -1893,19 +2427,22 @@ describe("dialogue camera quick actions", () => {
       dialogueNodeId: "735202",
       saved: true,
     });
-    expect(connection.schoolCamerasByData.get("ActionData2")).toEqual({
-      Keys: ["ERing", "ENino", "EJodie"],
-      Values: [
-        { MoveCameras: [{ CameraMoveType: "EPush", FOV: 90 }] },
-        { MoveCameras: [{ CameraMoveType: "EPush", FOV: 90 }] },
-        { MoveCameras: [{ CameraMoveType: "EPush", FOV: 90 }] },
-      ],
-    });
+    const schoolMap = connection.schoolCamerasByData.get("ActionData2") as {
+      Values: Array<{ MoveCameras: Array<Record<string, unknown>> }>;
+    };
+    expect(schoolMap.Values.map(({ MoveCameras }) =>
+      (
+        MoveCameras[0].PushCameraArg as {
+          StartPoint: { Z: number };
+        }
+      ).StartPoint.Z,
+    )).toEqual([-13, -13, -24]);
   });
 
   it("preserves configured role cameras and only fills missing roles", async () => {
     const connection = new FakeStoryboardExportConnection();
     connection.selectedDialogueNodeId = "735202";
+    connection.movesByData.set("ActionData2", [completePushCameraMove(90)]);
     connection.schoolCamerasByData.set("ActionData2", {
       Keys: ["ERing"],
       Values: [
@@ -1939,31 +2476,39 @@ describe("dialogue camera quick actions", () => {
       { ...request, reviewToken: preview.reviewToken },
       () => connection,
     );
-    expect(connection.schoolCamerasByData.get("ActionData2")).toEqual({
-      Keys: ["ERing", "ENino", "EJodie"],
-      Values: [
-        {
-          MoveCameras: [{ CameraMoveType: "EPush", FOV: 48 }],
-        },
-        { MoveCameras: [{ CameraMoveType: "EPush", FOV: 90 }] },
-        { MoveCameras: [{ CameraMoveType: "EPush", FOV: 90 }] },
-      ],
+    const schoolMap = connection.schoolCamerasByData.get("ActionData2") as {
+      Keys: string[];
+      Values: Array<{ MoveCameras: Array<Record<string, unknown>> }>;
+    };
+    expect(schoolMap.Keys).toEqual(["ERing", "ENino", "EJodie"]);
+    expect(schoolMap.Values[0]).toEqual({
+      MoveCameras: [{ CameraMoveType: "EPush", FOV: 48 }],
     });
+    expect(schoolMap.Values.slice(1).map(({ MoveCameras }) =>
+      (
+        MoveCameras[0].PushCameraArg as {
+          StartPoint: { Z: number };
+        }
+      ).StartPoint.Z,
+    )).toEqual([-13, -24]);
   });
 
-  it("copies complete role camera values over existing and missing roles", async () => {
+  it("copies complete role camera values and applies the source-to-target eye height", async () => {
     const connection = new FakeStoryboardExportConnection();
     connection.selectedDialogueNodeId = "735202";
     connection.movesByData.set("ActionData2", []);
+    const ringMove = completePushCameraMove(48);
+    const ringPush = ringMove.PushCameraArg as Record<string, unknown>;
     const ringCamera = {
       MoveCameras: [
         {
-          CameraMoveType: "ERotate",
-          FOV: 48,
-          RotateCameraArg: {
-            CameraName: "c_ring",
-            RotationSpeed: 1.25,
+          ...ringMove,
+          PushCameraArg: {
+            ...ringPush,
+            StartPoint: { X: 120, Y: -30, Z: 130 },
+            EndPoint: { X: 180, Y: -10, Z: 135 },
           },
+          CustomMoveMetadata: { CameraName: "c_ring" },
         },
       ],
       BlendWeight: 0.75,
@@ -2012,9 +2557,37 @@ describe("dialogue camera quick actions", () => {
       dialogueNodeId: "735202",
       saved: true,
     });
-    expect(connection.schoolCamerasByData.get("ActionData2")).toEqual({
-      Keys: ["ERing", "ENino", "EJodie"],
-      Values: [ringCamera, ringCamera, ringCamera],
+    const result = connection.schoolCamerasByData.get("ActionData2") as {
+      Keys: string[];
+      Values: typeof ringCamera[];
+    };
+    expect(result.Keys).toEqual(["ERing", "ENino", "EJodie"]);
+    expect(result.Values[0]).toEqual(ringCamera);
+    expect(result.Values[1]).toMatchObject({
+      BlendWeight: 0.75,
+      CustomMetadata: { Owner: "Ring", Revision: 3 },
+      MoveCameras: [{
+        CameraMoveType: "EPush",
+        FOV: 48,
+        CustomMoveMetadata: { CameraName: "c_ring" },
+        PushCameraArg: {
+          StartPoint: { X: 120, Y: -30, Z: 130 },
+          EndPoint: { X: 180, Y: -10, Z: 135 },
+        },
+      }],
+    });
+    expect(result.Values[2]).toMatchObject({
+      BlendWeight: 0.75,
+      CustomMetadata: { Owner: "Ring", Revision: 3 },
+      MoveCameras: [{
+        CameraMoveType: "EPush",
+        FOV: 48,
+        CustomMoveMetadata: { CameraName: "c_ring" },
+        PushCameraArg: {
+          StartPoint: { X: 120, Y: -30, Z: 119 },
+          EndPoint: { X: 180, Y: -10, Z: 124 },
+        },
+      }],
     });
     expect(
       connection.calls.filter(

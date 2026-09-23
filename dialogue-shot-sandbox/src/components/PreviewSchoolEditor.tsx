@@ -3,6 +3,7 @@ import {
   Check,
   ChevronRight,
   LoaderCircle,
+  MapPinned,
   UserRoundSearch,
   X,
 } from "lucide-react";
@@ -15,6 +16,7 @@ import type {
 import {
   applyDialoguePreviewSchool,
   inspectDialoguePreviewSchool,
+  switchEditorToAutoTest,
 } from "../ue/client";
 import { OverlayScrollArea } from "./OverlayScrollArea";
 
@@ -22,6 +24,7 @@ interface PreviewSchoolEditorProps {
   dialogueNodeId: string;
   careers: CareerPreviewOption[];
   onActivityChange?: (activity: "idle" | "read" | "write") => void;
+  onMapSwitchingChange?: (switching: boolean) => void;
 }
 
 function careerLabel(
@@ -39,6 +42,7 @@ export function PreviewSchoolEditor({
   dialogueNodeId,
   careers,
   onActivityChange,
+  onMapSwitchingChange,
 }: PreviewSchoolEditorProps) {
   const operationRunRef = useRef(0);
   const [selectedCareerId, setSelectedCareerId] = useState("");
@@ -46,7 +50,8 @@ export function PreviewSchoolEditor({
     useState<DialoguePreviewSchoolPreview | null>(null);
   const [request, setRequest] =
     useState<DialoguePreviewSchoolRequest | null>(null);
-  const [busy, setBusy] = useState<"inspect" | "apply" | null>(null);
+  const [busy, setBusy] =
+    useState<"inspect" | "apply" | "switch-map" | null>(null);
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
   const selectedCareer = useMemo(
@@ -67,16 +72,57 @@ export function PreviewSchoolEditor({
 
   useEffect(() => {
     onActivityChange?.(
-      busy === "apply" ? "write" : busy === "inspect" ? "read" : "idle",
+      busy === "apply" || busy === "switch-map"
+        ? "write"
+        : busy === "inspect"
+          ? "read"
+          : "idle",
     );
-  }, [busy, onActivityChange]);
+    onMapSwitchingChange?.(busy === "switch-map");
+  }, [busy, onActivityChange, onMapSwitchingChange]);
 
   useEffect(
     () => () => {
       onActivityChange?.("idle");
+      onMapSwitchingChange?.(false);
     },
-    [onActivityChange],
+    [onActivityChange, onMapSwitchingChange],
   );
+
+  async function switchMap() {
+    const operationRun = ++operationRunRef.current;
+    setBusy("switch-map");
+    setError("");
+    setStatus("");
+    try {
+      const result = await switchEditorToAutoTest();
+      if (operationRun !== operationRunRef.current) {
+        return;
+      }
+      setStatus(
+        result.status === "already_open"
+          ? "UE 当前已经是 AutoTest"
+          : result.status === "opened"
+            ? "UE 已切换到 AutoTest"
+            : result.status === "opening"
+              ? "UE 正在切换到 AutoTest，请在 UE 中完成保存确认"
+              : "UE 已取消切图，当前地图保持不变",
+      );
+    } catch (switchError) {
+      if (operationRun !== operationRunRef.current) {
+        return;
+      }
+      setError(
+        switchError instanceof Error
+          ? switchError.message
+          : "无法切换到 AutoTest",
+      );
+    } finally {
+      if (operationRun === operationRunRef.current) {
+        setBusy(null);
+      }
+    }
+  }
 
   async function inspect() {
     if (!selectedCareer) {
@@ -165,6 +211,31 @@ export function PreviewSchoolEditor({
       </section>
 
       <OverlayScrollArea className="inspector-tab-panel preview-school-editor">
+        <section className="inspector-section">
+          <div className="section-label">
+            <span>预览环境</span>
+            <small>AutoTest</small>
+          </div>
+          <div className="node-camera-command-list">
+            <button
+              type="button"
+              disabled={busy !== null}
+              onClick={() => void switchMap()}
+            >
+              <MapPinned size={16} />
+              <span>
+                <strong>切到 AutoTest</strong>
+                <small>/Game/Seria/Maps/AutoTest</small>
+              </span>
+              {busy === "switch-map" ? (
+                <LoaderCircle className="spin" size={15} />
+              ) : (
+                <ChevronRight size={15} />
+              )}
+            </button>
+          </div>
+        </section>
+
         <section className="inspector-section">
           <div className="section-label">
             <span>职业配置</span>

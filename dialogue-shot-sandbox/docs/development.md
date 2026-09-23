@@ -87,6 +87,8 @@ npm run test:e2e
 - Playwright 使用已安装 Microsoft Edge（`msedge`），默认 `1440x900` 桌面项目。
   它会自行启动/关闭开发服务，不复用已有服务；端口被占用时先设置
   `$env:PLAYWRIGHT_PORT = "4174"`。不新增移动端矩阵。
+- Vite 不监听 `artifacts/`、`desktop-dist/` 和 `test-results/`，避免打包 EXE
+  的 Windows 文件锁或验证产物干扰开发服务。
 - UI/Three.js 变更检查桌面截图、Canvas 非空、减少动态效果和文字溢出。
   纯文档改动按根目录指南做链接与 diff 检查，无需构建和启动 UE。
 
@@ -119,6 +121,16 @@ GitHub CLI 已登录后，发布入口是：
 powershell -ExecutionPolicy Bypass -File scripts/publish-update.ps1
 ```
 
-脚本重新构建并上传固定通道 `shot-sandbox-update` 的安装版、便携版、更新元数据
-与校验和。逐项核对上传、版本与哈希；本机安装是另一步。当前无商业签名配置时，
-不能承诺 SmartScreen 不提示未知发布者。
+脚本默认重新构建并上传固定通道 `shot-sandbox-update` 的安装版、便携版、更新元数据
+与校验和。已经完成本轮打包且核对版本后，可传 `-SkipBuild` 发布同一份已验证产物。
+版本同时更新 `package.json` 与 lockfile；上传后核对 GitHub 附件大小及 SHA-256，
+并检查 `latest.yml` 的版本、安装包路径与 SHA-512。发布附件不等于提交或推送源码。
+
+本机覆盖安装是另一步：先定位当前卸载注册项中的安装目录，退出旧客户端，运行
+新版本 Setup，保留 `%APPDATA%/Shot Sandbox` 的配置、任务与资料。完成后核对
+注册版本、EXE 版本及安装目录的 `resources/app.asar`，再启动客户端验证。
+使用 TRAE 新增工具时，重载集成工作区或重新启用 MCP。
+
+清理仅针对确认可重建的日志、测试产物和旧安装包；保留本轮验证证据与至少上一版
+回退包。不将未跟踪源码、历史研究、业务草稿、授权目录或运行时配置视为垃圾。
+当前无商业签名配置时，不能承诺 SmartScreen 不提示未知发布者。

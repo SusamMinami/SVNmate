@@ -67,6 +67,7 @@ for (const scale of [1, 1.5, 2]) {
       await expect(page.locator(".app-shell")).toHaveAttribute("data-workspace-direction", "up");
       // All three interrupted pages survive until the final movement completes.
       await expect(page.locator('[data-workspace-state="exiting"]')).toHaveCount(2);
+      await page.screenshot({ path: testInfo.outputPath(`workspace-midflight-${scale}.png`) });
       await page.evaluate(() => document.querySelectorAll<HTMLElement>("[data-workspace-id]")
         .forEach((element) => element.getAnimations().forEach((animation) => animation.finish())));
       await expect(page.locator('[data-workspace-state="exiting"]')).toHaveCount(0);
@@ -123,11 +124,27 @@ test("status popovers reverse, dismiss, and share immediate adjacent tooltips", 
   const panel = page.locator(".data-source-status__popover");
   await expect(panel).toHaveAttribute("data-open", "true");
   await expect(panel).toHaveCSS("opacity", "1");
-  const box = (await data.boundingBox())!;
-  await page.mouse.click(box.x + 16, box.y + 16);
-  // Closing content is inert immediately, but still paints its short exit.
-  await expect(panel).toHaveAttribute("inert", "");
-  await page.mouse.click(box.x + 16, box.y + 16);
+  const reversal = await data.evaluate(async (button) => {
+    const element = document.querySelector<HTMLElement>(".data-source-status__popover")!;
+    const frame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
+    await frame();
+    element.getAnimations().forEach((animation) => {
+      animation.pause();
+      animation.currentTime = 30;
+    });
+    const opacity = Number(getComputedStyle(element).opacity);
+    const inert = element.inert;
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
+    await frame();
+    const frames = element.getAnimations().flatMap((animation) =>
+      (animation.effect as KeyframeEffect).getKeyframes());
+    return { opacity, inert, from: Number(frames.find((frame) => "opacity" in frame)?.opacity) };
+  });
+  expect(reversal.inert).toBe(true);
+  expect(reversal.opacity).toBeGreaterThan(0);
+  expect(reversal.opacity).toBeLessThan(1);
+  expect(reversal.from).toBeCloseTo(reversal.opacity, 2);
   await expect(panel).toHaveAttribute("data-open", "true");
   await expect(panel).toHaveCSS("opacity", "1");
   await page.screenshot({ path: testInfo.outputPath("status-popover.png") });

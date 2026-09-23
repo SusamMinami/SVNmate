@@ -29,8 +29,9 @@
 | --- | --- | --- |
 | 使用上一相机参数 | 向前跳过空节点，完整复制最近有效节点的 `CameraPosition + MoveCameras` | 服务端读取来源并生成令牌 |
 | 添加默认镜头 | 空节点使用 `c1 / EPush / Velocity=1 / BlendOutTime=1 / FOV=62`；也可只读取角色预设 Transform | 已回读配置生成本地差异，提交时重读 |
+| 粘贴到 ELookAtPush | 已配置节点恰好包含一段 `EPush` 时，将其起终点、相对坐标、速度和 Blend Out 复制到 `LookAtPushArg`，并选择注视模型槽 | 服务端生成差异与令牌，提交时重读 |
 | 添加镜头曲线 | `DialogBlendCameraData=EBlend`，默认 `trans_6015`；`Duration` 默认 0，可编辑 `0-3600s` | 本地差异，提交时校验 CurveFloat 与节点 |
-| 添加角色相机 | 保留 `SchoolMoveCamerasMap` 已有键，用主 `MoveCameras` 补缺失的 `ERing / ENino / EJodie` | 本地差异，提交时重读 |
+| 添加角色相机 | 保留 `SchoolMoveCamerasMap` 已有键，用主 `MoveCameras` 补缺失的 `ERing / ENino / EJodie`，并按固定职业高度平移 EPush 起终点 Z | 本地差异，提交时重读 |
 
 默认曲线完整路径为
 `/Game/Seria/Task/Mod/MainQuest/DialogCurve/trans_6015.trans_6015`，路径用资产名输入，
@@ -38,10 +39,20 @@ Duration 单独编辑。本地确认路径不额外预检；调用方显式携�
 
 - 四个按钮只选方案、展示差异，不直接写入。差异区在主滚动区外、紧贴底栏，
   唯一写入入口在底栏；切换方案替换待写内容。
+- 已有主镜头时入口显示“修改当前镜头”。展开后可从 UE 页签共用的角色槽列表
+  选择注视 Actor，并把当前单段 `EPush` 转为 `ELookAtPush`。转换保留
+  `CameraPosition`、FOV 和未知扩展字段，不复制起止旋转；多段运镜或非
+  `EPush` 明确阻断。起终点的 XYZ 必须齐全且为有限数值，缺失、字符串、
+  NaN 或 Infinity 在预检及提交重读时阻断，不用零坐标兜底。
 - 不设置独立的“已有配置”区。默认镜头、Blend、角色相机状态归各自按钮；
   已配置项用绿色，角色相机只标绿已有角色名。
 - 角色相机可拖拽来源角色到目标，键盘支持先选来源再选目标。覆盖的是来源角色
-  完整 `SchoolMoveCamerasMap.Value`；拖拽只更新本地草稿，不请求 UE。
+  完整 `SchoolMoveCamerasMap.Value`；其中结构完整的 `EPush` 按来源与目标职业
+  高度差同步平移 `StartPoint.Z / EndPoint.Z`，其他运镜保持原样。
+  固定高度采用玩家 BP 胶囊体半高：Eric、Serena、Lan、Sylvan `92 cm`；
+  Ring/Nino 合并为 `79 cm`；Jodie 单独为 `68 cm`。因此从主镜头补齐时分别
+  调整 `-13 / -13 / -24 cm`，职业间复制继续使用“目标高度 - 来源高度”的同一公式。
+  确认区展示每项目标的 Z 偏移；拖拽只更新本地草稿，不请求 UE。
   提交时重读当前选择/配置，按原快照复制，非目标条目不变，回读失败回滚。
 - 普通角色相机补齐态不显示取消叉号，节点或方案变化使其失效；产生覆盖草稿
   后显示整组取消，也允许逐项撤销。
@@ -54,11 +65,33 @@ Duration 单独编辑。本地确认路径不额外预检；调用方显式携�
   坐标和既有参数保留规则见 [Camera BP 预设](camera-bp-presets.md)。
 - 成功后保留当前小窗与绿色反馈，仅刷新当前节点，不读全对话、Formation 或运行导演。
 
+### ELookAtPush 接入边界
+
+- 当前转换仍通过 `reflect.write_object_property` 写入 `MoveCameras`，
+  尚未接入 `ApplyCurrentSelectedNodeDataProperty`。后者接受 UE ExportText，
+  不能直接传 JSON；没有经过验证的序列化与回读流程前，不宣称已触发编辑器后处理。
+- 2026-09-21 只读查询运行中的 UE Python 类型，确认 `LookAtPushArg` 有整数
+  `look_at_actor`、`dialog_look_at_type`（默认 `EActor`）、起终点、relative、
+  velocity 和 blend_out_time；`MoveCamera` 未暴露 `export_text` 方法。
+  这是类型核对，不代表已验证真实节点转换、预览、保存或重新加载。
+- Actor 候选复用已加载的角色目录，并由预设快照角色补充；`roleHints` 只用于
+  显示名称。服务端目前只校验槽位整数范围，尚未核实当前 Formation 中该槽的存在性。
+- 转换保留已有 `CenterOffset`、Roll 与 `SchoolMoveCamerasMap`；注视偏移和
+  职业镜头覆盖可能影响最终画面，需要在专用测试节点中核对。
+- 自动化测试覆盖转换、无效坐标、多段阻断、审核后坐标变化和保存失败恢复；
+  UE 实机写入验收仍待指定测试节点与写入确认。
+
 ## 动作与视线
 
-- 按节点与 Formation 模型槽从角色 BP CDO `Montages` 读取候选。已有动作只读，
-  新增按界面顺序追加，不改删原动作。初始 Montage 为空、延迟 `0.4s`；
-  空白项不进入写入。
+- 按节点与 Formation 模型槽从角色 BP CDO `Montages` 读取候选。完整窗口中的
+  已有动作保持只读；小窗中的已有动作默认锁定，点击左侧锁后可修改延迟并与同轨
+  动作拖拽排序。解锁不直接形成修改，只有延迟或顺序变化才进入待写状态。
+- 小窗提交调整时替换该轨可编辑动作序列，同时按原位置保留未展示的特殊动作及
+  既有扩展字段；写入前若动作快照已变化则要求重新读取。新增动作仍可与已解锁
+  动作共同排序，初始 Montage 为空、延迟 `0.4s`，空白项不进入写入。
+- 旧版 Formation 若以角色名而非数字命名 ChildActorComponent，小窗动作与视线
+  可按 `DialogModels` 下标和组件名/`ChildActorClass` 的唯一精确匹配恢复模型槽；
+  匹配缺失或有歧义时不猜测。完整 BP 站位与分镜镜头导出仍要求数字槽。
 - 候选支持名称/路径筛选与连续滚动，最多同时渲染约 8 项，不限制总可选数量。
 - 新增 `AM_Turn*` 写 `ERotate` 并按名称角度更新预览，其余写 `ENone`。
   既有走位、旋转、停止标记和位置字段保持不变。
@@ -87,6 +120,8 @@ Duration 单独编辑。本地确认路径不额外预检；调用方显式携�
 - 小窗不显示目标节点选择，资源只作用于当前节点；完整窗口保留节点选择。
 - 音频资料库切换、分类和搜索在主滚动区内置顶，资源列表不另建嵌套滚动区。
   右缘使用覆盖式滑块，展开资料库不改变内容宽度；滚轮、键盘、触控板与拖动可用。
+- 进入小窗时重新读取本地音乐目录快照。输入搜索词后改为跨分类检索，不与此前
+  选中的分类叠加；搜索统一全角、空格、下划线和标点，并包含 v3 推荐场景与语义字段。
 - 镜头、音频、UE 页底栏主按钮统一为“写入节点”，不要求已生成分镜。
   点击后按操作执行重读/预检、校验、写入、回读和单次保存，不恢复全屏、
   不打开全量导出或第三层确认；成功仅清理该节点草稿。
@@ -101,6 +136,11 @@ Duration 单独编辑。本地确认路径不额外预检；调用方显式携�
 职业来自 `<doc>/csvdir/z职业配置表.csv` 的 `CareerInfor.id/name/bp`。
 展示差异后，只写当前节点 `PreviewSchoolID`；提交复核唯一选择与审核令牌，
 回读一致后保存，失败恢复，不沿用上一对白节点的内容。
+
+配置状态同时提供“切到 AutoTest”，调用 UE 原生 `world.open_level` 打开
+`/Game/Seria/Maps/AutoTest`，用于在剧情编辑器创建额外预览 World 前释放当前大地图。
+切图期间暂停小窗节点轮询；当前已经是 AutoTest 时不重复加载。此操作不在沙盒中
+预先阻断 dirty 地图，未保存内容的保存、放弃或取消由 UE 原生切图提示处理。
 
 ## 生命周期与验证
 

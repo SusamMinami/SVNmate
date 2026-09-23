@@ -56,7 +56,10 @@ export function selectionPollDelayAfterResponse(
   );
 }
 
-export function useUeDialogueSelection(enabled: boolean): {
+export function useUeDialogueSelection(
+  enabled: boolean,
+  paused = false,
+): {
   selection: SelectedDialogueNodeResult | null;
   refreshing: boolean;
   polling: boolean;
@@ -76,6 +79,11 @@ export function useUeDialogueSelection(enabled: boolean): {
       setRefreshing(false);
       setPolling(false);
       setPollIntervalMs(SELECTION_POLL_MIN_INTERVAL_MS);
+      return;
+    }
+    if (paused) {
+      setRefreshing(false);
+      setPolling(false);
       return;
     }
 
@@ -148,7 +156,7 @@ export function useUeDialogueSelection(enabled: boolean): {
         globalThis.clearTimeout(timer);
       }
     };
-  }, [enabled]);
+  }, [enabled, paused]);
 
   return { selection, refreshing, polling, pollIntervalMs };
 }

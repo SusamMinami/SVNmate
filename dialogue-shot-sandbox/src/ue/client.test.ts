@@ -5,6 +5,7 @@ import {
   getBlueprintFormation,
   inspectDialogNpcTableRegistration,
   refreshMissionTargetPlan,
+  switchEditorToAutoTest,
 } from "./client";
 
 afterEach(() => {
@@ -84,6 +85,35 @@ describe("refreshMissionTargetPlan", () => {
     expect(
       JSON.parse(String(fetchSpy.mock.calls[0]?.[1]?.body)),
     ).toEqual({ taskId: "900001" });
+  });
+});
+
+describe("switchEditorToAutoTest", () => {
+  it("posts the dedicated editor map command without retrying", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ok: true,
+          data: {
+            status: "opened",
+            mapAssetPath: "/Game/Seria/Maps/AutoTest",
+            previousMapAssetPath: "/Game/Seria/Maps/02_01_City/02_01_City",
+          },
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+
+    await expect(switchEditorToAutoTest()).resolves.toMatchObject({
+      status: "opened",
+      mapAssetPath: "/Game/Seria/Maps/AutoTest",
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe("/api/ue/editor/auto-test");
+    expect(JSON.parse(String(fetchSpy.mock.calls[0]?.[1]?.body))).toEqual({});
   });
 });
 

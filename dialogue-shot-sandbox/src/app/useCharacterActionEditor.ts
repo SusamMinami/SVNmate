@@ -29,6 +29,8 @@ export interface CharacterActionDraft extends DialogueCharacterActionItem {
 export interface CharacterActionTrackDraft {
   dialogueId: string;
   modelIndex: number;
+  editMode: "append" | "replace_editable";
+  unlockedSourceIndexes: number[];
   actions: CharacterActionDraft[];
 }
 
@@ -39,6 +41,7 @@ export interface CharacterActionEditorController {
   dialogueAssetPath: string;
   catalogs: BlueprintMontageCatalog[];
   existingTracks: DialogueCharacterActionTrack[];
+  ueTracks: DialogueCharacterActionTrack[];
   existingViewLineNodes: DialogueViewLineNode[];
   tracks: CharacterActionTrackDraft[];
   viewLines: DialogueViewLine[];
@@ -65,6 +68,11 @@ export interface CharacterActionEditorController {
     modelIndex: number,
     sourceIndex: number,
     targetIndex: number,
+  ) => void;
+  toggleExistingActionLock: (
+    dialogueId: string,
+    modelIndex: number,
+    sourceIndex: number,
   ) => void;
   setViewLine: (
     dialogueId: string,
@@ -452,6 +460,8 @@ export function useCharacterActionEditor({
               {
                 dialogueId,
                 modelIndex,
+                editMode: "append",
+                unlockedSourceIndexes: [],
                 actions: [{
                   id: nextActionId(dialogueId, modelIndex),
                   montageName: "",
@@ -562,6 +572,77 @@ export function useCharacterActionEditor({
     [updateTrack],
   );
 
+  const toggleExistingActionLock = useCallback(
+    (
+      dialogueId: string,
+      modelIndex: number,
+      sourceIndex: number,
+    ) => {
+      const existingTrack = ueTracks.find(
+        (track) =>
+          track.dialogueId === dialogueId &&
+          track.modelIndex === modelIndex,
+      );
+      if (
+        !existingTrack?.actions.some(
+          (action) => action.sourceIndex === sourceIndex,
+        )
+      ) {
+        return;
+      }
+      setTracks((current) => {
+        const draftIndex = current.findIndex(
+          (track) =>
+            track.dialogueId === dialogueId &&
+            track.modelIndex === modelIndex,
+        );
+        const currentDraft =
+          draftIndex >= 0 ? current[draftIndex] : undefined;
+        if (currentDraft?.editMode === "replace_editable") {
+          const unlocked = currentDraft.unlockedSourceIndexes.includes(
+            sourceIndex,
+          );
+          const nextDraft = {
+            ...currentDraft,
+            unlockedSourceIndexes: unlocked
+              ? currentDraft.unlockedSourceIndexes.filter(
+                  (index) => index !== sourceIndex,
+                )
+              : [...currentDraft.unlockedSourceIndexes, sourceIndex],
+          };
+          return current.map((track, index) =>
+            index === draftIndex ? nextDraft : track,
+          );
+        }
+
+        const appendedActions = currentDraft?.actions ?? [];
+        const replacementDraft: CharacterActionTrackDraft = {
+          dialogueId,
+          modelIndex,
+          editMode: "replace_editable",
+          unlockedSourceIndexes: [sourceIndex],
+          actions: [
+            ...existingTrack.actions.flatMap((action) =>
+              action.sourceIndex === undefined
+                ? []
+                : [{
+                    ...action,
+                    id: `${dialogueId}:${modelIndex}:existing:${action.sourceIndex}`,
+                  }],
+            ),
+            ...appendedActions,
+          ],
+        };
+        return currentDraft
+          ? current.map((track, index) =>
+              index === draftIndex ? replacementDraft : track,
+            )
+          : [...current, replacementDraft];
+      });
+    },
+    [setTracks, ueTracks],
+  );
+
   const exportActions = useMemo(
     () =>
       tracks.flatMap((track) => {
@@ -570,16 +651,44 @@ export function useCharacterActionEditor({
           .map((action) => ({
             montageName: action.montageName,
             delaySeconds: action.delaySeconds,
+            ...(action.sourceIndex === undefined
+              ? {}
+              : { sourceIndex: action.sourceIndex }),
           }));
+        if (track.editMode === "replace_editable") {
+          const existing = ueTracks
+            .find(
+              (candidate) =>
+                candidate.dialogueId === track.dialogueId &&
+                candidate.modelIndex === track.modelIndex,
+            )
+            ?.actions.filter(
+              (action) => action.sourceIndex !== undefined,
+            );
+          const unchanged =
+            existing?.length === actions.length &&
+            existing.every(
+              (action, index) =>
+                action.sourceIndex === actions[index]?.sourceIndex &&
+                action.montageName === actions[index]?.montageName &&
+                action.delaySeconds === actions[index]?.delaySeconds,
+            );
+          if (unchanged) {
+            return [];
+          }
+        }
         return actions.length > 0
           ? [{
               dialogueId: track.dialogueId,
               modelIndex: track.modelIndex,
+              ...(track.editMode === "replace_editable"
+                ? { editMode: track.editMode }
+                : {}),
               actions,
             }]
           : [];
       }),
-    [tracks],
+    [tracks, ueTracks],
   );
   const exportViewLines = viewLines;
 
@@ -650,20 +759,60 @@ export function useCharacterActionEditor({
             (track) =>
               trackKey(track.dialogueId, track.modelIndex) === key,
           );
-          const appended = item.actions.map((action) => ({
-            ...action,
-            behaviourType:
-              turnDegreesFromMontageName(action.montageName) === null
-                ? "ENone"
-                : "ERotate",
-          }));
+          const existingSourceIndexes =
+            existing?.actions.flatMap((action) =>
+              action.sourceIndex === undefined
+                ? []
+                : [action.sourceIndex],
+            ) ?? [];
+          const existingRawActionCount =
+            (existing?.actions.length ?? 0) +
+            (existing?.preservedComplexActionCount ?? 0);
+          const committed = item.actions.map((action, index) => {
+            const sourceAction =
+              action.sourceIndex === undefined
+                ? undefined
+                : existing?.actions.find(
+                    (candidate) =>
+                      candidate.sourceIndex === action.sourceIndex,
+                  );
+            return {
+              ...sourceAction,
+              ...action,
+              sourceIndex:
+                item.editMode === "replace_editable"
+                  ? existingSourceIndexes[index] ??
+                    existingRawActionCount +
+                      index -
+                      existingSourceIndexes.length
+                  : existingRawActionCount + index,
+              behaviourType:
+                sourceAction?.behaviourType ??
+                action.behaviourType ??
+                (turnDegreesFromMontageName(action.montageName) === null
+                  ? "ENone"
+                  : "ERotate"),
+            };
+          });
           if (existing) {
-            existing.actions = [...existing.actions, ...appended];
+            existing.actions =
+              item.editMode === "replace_editable"
+                ? (() => {
+                    let committedIndex = 0;
+                    const merged = existing.actions.map((action) =>
+                      action.sourceIndex === undefined
+                        ? action
+                        : committed[committedIndex++],
+                    );
+                    merged.push(...committed.slice(committedIndex));
+                    return merged;
+                  })()
+                : [...existing.actions, ...committed];
           } else {
             next.push({
               dialogueId: item.dialogueId,
               modelIndex: item.modelIndex,
-              actions: appended,
+              actions: committed,
               preservedComplexActionCount: 0,
             });
           }
@@ -746,6 +895,7 @@ export function useCharacterActionEditor({
     dialogueAssetPath,
     catalogs,
     existingTracks,
+    ueTracks,
     existingViewLineNodes,
     tracks,
     viewLines,
@@ -759,6 +909,7 @@ export function useCharacterActionEditor({
     removeAction,
     updateAction,
     reorderAction,
+    toggleExistingActionLock,
     setViewLine,
     removeViewLineChange,
     commitExported,
