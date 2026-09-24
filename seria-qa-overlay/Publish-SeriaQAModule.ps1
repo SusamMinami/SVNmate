@@ -9,6 +9,13 @@ $ErrorActionPreference = "Stop"
 
 $releaseTag = "seria-qa-overlay-latest"
 $repository = "SusamMinami/SVNmate"
+$releaseTitle = "Seria QA Overlay latest module"
+$releaseNotes = @"
+Manual installation: download the asset ending in -Setup.exe, exit Seria, and
+double-click it to open the graphical installer.
+
+SVNmate and automated updates use module-manifest.json and the ZIP asset.
+"@
 $sourceManifestPath = Join-Path $PSScriptRoot "manifest.json"
 $sourceManifest = Get-Content -LiteralPath $sourceManifestPath -Raw |
     ConvertFrom-Json
@@ -184,7 +191,11 @@ if ($releaseExists) {
             Write-Host "Removed obsolete remote asset: $name"
         }
     }
-    & gh release edit $releaseTag --repo $repository --latest=false
+    & gh release edit $releaseTag `
+        --repo $repository `
+        --title $releaseTitle `
+        --notes $releaseNotes `
+        --latest=false
 }
 else {
     & gh release create $releaseTag `
@@ -192,8 +203,8 @@ else {
         $setupPath `
         $moduleManifestPath `
         --repo $repository `
-        --title "Seria QA Overlay latest module" `
-        --notes "Fixed update channel for the Seria QA Overlay module." `
+        --title $releaseTitle `
+        --notes $releaseNotes `
         --latest=false
 }
 if ($LASTEXITCODE -ne 0) {
