@@ -47,6 +47,14 @@ $archivePath = Join-Path $dist $archiveName
 if (-not (Test-Path -LiteralPath $archivePath -PathType Leaf)) {
     throw "Expected module archive was not produced: $archivePath"
 }
+$setupName = (
+    "$($sourceManifest.archivePrefix)-" +
+    "$($sourceManifest.packageVersion)-Setup.exe"
+)
+$setupPath = Join-Path $dist $setupName
+if (-not (Test-Path -LiteralPath $setupPath -PathType Leaf)) {
+    throw "Expected GUI setup executable was not produced: $setupPath"
+}
 
 $sha256 = (
     Get-FileHash -LiteralPath $archivePath -Algorithm SHA256
@@ -70,6 +78,7 @@ $moduleManifestPath = Join-Path $dist "module-manifest.json"
 )
 
 Write-Host "Built module archive: $archivePath" -ForegroundColor Green
+Write-Host "Built GUI setup: $setupPath" -ForegroundColor Green
 Write-Host "Built update manifest: $moduleManifestPath" -ForegroundColor Green
 Write-Host "SHA256: $sha256"
 
@@ -152,12 +161,20 @@ $ErrorActionPreference = $previousPreference
 
 if ($releaseExists) {
     Publish-ReleaseAsset -Path $archivePath
+    Publish-ReleaseAsset -Path $setupPath
     Publish-ReleaseAsset -Path $moduleManifestPath
 
     foreach ($asset in @(Get-RemoteReleaseAssets)) {
         $name = [string]$asset.name
-        if ($name -like "$($sourceManifest.archivePrefix)-*.zip" -and
-            $name -ne $archiveName) {
+        $obsoleteArchive = (
+            $name -like "$($sourceManifest.archivePrefix)-*.zip" -and
+            $name -ne $archiveName
+        )
+        $obsoleteSetup = (
+            $name -like "$($sourceManifest.archivePrefix)-*-Setup.exe" -and
+            $name -ne $setupName
+        )
+        if ($obsoleteArchive -or $obsoleteSetup) {
             & gh api --method DELETE (
                 "repos/$repository/releases/assets/$($asset.id)"
             )
@@ -172,6 +189,7 @@ if ($releaseExists) {
 else {
     & gh release create $releaseTag `
         $archivePath `
+        $setupPath `
         $moduleManifestPath `
         --repo $repository `
         --title "Seria QA Overlay latest module" `

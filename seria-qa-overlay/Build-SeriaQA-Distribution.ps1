@@ -85,11 +85,15 @@ function Build-Package {
     $hash = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash
     Write-Host "Built: $archivePath"
     Write-Host "SHA256: $hash"
+    return $archivePath
 }
 
 if ($Package -in @("QA", "All")) {
-    Build-Package (Join-Path $PSScriptRoot "manifest.json")
+    $qaArchivePath = Build-Package (Join-Path $PSScriptRoot "manifest.json")
+    & (Join-Path $PSScriptRoot "Build-SeriaQA-InstallerExe.ps1") `
+        -ArchivePath $qaArchivePath `
+        -OutputDirectory $OutputDirectory
 }
 if ($Package -in @("DLSS5", "All")) {
-    Build-Package (Join-Path $PSScriptRoot "manifest.dlss5.json")
+    [void](Build-Package (Join-Path $PSScriptRoot "manifest.dlss5.json"))
 }

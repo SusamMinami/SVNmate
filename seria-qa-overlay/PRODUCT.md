@@ -66,6 +66,9 @@ It combines authoritative quest state from the game's existing Lua task manager 
 - QA and DLSS5 must ship as separate, independently restorable ZIP packages.
 - The QA ZIP includes both GUI and CLI installers backed by the same verified
   PowerShell core. GUI configuration must not fork installation behavior.
+- The fixed release channel also publishes a single self-extracting Setup EXE
+  for manual users. It embeds that QA ZIP, opens the same GUI, and removes its
+  temporary extraction after the GUI exits; SVNmate continues to consume ZIP.
 - The current DLSS5 DX11 bridge package remains independently replaceable; the task UI must not make bridge failure affect quest logic.
 - Product name: Seria QA Overlay.
 - Lua-to-addon transport: validated double-buffered UTF-8 snapshots under

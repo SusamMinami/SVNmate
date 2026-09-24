@@ -306,11 +306,13 @@ startup in future builds. Its loose copy supports one-click or manual
 activation in existing development clients. QA and DLSS5 use separate
 persistent recovery directories and desktop shortcuts.
 
-Planner distribution is a portable ZIP rather than an MSI. It contains the
-validated payload, manifest, path-resolving installer entry point, Chinese quick
-start, and technical documentation. The installer accepts `Seria.exe`, the
-`Seria\Binaries\Win64` directory, or a supported game root, writes no registry
-state, backs up differing files, and performs post-copy verification.
+Planner distribution includes a portable ZIP and a single self-extracting GUI
+Setup EXE. The EXE embeds the exact QA ZIP, extracts it to a unique temporary
+directory, starts `Install-SeriaQA-GUI.ps1`, waits for the GUI to exit, and then
+removes the temporary files. The ZIP remains the authoritative SVNmate and
+automation payload. Both paths accept `Seria.exe`, the `Seria\Binaries\Win64`
+directory, or a supported game root, write no registry state, back up differing
+files, and perform post-copy verification.
 
 Manual users launch `Install-SeriaQA-GUI.cmd`, which starts a DPI-aware WinForms
 surface in STA mode. The GUI starts without silently selecting an inferred
@@ -341,6 +343,9 @@ the user must close the game first.
   selected fixture, applies HUD visibility,
   Home surface preference, and opacity, then verifies those selected values
   without rewriting files.
+- The release exposes a directly downloadable `-Setup.exe`; `-ValidateOnly`
+  traverses its embedded extraction and GUI bootstrap path without modifying
+  the target, and the embedded ZIP hash matches the separately published ZIP.
 - An existing development client reaches `LIVE` after the one-click GM
   activation without rebuilding its PAK files.
 - Every GM 工具 action submits only its compiled allowlist command. Invalid or

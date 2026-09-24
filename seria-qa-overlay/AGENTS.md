@@ -20,7 +20,7 @@
 | QA 使用说明 | `README.txt`、`QUICK_START_CN.txt` |
 | DLSS5 使用说明 | `README-DLSS5.txt` |
 | 安装与校验 | `Install-SeriaQA-GUI.ps1`、`Reapply-DLSS5.ps1`、`manifest*.json` |
-| 构建分发包 | `Build-SeriaQA-Distribution.ps1` |
+| 构建 ZIP 与单文件 EXE | `Build-SeriaQA-Distribution.ps1`、`Build-SeriaQA-InstallerExe.ps1`、`src/SeriaQAInstaller/` |
 | SVNmate 模块发布 | `Publish-SeriaQAModule.ps1` |
 | GM 指令调研 | `GM_COMMAND_RESEARCH.md`、`tools/collect_gm_commands.py` |
 | Overlay 源码与测试 | `src/SeriaQAOverlay/` |

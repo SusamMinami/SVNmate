@@ -9,7 +9,8 @@ Seria QA Overlay 使用说明
   或当前战斗场景，并在界面中明确标识。
 
   QA Overlay 与 DLSS5 已分开发布：
-  - 只需要任务工具：安装 Seria-QA-Overlay 压缩包。
+  - 只需要任务工具：手动用户下载 Seria-QA-Overlay Setup.exe；
+    SVNmate 和自动化继续使用 Seria-QA-Overlay ZIP。
   - 需要 DLSS5：另行下载并安装 Seria-DLSS5 压缩包。
   - 两者可以任意顺序安装，也可以同时使用。
 
@@ -20,15 +21,16 @@ Seria QA Overlay 使用说明
 
   手动安装：
   1. 完全退出 Seria.exe。
-  2. 解压整个 Seria-QA-Overlay 压缩包。
-  3. 双击 Install-SeriaQA-GUI.cmd。
-  4. 直接粘贴游戏根目录、Seria.exe 或 Win64 目录；也可浏览或手动点击自动检测。
-  5. 确认下方显示“有效路径”，按需调整 HUD、Home 主界面和背景不透明度。
-  6. 点击“安装 / 更新”；也可点击“仅校验”检查现有安装与配置。
-  7. 安装成功后启动游戏。
+  2. 下载并双击名称以 -Setup.exe 结尾的图形安装器。
+  3. 直接粘贴游戏根目录、Seria.exe 或 Win64 目录；也可浏览或手动点击自动检测。
+  4. 确认下方显示“有效路径”，按需调整 HUD、Home 主界面和背景不透明度。
+  5. 点击“安装 / 更新”；也可点击“仅校验”检查现有安装与配置。
+  6. 安装成功后启动游戏。
 
   QA 安装不会安装 DLSS5，也不会修改游戏分辨率。
-  Install-SeriaQA.cmd 仍保留为命令行入口，供 SVNmate 和自动化更新使用。
+  Setup.exe 会临时解压完整 QA 包并直接打开同一图形界面，关闭后自动清理。
+  ZIP 内的 Install-SeriaQA-GUI.cmd 和 Install-SeriaQA.cmd 仍分别保留为
+  解压后的图形入口与命令行入口，供离线检查、SVNmate 和自动化更新使用。
 
 
 启动任务采集
@@ -144,7 +146,8 @@ Seria QA Overlay 使用说明
 
 注意
   - 仅用于内部开发或测试客户端。
-  - 不要只复制某个 addon64 文件，应使用完整安装包。
+  - 不要只复制某个 addon64 文件，应使用 Setup.exe 或完整 ZIP。
+  - Setup.exe 当前未进行代码签名，Windows 可能显示来源确认提示。
   - 工具包含未签名的 ReShade 社区组件，不要用于有反作弊要求的环境。
 
 更简短的步骤见 QUICK_START_CN.txt。

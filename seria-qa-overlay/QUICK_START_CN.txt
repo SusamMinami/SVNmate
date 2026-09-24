@@ -6,10 +6,12 @@ Seria QA Overlay 快速上手
 
   手动方式：
   1. 完全退出 Seria.exe。
-  2. 解压 Seria-QA-Overlay 压缩包。
-  3. 双击 Install-SeriaQA-GUI.cmd。
-  4. 直接粘贴游戏根目录、Seria.exe 或 Win64 目录，也可浏览或手动自动检测。
-  5. 确认路径有效并调整显示设置，然后点击“安装 / 更新”。
+  2. 下载并双击名称以 -Setup.exe 结尾的图形安装器。
+  3. 直接粘贴游戏根目录、Seria.exe 或 Win64 目录，也可浏览或手动自动检测。
+  4. 确认路径有效并调整显示设置，然后点击“安装 / 更新”。
+
+  ZIP 仍供 SVNmate、自动化和离线拆包使用；解压后也可双击
+  Install-SeriaQA-GUI.cmd 打开同一界面。
 
   此安装包不包含 DLSS5，也不会修改分辨率。
 
