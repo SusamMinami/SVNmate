@@ -171,6 +171,13 @@ def folder_task_paths(item: object) -> tuple[str, ...]:
     return tuple(paths)
 
 
+def folder_task_label(paths: Sequence[str], max_chars: int = 180) -> str:
+    label = "  +  ".join(paths)
+    if len(label) <= max_chars:
+        return label
+    return label[: max(1, max_chars - 3)].rstrip() + "..."
+
+
 def normalize_folder_task_items(items: object) -> list[dict[str, object]]:
     normalized: list[dict[str, object]] = []
     if not isinstance(items, list):
@@ -873,6 +880,9 @@ class SvnAutoTool:
         self.folder_trees: dict[str, ttk.Treeview] = {}
         self.folder_drag_state: dict[str, object] | None = None
         self.folder_drop_target: tuple[str, str] | None = None
+        self.folder_drag_preview: Toplevel | None = None
+        self.folder_drag_preview_label: Label | None = None
+        self.current_colors: dict[str, str] = {}
         self.log_queue: queue.Queue[tuple[str, object]] = queue.Queue(
             maxsize=MAX_PENDING_LOG_ITEMS
         )
@@ -1107,13 +1117,6 @@ class SvnAutoTool:
 
         folder_frame = ttk.Frame(main, style="Card.TFrame", padding=(12, 9))
         folder_frame.pack(fill=BOTH, expand=False, pady=(12, 6))
-        folder_title = ttk.Frame(folder_frame, style="Card.TFrame")
-        folder_title.pack(fill=X, pady=(0, 7))
-        ttk.Label(folder_title, text="工作目录", style="SectionTitle.TLabel").pack(side=LEFT)
-        ttk.Label(folder_title, text="任务组 · 最多 2 组并行 · 同一 WC 自动排队", style="CardMuted.TLabel").pack(
-            side=LEFT,
-            padx=(10, 0),
-        )
         columns_frame = ttk.Frame(folder_frame, style="Card.TFrame")
         columns_frame.pack(fill=BOTH, expand=True)
         self._build_folder_column(columns_frame, "left", "栏目一")
@@ -2383,6 +2386,7 @@ class SvnAutoTool:
 
     def _apply_visual_theme(self, theme: str) -> None:
         colors = configure_svnmate_styles(self.root, self.ui_style, theme)
+        self.current_colors = colors
         for tree in self.folder_trees.values():
             tree.tag_configure(
                 "folder-group",
@@ -2421,11 +2425,7 @@ class SvnAutoTool:
             for index, folder_item in enumerate(self.folder_groups[group_key]):
                 checked = "[x]" if bool(folder_item.get("enabled", True)) else "[ ]"
                 paths = folder_task_paths(folder_item)
-                label = (
-                    paths[0]
-                    if len(paths) == 1
-                    else f"{len(paths)} 个文件夹  |  " + "  +  ".join(paths)
-                )
+                label = folder_task_label(paths)
                 tags = ("folder-group",) if len(paths) > 1 else ()
                 tree.insert(
                     "",
@@ -2509,6 +2509,8 @@ class SvnAutoTool:
         event: object,
         group_key: str,
     ) -> str | None:
+        self._destroy_folder_drag_preview()
+        self._set_folder_drop_target(None)
         tree = self.folder_trees[group_key]
         row_id = tree.identify_row(event.y)
         column = tree.identify_column(event.x)
@@ -2547,12 +2549,18 @@ class SvnAutoTool:
         state["active"] = True
         for tree in self.folder_trees.values():
             tree.configure(cursor="fleur")
-        self._set_folder_drop_target(
-            self._folder_drop_location(
-                int(getattr(event, "x_root", 0)),
-                int(getattr(event, "y_root", 0)),
-            )
+        target = self._folder_drop_location(
+            int(getattr(event, "x_root", 0)),
+            int(getattr(event, "y_root", 0)),
         )
+        source_target = (
+            str(state["group_key"]),
+            str(state["index"]),
+        )
+        if target == source_target:
+            target = None
+        self._set_folder_drop_target(target)
+        self._update_folder_drag_preview(event, target)
         return "break"
 
     def _on_folder_drag_release(
@@ -2562,6 +2570,7 @@ class SvnAutoTool:
     ) -> str | None:
         state = self.folder_drag_state
         self.folder_drag_state = None
+        self._destroy_folder_drag_preview()
         for tree in self.folder_trees.values():
             tree.configure(cursor="")
         target = self._folder_drop_location(
@@ -2609,6 +2618,94 @@ class SvnAutoTool:
             self.status_text.set(status)
         return "break"
 
+    def _update_folder_drag_preview(
+        self,
+        event: object,
+        target: tuple[str, str] | None,
+    ) -> None:
+        state = self.folder_drag_state
+        if state is None:
+            return
+        source_key = str(state["group_key"])
+        source_index = int(state["index"])
+        source_groups = self.folder_groups.get(source_key, [])
+        if source_index < 0 or source_index >= len(source_groups):
+            return
+        source_paths = folder_task_paths(source_groups[source_index])
+        label = folder_task_label(source_paths, max_chars=92)
+        if target is not None:
+            target_key, target_row = target
+            if target_row:
+                target_index = int(target_row)
+                target_groups = self.folder_groups.get(target_key, [])
+                if 0 <= target_index < len(target_groups):
+                    combined = list(
+                        folder_task_paths(target_groups[target_index])
+                    )
+                    seen = {
+                        normalized_path_key(path)
+                        for path in combined
+                    }
+                    for path in source_paths:
+                        key = normalized_path_key(path)
+                        if key not in seen:
+                            seen.add(key)
+                            combined.append(path)
+                    label = (
+                        "合并后  |  "
+                        + folder_task_label(combined, max_chars=84)
+                    )
+            elif target_key == source_key and len(source_paths) > 1:
+                label = f"拆分为独立行  |  {label}"
+            elif target_key != source_key:
+                column_name = "栏目一" if target_key == "left" else "栏目二"
+                label = f"移动到{column_name}  |  {label}"
+
+        if self.folder_drag_preview is None:
+            colors = self.current_colors or {
+                "accent_fill": "#0067C0",
+                "selected_text": "#FFFFFF",
+                "border": "#D1D1D1",
+            }
+            preview = Toplevel(self.root)
+            preview.overrideredirect(True)
+            preview.attributes("-topmost", True)
+            try:
+                preview.attributes("-alpha", 0.94)
+            except Exception:
+                pass
+            drag_label = Label(
+                preview,
+                background=colors["accent_fill"],
+                foreground=colors["selected_text"],
+                highlightbackground=colors["border"],
+                highlightthickness=1,
+                font=("Segoe UI Semibold", 9),
+                padx=10,
+                pady=6,
+            )
+            drag_label.pack()
+            self.folder_drag_preview = preview
+            self.folder_drag_preview_label = drag_label
+
+        if self.folder_drag_preview_label is not None:
+            self.folder_drag_preview_label.configure(text=label)
+        x = int(getattr(event, "x_root", 0)) + 14
+        y = int(getattr(event, "y_root", 0)) + 16
+        x_position = f"+{x}" if x >= 0 else str(x)
+        y_position = f"+{y}" if y >= 0 else str(y)
+        self.folder_drag_preview.geometry(f"{x_position}{y_position}")
+
+    def _destroy_folder_drag_preview(self) -> None:
+        preview = getattr(self, "folder_drag_preview", None)
+        self.folder_drag_preview = None
+        self.folder_drag_preview_label = None
+        if preview is not None:
+            try:
+                preview.destroy()
+            except Exception:
+                pass
+
     def _folder_drop_location(
         self,
         x_root: int,
@@ -2637,24 +2734,58 @@ class SvnAutoTool:
             tree = self.folder_trees.get(group_key)
             if tree is not None and row_id in tree.get_children():
                 index = int(row_id)
+                folder_item = self.folder_groups[group_key][index]
+                checked = (
+                    "[x]"
+                    if bool(folder_item.get("enabled", True))
+                    else "[ ]"
+                )
+                paths = folder_task_paths(folder_item)
                 tags = (
                     ("folder-group",)
-                    if len(
-                        folder_task_paths(
-                            self.folder_groups[group_key][index]
-                        )
-                    )
-                    > 1
+                    if len(paths) > 1
                     else ()
                 )
-                tree.item(row_id, tags=tags)
+                tree.item(
+                    row_id,
+                    values=(checked, folder_task_label(paths)),
+                    tags=tags,
+                )
         self.folder_drop_target = target
         if target is None:
             return
         group_key, row_id = target
         tree = self.folder_trees[group_key]
         if row_id and row_id in tree.get_children():
-            tree.item(row_id, tags=("drop-target",))
+            target_index = int(row_id)
+            target_item = self.folder_groups[group_key][target_index]
+            combined = list(folder_task_paths(target_item))
+            state = self.folder_drag_state
+            if state is not None:
+                source_key = str(state["group_key"])
+                source_index = int(state["index"])
+                source_groups = self.folder_groups.get(source_key, [])
+                if 0 <= source_index < len(source_groups):
+                    seen = {
+                        normalized_path_key(path)
+                        for path in combined
+                    }
+                    for path in folder_task_paths(
+                        source_groups[source_index]
+                    ):
+                        key = normalized_path_key(path)
+                        if key not in seen:
+                            seen.add(key)
+                            combined.append(path)
+            tree.item(
+                row_id,
+                values=(
+                    "合并",
+                    "合并后  |  "
+                    + folder_task_label(combined),
+                ),
+                tags=("drop-target",),
+            )
 
     def _merge_folder_groups(
         self,

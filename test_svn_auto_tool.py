@@ -21,6 +21,7 @@ from svn_auto_tool import (
     WindowsTrayIcon,
     _launch_detached_command,
     _window_dimensions_for_dpi,
+    folder_task_label,
     folder_task_paths,
     normalize_execution_groups,
     normalize_folder_task_items,
@@ -759,6 +760,14 @@ class LiveLogMemoryTests(unittest.TestCase):
 
 
 class FolderInteractionTests(unittest.TestCase):
+    def test_group_label_lists_paths_without_count_prefix(self) -> None:
+        label = folder_task_label(
+            [r"C:\trunk\bin", r"C:\trunk\doc"]
+        )
+
+        self.assertEqual(label, r"C:\trunk\bin  +  C:\trunk\doc")
+        self.assertNotIn("2 个文件夹", label)
+
     def test_legacy_folder_config_migrates_to_task_groups(self) -> None:
         items = normalize_folder_task_items(
             [
