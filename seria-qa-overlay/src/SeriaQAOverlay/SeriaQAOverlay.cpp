@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdlib>
@@ -28,20 +29,115 @@
 
 extern "C" __declspec(dllexport) const char *NAME = "Seria QA Overlay";
 extern "C" __declspec(dllexport) const char *DESCRIPTION =
-	"Read-only task flow, navigation, dialogue, and optional DLSS5 diagnostics for Seria.";
+	"Read-only task flow plus allowlisted QA actions and optional DLSS5 diagnostics for Seria.";
 
 namespace
 {
 	using seria_qa::snapshot;
 
-	constexpr char addon_version[] = "0.3.0";
+	constexpr char addon_version[] = "0.12.0";
 	constexpr ULONGLONG snapshot_poll_interval_ms = 100;
 	constexpr ULONGLONG diagnostics_poll_interval_ms = 1000;
+	constexpr ULONGLONG task_change_highlight_ms = 12'000;
 	constexpr size_t max_file_bytes = 512 * 1024;
-	constexpr char gm_dialog_command[] =
+	constexpr char capture_gm_dialog_command[] =
 		"RunLuaString dofile(UE4.USeriaLuaInterface.GetProjectBinariesDirectory()..\"/SeriaQA.lua\")";
-	constexpr char external_gm_command[] =
+	constexpr char capture_external_gm_command[] =
 		"gm:RunLuaString dofile(UE4.USeriaLuaInterface.GetProjectBinariesDirectory()..\"/SeriaQA.lua\")";
+
+	enum class gm_command_id
+	{
+		print_current_task,
+		task_list_print,
+		debug_task_info,
+		show_mission_dialog_info,
+		get_rotation,
+		get_tod,
+		scene_online_num,
+		show_location,
+		add_task,
+		skip_level_sequence,
+		add_buff,
+		kill_hostile_monsters,
+	};
+
+	enum class gm_command_category
+	{
+		task,
+		location,
+		action,
+	};
+
+	enum class gm_parameter_kind
+	{
+		none,
+		task_id,
+		node_task_id,
+		buff,
+	};
+
+	struct gm_command_definition
+	{
+		gm_command_id id;
+		gm_command_category category;
+		const char *command;
+		const char *action;
+		const char *description;
+		const char *source;
+		gm_parameter_kind parameters;
+		bool destructive;
+	};
+
+	constexpr std::array<gm_command_definition, 12> gm_command_definitions = {{
+		{ gm_command_id::print_current_task, gm_command_category::task,
+			"PrintCurrentTask", "打印当前任务",
+			"输出当前任务及可见、隐藏任务关系。", "客户端 · 日志",
+			gm_parameter_kind::none, false },
+		{ gm_command_id::task_list_print, gm_command_category::task,
+			"TaskListPrint", "打印任务列表",
+			"输出当前持有任务列表。", "客户端 · 日志",
+			gm_parameter_kind::none, false },
+		{ gm_command_id::debug_task_info, gm_command_category::task,
+			"DebugTaskInfo", "切换任务调试显示",
+			"开启或关闭屏幕上的追踪任务调试信息。", "客户端 · 显示开关",
+			gm_parameter_kind::none, false },
+		{ gm_command_id::show_mission_dialog_info, gm_command_category::task,
+			"ShowMissionDialogInfo", "评估任务线对白",
+			"从指定起始任务递归统计任务线对白长度。", "客户端 · 日志",
+			gm_parameter_kind::task_id, false },
+		{ gm_command_id::get_rotation, gm_command_category::location,
+			"GetRotation", "查看角色朝向",
+			"显示主角当前 Pitch、Yaw、Roll。", "客户端 · 屏幕与聊天",
+			gm_parameter_kind::none, false },
+		{ gm_command_id::get_tod, gm_command_category::location,
+			"GetTOD", "查看场景时间",
+			"显示当前场景 TOD 时间值。", "客户端 · 屏幕与日志",
+			gm_parameter_kind::none, false },
+		{ gm_command_id::scene_online_num, gm_command_category::location,
+			"sceneOnlineNum", "查询场景在线数",
+			"查询场景服帧率和在线人数；权限或环境不支持时由游戏拒绝。",
+			"场景服 · 返回消息", gm_parameter_kind::none, false },
+		{ gm_command_id::show_location, gm_command_category::location,
+			"showLocation", "打开位置面板",
+			"打开角色、怪物和 NPC 的位置诊断面板。", "客户端 · 本地面板",
+			gm_parameter_kind::none, false },
+		{ gm_command_id::add_task, gm_command_category::action,
+			"addtask", "添加任务",
+			"将指定任务节点添加到当前角色；重复或条件不满足时由服务器拒绝。",
+			"服务器 · 修改任务状态", gm_parameter_kind::node_task_id, false },
+		{ gm_command_id::skip_level_sequence, gm_command_category::action,
+			"SkipLevelSequence", "跳过当前动画",
+			"立即跳过当前正在播放的整段剧情动画。",
+			"客户端 · 改变播放状态", gm_parameter_kind::none, false },
+		{ gm_command_id::add_buff, gm_command_category::action,
+			"AddBuff", "为自己添加 Buff",
+			"按 Buff ID 和层数为当前角色添加 Buff；需要 GM 1 级权限。",
+			"场景服 · 修改角色状态", gm_parameter_kind::buff, false },
+		{ gm_command_id::kill_hostile_monsters, gm_command_category::action,
+			"kill", "击杀当前房间敌人",
+			"击杀当前房间内与玩家阵营敌对的所有怪物。",
+			"场景服 · 高风险", gm_parameter_kind::none, true },
+	}};
 
 	const ImVec4 color_bg = ImVec4(0.12f, 0.12f, 0.13f, 0.96f);
 	const ImVec4 color_panel = ImVec4(0.15f, 0.15f, 0.16f, 0.98f);
@@ -57,30 +153,66 @@ namespace
 	bool g_initialized = false;
 	bool g_hud_visible = true;
 	bool g_overlay_open = false;
+	bool g_task_workspace_open = false;
+	bool g_task_workspace_focus_requested = false;
+	bool g_workspace_cursor_owned = false;
+	bool g_home_opens_full_reshade = false;
+	bool g_task_interaction_hint_pending = true;
+	int64_t g_task_interaction_hint_id = 0;
 	bool g_toggle_chord_down = false;
 	int g_hud_opacity_percent = 78;
 	int64_t g_selected_task_id = 0;
 	bool g_selected_task_client = false;
+	int64_t g_selected_task_node_id = 0;
+	int64_t g_selected_task_node_line_id = 0;
 	int g_task_filter = 0;
 	char g_task_search[192] = {};
 	bool g_scroll_to_selected = false;
 	ULONGLONG g_copied_until = 0;
+	int64_t g_mission_dialog_task_id = 0;
+	int64_t g_buff_id = 0;
+	int g_buff_stacks = 1;
 	std::filesystem::path g_module_dir;
 	FILETIME g_process_start_time = {};
 
-	enum class capture_activation_phase
+	struct recent_task_change
+	{
+		int64_t task_id = 0;
+		uint64_t event_sequence = 0;
+		int64_t event_time_ms = 0;
+		ULONGLONG expires_at = 0;
+		std::string kind;
+		std::string label;
+	};
+
+	std::vector<recent_task_change> g_recent_task_changes;
+	bool g_activity_initialized = false;
+	uint64_t g_activity_snapshot_sequence = 0;
+	uint64_t g_last_event_sequence = 0;
+	int64_t g_last_event_time_ms = 0;
+
+	enum class gm_submission_phase
 	{
 		idle,
 		open_gm,
+		select_all,
 		paste,
 		submit,
-		waiting,
+		waiting_capture,
 		failed,
 	};
 
-	capture_activation_phase g_capture_activation = capture_activation_phase::idle;
-	ULONGLONG g_capture_activation_due = 0;
-	std::string g_capture_activation_error;
+	gm_submission_phase g_gm_submission = gm_submission_phase::idle;
+	ULONGLONG g_gm_submission_due = 0;
+	std::string g_pending_gm_command;
+	std::string g_pending_gm_label;
+	bool g_pending_gm_is_capture = false;
+	std::string g_gm_submission_error;
+	bool g_has_last_gm_submission = false;
+	bool g_last_gm_submission_succeeded = false;
+	std::string g_last_gm_command;
+	std::string g_last_gm_label;
+	std::string g_last_gm_message;
 
 	bool foreground_window_belongs_to_process()
 	{
@@ -97,6 +229,23 @@ namespace
 		inputs[1].type = INPUT_KEYBOARD;
 		inputs[1].ki.wVk = key;
 		inputs[1].ki.dwFlags = KEYEVENTF_KEYUP;
+		return SendInput(static_cast<UINT>(inputs.size()), inputs.data(), sizeof(INPUT)) ==
+			static_cast<UINT>(inputs.size());
+	}
+
+	bool select_all_text()
+	{
+		std::array<INPUT, 4> inputs = {};
+		inputs[0].type = INPUT_KEYBOARD;
+		inputs[0].ki.wVk = VK_CONTROL;
+		inputs[1].type = INPUT_KEYBOARD;
+		inputs[1].ki.wVk = 'A';
+		inputs[2].type = INPUT_KEYBOARD;
+		inputs[2].ki.wVk = 'A';
+		inputs[2].ki.dwFlags = KEYEVENTF_KEYUP;
+		inputs[3].type = INPUT_KEYBOARD;
+		inputs[3].ki.wVk = VK_CONTROL;
+		inputs[3].ki.dwFlags = KEYEVENTF_KEYUP;
 		return SendInput(static_cast<UINT>(inputs.size()), inputs.data(), sizeof(INPUT)) ==
 			static_cast<UINT>(inputs.size());
 	}
@@ -118,74 +267,273 @@ namespace
 			static_cast<UINT>(inputs.size());
 	}
 
-	void fail_capture_activation(const char *message)
+	bool gm_submission_running()
 	{
-		g_capture_activation = capture_activation_phase::failed;
-		g_capture_activation_error = message;
+		return g_gm_submission != gm_submission_phase::idle &&
+			g_gm_submission != gm_submission_phase::failed;
+	}
+
+	void remember_gm_submission_result(bool succeeded, const char *message)
+	{
+		g_has_last_gm_submission = true;
+		g_last_gm_submission_succeeded = succeeded;
+		g_last_gm_command = g_pending_gm_command;
+		g_last_gm_label = g_pending_gm_label;
+		g_last_gm_message = message;
+	}
+
+	void fail_gm_submission(const char *message)
+	{
+		g_gm_submission = gm_submission_phase::failed;
+		g_gm_submission_error = message;
+		remember_gm_submission_result(false, message);
+	}
+
+	const gm_command_definition *find_gm_command(gm_command_id id)
+	{
+		const auto found = std::find_if(
+			gm_command_definitions.begin(), gm_command_definitions.end(),
+			[id](const gm_command_definition &command) {
+				return command.id == id;
+			});
+		return found == gm_command_definitions.end() ? nullptr : &*found;
+	}
+
+	bool is_positive_decimal(
+		std::string_view value,
+		int64_t maximum = std::numeric_limits<int64_t>::max())
+	{
+		if (value.empty() || value.front() == '0')
+			return false;
+
+		int64_t parsed = 0;
+		for (const unsigned char character : value)
+		{
+			if (character < '0' || character > '9')
+				return false;
+			const int digit = character - '0';
+			if (parsed > (maximum - digit) / 10)
+				return false;
+			parsed = parsed * 10 + digit;
+		}
+		return parsed > 0;
+	}
+
+	bool is_allowed_gm_submission(
+		std::string_view command,
+		bool wait_for_capture)
+	{
+		if (wait_for_capture)
+			return command == capture_gm_dialog_command;
+
+		for (const gm_command_definition &definition : gm_command_definitions)
+		{
+			const std::string_view fixed_command = definition.command;
+			if (definition.parameters == gm_parameter_kind::none)
+			{
+				if (command == fixed_command)
+					return true;
+				continue;
+			}
+
+			if (command.size() <= fixed_command.size() + 1 ||
+				command.substr(0, fixed_command.size()) != fixed_command ||
+				command[fixed_command.size()] != ' ')
+				continue;
+			const std::string_view argument =
+				command.substr(fixed_command.size() + 1);
+			if (definition.parameters == gm_parameter_kind::task_id ||
+				definition.parameters == gm_parameter_kind::node_task_id)
+				return is_positive_decimal(argument);
+			if (definition.parameters == gm_parameter_kind::buff)
+			{
+				const size_t separator = argument.find(' ');
+				if (separator == std::string_view::npos ||
+					argument.find(' ', separator + 1) != std::string_view::npos)
+					return false;
+				return is_positive_decimal(argument.substr(0, separator)) &&
+					is_positive_decimal(argument.substr(separator + 1), 999);
+			}
+		}
+		return false;
+	}
+
+	void begin_gm_submission(
+		reshade::api::effect_runtime *runtime,
+		std::string command,
+		std::string label,
+		bool wait_for_capture)
+	{
+		if (gm_submission_running())
+			return;
+		if (!is_allowed_gm_submission(command, wait_for_capture))
+		{
+			g_pending_gm_command = std::move(command);
+			g_pending_gm_label = std::move(label);
+			g_pending_gm_is_capture = wait_for_capture;
+			fail_gm_submission("命令不在固定白名单中。");
+			return;
+		}
+
+		g_pending_gm_command = std::move(command);
+		g_pending_gm_label = std::move(label);
+		g_pending_gm_is_capture = wait_for_capture;
+		ImGui::SetClipboardText(g_pending_gm_command.c_str());
+		g_gm_submission = gm_submission_phase::open_gm;
+		g_gm_submission_due = GetTickCount64() + 250;
+		g_gm_submission_error.clear();
+		if (g_task_workspace_open)
+		{
+			g_task_workspace_open = false;
+		}
+		else if (g_overlay_open &&
+			!runtime->open_overlay(false, reshade::api::input_source::none))
+			fail_gm_submission("无法关闭 ReShade，请关闭工具页后重试。");
 	}
 
 	void begin_capture_activation(reshade::api::effect_runtime *runtime)
 	{
-		ImGui::SetClipboardText(gm_dialog_command);
-		g_capture_activation = capture_activation_phase::open_gm;
-		g_capture_activation_due = GetTickCount64() + 250;
-		g_capture_activation_error.clear();
-		if (!runtime->open_overlay(false, reshade::api::input_source::none))
-			fail_capture_activation("无法关闭 ReShade，请关闭工具页后重试。");
+		begin_gm_submission(
+			runtime,
+			capture_gm_dialog_command,
+			"启动任务采集",
+			true);
 	}
 
-	void update_capture_activation(bool capture_live)
+	void begin_whitelisted_gm_submission(
+		reshade::api::effect_runtime *runtime,
+		gm_command_id id,
+		int64_t first_argument = 0,
+		int64_t second_argument = 0)
 	{
-		if (capture_live)
+		const gm_command_definition *const definition = find_gm_command(id);
+		if (definition == nullptr)
 		{
-			g_capture_activation = capture_activation_phase::idle;
-			g_capture_activation_error.clear();
+			g_pending_gm_command.clear();
+			g_pending_gm_label = "GM 白名单命令";
+			g_pending_gm_is_capture = false;
+			fail_gm_submission("命令不在固定白名单中。");
 			return;
 		}
-		if (g_capture_activation == capture_activation_phase::idle ||
-			g_capture_activation == capture_activation_phase::failed)
+
+		std::string command = definition->command;
+		if (definition->parameters == gm_parameter_kind::task_id ||
+			definition->parameters == gm_parameter_kind::node_task_id)
+		{
+			if (first_argument <= 0)
+			{
+				g_pending_gm_command = command;
+				g_pending_gm_label = definition->action;
+				g_pending_gm_is_capture = false;
+				fail_gm_submission(
+					definition->parameters == gm_parameter_kind::node_task_id
+						? "请输入有效的任务节点 ID。"
+						: "请输入有效的起始任务 ID。");
+				return;
+			}
+			command += " " + std::to_string(first_argument);
+		}
+		else if (definition->parameters == gm_parameter_kind::buff)
+		{
+			if (first_argument <= 0 || second_argument < 1 || second_argument > 999)
+			{
+				g_pending_gm_command = command;
+				g_pending_gm_label = definition->action;
+				g_pending_gm_is_capture = false;
+				fail_gm_submission("请输入有效的 Buff ID；层数范围为 1-999。");
+				return;
+			}
+			command += " " + std::to_string(first_argument);
+			command += " " + std::to_string(second_argument);
+		}
+		begin_gm_submission(runtime, std::move(command), definition->action, false);
+	}
+
+	void update_gm_submission(bool capture_live)
+	{
+		if (g_gm_submission == gm_submission_phase::waiting_capture && capture_live)
+		{
+			remember_gm_submission_result(
+				true, "任务采集已启动，快照正在实时更新。");
+			g_gm_submission = gm_submission_phase::idle;
+			g_gm_submission_error.clear();
+			return;
+		}
+		if (g_gm_submission == gm_submission_phase::idle ||
+			g_gm_submission == gm_submission_phase::failed)
 			return;
 
 		const ULONGLONG now = GetTickCount64();
-		if (now < g_capture_activation_due)
+		if (now < g_gm_submission_due)
 			return;
-		if (!foreground_window_belongs_to_process())
+		const bool foreground_owned = foreground_window_belongs_to_process();
+		if (!foreground_owned)
 		{
-			fail_capture_activation("游戏窗口不在前台，请切回游戏后重试。");
+			fail_gm_submission("游戏窗口不在前台，请切回游戏后重试。");
 			return;
 		}
 
-		switch (g_capture_activation)
+		switch (g_gm_submission)
 		{
-		case capture_activation_phase::open_gm:
-			if (!send_key(VK_OEM_5))
+		case gm_submission_phase::open_gm:
+		{
+			const bool sent = send_key(VK_OEM_5);
+			if (!sent)
 			{
-				fail_capture_activation("无法打开 GM 输入框。");
+				fail_gm_submission("无法打开 GM 输入框。");
 				return;
 			}
-			g_capture_activation = capture_activation_phase::paste;
-			g_capture_activation_due = now + 350;
+			g_gm_submission = gm_submission_phase::select_all;
+			g_gm_submission_due = now + 350;
 			break;
-		case capture_activation_phase::paste:
-			if (!paste_clipboard())
+		}
+		case gm_submission_phase::select_all:
+		{
+			const bool selected = select_all_text();
+			if (!selected)
 			{
-				fail_capture_activation("无法粘贴启动命令。");
+				fail_gm_submission("无法选中 GM 输入框中的旧命令。");
 				return;
 			}
-			g_capture_activation = capture_activation_phase::submit;
-			g_capture_activation_due = now + 150;
+			g_gm_submission = gm_submission_phase::paste;
+			g_gm_submission_due = now + 100;
 			break;
-		case capture_activation_phase::submit:
-			if (!send_key(VK_RETURN))
+		}
+		case gm_submission_phase::paste:
+		{
+			const bool pasted = paste_clipboard();
+			if (!pasted)
 			{
-				fail_capture_activation("无法提交启动命令。");
+				fail_gm_submission("无法粘贴 GM 命令。");
 				return;
 			}
-			g_capture_activation = capture_activation_phase::waiting;
-			g_capture_activation_due = now + 8000;
+			g_gm_submission = gm_submission_phase::submit;
+			g_gm_submission_due = now + 150;
 			break;
-		case capture_activation_phase::waiting:
-			fail_capture_activation("未收到任务数据。请确认已进入角色，或复制命令手动执行。");
+		}
+		case gm_submission_phase::submit:
+		{
+			const bool submitted = send_key(VK_RETURN);
+			if (!submitted)
+			{
+				fail_gm_submission("无法提交 GM 命令。");
+				return;
+			}
+			if (g_pending_gm_is_capture)
+			{
+				g_gm_submission = gm_submission_phase::waiting_capture;
+				g_gm_submission_due = now + 8000;
+			}
+			else
+			{
+				remember_gm_submission_result(
+					true, "命令已提交；结果请查看游戏界面、聊天或日志。");
+				g_gm_submission = gm_submission_phase::idle;
+			}
+			break;
+		}
+		case gm_submission_phase::waiting_capture:
+			fail_gm_submission("未收到任务数据。请确认已进入角色，或复制命令手动执行。");
 			break;
 		default:
 			break;
@@ -722,6 +1070,10 @@ namespace
 		int configured_opacity = g_hud_opacity_percent;
 		if (reshade::get_config_value(nullptr, "SeriaQAOverlay", "HudOpacity", configured_opacity))
 			g_hud_opacity_percent = std::clamp(configured_opacity, 25, 100);
+		bool configured_full_reshade = false;
+		if (reshade::get_config_value(
+			nullptr, "SeriaQAOverlay", "HomeOpensFullReShade", configured_full_reshade))
+			g_home_opens_full_reshade = configured_full_reshade;
 
 		g_snapshots.poll();
 		refresh_dlss_diagnostics(runtime);
@@ -741,7 +1093,7 @@ namespace
 			if (candidate <= 0) continue;
 			if (std::count_if(data.tasks.begin(), data.tasks.end(),
 				[candidate](const auto &task) { return task.task_id == candidate; }) > 1)
-				return nullptr; // Schema v2 does not qualify any focus source by origin.
+				return nullptr; // Focus records do not qualify task identity by origin.
 			const auto *task = find_task(data, candidate);
 			if (task != nullptr && task->status == 1) return task;
 		}
@@ -852,11 +1204,157 @@ namespace
 		return "未知";
 	}
 
+	const char *dialogue_type_name(const seria_qa::dialogue_record &dialogue)
+	{
+		if (dialogue.complex_chat) return "复杂闲话";
+		if (dialogue.camera_dialog) return "镜头对话";
+		if (dialogue.task_id > 0) return "任务对白";
+		return "普通对话";
+	}
+
+	ImVec4 dialogue_type_color(const seria_qa::dialogue_record &dialogue)
+	{
+		if (dialogue.complex_chat) return color_yellow;
+		if (dialogue.camera_dialog) return color_cyan;
+		if (dialogue.task_id > 0) return color_text;
+		return color_muted;
+	}
+
 	ImVec4 event_color(const seria_qa::event_record &event)
 	{
 		if (event.kind == "failed" || event.kind == "abandon")
 			return color_red;
-		return color_muted;
+		if (event.kind == "finished" || event.kind == "committed" ||
+			event.kind == "line_finished")
+			return color_cyan;
+		return color_yellow;
+	}
+
+	void remember_task_change(
+		const seria_qa::event_record &event,
+		ULONGLONG expires_at)
+	{
+		if (event.task_id <= 0)
+			return;
+		g_recent_task_changes.erase(std::remove_if(
+			g_recent_task_changes.begin(), g_recent_task_changes.end(),
+			[&event](const recent_task_change &change) {
+				return change.task_id == event.task_id;
+			}), g_recent_task_changes.end());
+		g_recent_task_changes.push_back({
+			event.task_id,
+			event.sequence,
+			event.time_ms,
+			expires_at,
+			event.kind,
+			event.label,
+		});
+	}
+
+	void update_task_changes(const snapshot &data)
+	{
+		const ULONGLONG now = GetTickCount64();
+		g_recent_task_changes.erase(std::remove_if(
+			g_recent_task_changes.begin(), g_recent_task_changes.end(),
+			[now](const recent_task_change &change) {
+				return now >= change.expires_at;
+			}), g_recent_task_changes.end());
+
+		if (data.sequence < g_activity_snapshot_sequence)
+		{
+			g_activity_initialized = false;
+			g_last_event_sequence = 0;
+			g_last_event_time_ms = 0;
+			g_recent_task_changes.clear();
+		}
+		g_activity_snapshot_sequence = data.sequence;
+
+		if (!g_activity_initialized)
+		{
+			for (const seria_qa::event_record &event : data.events)
+			{
+				if (event.time_ms > g_last_event_time_ms ||
+					(event.time_ms == g_last_event_time_ms &&
+						event.sequence > g_last_event_sequence))
+				{
+					g_last_event_time_ms = event.time_ms;
+					g_last_event_sequence = event.sequence;
+				}
+				const int64_t age = data.generated_at_ms - event.time_ms;
+				if (event.task_id > 0 && age >= 0 &&
+					age < static_cast<int64_t>(task_change_highlight_ms))
+				{
+					remember_task_change(event,
+						now + task_change_highlight_ms - static_cast<ULONGLONG>(age));
+				}
+			}
+			g_activity_initialized = true;
+			return;
+		}
+
+		for (const seria_qa::event_record &event : data.events)
+		{
+			const bool unseen = event.time_ms > g_last_event_time_ms ||
+				(event.time_ms == g_last_event_time_ms &&
+					event.sequence > g_last_event_sequence);
+			if (!unseen)
+				continue;
+			remember_task_change(event, now + task_change_highlight_ms);
+			g_last_event_time_ms = event.time_ms;
+			g_last_event_sequence = event.sequence;
+		}
+	}
+
+	const recent_task_change *recent_change_for(int64_t task_id)
+	{
+		const auto found = std::find_if(
+			g_recent_task_changes.begin(), g_recent_task_changes.end(),
+			[task_id](const recent_task_change &change) {
+				return change.task_id == task_id;
+			});
+		return found == g_recent_task_changes.end() ? nullptr : &*found;
+	}
+
+	ImVec4 task_change_color(const recent_task_change &change)
+	{
+		if (change.kind == "failed" || change.kind == "abandon")
+			return color_red;
+		if (change.kind == "finished" || change.kind == "committed" ||
+			change.kind == "line_finished")
+			return color_cyan;
+		return color_yellow;
+	}
+
+	bool task_activity_before(
+		const seria_qa::task_record *left,
+		const seria_qa::task_record *right,
+		const seria_qa::task_record *current)
+	{
+		const recent_task_change *const left_change = recent_change_for(left->task_id);
+		const recent_task_change *const right_change = recent_change_for(right->task_id);
+		if ((left_change != nullptr) != (right_change != nullptr))
+			return left_change != nullptr;
+		if (left_change != nullptr && right_change != nullptr)
+		{
+			if (left_change->event_time_ms != right_change->event_time_ms)
+				return left_change->event_time_ms > right_change->event_time_ms;
+			if (left_change->event_sequence != right_change->event_sequence)
+				return left_change->event_sequence > right_change->event_sequence;
+		}
+
+		const bool left_current = current != nullptr &&
+			left->task_id == current->task_id && left->client == current->client;
+		const bool right_current = current != nullptr &&
+			right->task_id == current->task_id && right->client == current->client;
+		if (left_current != right_current)
+			return left_current;
+		if (left->active != right->active)
+			return left->active;
+		if (left->traced != right->traced)
+			return left->traced;
+		if (left->task_id != right->task_id)
+			return left->task_id < right->task_id;
+		return left->client < right->client;
 	}
 
 	std::string shortened(std::string_view text, size_t max_bytes)
@@ -867,6 +1365,24 @@ namespace
 		while (cut > 0 && (static_cast<unsigned char>(text[cut]) & 0xc0) == 0x80)
 			--cut;
 		return std::string(text.substr(0, cut)) + "...";
+	}
+
+	// UTF-8 safe trim so the result (plus ellipsis) fits the pixel width.
+	std::string fit_to_width(std::string text, float max_width)
+	{
+		if (ImGui::CalcTextSize(text.c_str()).x <= max_width)
+			return text;
+		while (!text.empty())
+		{
+			size_t cut = text.size() - 1;
+			while (cut > 0 && (static_cast<unsigned char>(text[cut]) & 0xc0) == 0x80)
+				--cut;
+			text.resize(cut);
+			const std::string candidate = text + "...";
+			if (ImGui::CalcTextSize(candidate.c_str()).x <= max_width)
+				return candidate;
+		}
+		return "...";
 	}
 
 	void push_overlay_style()
@@ -943,41 +1459,295 @@ namespace
 		ImGui::PopFont();
 	}
 
+	int progress_percent(int completed_nodes, int total_nodes)
+	{
+		if (total_nodes <= 0)
+			return 0;
+		const int64_t scaled = static_cast<int64_t>(completed_nodes) * 100;
+		return std::clamp(
+			static_cast<int>((scaled + total_nodes / 2) / total_nodes),
+			0, 100);
+	}
+
+	int progress_percent(const seria_qa::focus_record &focus)
+	{
+		return focus.progress_known
+			? progress_percent(focus.completed_nodes, focus.total_nodes)
+			: 0;
+	}
+
+	const seria_qa::progress_record *progress_for_task(
+		const snapshot &data,
+		int64_t task_id)
+	{
+		const auto found = std::find_if(data.progress.begin(), data.progress.end(),
+			[task_id](const seria_qa::progress_record &record) {
+				return record.task_id == task_id;
+			});
+		return found == data.progress.end() ? nullptr : &*found;
+	}
+
+	struct task_progress_presentation
+	{
+		std::string text = "--";
+		ImVec4 color;
+		bool known = false;
+	};
+
+	// User-facing completion text for one held task. Finished/committed tasks
+	// read 100%; failed tasks show structural progress in red; abandoned or
+	// unresolvable task lines stay "--" instead of a fabricated number.
+	task_progress_presentation present_task_progress(
+		const snapshot &data,
+		const seria_qa::task_record &task)
+	{
+		task_progress_presentation result;
+		result.color = color_muted;
+		if (task.status == 2 || task.status == 3)
+		{
+			result.text = "100%";
+			result.color = color_cyan;
+			result.known = true;
+			return result;
+		}
+		if (task.status == -1)
+			return result;
+
+		const seria_qa::progress_record *const progress =
+			progress_for_task(data, task.task_id);
+		if (progress == nullptr || !progress->progress_known)
+			return result;
+
+		const int percent =
+			progress_percent(progress->completed_nodes, progress->total_nodes);
+		result.text = std::to_string(percent) + "%";
+		result.known = true;
+		result.color = task.status == 4 ? color_red : color_cyan;
+		return result;
+	}
+
+	void draw_progress_ring(
+		const seria_qa::focus_record &focus,
+		float diameter,
+		const char *id)
+	{
+		constexpr float tau = 6.2831853071795864769f;
+		constexpr float start_angle = -1.5707963267948966192f;
+		const ImVec2 top_left = ImGui::GetCursorScreenPos();
+		ImGui::PushID(id);
+		ImGui::Dummy(ImVec2(diameter, diameter));
+		ImGui::PopID();
+
+		ImDrawList *const draw = ImGui::GetWindowDrawList();
+		const ImVec2 center(top_left.x + diameter * 0.5f, top_left.y + diameter * 0.5f);
+		const float radius = diameter * 0.39f;
+		const float stroke = std::max(3.0f, diameter * 0.065f);
+		draw->PathArcTo(center, radius, start_angle, start_angle + tau, 64);
+		draw->PathStroke(ImGui::GetColorU32(ImVec4(0.29f, 0.29f, 0.31f, 1.0f)), 0, stroke);
+
+		const int percent = progress_percent(focus);
+		const float ratio = static_cast<float>(percent) / 100.0f;
+		if (focus.progress_known && ratio > 0.0f)
+		{
+			draw->PathArcTo(center, radius, start_angle, start_angle + tau * ratio, 64);
+			draw->PathStroke(ImGui::GetColorU32(color_cyan), 0, stroke);
+		}
+
+		const int point_count = focus.progress_known
+			? std::clamp(focus.total_nodes, 1, 12)
+			: 0;
+		const int current_point = point_count > 0
+			? std::clamp(static_cast<int>(ratio * point_count), 0, point_count - 1)
+			: -1;
+		for (int index = 0; index < point_count; ++index)
+		{
+			const float point_ratio =
+				(static_cast<float>(index) + 0.5f) / static_cast<float>(point_count);
+			const float angle = start_angle + tau * point_ratio;
+			const ImVec2 point(
+				center.x + std::cos(angle) * radius,
+				center.y + std::sin(angle) * radius);
+			const bool completed = point_ratio <= ratio;
+			const bool current = !completed && index == current_point;
+			const ImVec4 fill = completed ? color_cyan :
+				current ? color_yellow : ImVec4(0.38f, 0.39f, 0.41f, 1.0f);
+			draw->AddCircleFilled(point, current ? stroke * 0.72f : stroke * 0.58f,
+				ImGui::GetColorU32(fill), 12);
+			draw->AddCircle(point, current ? stroke * 0.72f : stroke * 0.58f,
+				ImGui::GetColorU32(color_panel), 12, 1.0f);
+		}
+
+		char label[16] = "--";
+		if (focus.progress_known)
+			std::snprintf(label, sizeof(label), "%d%%", percent);
+		const ImVec2 label_size = ImGui::CalcTextSize(label);
+		draw->AddText(
+			ImVec2(center.x - label_size.x * 0.5f, center.y - label_size.y * 0.5f),
+			ImGui::GetColorU32(focus.progress_known ? color_text : color_muted),
+			label);
+	}
+
 	size_t completed_task_count(const snapshot &data)
 	{
 		return static_cast<size_t>(std::count_if(data.tasks.begin(), data.tasks.end(),
 			[](const seria_qa::task_record &task) { return task.status == 2 || task.status == 3; }));
 	}
 
-	bool is_completion_event(const seria_qa::event_record &event)
+	constexpr float chip_pad_x = 8.0f;
+	constexpr float chip_pad_y = 3.5f;
+	constexpr float chip_gap_x = 6.0f;
+	constexpr float chip_gap_y = 4.0f;
+	constexpr int max_chip_lines = 2;
+
+	// One compact chip: task id and name in a single tinted block. The tint is
+	// semantic - recent change, current (cyan), or the task's own status.
+	void draw_task_activity_chip(
+		ImDrawList *draw,
+		const ImVec2 &top_left,
+		float width,
+		float height,
+		const seria_qa::task_record &task,
+		bool current)
 	{
-		return event.task_id > 0 && (event.kind == "finished" || event.kind == "committed");
+		const recent_task_change *const change = recent_change_for(task.task_id);
+		const ImVec4 ink = change != nullptr
+			? task_change_color(*change)
+			: current ? color_cyan : status_color(task.status);
+
+		const float fill_alpha = change != nullptr ? 0.20f : current ? 0.14f : 0.10f;
+		draw->AddRectFilled(top_left,
+			ImVec2(top_left.x + width, top_left.y + height),
+			ImGui::GetColorU32(ImVec4(ink.x, ink.y, ink.z, fill_alpha)), 4.0f);
+		draw->AddRect(top_left,
+			ImVec2(top_left.x + width, top_left.y + height),
+			ImGui::GetColorU32(ImVec4(ink.x, ink.y, ink.z,
+				change != nullptr ? 0.95f : 0.65f)), 4.0f);
+
+		std::string label = "[" + std::to_string(task.task_id) + "] ";
+		label += task.name.empty() ? "未命名任务" : task.name;
+		label = fit_to_width(std::move(label), width - chip_pad_x * 2.0f);
+		draw->AddText(
+			ImVec2(top_left.x + chip_pad_x, top_left.y + chip_pad_y),
+			ImGui::GetColorU32(ink), label.c_str());
 	}
 
-	void draw_recent_completions(const snapshot &data)
+	void draw_task_activity_strip(
+		const snapshot &data,
+		const seria_qa::task_record *current)
 	{
-		std::array<int64_t, 2> shown_task_ids = {};
-		int shown = 0;
-		for (auto iterator = data.events.rbegin(); iterator != data.events.rend() && shown < 2; ++iterator)
+		if (data.tasks.empty())
+			return;
+
+		std::vector<const seria_qa::task_record *> tasks;
+		tasks.reserve(data.tasks.size());
+		for (const seria_qa::task_record &task : data.tasks)
+			tasks.push_back(&task);
+		std::stable_sort(tasks.begin(), tasks.end(),
+			[current](const auto *left, const auto *right) {
+				return task_activity_before(left, right, current);
+			});
+
+		const recent_task_change *latest = nullptr;
+		for (const recent_task_change &change : g_recent_task_changes)
 		{
-			if (!is_completion_event(*iterator) ||
-				std::find(shown_task_ids.begin(), shown_task_ids.end(), iterator->task_id) != shown_task_ids.end())
+			if (std::none_of(tasks.begin(), tasks.end(),
+				[&change](const auto *task) { return task->task_id == change.task_id; }))
 				continue;
-			if (shown == 0)
-				ImGui::Separator();
-			shown_task_ids[static_cast<size_t>(shown)] = iterator->task_id;
-			ImGui::TextColored(color_muted, "v");
-			ImGui::SameLine(0.0f, 6.0f);
-			ImGui::TextWrapped("%s [%lld] %s",
-				shown == 0 ? "上次完成" : "上上次完成",
-				static_cast<long long>(iterator->task_id),
-				iterator->label.empty() ? "(unnamed task)" : iterator->label.c_str());
-			++shown;
+			if (latest == nullptr ||
+				change.event_time_ms > latest->event_time_ms ||
+				(change.event_time_ms == latest->event_time_ms &&
+					change.event_sequence > latest->event_sequence))
+				latest = &change;
 		}
+
+		ImGui::Separator();
+		if (latest != nullptr)
+		{
+			ImGui::TextColored(task_change_color(*latest), "%s  [%lld] %s",
+				event_name(latest->kind),
+				static_cast<long long>(latest->task_id),
+				latest->label.empty() ? "任务状态已变化" : latest->label.c_str());
+		}
+		else
+		{
+			ImGui::TextDisabled("任务状态");
+		}
+
+		const ImVec2 origin = ImGui::GetCursorScreenPos();
+		const float row_width = ImGui::GetContentRegionAvail().x;
+		const float right_edge = origin.x + row_width;
+		const float row_height = ImGui::GetTextLineHeight() + chip_pad_y * 2.0f;
+		ImDrawList *const draw = ImGui::GetWindowDrawList();
+
+		float x = origin.x;
+		float y = origin.y;
+		int lines_used = 1;
+		size_t hidden = 0;
+
+		for (size_t index = 0; index < tasks.size(); ++index)
+		{
+			const seria_qa::task_record &task = *tasks[index];
+			std::string label = "[" + std::to_string(task.task_id) + "] ";
+			label += task.name.empty() ? "未命名任务" : task.name;
+			label = fit_to_width(std::move(label),
+				row_width - chip_pad_x * 2.0f);
+			const float width =
+				ImGui::CalcTextSize(label.c_str()).x + chip_pad_x * 2.0f;
+
+			if (x + width > right_edge && x > origin.x)
+			{
+				if (lines_used == max_chip_lines)
+				{
+					hidden = tasks.size() - index;
+					break;
+				}
+				x = origin.x;
+				y += row_height + chip_gap_y;
+				++lines_used;
+			}
+
+			const bool is_current = current != nullptr &&
+				task.task_id == current->task_id && task.client == current->client;
+			draw_task_activity_chip(draw, ImVec2(x, y), width, row_height,
+				task, is_current);
+			x += width + chip_gap_x;
+		}
+
+		if (hidden > 0)
+		{
+			const std::string label = "+" + std::to_string(hidden);
+			float width =
+				ImGui::CalcTextSize(label.c_str()).x + chip_pad_x * 2.0f;
+			if (x + width > right_edge && x > origin.x &&
+				lines_used < max_chip_lines)
+			{
+				x = origin.x;
+				y += row_height + chip_gap_y;
+				++lines_used;
+			}
+			draw->AddRectFilled(ImVec2(x, y),
+				ImVec2(x + width, y + row_height),
+				ImGui::GetColorU32(ImVec4(0.30f, 0.30f, 0.32f, 0.18f)), 4.0f);
+			draw->AddRect(ImVec2(x, y),
+				ImVec2(x + width, y + row_height),
+				ImGui::GetColorU32(ImVec4(0.40f, 0.40f, 0.42f, 0.7f)), 4.0f);
+			draw->AddText(ImVec2(x + chip_pad_x, y + chip_pad_y),
+				ImGui::GetColorU32(color_muted), label.c_str());
+		}
+
+		ImGui::Dummy(ImVec2(row_width, y + row_height - origin.y));
 	}
 
-	void draw_hud_task(const seria_qa::task_record &task)
+	void draw_hud_task(
+		const seria_qa::task_record &task,
+		const seria_qa::focus_record *focus)
 	{
+		if (focus != nullptr)
+		{
+			draw_progress_ring(*focus, 72.0f, "hud-progress");
+			ImGui::SameLine(0.0f, 10.0f);
+			ImGui::BeginGroup();
+		}
 		ImGui::TextColored(status_color(task.status), "%s", status_marker(task.status));
 		ImGui::SameLine(0.0f, 6.0f);
 		const std::string name = shortened(task.name.empty() ? "(unnamed task)" : task.name, 88);
@@ -985,13 +1755,59 @@ namespace
 		if (!task.description.empty())
 			ImGui::TextWrapped("  %s", task.description.c_str());
 		ImGui::TextColored(color_muted, "  %s", status_name(task.status));
+		if (focus != nullptr)
+		{
+			if (focus->progress_known)
+			{
+				ImGui::TextColored(color_muted, "  已完成 %d / %d 个配置节点",
+					focus->completed_nodes, focus->total_nodes);
+			}
+			else
+			{
+				if (focus->task_id == task.task_id)
+					ImGui::TextColored(color_muted, "  进度暂不可计算 · 后续 %d 个配置节点",
+						focus->remaining_nodes);
+				else
+					ImGui::TextColored(color_muted, "  当前任务线进度暂不可计算");
+			}
+			ImGui::EndGroup();
+		}
+	}
+
+	void draw_active_dialogue(
+		const seria_qa::dialogue_record &dialogue,
+		bool section_heading)
+	{
+		if (!dialogue.active)
+			return;
+
+		if (section_heading)
+			ImGui::SeparatorText("当前触发");
+		else
+			ImGui::TextDisabled("当前触发");
+
+		ImGui::TextColored(
+			dialogue_type_color(dialogue), "%s", dialogue_type_name(dialogue));
+		ImGui::SameLine(0.0f, 10.0f);
+		ImGui::Text("开始 ID  %lld", static_cast<long long>(dialogue.start_id));
+		ImGui::Text("当前句 ID  %lld", static_cast<long long>(dialogue.current_id));
+		if (dialogue.task_id > 0)
+		{
+			ImGui::SameLine(0.0f, 12.0f);
+			ImGui::TextDisabled(
+				"关联任务 %lld · 任务线 %lld",
+				static_cast<long long>(dialogue.task_id),
+				static_cast<long long>(dialogue.task_line_id));
+		}
 	}
 
 	void draw_hud(reshade::api::effect_runtime *runtime)
 	{
 		initialize_runtime_state(runtime);
 		g_snapshots.poll();
-		update_capture_activation(g_snapshots.is_live());
+		update_gm_submission(g_snapshots.is_live());
+		if (g_snapshots.current)
+			update_task_changes(*g_snapshots.current);
 
 		const bool chord_down = runtime->is_key_down(VK_HOME) && runtime->is_key_down(VK_CONTROL);
 		if (chord_down && !g_toggle_chord_down)
@@ -1000,7 +1816,7 @@ namespace
 			reshade::set_config_value(nullptr, "SeriaQAOverlay", "HudVisible", g_hud_visible);
 		}
 		g_toggle_chord_down = chord_down;
-		if (!g_hud_visible || g_overlay_open)
+		if (!g_hud_visible || g_overlay_open || g_task_workspace_open)
 			return;
 
 		refresh_dlss_diagnostics(runtime);
@@ -1036,9 +1852,10 @@ namespace
 			if (!g_snapshots.current)
 			{
 				text_status("!", color_red, "任务数据离线");
-				if (g_capture_activation == capture_activation_phase::failed)
-					ImGui::TextWrapped("%s", g_capture_activation_error.c_str());
-				else if (g_capture_activation != capture_activation_phase::idle)
+				if (g_gm_submission == gm_submission_phase::failed &&
+					g_pending_gm_is_capture)
+					ImGui::TextWrapped("%s", g_gm_submission_error.c_str());
+				else if (gm_submission_running() && g_pending_gm_is_capture)
 					ImGui::TextWrapped("正在通过游戏 GM 面板启动任务采集...");
 				else
 					ImGui::TextWrapped("进入角色后按 Home，在“全部任务”中点击“一键启动采集”。");
@@ -1055,13 +1872,18 @@ namespace
 						"当前显示最后一次有效数据；确认客户端仍在运行且 Saved 目录可写。");
 					ImGui::Separator();
 				}
+				if (data.dialogue.active)
+				{
+					draw_active_dialogue(data.dialogue, false);
+					ImGui::Separator();
+				}
 				const seria_qa::task_record *const task = primary_task(data);
 				if (task != nullptr)
 				{
-					draw_hud_task(*task);
-					if (data.focus.task_id == task->task_id)
-						ImGui::TextColored(color_muted, "  任务线进度  后续 %d 个配置节点%s",
-							data.focus.remaining_nodes, data.focus.has_branches ? "（含分支）" : "");
+					const seria_qa::focus_record unknown_focus = {};
+					const seria_qa::focus_record *const focus =
+						data.focus.task_id == task->task_id ? &data.focus : &unknown_focus;
+					draw_hud_task(*task, focus);
 				}
 				else
 				{
@@ -1101,13 +1923,9 @@ namespace
 				text_status("", color_muted, "%s  ·  任务 %lld",
 					data.navigation.auto_moving ? "正在寻路" : "导航已设置",
 					static_cast<long long>(data.navigation.task_id));
-				if (data.dialogue.active)
-					text_status("", color_muted, "对话 %lld  ·  节点 %lld",
-						static_cast<long long>(data.dialogue.start_id),
-						static_cast<long long>(data.dialogue.current_id));
 
-				draw_recent_completions(data);
-				ImGui::TextDisabled("Home 查看全部 %zu 条任务", data.tasks.size());
+				draw_task_activity_strip(data, task);
+				ImGui::TextDisabled("Home 打开任务工作区  ·  共 %zu 条", data.tasks.size());
 			}
 
 			if (g_dlss.available && g_dlss.health == health_level::check)
@@ -1151,6 +1969,17 @@ namespace
 	{
 		g_selected_task_id = task.task_id;
 		g_selected_task_client = task.client;
+		if (g_selected_task_node_line_id != task.task_line_id)
+		{
+			g_selected_task_node_id = task.task_id;
+			g_selected_task_node_line_id = task.task_line_id;
+		}
+	}
+
+	void copy_task_id(int64_t task_id)
+	{
+		ImGui::SetClipboardText(std::to_string(task_id).c_str());
+		g_copied_until = GetTickCount64() + 2000;
 	}
 
 	std::string fit_text(std::string text, float width)
@@ -1169,6 +1998,7 @@ namespace
 
 	void draw_task_outline(const snapshot &data, float height)
 	{
+		bool interaction_hint_hovered = false;
 		const float toolbar_top = ImGui::GetCursorPosY();
 		const float toolbar_width = ImGui::GetContentRegionAvail().x;
 		const float toolbar_right = ImGui::GetCursorScreenPos().x + toolbar_width;
@@ -1206,11 +2036,17 @@ namespace
 		if (ImGui::Button("复制列表"))
 		{
 			std::ostringstream text;
-			text << "任务编号\t任务名称\t状态\t来源\n";
+			text << "任务编号\t任务名称\t状态\t完成度\t来源\n";
 			for (const auto &task : data.tasks)
 				if (task_visible_for_filter(task))
-					text << task.task_id << '\t' << task.name << '\t' << status_name(task.status)
-						<< '\t' << (task.client ? "客户端" : "服务端") << '\n';
+				{
+					const task_progress_presentation progress =
+						present_task_progress(data, task);
+					text << task.task_id << '\t' << task.name << '\t'
+						<< status_name(task.status) << '\t'
+						<< (progress.known ? progress.text : "") << '\t'
+						<< (task.client ? "客户端" : "服务端") << '\n';
+				}
 			ImGui::SetClipboardText(text.str().c_str());
 			g_copied_until = GetTickCount64() + 2000;
 		}
@@ -1230,10 +2066,10 @@ namespace
 			std::vector<const seria_qa::task_record *> tasks;
 			for (const auto &task : data.tasks)
 				if (task_visible_for_filter(task)) tasks.push_back(&task);
-			std::stable_sort(tasks.begin(), tasks.end(), [](const auto *a, const auto *b) {
-				if (a->task_id != b->task_id) return a->task_id < b->task_id;
-				return a->client < b->client;
-			});
+			std::stable_sort(tasks.begin(), tasks.end(),
+				[current](const auto *left, const auto *right) {
+					return task_activity_before(left, right, current);
+				});
 			const float line = ImGui::GetTextLineHeight();
 			const int columns = std::clamp(static_cast<int>(
 				ImGui::GetContentRegionAvail().x / (line * 16.0f)), 1, 4);
@@ -1247,41 +2083,81 @@ namespace
 					ImGui::PushID(std::to_string(task.task_id).c_str());
 					const ImVec2 pos = ImGui::GetCursorScreenPos();
 					const ImVec2 size(std::max(60.0f, ImGui::GetContentRegionAvail().x), line * 3.0f + 24.0f);
-					if (ImGui::Selectable("##task-tile", task_selected(task), 0, size)) select_task(task);
+					if (ImGui::Selectable("##task-tile", task_selected(task), 0, size))
+						select_task(task);
 					if (g_scroll_to_selected && task_selected(task))
 					{
 						ImGui::SetScrollHereY(0.5f);
 						g_scroll_to_selected = false;
 					}
 					const bool hovered = ImGui::IsItemHovered();
+					if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+						copy_task_id(task.task_id);
+					const recent_task_change *const change = recent_change_for(task.task_id);
+					const bool is_current = current != nullptr &&
+						current->task_id == task.task_id && current->client == task.client;
 					ImDrawList *draw = ImGui::GetWindowDrawList();
 					draw->PushClipRect(pos, ImVec2(pos.x + size.x, pos.y + size.y), true);
 					draw->AddRect(pos, ImVec2(pos.x + size.x, pos.y + size.y),
-						ImGui::GetColorU32(task_selected(task) ? color_cyan : ImVec4(0.30f, 0.30f, 0.32f, 1)), 4.0f);
-					const ImU32 ink = ImGui::GetColorU32(color_muted);
+						ImGui::GetColorU32(task_selected(task) ? color_cyan :
+							change != nullptr ? task_change_color(*change) :
+							ImVec4(0.30f, 0.30f, 0.32f, 1)), 4.0f);
 					const float ix = pos.x + 10, iy = pos.y + 10;
-					draw->AddRect(ImVec2(ix, iy), ImVec2(ix + 12, iy + 16), ink, 1);
-					draw->AddLine(ImVec2(ix + 3, iy + 6), ImVec2(ix + 9, iy + 6), ink);
-					draw->AddLine(ImVec2(ix + 3, iy + 10), ImVec2(ix + 9, iy + 10), ink);
-					const std::string id = std::to_string(task.task_id) +
-						(current && current->task_id == task.task_id && current->client == task.client ? "  当前" : "");
-					draw->AddText(ImVec2(ix + 20, iy), ink, id.c_str());
-					const std::string title = fit_text(task.name.empty() ? "未命名任务" : task.name, size.x - 20);
-					draw->AddText(ImVec2(ix, iy + line + 3), ImGui::GetColorU32(color_text), title.c_str());
-					const std::string meta = std::string(status_name(task.status)) +
-						(task.client ? " · 客户端" : " · 服务端") + (task.subtask ? " · 子任务" : "") +
+
+					const task_progress_presentation progress =
+						present_task_progress(data, task);
+					const float percent_width =
+						ImGui::CalcTextSize(progress.text.c_str()).x;
+					std::string id_text = std::to_string(task.task_id) +
+						(is_current ? "  当前" : "");
+					id_text = fit_text(id_text,
+						std::max(24.0f, size.x - 20 - percent_width - 8));
+					const ImVec4 id_color = change != nullptr
+						? task_change_color(*change)
+						: is_current ? color_cyan : color_text;
+					draw->AddText(ImVec2(ix, iy),
+						ImGui::GetColorU32(id_color), id_text.c_str());
+					draw->AddText(
+						ImVec2(pos.x + size.x - 10 - percent_width, iy),
+						ImGui::GetColorU32(progress.color),
+						progress.text.c_str());
+
+					const std::string title = fit_text(
+						task.name.empty() ? "未命名任务" : task.name, size.x - 20);
+					draw->AddText(ImVec2(ix, iy + line + 3),
+						ImGui::GetColorU32(color_text), title.c_str());
+					const std::string meta = (change != nullptr
+						? std::string(event_name(change->kind)) + " · "
+						: std::string()) + status_name(task.status) +
+						(task.client ? " · 客户端" : " · 服务端") +
+						(task.subtask ? " · 子任务" : "") +
 						(task.traced ? " · 已追踪" : "");
-					draw->AddText(ImVec2(ix, iy + 2 * line + 6), ImGui::GetColorU32(status_color(task.status)),
+					draw->AddText(ImVec2(ix, iy + 2 * line + 6),
+						ImGui::GetColorU32(change != nullptr
+							? task_change_color(*change)
+							: status_color(task.status)),
 						fit_text(meta, size.x - 20).c_str());
 					draw->PopClipRect();
 					if (hovered)
 					{
+						const bool show_interaction_hint =
+							g_task_interaction_hint_pending &&
+							(g_task_interaction_hint_id == 0 ||
+								g_task_interaction_hint_id == task.task_id);
+						if (show_interaction_hint)
+						{
+							g_task_interaction_hint_id = task.task_id;
+							interaction_hint_hovered = true;
+						}
 						ImGui::BeginTooltip();
 						ImGui::PushTextWrapPos(ImGui::GetFontSize() * 26);
 						ImGui::Text("%lld", static_cast<long long>(task.task_id));
 						ImGui::TextWrapped("%s", task.name.c_str());
 						ImGui::TextWrapped("%s", task.description.c_str());
-						ImGui::TextDisabled("点击查看详情，不改变游戏内追踪");
+						if (progress.known)
+							ImGui::Text("完成度 %s", progress.text.c_str());
+						if (show_interaction_hint)
+							ImGui::TextDisabled("单击查看详情 · 双击复制任务 ID");
 						ImGui::PopTextWrapPos();
 						ImGui::EndTooltip();
 					}
@@ -1292,9 +2168,185 @@ namespace
 			}
 		}
 		ImGui::EndChild();
+		if (g_task_interaction_hint_pending &&
+			g_task_interaction_hint_id != 0 &&
+			!interaction_hint_hovered)
+		{
+			g_task_interaction_hint_pending = false;
+			g_task_interaction_hint_id = 0;
+		}
 	}
 
-	void draw_task_inspector(const snapshot &data, float height)
+	const char *task_node_status_name(const seria_qa::task_node_record &node)
+	{
+		if (node.status_inferred) return "路径已过";
+		if (node.status == 2 || node.status == 3) return "已完成";
+		if (node.status == 4) return "失败";
+		if (node.status == -1) return "已放弃";
+		if (node.held && node.status == 1) return "进行中";
+		if (!node.selected_path) return "未选分支";
+		return "未开始";
+	}
+
+	ImVec4 task_node_status_color(const seria_qa::task_node_record &node)
+	{
+		if (node.status == 2 || node.status == 3) return color_cyan;
+		if (node.status == 4 || node.status == -1) return color_red;
+		if (node.held && node.status == 1) return color_yellow;
+		return color_muted;
+	}
+
+	void submit_add_task(
+		reshade::api::effect_runtime *runtime,
+		const seria_qa::task_node_record &node)
+	{
+		g_selected_task_node_id = node.task_id;
+		g_selected_task_node_line_id = node.task_line_id;
+		begin_whitelisted_gm_submission(
+			runtime, gm_command_id::add_task, node.task_id);
+	}
+
+	void draw_task_nodes(
+		reshade::api::effect_runtime *runtime,
+		const snapshot &data,
+		const seria_qa::task_record &selected)
+	{
+		std::vector<const seria_qa::task_node_record *> nodes;
+		for (const seria_qa::task_node_record &node : data.task_nodes)
+		{
+			if (node.task_line_id == selected.task_line_id)
+				nodes.push_back(&node);
+		}
+		std::stable_sort(nodes.begin(), nodes.end(), [](const auto *left, const auto *right) {
+			if (left->order != right->order) return left->order < right->order;
+			return left->task_id < right->task_id;
+		});
+
+		ImGui::SeparatorText("任务节点");
+		if (nodes.empty())
+		{
+			ImGui::TextDisabled("当前快照没有这条任务线的节点数据。");
+			return;
+		}
+
+		if (g_selected_task_node_line_id != selected.task_line_id ||
+			std::none_of(nodes.begin(), nodes.end(), [](const auto *node) {
+				return node->task_id == g_selected_task_node_id;
+			}))
+		{
+			g_selected_task_node_id = selected.task_id;
+			g_selected_task_node_line_id = selected.task_line_id;
+		}
+
+		const size_t completed = static_cast<size_t>(std::count_if(
+			nodes.begin(), nodes.end(), [](const auto *node) {
+				return node->status == 2 || node->status == 3;
+			}));
+		ImGui::TextDisabled("共 %zu 个节点 · 已完成 %zu 个", nodes.size(), completed);
+		if (data.task_nodes_truncated)
+			ImGui::TextColored(color_yellow, "节点数据达到快照上限，列表可能不完整。");
+
+		const auto selected_node = std::find_if(
+			nodes.begin(), nodes.end(), [](const auto *node) {
+				return node->task_id == g_selected_task_node_id;
+			});
+		if (selected_node != nodes.end())
+		{
+			if (ImGui::SmallButton("复制节点 ID"))
+				copy_task_id((*selected_node)->task_id);
+			if (GetTickCount64() < g_copied_until)
+			{
+				ImGui::SameLine();
+				ImGui::TextDisabled("已复制");
+			}
+		}
+
+		const ImGuiTableFlags flags =
+			ImGuiTableFlags_BordersInnerH |
+			ImGuiTableFlags_RowBg |
+			ImGuiTableFlags_SizingStretchProp;
+		if (!ImGui::BeginTable("task-node-list", 4, flags))
+			return;
+
+		ImGui::TableSetupColumn(
+			"状态", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFontSize() * 5.0f);
+		ImGui::TableSetupColumn(
+			"任务 ID", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFontSize() * 6.5f);
+		ImGui::TableSetupColumn("节点", ImGuiTableColumnFlags_WidthStretch);
+		ImGui::TableSetupColumn(
+			"操作", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFontSize() * 4.5f);
+		ImGui::TableHeadersRow();
+
+		for (const seria_qa::task_node_record *const node : nodes)
+		{
+			ImGui::PushID(static_cast<int>(node->task_id));
+			ImGui::TableNextRow();
+			const ImVec4 node_color = task_node_status_color(*node);
+
+			ImGui::TableNextColumn();
+			ImGui::TextColored(node_color, "%s", task_node_status_name(*node));
+
+			ImGui::TableNextColumn();
+			ImGui::TextColored(node_color, "%lld",
+				static_cast<long long>(node->task_id));
+
+			ImGui::TableNextColumn();
+			std::string label(static_cast<size_t>(std::min(node->depth, 8)) * 2, ' ');
+			if (node->branch)
+				label += "分支 ";
+			label += node->name.empty() ? "未命名节点" : node->name;
+			const bool node_selected = node->task_id == g_selected_task_node_id;
+			ImGui::PushStyleColor(ImGuiCol_Text, node_color);
+			const bool activated = ImGui::Selectable(
+				label.c_str(), node_selected, ImGuiSelectableFlags_AllowDoubleClick);
+			ImGui::PopStyleColor();
+			const bool hovered = ImGui::IsItemHovered();
+			if (activated)
+			{
+				g_selected_task_node_id = node->task_id;
+				g_selected_task_node_line_id = node->task_line_id;
+			}
+			if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) &&
+				!node->held && !gm_submission_running())
+				submit_add_task(runtime, *node);
+			if (hovered)
+			{
+				ImGui::BeginTooltip();
+				ImGui::PushTextWrapPos(ImGui::GetFontSize() * 28.0f);
+				ImGui::Text("[%lld] %s",
+					static_cast<long long>(node->task_id),
+					node->name.empty() ? "未命名节点" : node->name.c_str());
+				if (!node->description.empty())
+					ImGui::TextWrapped("%s", node->description.c_str());
+				if (node->parent_task_id > 0)
+					ImGui::TextDisabled("上游节点 %lld",
+						static_cast<long long>(node->parent_task_id));
+				if (node->status_inferred)
+					ImGui::TextDisabled("状态由本地任务表与当前持有节点推断");
+				ImGui::TextDisabled(node->held
+					? "当前已持有，不重复添加"
+					: "双击直接添加到当前角色");
+				ImGui::PopTextWrapPos();
+				ImGui::EndTooltip();
+			}
+
+			ImGui::TableNextColumn();
+			const bool disabled = node->held || gm_submission_running();
+			if (disabled)
+				ImGui::BeginDisabled();
+			if (ImGui::SmallButton("添加"))
+				submit_add_task(runtime, *node);
+			if (disabled)
+				ImGui::EndDisabled();
+			ImGui::PopID();
+		}
+		ImGui::EndTable();
+	}
+
+	void draw_task_inspector(
+		reshade::api::effect_runtime *runtime,
+		const snapshot &data,
+		float height)
 	{
 		heading_text("任务详情", color_text);
 		ImGui::Separator();
@@ -1314,6 +2366,9 @@ namespace
 			{
 				select_task(*selected);
 				ImGui::TextWrapped("[%lld] %s", static_cast<long long>(selected->task_id), selected->name.c_str());
+				if (ImGui::SmallButton("复制任务 ID"))
+					copy_task_id(selected->task_id);
+				ImGui::SameLine();
 				if (ImGui::SmallButton("复制编号与名称"))
 				{
 					const std::string text = std::to_string(selected->task_id) + " " + selected->name;
@@ -1322,14 +2377,35 @@ namespace
 				}
 				ImGui::TextWrapped("%s", selected->description.empty() ? "无任务描述" : selected->description.c_str());
 				ImGui::Separator();
+				const task_progress_presentation progress =
+					present_task_progress(data, *selected);
 				ImGui::TextWrapped("状态：%s (%d)", status_name(selected->status), selected->status);
+				ImGui::TextWrapped("完成度：%s",
+					progress.known ? progress.text.c_str() : "--");
 				ImGui::TextWrapped("任务线：%lld", static_cast<long long>(selected->task_line_id));
 				if (data.focus.task_id == selected->task_id && primary_task(data) == selected)
 				{
 					ImGui::TextWrapped("焦点来源：%s", focus_source_name(data.focus.source));
-					ImGui::TextWrapped("后续节点：%d%s", data.focus.remaining_nodes,
-						data.focus.has_branches ? "（含分支）" : "");
+					ImGui::SeparatorText("任务线进度");
+					draw_progress_ring(data.focus, 88.0f, "inspector-progress");
+					ImGui::SameLine(0.0f, 12.0f);
+					ImGui::BeginGroup();
+					if (data.focus.progress_known)
+					{
+						ImGui::Text("%d%%", progress_percent(data.focus));
+						ImGui::TextWrapped("已完成：%d / %d 个配置节点",
+							data.focus.completed_nodes, data.focus.total_nodes);
+						ImGui::TextWrapped("当前：第 %d 个节点", data.focus.completed_nodes + 1);
+						ImGui::TextWrapped("后续：%d 个节点", data.focus.remaining_nodes);
+					}
+					else
+					{
+						ImGui::TextDisabled("当前任务线无法定位起始节点");
+						ImGui::TextWrapped("后续：%d 个配置节点", data.focus.remaining_nodes);
+					}
+					ImGui::EndGroup();
 				}
+				draw_task_nodes(runtime, data, *selected);
 				ImGui::SeparatorText("配置后续候选");
 				bool has_next = false;
 				for (const auto &next : data.next)
@@ -1421,19 +2497,219 @@ namespace
 		ImGui::EndChild();
 	}
 
-	void draw_details(reshade::api::effect_runtime *runtime)
+	bool gm_command_parameters_valid(const gm_command_definition &definition)
 	{
-		initialize_runtime_state(runtime);
-		g_snapshots.poll();
-		refresh_dlss_diagnostics(runtime);
-		push_overlay_style();
+		switch (definition.parameters)
+		{
+		case gm_parameter_kind::task_id:
+			return g_mission_dialog_task_id > 0;
+		case gm_parameter_kind::node_task_id:
+			return g_selected_task_node_id > 0;
+		case gm_parameter_kind::buff:
+			return g_buff_id > 0 && g_buff_stacks >= 1 && g_buff_stacks <= 999;
+		default:
+			return true;
+		}
+	}
 
+	void draw_gm_command_group(
+		reshade::api::effect_runtime *runtime,
+		gm_command_category category,
+		const char *table_id)
+	{
+		if (!ImGui::BeginTable(table_id, 2,
+			ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_BordersInnerH))
+			return;
+
+		const float action_width = std::min(
+			ImGui::GetFontSize() * 13.0f,
+			std::max(ImGui::GetFontSize() * 9.0f,
+				ImGui::GetContentRegionAvail().x * 0.42f));
+		ImGui::TableSetupColumn(
+			"操作", ImGuiTableColumnFlags_WidthFixed, action_width);
+		ImGui::TableSetupColumn("说明", ImGuiTableColumnFlags_WidthStretch);
+		for (const gm_command_definition &definition : gm_command_definitions)
+		{
+			if (definition.category != category)
+				continue;
+
+			const bool parameter_invalid = !gm_command_parameters_valid(definition);
+			const bool disabled = gm_submission_running() || parameter_invalid;
+			ImGui::PushID(definition.command);
+			ImGui::TableNextRow();
+			ImGui::TableNextColumn();
+			if (disabled)
+				ImGui::BeginDisabled();
+			if (definition.destructive)
+			{
+				ImGui::PushStyleColor(
+					ImGuiCol_Button, ImVec4(0.36f, 0.14f, 0.14f, 1.0f));
+				ImGui::PushStyleColor(
+					ImGuiCol_ButtonHovered, ImVec4(0.48f, 0.18f, 0.18f, 1.0f));
+				ImGui::PushStyleColor(
+					ImGuiCol_ButtonActive, ImVec4(0.56f, 0.20f, 0.20f, 1.0f));
+			}
+			if (ImGui::Button(
+				definition.action,
+				ImVec2(ImGui::GetContentRegionAvail().x, 0.0f)))
+			{
+				const int64_t first_argument =
+					definition.parameters == gm_parameter_kind::task_id
+						? g_mission_dialog_task_id
+						: definition.parameters == gm_parameter_kind::node_task_id
+							? g_selected_task_node_id
+						: definition.parameters == gm_parameter_kind::buff
+							? g_buff_id
+							: 0;
+				const int64_t second_argument =
+					definition.parameters == gm_parameter_kind::buff
+						? g_buff_stacks
+						: 0;
+				begin_whitelisted_gm_submission(
+					runtime,
+					definition.id,
+					first_argument,
+					second_argument);
+			}
+			if (definition.destructive)
+				ImGui::PopStyleColor(3);
+			if (disabled)
+				ImGui::EndDisabled();
+
+			ImGui::TableNextColumn();
+			ImGui::TextWrapped("%s", definition.description);
+			ImGui::TextDisabled("%s  ·  %s", definition.command, definition.source);
+			ImGui::PopID();
+		}
+		ImGui::EndTable();
+	}
+
+	void draw_gm_tools(reshade::api::effect_runtime *runtime)
+	{
+		ImGui::TextWrapped(
+			"仅提供已审核的固定白名单。点击后工具会暂时关闭，自动打开游戏 GM "
+			"面板并提交；诊断与状态操作分区展示，不提供自由文本。");
+
+		if (gm_submission_running())
+		{
+			text_status_wrapped("~", color_yellow, "正在提交：%s",
+				g_pending_gm_label.c_str());
+		}
+		else if (g_gm_submission == gm_submission_phase::failed)
+		{
+			text_status_wrapped("!", color_red, "提交失败：%s",
+				g_gm_submission_error.c_str());
+		}
+		else if (g_has_last_gm_submission)
+		{
+			const ImVec4 color =
+				g_last_gm_submission_succeeded ? color_cyan : color_red;
+			text_status_wrapped(
+				g_last_gm_submission_succeeded ? "+" : "!",
+				color,
+				"%s：%s  ·  %s",
+				g_last_gm_submission_succeeded ? "已提交" : "提交失败",
+				g_last_gm_label.c_str(),
+				g_last_gm_message.c_str());
+			ImGui::TextDisabled("%s", g_last_gm_command.c_str());
+		}
+
+		ImGui::SeparatorText("任务诊断");
+		if (g_mission_dialog_task_id <= 0)
+		{
+			if (g_selected_task_id > 0)
+				g_mission_dialog_task_id = g_selected_task_id;
+			else if (g_snapshots.current)
+			{
+				const seria_qa::task_record *const current =
+					primary_task(*g_snapshots.current);
+				if (current != nullptr)
+					g_mission_dialog_task_id = current->task_id;
+			}
+		}
+		ImGui::SetNextItemWidth(std::min(
+			ImGui::GetFontSize() * 14.0f,
+			ImGui::GetContentRegionAvail().x * 0.45f));
+		if (ImGui::InputScalar(
+			"起始任务 ID",
+			ImGuiDataType_S64,
+			&g_mission_dialog_task_id))
+		{
+			g_mission_dialog_task_id =
+				std::max<int64_t>(0, g_mission_dialog_task_id);
+		}
+		if (g_selected_task_id > 0)
+		{
+			ImGui::SameLine();
+			if (ImGui::Button("使用已选任务"))
+				g_mission_dialog_task_id = g_selected_task_id;
+		}
+		if (g_mission_dialog_task_id <= 0)
+			ImGui::TextColored(color_yellow,
+				"“评估任务线对白”需要一个有效的起始任务 ID。");
+		draw_gm_command_group(
+			runtime, gm_command_category::task, "gm-task-commands");
+
+		ImGui::SeparatorText("位置与场景");
+		draw_gm_command_group(
+			runtime, gm_command_category::location, "gm-location-commands");
+
+		ImGui::SeparatorText("状态操作");
+		ImGui::TextColored(
+			color_yellow,
+			"以下操作会改变任务、动画、角色或战斗场景状态，仅用于开发和测试环境。");
+		ImGui::SetNextItemWidth(std::min(
+			ImGui::GetFontSize() * 12.0f,
+			ImGui::GetContentRegionAvail().x * 0.45f));
+		if (ImGui::InputScalar(
+			"添加任务 ID",
+			ImGuiDataType_S64,
+			&g_selected_task_node_id))
+		{
+			g_selected_task_node_id =
+				std::max<int64_t>(0, g_selected_task_node_id);
+		}
+		if (g_selected_task_node_id <= 0)
+			ImGui::TextColored(color_yellow,
+				"“添加任务”需要有效的任务节点 ID。");
+
+		const bool buff_inputs_inline =
+			ImGui::GetContentRegionAvail().x >= ImGui::GetFontSize() * 31.0f;
+		ImGui::SetNextItemWidth(std::min(
+			ImGui::GetFontSize() * 12.0f,
+			ImGui::GetContentRegionAvail().x *
+				(buff_inputs_inline ? 0.36f : 0.70f)));
+		if (ImGui::InputScalar("Buff ID", ImGuiDataType_S64, &g_buff_id))
+			g_buff_id = std::max<int64_t>(0, g_buff_id);
+		if (buff_inputs_inline)
+			ImGui::SameLine();
+		ImGui::SetNextItemWidth(std::min(
+			ImGui::GetFontSize() * 8.0f,
+			ImGui::GetContentRegionAvail().x *
+				(buff_inputs_inline ? 0.28f : 0.55f)));
+		if (ImGui::InputInt("层数", &g_buff_stacks))
+			g_buff_stacks = std::clamp(g_buff_stacks, 1, 999);
+		if (g_buff_id <= 0)
+			ImGui::TextColored(color_yellow,
+				"“为自己添加 Buff”需要有效的 Buff ID；层数范围为 1-999。");
+		draw_gm_command_group(
+			runtime, gm_command_category::action, "gm-state-commands");
+
+		ImGui::SeparatorText("结果位置");
+		ImGui::TextDisabled(
+			"屏幕/聊天类结果直接显示在游戏内；日志类结果写入 Saved\\Logs。");
+	}
+
+	void draw_details_content(reshade::api::effect_runtime *runtime)
+	{
 		heading_text("角色任务", color_text, 1.10f);
 		ImGui::SameLine();
-		ImGui::TextDisabled("只读  ·  %s", !g_snapshots.current ? "未连接" :
+		ImGui::TextDisabled("任务数据只读  ·  %s", !g_snapshots.current ? "未连接" :
 			g_snapshots.is_live() ? "实时" : "数据暂停");
 		if (g_snapshots.current && !g_snapshots.is_live())
 			text_wrapped_colored(color_yellow, "显示上次有效数据。确认客户端仍在运行且 Saved 目录可写。");
+		if (g_snapshots.current && g_snapshots.current->dialogue.active)
+			draw_active_dialogue(g_snapshots.current->dialogue, true);
 		if (ImGui::BeginTabBar("qa-pages"))
 		{
 			if (ImGui::BeginTabItem("全部任务"))
@@ -1442,24 +2718,25 @@ namespace
 				{
 					ImGui::TextWrapped("进入角色后，可由工具自动打开 GM 面板并启动任务采集。");
 					const bool activation_running =
-						g_capture_activation != capture_activation_phase::idle &&
-						g_capture_activation != capture_activation_phase::failed;
+						gm_submission_running() && g_pending_gm_is_capture;
 					if (activation_running)
 						ImGui::BeginDisabled();
 					if (ImGui::Button(activation_running ? "正在启动..." : "一键启动采集"))
 						begin_capture_activation(runtime);
 					if (activation_running)
 						ImGui::EndDisabled();
-					if (g_capture_activation == capture_activation_phase::failed)
-						text_wrapped_colored(color_red, "%s", g_capture_activation_error.c_str());
+					if (g_gm_submission == gm_submission_phase::failed &&
+						g_pending_gm_is_capture)
+						text_wrapped_colored(
+							color_red, "%s", g_gm_submission_error.c_str());
 					ImGui::SeparatorText("手动备用");
 					if (ImGui::Button("复制启动命令"))
 					{
-						ImGui::SetClipboardText(external_gm_command);
+						ImGui::SetClipboardText(capture_external_gm_command);
 						g_copied_until = GetTickCount64() + 2000;
 					}
 					if (GetTickCount64() < g_copied_until) ImGui::TextDisabled("已复制");
-					ImGui::TextWrapped("%s", external_gm_command);
+					ImGui::TextWrapped("%s", capture_external_gm_command);
 				}
 				else
 				{
@@ -1477,14 +2754,18 @@ namespace
 							ImGui::TableNextColumn();
 							draw_task_outline(data, area_height);
 							ImGui::TableNextColumn();
-							draw_task_inspector(data, area_height - ImGui::GetFrameHeightWithSpacing());
+							draw_task_inspector(
+								runtime, data,
+								area_height - ImGui::GetFrameHeightWithSpacing());
 							ImGui::EndTable();
 						}
 					}
 					else
 					{
 						draw_task_outline(data, std::max(220.0f, area_height * 0.58f));
-						draw_task_inspector(data, std::max(140.0f, area_height * 0.34f));
+						draw_task_inspector(
+							runtime, data,
+							std::max(140.0f, area_height * 0.34f));
 					}
 				}
 				ImGui::EndTabItem();
@@ -1494,6 +2775,11 @@ namespace
 				if (g_snapshots.current)
 					draw_events(*g_snapshots.current, std::max(100.0f, ImGui::GetContentRegionAvail().y - 40));
 				else ImGui::TextDisabled("启动任务采集后显示变化记录。");
+				ImGui::EndTabItem();
+			}
+			if (ImGui::BeginTabItem("GM 工具"))
+			{
+				draw_gm_tools(runtime);
 				ImGui::EndTabItem();
 			}
 			if (g_dlss.available &&
@@ -1508,13 +2794,25 @@ namespace
 			{
 				if (ImGui::Checkbox("显示左上角任务窗口", &g_hud_visible))
 					reshade::set_config_value(nullptr, "SeriaQAOverlay", "HudVisible", g_hud_visible);
+				if (ImGui::Checkbox(
+					"Home 显示完整 ReShade 页面", &g_home_opens_full_reshade))
+				{
+					reshade::set_config_value(
+						nullptr,
+						"SeriaQAOverlay",
+						"HomeOpensFullReShade",
+						g_home_opens_full_reshade);
+				}
+				if (ImGui::IsItemHovered())
+					ImGui::SetTooltip(
+						"关闭时 Home 只打开任务 QA；开启后显示完整 ReShade 页面。");
 				ImGui::SetNextItemWidth(std::min(260.0f, ImGui::GetContentRegionAvail().x * 0.55f));
 				if (ImGui::SliderInt("背景不透明度", &g_hud_opacity_percent, 25, 100, "%d%%"))
 					reshade::set_config_value(nullptr, "SeriaQAOverlay", "HudOpacity", g_hud_opacity_percent);
-				ImGui::TextWrapped("数值越低，背景越透明。Home 关闭工具页后可查看效果；Ctrl+Home 切换任务窗口。");
+				ImGui::TextWrapped("数值越低，背景越透明。");
 				if (ImGui::CollapsingHeader("采集信息"))
 				{
-					ImGui::Text("插件 %s · 支持协议 v1 / v2", addon_version);
+					ImGui::Text("插件 %s · 快照协议 v6", addon_version);
 					if (g_snapshots.current)
 					{
 						const snapshot &data = *g_snapshots.current;
@@ -1523,8 +2821,10 @@ namespace
 						ImGui::TextWrapped("导航任务 %lld · 地图 %lld · 目标 %d:%lld",
 							static_cast<long long>(data.navigation.task_id), static_cast<long long>(data.navigation.map_id),
 							data.navigation.target_type, static_cast<long long>(data.navigation.target_id));
-						ImGui::TextWrapped("对话 %lld · 节点 %lld · 任务 %lld",
-							static_cast<long long>(data.dialogue.start_id), static_cast<long long>(data.dialogue.current_id),
+						ImGui::TextWrapped("%s · 开始 ID %lld · 当前句 ID %lld · 任务 %lld",
+							dialogue_type_name(data.dialogue),
+							static_cast<long long>(data.dialogue.start_id),
+							static_cast<long long>(data.dialogue.current_id),
 							static_cast<long long>(data.dialogue.task_id));
 					}
 					ImGui::TextWrapped("读取信息：%s", g_snapshots.error.empty() ? "正常" : g_snapshots.error.c_str());
@@ -1533,8 +2833,66 @@ namespace
 			}
 			ImGui::EndTabBar();
 		}
+	}
 
+	void draw_details(reshade::api::effect_runtime *runtime)
+	{
+		initialize_runtime_state(runtime);
+		g_snapshots.poll();
+		if (g_snapshots.current)
+			update_task_changes(*g_snapshots.current);
+		refresh_dlss_diagnostics(runtime);
+		push_overlay_style();
+		draw_details_content(runtime);
 		pop_overlay_style();
+	}
+
+	void draw_task_workspace(reshade::api::effect_runtime *runtime)
+	{
+		if (!g_task_workspace_open)
+			return;
+
+		runtime->block_input_next_frame();
+		ImGui::SetNextFrameWantCaptureKeyboard(true);
+		ImGui::SetNextFrameWantCaptureMouse(true);
+		ImGui::GetIO().MouseDrawCursor = true;
+		g_workspace_cursor_owned = true;
+
+		const ImVec2 display = ImGui::GetIO().DisplaySize;
+		const ImVec2 window_size(
+			std::min(std::max(720.0f, display.x * 0.82f), std::max(320.0f, display.x - 24.0f)),
+			std::min(std::max(520.0f, display.y * 0.82f), std::max(240.0f, display.y - 24.0f)));
+		ImGui::SetNextWindowSize(window_size, ImGuiCond_FirstUseEver);
+		ImGui::SetNextWindowPos(
+			ImVec2((display.x - window_size.x) * 0.5f, (display.y - window_size.y) * 0.5f),
+			ImGuiCond_FirstUseEver);
+		if (g_task_workspace_focus_requested)
+		{
+			ImGui::SetNextWindowFocus();
+			g_task_workspace_focus_requested = false;
+		}
+
+		push_overlay_style();
+		bool open = g_task_workspace_open;
+		const ImGuiWindowFlags flags =
+			ImGuiWindowFlags_NoCollapse |
+			ImGuiWindowFlags_NoSavedSettings;
+		if (ImGui::Begin("任务 QA###seria-qa-workspace", &open, flags))
+			draw_details_content(runtime);
+		ImGui::End();
+		pop_overlay_style();
+		g_task_workspace_open = open;
+	}
+
+	void draw_overlay(reshade::api::effect_runtime *runtime)
+	{
+		if (!g_task_workspace_open && g_workspace_cursor_owned)
+		{
+			ImGui::GetIO().MouseDrawCursor = false;
+			g_workspace_cursor_owned = false;
+		}
+		draw_hud(runtime);
+		draw_task_workspace(runtime);
 	}
 
 	void set_hud_visibility(bool visible)
@@ -1546,6 +2904,7 @@ namespace
 	bool on_open_overlay(reshade::api::effect_runtime *runtime, bool open, reshade::api::input_source source)
 	{
 		initialize_runtime_state(runtime);
+		refresh_dlss_diagnostics(runtime);
 		const bool chord_down = runtime->is_key_down(VK_HOME) && runtime->is_key_down(VK_CONTROL);
 		if (source == reshade::api::input_source::keyboard && chord_down)
 		{
@@ -1553,6 +2912,26 @@ namespace
 				set_hud_visibility(!g_hud_visible);
 			g_toggle_chord_down = true;
 			return true;
+		}
+		const bool shift_down = runtime->is_key_down(VK_SHIFT);
+		if (source == reshade::api::input_source::keyboard && open &&
+			!shift_down && !g_home_opens_full_reshade)
+		{
+			g_task_workspace_open = !g_task_workspace_open;
+			g_task_workspace_focus_requested = g_task_workspace_open;
+			if (g_task_workspace_open)
+			{
+				g_task_interaction_hint_pending = true;
+				g_task_interaction_hint_id = 0;
+			}
+			g_overlay_open = false;
+			return true;
+		}
+		if (open)
+		{
+			g_task_workspace_open = false;
+			g_task_interaction_hint_pending = true;
+			g_task_interaction_hint_id = 0;
 		}
 		g_overlay_open = open;
 		return false;
@@ -1582,7 +2961,7 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID)
 		if (!is_seria_process())
 			return TRUE;
 
-		reshade::register_event<reshade::addon_event::reshade_overlay>(draw_hud);
+		reshade::register_event<reshade::addon_event::reshade_overlay>(draw_overlay);
 		reshade::register_event<reshade::addon_event::reshade_open_overlay>(on_open_overlay);
 		reshade::register_overlay("Seria QA", draw_details);
 		g_ui_registered = true;
@@ -1593,7 +2972,7 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID)
 		{
 			reshade::unregister_overlay("Seria QA", draw_details);
 			reshade::unregister_event<reshade::addon_event::reshade_open_overlay>(on_open_overlay);
-			reshade::unregister_event<reshade::addon_event::reshade_overlay>(draw_hud);
+			reshade::unregister_event<reshade::addon_event::reshade_overlay>(draw_overlay);
 			g_ui_registered = false;
 		}
 		reshade::unregister_addon(module);

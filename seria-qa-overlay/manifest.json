@@ -2,7 +2,8 @@
   "schemaVersion": 2,
   "packageId": "seria-qa-overlay",
   "displayName": "Seria QA Overlay",
-  "packageVersion": "2026.09.22-seria-qa-overlay-v0.3",
+  "moduleVersion": "0.12.0",
+  "packageVersion": "2026.09.24-seria-qa-overlay-v0.12.0",
   "archivePrefix": "Seria-QA-Overlay",
   "targetRelativePath": "bin\\WindowsNoEditor\\Client\\Seria\\Binaries\\Win64",
   "recoveryDirectoryName": "Seria-QA-Overlay-Recovery",
@@ -19,11 +20,11 @@
     },
     {
       "path": "seria-qa-overlay.addon64",
-      "sha256": "EA72E63CDC78A368D614FA924E654988CF81E0C6439D03960E558A082BE552C2"
+      "sha256": "0E1D5E54B468035AF4FA4DE5D741A2CE260FA97143E1BE3869AAED1C5393E262"
     },
     {
       "path": "TaskQADiagnostics.lua",
-      "sha256": "2F735B35CE885BE0260288953F396682195CB4399F232F95B0C59A62F7773A55"
+      "sha256": "DB2D437BA551873CB504607D38C9751F77F0B9CABEC08C387E3E2168B6D91F11"
     },
     {
       "path": "SeriaQA.lua",
@@ -57,6 +58,13 @@
       "section": "SeriaQAOverlay",
       "key": "HudOpacity",
       "value": "78",
+      "onlyIfMissing": true,
+      "verifyExact": false
+    },
+    {
+      "section": "SeriaQAOverlay",
+      "key": "HomeOpensFullReShade",
+      "value": "0",
       "onlyIfMissing": true,
       "verifyExact": false
     }

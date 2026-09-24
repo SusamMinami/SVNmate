@@ -1,9 +1,11 @@
 /backups/
 /logs/
 /dist/
+/.generated/
 /src/SeriaQAOverlay/build/
 /payload/*.dll
 /payload/*.addon64
 /payload/reshade-shaders/
 !manifest.json
 !manifest.dlss5.json
+!/.impeccable/design.json

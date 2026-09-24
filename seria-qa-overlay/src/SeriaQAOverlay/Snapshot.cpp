@@ -10,6 +10,8 @@ namespace seria_qa
 		constexpr size_t max_snapshot_bytes = 512 * 1024;
 		constexpr size_t max_tasks = 2048;
 		constexpr size_t max_next_records = 4096;
+		constexpr size_t max_progress_records = 2048;
+		constexpr size_t max_task_nodes = 1024;
 		constexpr size_t max_events = 64;
 
 		bool append_utf8(uint32_t code_point, std::string &output)
@@ -266,8 +268,7 @@ namespace seria_qa
 				if (fields.size() != 5 || fields[0] != "SERIA_QA_SNAPSHOT")
 					return fail(line_number, "invalid header");
 				int schema_version = 0;
-				if (!parse_int(fields[1], schema_version) ||
-					schema_version < 1 || schema_version > 2)
+				if (!parse_int(fields[1], schema_version) || schema_version != 6)
 					return fail(line_number, "unsupported schema");
 				result.value.schema_version = static_cast<uint32_t>(schema_version);
 				if (!parse_uint64(fields[2], result.value.sequence) ||
@@ -295,10 +296,11 @@ namespace seria_qa
 			++record_count;
 			if (fields[0] == "META")
 			{
-				if (fields.size() != 4 ||
+				if (fields.size() != 5 ||
 					!parse_bool(fields[1], result.value.task_list_ready) ||
 					!parse_int(fields[2], result.value.server_task_count) ||
-					!parse_int(fields[3], result.value.client_task_count))
+					!parse_int(fields[3], result.value.client_task_count) ||
+					!parse_bool(fields[4], result.value.task_nodes_truncated))
 					return fail(line_number, "invalid META record");
 			}
 			else if (fields[0] == "TASK")
@@ -362,24 +364,92 @@ namespace seria_qa
 			}
 			else if (fields[0] == "DIALOG")
 			{
-				if (fields.size() != 6 ||
+				if (fields.size() != 8 ||
 					!parse_bool(fields[1], result.value.dialogue.active) ||
 					!parse_int64(fields[2], result.value.dialogue.start_id) ||
 					!parse_int64(fields[3], result.value.dialogue.current_id) ||
 					!parse_int64(fields[4], result.value.dialogue.task_id) ||
-					!parse_int64(fields[5], result.value.dialogue.task_line_id))
+					!parse_int64(fields[5], result.value.dialogue.task_line_id) ||
+					!parse_bool(fields[6], result.value.dialogue.complex_chat) ||
+					!parse_bool(fields[7], result.value.dialogue.camera_dialog))
 					return fail(line_number, "invalid DIALOG record");
 			}
 			else if (fields[0] == "FOCUS")
 			{
-				if (fields.size() != 6 ||
+				if (fields.size() != 9 ||
 					!parse_int64(fields[1], result.value.focus.task_id) ||
 					!parse_int64(fields[2], result.value.focus.task_line_id) ||
-					!parse_int(fields[3], result.value.focus.remaining_nodes) ||
-					!parse_bool(fields[4], result.value.focus.has_branches) ||
-					!decode_field(fields[5], result.value.focus.source) ||
-					result.value.focus.remaining_nodes < 0)
+					!parse_int(fields[3], result.value.focus.completed_nodes) ||
+					!parse_int(fields[4], result.value.focus.remaining_nodes) ||
+					!parse_int(fields[5], result.value.focus.total_nodes) ||
+					!parse_bool(fields[6], result.value.focus.has_branches) ||
+					!parse_bool(fields[7], result.value.focus.progress_known) ||
+					!decode_field(fields[8], result.value.focus.source) ||
+					result.value.focus.completed_nodes < 0 ||
+					result.value.focus.remaining_nodes < 0 ||
+					result.value.focus.total_nodes < 0)
 					return fail(line_number, "invalid FOCUS record");
+				if (result.value.focus.progress_known &&
+					(result.value.focus.task_id <= 0 ||
+						result.value.focus.total_nodes <= 0 ||
+						result.value.focus.completed_nodes +
+							result.value.focus.remaining_nodes + 1 !=
+							result.value.focus.total_nodes))
+					return fail(line_number, "inconsistent FOCUS progress");
+			}
+			else if (fields[0] == "PROGRESS")
+			{
+				if (fields.size() != 8 ||
+					result.value.progress.size() >= max_progress_records)
+					return fail(line_number, "invalid or excessive PROGRESS record");
+				progress_record record;
+				if (!parse_int64(fields[1], record.task_id) ||
+					!parse_int64(fields[2], record.task_line_id) ||
+					!parse_int(fields[3], record.completed_nodes) ||
+					!parse_int(fields[4], record.remaining_nodes) ||
+					!parse_int(fields[5], record.total_nodes) ||
+					!parse_bool(fields[6], record.has_branches) ||
+					!parse_bool(fields[7], record.progress_known) ||
+					record.completed_nodes < 0 ||
+					record.remaining_nodes < 0 ||
+					record.total_nodes < 0)
+					return fail(line_number, "invalid PROGRESS fields");
+				if (record.progress_known &&
+					(record.task_id <= 0 ||
+						record.total_nodes <= 0 ||
+						record.completed_nodes +
+							record.remaining_nodes + 1 != record.total_nodes))
+					return fail(line_number, "inconsistent PROGRESS progress");
+				result.value.progress.push_back(std::move(record));
+			}
+			else if (fields[0] == "NODE")
+			{
+				if (fields.size() != 14 ||
+					result.value.task_nodes.size() >= max_task_nodes)
+					return fail(line_number, "invalid or excessive NODE record");
+				task_node_record record;
+				if (!parse_int64(fields[1], record.task_line_id) ||
+					!parse_int64(fields[2], record.task_id) ||
+					!parse_int64(fields[3], record.parent_task_id) ||
+					!parse_int(fields[4], record.depth) ||
+					!parse_int(fields[5], record.order) ||
+					!parse_int(fields[6], record.status) ||
+					!parse_bool(fields[7], record.held) ||
+					!parse_bool(fields[8], record.selected_path) ||
+					!parse_bool(fields[9], record.branch) ||
+					!parse_bool(fields[10], record.status_inferred) ||
+					!parse_bool(fields[11], record.subtask_edge) ||
+					!decode_field(fields[12], record.name) ||
+					!decode_field(fields[13], record.description) ||
+					record.task_line_id <= 0 ||
+					record.task_id <= 0 ||
+					record.parent_task_id < 0 ||
+					record.depth < 0 ||
+					record.order <= 0 ||
+					record.status < -1 ||
+					record.status > 4)
+					return fail(line_number, "invalid NODE fields");
+				result.value.task_nodes.push_back(std::move(record));
 			}
 			else if (fields[0] == "EVENT")
 			{

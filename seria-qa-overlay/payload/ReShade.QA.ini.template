@@ -16,3 +16,4 @@ ProxyLibrary=
 [SeriaQAOverlay]
 HudVisible=1
 HudOpacity=78
+HomeOpensFullReShade=0

@@ -113,7 +113,8 @@ try {
             throw "Seria QA runtime Lua sources are incomplete."
         }
 
-        & $lua (Join-Path $root "Test-TaskQADiagnostics.lua") $generatedSnapshot $scriptRoot
+        & $lua (Join-Path $root "Test-TaskQADiagnostics.lua") `
+            $generatedSnapshot $scriptRoot $taskDiagnosticsSource
         if ($LASTEXITCODE -ne 0) {
             throw "Lua snapshot integration test failed."
         }

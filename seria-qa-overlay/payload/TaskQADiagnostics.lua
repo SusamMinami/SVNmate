@@ -8,11 +8,14 @@ local NavigationGuideManager = require "UI.NavigationGuide.NavigationGuideManage
 local TaskStatus = require "Protocols.ProtoLua.game.taskModule.TaskStatus".Create()
 
 local TaskCfg = SeriaCfg.Mission
+local DialogStartCfg = SeriaCfg.DialogStart or {}
+local ComplexChatCfg = SeriaCfg.ComplexChat or {}
 
-local SchemaVersion = 2
+local SchemaVersion = 6
 local SnapshotPrefix = "SeriaQAOverlay."
 local MaxEvents = 64
 local MaxProgressNodes = 4096
+local MaxTaskNodes = 1024
 
 local StatusNames = {
     [TaskStatus.NONE_] = "none",
@@ -81,6 +84,34 @@ end
 local function ResolveStaticTaskName(TaskId)
     local Row = TaskCfg[TaskId]
     return Row and tostring(Row.Name or "") or ""
+end
+
+local function IsCountedTask(TaskId)
+    local Row = TaskCfg[TaskId]
+    return Row and (tostring(Row.Name or "") ~= "" or tostring(Row.Description or "") ~= "")
+end
+
+-- Resolves configured successors/subtasks on one task, honoring the player's
+-- selected branch indexes and reporting whether unresolved branches remain.
+local function ResolveLinks(TaskManager, TaskId, Row)
+    local NextTaskIds, SubTaskIds = TaskManager.SplitSubtask(Row.Subtask)
+    local HasBranches = false
+    local SelectedIndexes = TaskManager.NextIndexesByTaskID[TaskId]
+    if SelectedIndexes and #SelectedIndexes > 0 then
+        local SelectedTaskIds = {}
+        for _, Index in ipairs(SelectedIndexes) do
+            if NextTaskIds[Index] then
+                table.insert(SelectedTaskIds, NextTaskIds[Index])
+            end
+        end
+        NextTaskIds = SelectedTaskIds
+    elseif #NextTaskIds > 1 then
+        HasBranches = true
+    end
+    if #SubTaskIds > 1 then
+        HasBranches = true
+    end
+    return NextTaskIds, SubTaskIds, HasBranches
 end
 
 local function GetTaskRecord(TaskManager, TaskInfo, Source, ShownTaskIds)
@@ -202,14 +233,17 @@ local function BuildFocusRecord(TaskManager, TaskRecords, Navigation, Dialogue, 
         return {
             TaskId = 0,
             TaskLineId = 0,
+            CompletedNodes = 0,
             RemainingNodes = 0,
+            TotalNodes = 0,
             HasBranches = false,
+            ProgressKnown = false,
             Source = "",
         }
     end
 
     local RemainingNodes = 0
-    local HasBranches = false
+    local RemainingHasBranches = false
     local Visited = {[Focused.TaskId] = true}
     local Queue = {Focused.TaskId}
     local Head = 1
@@ -222,8 +256,7 @@ local function BuildFocusRecord(TaskManager, TaskRecords, Navigation, Dialogue, 
         end
         Visited[TaskId] = true
         table.insert(Queue, TaskId)
-        local Row = TaskCfg[TaskId]
-        if Row and (tostring(Row.Name or "") ~= "" or tostring(Row.Description or "") ~= "") then
+        if IsCountedTask(TaskId) then
             RemainingNodes = RemainingNodes + 1
         end
     end
@@ -233,22 +266,8 @@ local function BuildFocusRecord(TaskManager, TaskRecords, Navigation, Dialogue, 
         Head = Head + 1
         local Row = TaskCfg[TaskId]
         if Row then
-            local NextTaskIds, SubTaskIds = TaskManager.SplitSubtask(Row.Subtask)
-            local SelectedIndexes = TaskManager.NextIndexesByTaskID[TaskId]
-            if SelectedIndexes and #SelectedIndexes > 0 then
-                local SelectedTaskIds = {}
-                for _, Index in ipairs(SelectedIndexes) do
-                    if NextTaskIds[Index] then
-                        table.insert(SelectedTaskIds, NextTaskIds[Index])
-                    end
-                end
-                NextTaskIds = SelectedTaskIds
-            elseif #NextTaskIds > 1 then
-                HasBranches = true
-            end
-            if #SubTaskIds > 1 then
-                HasBranches = true
-            end
+            local NextTaskIds, SubTaskIds, HasBranches = ResolveLinks(TaskManager, TaskId, Row)
+            RemainingHasBranches = RemainingHasBranches or HasBranches
             for _, TaskIdToAdd in ipairs(NextTaskIds) do
                 Enqueue(TaskIdToAdd)
             end
@@ -258,13 +277,378 @@ local function BuildFocusRecord(TaskManager, TaskRecords, Navigation, Dialogue, 
         end
     end
 
+    local CompletedNodes = 0
+    local ProgressKnown = false
+    local PathHasBranches = false
+    local StartSuccess, FirstTaskId = pcall(
+        TaskManager.GetFirstTaskIDOfTaskLine, Focused.TaskLineId)
+    FirstTaskId = StartSuccess and SafeNumber(FirstTaskId) or 0
+    if FirstTaskId > 0 and TaskCfg[FirstTaskId] then
+        local PathQueue = {{
+            TaskId = FirstTaskId,
+            CompletedNodes = 0,
+            HasBranches = false,
+        }}
+        local PathHead = 1
+        local PathVisited = {}
+        local Processed = 0
+        while PathHead <= #PathQueue and Processed < MaxProgressNodes do
+            local Candidate = PathQueue[PathHead]
+            PathHead = PathHead + 1
+            if not PathVisited[Candidate.TaskId] then
+                PathVisited[Candidate.TaskId] = true
+                Processed = Processed + 1
+                if Candidate.TaskId == Focused.TaskId then
+                    CompletedNodes = Candidate.CompletedNodes
+                    PathHasBranches = Candidate.HasBranches
+                    ProgressKnown = true
+                    break
+                end
+
+                local Row = TaskCfg[Candidate.TaskId]
+                if Row then
+                    local NextTaskIds, SubTaskIds, HasBranches =
+                        ResolveLinks(TaskManager, Candidate.TaskId, Row)
+                    local CompletedBeforeNext = Candidate.CompletedNodes +
+                        (IsCountedTask(Candidate.TaskId) and 1 or 0)
+                    local function EnqueuePath(TaskId)
+                        TaskId = SafeNumber(TaskId)
+                        if TaskId > 0
+                            and not PathVisited[TaskId]
+                            and GetTaskLineId(TaskManager, TaskId) == Focused.TaskLineId then
+                            table.insert(PathQueue, {
+                                TaskId = TaskId,
+                                CompletedNodes = CompletedBeforeNext,
+                                HasBranches = Candidate.HasBranches or HasBranches,
+                            })
+                        end
+                    end
+                    for _, TaskIdToAdd in ipairs(NextTaskIds) do
+                        EnqueuePath(TaskIdToAdd)
+                    end
+                    for _, TaskIdToAdd in ipairs(SubTaskIds) do
+                        EnqueuePath(TaskIdToAdd)
+                    end
+                end
+            end
+        end
+    end
+
     return {
         TaskId = Focused.TaskId,
         TaskLineId = Focused.TaskLineId,
+        CompletedNodes = CompletedNodes,
         RemainingNodes = RemainingNodes,
-        HasBranches = HasBranches,
+        TotalNodes = ProgressKnown and (CompletedNodes + RemainingNodes + 1) or 0,
+        HasBranches = RemainingHasBranches or PathHasBranches,
+        ProgressKnown = ProgressKnown,
         Source = Source,
     }
+end
+
+-- Builds one structural progress record per unique held task id. Tasks on the
+-- same task line share a single walk from the line root for completed counts;
+-- each task then gets its own forward walk for remaining nodes.
+local function BuildProgressRecords(TaskManager, TaskRecords)
+    local Result = {}
+    local SeenTask = {}
+    local OrderedLineIds = {}
+    local TasksByLine = {}
+
+    for _, Record in ipairs(TaskRecords) do
+        local TaskId = SafeNumber(Record.TaskId)
+        if not SeenTask[TaskId] then
+            SeenTask[TaskId] = true
+            local LineId = SafeNumber(Record.TaskLineId)
+            if LineId > 0 then
+                if not TasksByLine[LineId] then
+                    TasksByLine[LineId] = {}
+                    table.insert(OrderedLineIds, LineId)
+                end
+                table.insert(TasksByLine[LineId], Record)
+            else
+                table.insert(Result, {
+                    TaskId = TaskId,
+                    TaskLineId = 0,
+                    CompletedNodes = 0,
+                    RemainingNodes = 0,
+                    TotalNodes = 0,
+                    HasBranches = false,
+                    ProgressKnown = false,
+                })
+            end
+        end
+    end
+
+    for _, LineId in ipairs(OrderedLineIds) do
+        local LineRecords = TasksByLine[LineId]
+        local StartSuccess, FirstTaskId = pcall(
+            TaskManager.GetFirstTaskIDOfTaskLine, LineId)
+        FirstTaskId = StartSuccess and SafeNumber(FirstTaskId) or 0
+
+        local CompletedAt = {}
+        local BranchesAt = {}
+        if FirstTaskId > 0 and TaskCfg[FirstTaskId] then
+            local PathQueue = {{
+                TaskId = FirstTaskId,
+                CompletedNodes = 0,
+                HasBranches = false,
+            }}
+            local PathHead = 1
+            local PathVisited = {}
+            local Processed = 0
+            while PathHead <= #PathQueue and Processed < MaxProgressNodes do
+                local Candidate = PathQueue[PathHead]
+                PathHead = PathHead + 1
+                if not PathVisited[Candidate.TaskId] then
+                    PathVisited[Candidate.TaskId] = true
+                    Processed = Processed + 1
+                    CompletedAt[Candidate.TaskId] = Candidate.CompletedNodes
+                    BranchesAt[Candidate.TaskId] = Candidate.HasBranches
+
+                    local Row = TaskCfg[Candidate.TaskId]
+                    if Row then
+                        local NextTaskIds, SubTaskIds, HasBranches =
+                            ResolveLinks(TaskManager, Candidate.TaskId, Row)
+                        local CompletedBeforeNext = Candidate.CompletedNodes +
+                            (IsCountedTask(Candidate.TaskId) and 1 or 0)
+                        local function EnqueuePath(TaskId)
+                            TaskId = SafeNumber(TaskId)
+                            if TaskId > 0 and not PathVisited[TaskId]
+                                and GetTaskLineId(TaskManager, TaskId) == LineId then
+                                table.insert(PathQueue, {
+                                    TaskId = TaskId,
+                                    CompletedNodes = CompletedBeforeNext,
+                                    HasBranches = Candidate.HasBranches or HasBranches,
+                                })
+                            end
+                        end
+                        for _, TaskIdToAdd in ipairs(NextTaskIds) do
+                            EnqueuePath(TaskIdToAdd)
+                        end
+                        for _, TaskIdToAdd in ipairs(SubTaskIds) do
+                            EnqueuePath(TaskIdToAdd)
+                        end
+                    end
+                end
+            end
+        end
+
+        for _, Focused in ipairs(LineRecords) do
+            local CompletedNodes = SafeNumber(CompletedAt[Focused.TaskId])
+            local ProgressKnown = CompletedAt[Focused.TaskId] ~= nil
+            local RemainingNodes = 0
+            local RemainingHasBranches = false
+
+            local Visited = {[Focused.TaskId] = true}
+            local Queue = {Focused.TaskId}
+            local Head = 1
+            local function Enqueue(TaskId)
+                TaskId = SafeNumber(TaskId)
+                if TaskId <= 0 or Visited[TaskId]
+                    or GetTaskLineId(TaskManager, TaskId) ~= LineId then
+                    return
+                end
+                Visited[TaskId] = true
+                table.insert(Queue, TaskId)
+                if IsCountedTask(TaskId) then
+                    RemainingNodes = RemainingNodes + 1
+                end
+            end
+
+            while Head <= #Queue and Head <= MaxProgressNodes do
+                local TaskId = Queue[Head]
+                Head = Head + 1
+                local Row = TaskCfg[TaskId]
+                if Row then
+                    local NextTaskIds, SubTaskIds, HasBranches =
+                        ResolveLinks(TaskManager, TaskId, Row)
+                    RemainingHasBranches = RemainingHasBranches or HasBranches
+                    for _, TaskIdToAdd in ipairs(NextTaskIds) do
+                        Enqueue(TaskIdToAdd)
+                    end
+                    for _, TaskIdToAdd in ipairs(SubTaskIds) do
+                        Enqueue(TaskIdToAdd)
+                    end
+                end
+            end
+
+            table.insert(Result, {
+                TaskId = Focused.TaskId,
+                TaskLineId = LineId,
+                CompletedNodes = CompletedNodes,
+                RemainingNodes = RemainingNodes,
+                TotalNodes = ProgressKnown and (CompletedNodes + RemainingNodes + 1) or 0,
+                HasBranches = RemainingHasBranches
+                    or BranchesAt[Focused.TaskId] == true,
+                ProgressKnown = ProgressKnown,
+            })
+        end
+    end
+
+    table.sort(Result, function(A, B)
+        if A.TaskId ~= B.TaskId then
+            return A.TaskId < B.TaskId
+        end
+        return A.TaskLineId < B.TaskLineId
+    end)
+    return Result
+end
+
+-- Expands every held task line from its configured root. Exact held/cached
+-- statuses are preferred; otherwise completed predecessors are inferred locally
+-- from the configured path to each held task.
+local function BuildTaskNodeRecords(TaskManager, TaskRecords)
+    local Result = {}
+    local Truncated = false
+    local HeldStatusByTaskId = {}
+    local LineIds = {}
+    local SeenLine = {}
+
+    for _, Record in ipairs(TaskRecords) do
+        if HeldStatusByTaskId[Record.TaskId] == nil
+            or Record.Status == TaskStatus.PROCESSING then
+            HeldStatusByTaskId[Record.TaskId] = Record.Status
+        end
+        if Record.TaskLineId > 0 and not SeenLine[Record.TaskLineId] then
+            SeenLine[Record.TaskLineId] = true
+            table.insert(LineIds, Record.TaskLineId)
+        end
+    end
+    table.sort(LineIds)
+
+    local function ResolveStatus(TaskId)
+        local HeldStatus = HeldStatusByTaskId[TaskId]
+        if HeldStatus ~= nil then
+            return HeldStatus, true
+        end
+        if TaskManager.GetTaskStatusById then
+            local Success, Status = pcall(TaskManager.GetTaskStatusById, TaskId)
+            if Success and Status ~= nil then
+                return SafeNumber(Status), false, false
+            end
+        end
+        return TaskStatus.NONE_, false, false
+    end
+
+    for _, LineId in ipairs(LineIds) do
+        if #Result >= MaxTaskNodes then
+            Truncated = true
+            break
+        end
+
+        local StartSuccess, FirstTaskId = pcall(
+            TaskManager.GetFirstTaskIDOfTaskLine, LineId)
+        FirstTaskId = StartSuccess and SafeNumber(FirstTaskId) or 0
+        local Queue = FirstTaskId > 0 and {{
+            TaskId = FirstTaskId,
+            ParentTaskId = 0,
+            Depth = 0,
+            SelectedPath = true,
+            Branch = false,
+            SubTaskEdge = false,
+        }} or {}
+        local Head = 1
+        local Visited = {}
+        local NodeByTaskId = {}
+
+        local function Enqueue(
+            TaskId, ParentTaskId, Depth, SelectedPath, Branch, SubTaskEdge)
+            TaskId = SafeNumber(TaskId)
+            if TaskId <= 0 or Visited[TaskId]
+                or GetTaskLineId(TaskManager, TaskId) ~= LineId then
+                return
+            end
+            table.insert(Queue, {
+                TaskId = TaskId,
+                ParentTaskId = ParentTaskId,
+                Depth = Depth,
+                SelectedPath = SelectedPath,
+                Branch = Branch,
+                SubTaskEdge = SubTaskEdge,
+            })
+        end
+
+        while Head <= #Queue do
+            if #Result >= MaxTaskNodes then
+                Truncated = true
+                break
+            end
+
+            local Candidate = Queue[Head]
+            Head = Head + 1
+            if not Visited[Candidate.TaskId] then
+                Visited[Candidate.TaskId] = true
+                local Row = TaskCfg[Candidate.TaskId]
+                if Row then
+                    local Status, Held = ResolveStatus(Candidate.TaskId)
+                    local Record = {
+                        TaskLineId = LineId,
+                        TaskId = Candidate.TaskId,
+                        ParentTaskId = Candidate.ParentTaskId,
+                        Depth = Candidate.Depth,
+                        Order = #Result + 1,
+                        Status = Status,
+                        Held = Held,
+                        SelectedPath = Candidate.SelectedPath,
+                        Branch = Candidate.Branch,
+                        StatusInferred = false,
+                        SubTaskEdge = Candidate.SubTaskEdge,
+                        Name = tostring(Row.Name or ""),
+                        Description = tostring(Row.Description or ""),
+                    }
+                    table.insert(Result, Record)
+                    NodeByTaskId[Candidate.TaskId] = Record
+
+                    local NextTaskIds, SubTaskIds =
+                        TaskManager.SplitSubtask(Row.Subtask)
+                    local SelectedIndexes = TaskManager.NextIndexesByTaskID[Candidate.TaskId]
+                    local HasSelectedIndexes =
+                        SelectedIndexes ~= nil and #SelectedIndexes > 0
+                    local SelectedIndexMap = {}
+                    for _, Index in ipairs(SelectedIndexes or {}) do
+                        SelectedIndexMap[Index] = true
+                    end
+
+                    for Index, TaskId in ipairs(NextTaskIds) do
+                        local EdgeSelected = not HasSelectedIndexes
+                            or SelectedIndexMap[Index] == true
+                        Enqueue(TaskId, Candidate.TaskId, Candidate.Depth + 1,
+                            Candidate.SelectedPath and EdgeSelected,
+                            #NextTaskIds > 1, false)
+                    end
+                    for _, TaskId in ipairs(SubTaskIds) do
+                        Enqueue(TaskId, Candidate.TaskId, Candidate.Depth + 1,
+                            Candidate.SelectedPath, #SubTaskIds > 1, true)
+                    end
+                end
+            end
+        end
+
+        for _, HeldRecord in ipairs(TaskRecords) do
+            if HeldRecord.TaskLineId == LineId then
+                local Current = NodeByTaskId[HeldRecord.TaskId]
+                local PathVisited = {}
+                while Current and Current.ParentTaskId > 0
+                    and not PathVisited[Current.TaskId] do
+                    PathVisited[Current.TaskId] = true
+                    local Parent = NodeByTaskId[Current.ParentTaskId]
+                    if not Parent then
+                        break
+                    end
+                    if not Current.SubTaskEdge
+                        and not Parent.Held
+                        and Parent.Status == TaskStatus.NONE_ then
+                        Parent.Status = TaskStatus.FINISHED
+                        Parent.StatusInferred = true
+                    end
+                    Current = Parent
+                end
+            end
+        end
+    end
+
+    return Result, Truncated
 end
 
 local function BuildNextRecords(TaskManager, TaskRecords)
@@ -361,6 +745,8 @@ local function BuildDialogueRecord()
         CurrentId = 0,
         TaskId = SafeNumber(DialogManager.TaskID),
         TaskLineId = SafeNumber(DialogManager.TaskLineId),
+        ComplexChat = false,
+        CameraDialog = false,
     }
 
     local StartSuccess, StartId = pcall(DialogManager.GetStartDialogID, DialogManager)
@@ -371,6 +757,9 @@ local function BuildDialogueRecord()
     if CurrentSuccess then
         Result.CurrentId = SafeNumber(CurrentId)
     end
+    Result.ComplexChat = ComplexChatCfg[Result.StartId] ~= nil
+    local DialogStart = DialogStartCfg[Result.StartId]
+    Result.CameraDialog = DialogStart ~= nil and DialogStart.Virtual == true
     return Result
 end
 
@@ -486,6 +875,10 @@ function TaskQADiagnostics:OnDialogueEvent(Args, Reason)
     self:MarkDirty(Reason)
 end
 
+function TaskQADiagnostics:OnTaskStatusReceived()
+    self:MarkDirty("task_status")
+end
+
 function TaskQADiagnostics:UpdateKnownTasks(TaskRecords)
     local Current = {}
     for _, Record in ipairs(TaskRecords) do
@@ -525,6 +918,9 @@ function TaskQADiagnostics:Flush()
     local Dialogue = BuildDialogueRecord()
     local Focus = BuildFocusRecord(
         TaskManager, TaskRecords, Navigation, Dialogue, self.FocusedTaskId)
+    local ProgressRecords = BuildProgressRecords(TaskManager, TaskRecords)
+    local TaskNodeRecords, TaskNodesTruncated =
+        BuildTaskNodeRecords(TaskManager, TaskRecords)
     self:UpdateKnownTasks(TaskRecords)
 
     self.Sequence = self.Sequence + 1
@@ -555,7 +951,8 @@ function TaskQADiagnostics:Flush()
         EscapeField(table.concat(Reasons, ",")),
     }, "\t"))
 
-    AddLine("META", BoolText(TaskManager.bReceiveTaskList), Counts.Server, Counts.Client)
+    AddLine("META", BoolText(TaskManager.bReceiveTaskList), Counts.Server, Counts.Client,
+        BoolText(TaskNodesTruncated))
 
     for _, Record in ipairs(TaskRecords) do
         AddLine("TASK", Record.TaskId, Record.TaskLineId, Record.Status, Record.TaskClass,
@@ -576,9 +973,25 @@ function TaskQADiagnostics:Flush()
     AddLine("NAV", BoolText(Navigation.GuideActive), BoolText(Navigation.AutoMoving),
         Navigation.TaskId, Navigation.MapId, Navigation.TargetType, Navigation.TargetId)
     AddLine("DIALOG", BoolText(Dialogue.Active), Dialogue.StartId, Dialogue.CurrentId,
-        Dialogue.TaskId, Dialogue.TaskLineId)
-    AddLine("FOCUS", Focus.TaskId, Focus.TaskLineId, Focus.RemainingNodes,
-        BoolText(Focus.HasBranches), Focus.Source)
+        Dialogue.TaskId, Dialogue.TaskLineId, BoolText(Dialogue.ComplexChat),
+        BoolText(Dialogue.CameraDialog))
+    AddLine("FOCUS", Focus.TaskId, Focus.TaskLineId, Focus.CompletedNodes,
+        Focus.RemainingNodes, Focus.TotalNodes, BoolText(Focus.HasBranches),
+        BoolText(Focus.ProgressKnown), Focus.Source)
+
+    for _, Record in ipairs(ProgressRecords) do
+        AddLine("PROGRESS", Record.TaskId, Record.TaskLineId, Record.CompletedNodes,
+            Record.RemainingNodes, Record.TotalNodes, BoolText(Record.HasBranches),
+            BoolText(Record.ProgressKnown))
+    end
+
+    for _, Record in ipairs(TaskNodeRecords) do
+        AddLine("NODE", Record.TaskLineId, Record.TaskId, Record.ParentTaskId,
+            Record.Depth, Record.Order, Record.Status, BoolText(Record.Held),
+            BoolText(Record.SelectedPath), BoolText(Record.Branch),
+            BoolText(Record.StatusInferred), BoolText(Record.SubTaskEdge),
+            Record.Name, Record.Description)
+    end
 
     for _, Record in ipairs(self.Events) do
         AddLine("EVENT", Record.Sequence, Record.TimeMs, Record.Kind, Record.TaskId,
@@ -627,6 +1040,10 @@ function TaskQADiagnostics.Init(TaskManager)
     TaskManager.OnTaskLineFinishedEvent:Add(TaskQADiagnostics.OnTaskLineFinished, TaskQADiagnostics)
     TaskManager.OnTaskListInitedEvent:Add(TaskQADiagnostics.OnTaskListInited, TaskQADiagnostics)
     TaskManager.TaskLineStateChangeEvent:Add(TaskQADiagnostics.OnRefreshTask, TaskQADiagnostics)
+    if TaskManager.TaskStatusReceivedEvent then
+        TaskManager.TaskStatusReceivedEvent:Add(
+            TaskQADiagnostics.OnTaskStatusReceived, TaskQADiagnostics)
+    end
     TaskManager.AllNPCRemoveTaskEvent:Add(TaskQADiagnostics.OnReset, TaskQADiagnostics)
 
     NavigationGuideManager.PostAddPathEvent:Add(TaskQADiagnostics.OnNavigationEvent, TaskQADiagnostics, "guide_add")

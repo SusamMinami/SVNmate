@@ -48,6 +48,13 @@ function Build-Package {
         if ([string]$manifest.packageId -eq "seria-qa-overlay") {
             Copy-Item -LiteralPath (Join-Path $PSScriptRoot "QUICK_START_CN.txt") `
                 -Destination $packageRoot -Force
+            foreach ($guiFile in @(
+                "Install-SeriaQA-GUI.cmd",
+                "Install-SeriaQA-GUI.ps1"
+            )) {
+                Copy-Item -LiteralPath (Join-Path $PSScriptRoot $guiFile) `
+                    -Destination $packageRoot -Force
+            }
         }
         else {
             Copy-Item -LiteralPath (Join-Path $PSScriptRoot "DLSS5_UPDATE_AUDIT_2026-09-17.md") `

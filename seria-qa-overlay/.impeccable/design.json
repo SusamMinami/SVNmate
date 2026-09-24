@@ -1,0 +1,143 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-23T16:31:17.2375795+08:00",
+  "title": "Design System: Seria QA Overlay",
+  "extensions": {
+    "colorMeta": {
+      "window": {"role":"neutral","displayName":"Charcoal Window","tonalRamp":["oklch(15% 0.0048 286.03)","oklch(27% 0.0048 286.03)","oklch(39% 0.0048 286.03)","oklch(51% 0.0048 286.03)","oklch(63% 0.0048 286.03)","oklch(75% 0.0048 286.03)","oklch(87% 0.0048 286.03)","oklch(95% 0.0048 286.03)"]},
+      "panel": {"role":"neutral","displayName":"Inset Panel","tonalRamp":["oklch(15% 0.0047 286.08)","oklch(27% 0.0047 286.08)","oklch(39% 0.0047 286.08)","oklch(51% 0.0047 286.08)","oklch(63% 0.0047 286.08)","oklch(75% 0.0047 286.08)","oklch(87% 0.0047 286.08)","oklch(95% 0.0047 286.08)"]},
+      "text": {"role":"neutral","displayName":"Readable White","tonalRamp":["oklch(15% 0.0034 286.34)","oklch(27% 0.0034 286.34)","oklch(39% 0.0034 286.34)","oklch(51% 0.0034 286.34)","oklch(63% 0.0034 286.34)","oklch(75% 0.0034 286.34)","oklch(87% 0.0034 286.34)","oklch(95% 0.0034 286.34)"]},
+      "muted": {"role":"neutral","displayName":"Muted Gray","tonalRamp":["oklch(15% 0.0077 264.52)","oklch(27% 0.0077 264.52)","oklch(39% 0.0077 264.52)","oklch(51% 0.0077 264.52)","oklch(63% 0.0077 264.52)","oklch(75% 0.0077 264.52)","oklch(87% 0.0077 264.52)","oklch(95% 0.0077 264.52)"]},
+      "accent": {"role":"primary","displayName":"Soft Blue","tonalRamp":["oklch(15% 0.0607 252.50)","oklch(27% 0.0607 252.50)","oklch(39% 0.0607 252.50)","oklch(51% 0.0607 252.50)","oklch(63% 0.0607 252.50)","oklch(75% 0.0607 252.50)","oklch(87% 0.0607 252.50)","oklch(95% 0.0607 252.50)"]},
+      "warning": {"role":"secondary","displayName":"Muted Amber","tonalRamp":["oklch(15% 0.0808 82.24)","oklch(27% 0.0808 82.24)","oklch(39% 0.0808 82.24)","oklch(51% 0.0808 82.24)","oklch(63% 0.0808 82.24)","oklch(75% 0.0808 82.24)","oklch(87% 0.0808 82.24)","oklch(95% 0.0808 82.24)"]},
+      "error": {"role":"tertiary","displayName":"Soft Red","tonalRamp":["oklch(15% 0.1015 23.44)","oklch(27% 0.1015 23.44)","oklch(39% 0.1015 23.44)","oklch(51% 0.1015 23.44)","oklch(63% 0.1015 23.44)","oklch(75% 0.1015 23.44)","oklch(87% 0.1015 23.44)","oklch(95% 0.1015 23.44)"]},
+      "rule": {"role":"neutral","displayName":"Rules","tonalRamp":["oklch(15% 0.0084 286.02)","oklch(27% 0.0084 286.02)","oklch(39% 0.0084 286.02)","oklch(51% 0.0084 286.02)","oklch(63% 0.0084 286.02)","oklch(75% 0.0084 286.02)","oklch(87% 0.0084 286.02)","oklch(95% 0.0084 286.02)"]},
+      "selected": {"role":"primary","displayName":"Selected Blue","tonalRamp":["oklch(15% 0.0395 255.74)","oklch(27% 0.0395 255.74)","oklch(39% 0.0395 255.74)","oklch(51% 0.0395 255.74)","oklch(63% 0.0395 255.74)","oklch(75% 0.0395 255.74)","oklch(87% 0.0395 255.74)","oklch(95% 0.0395 255.74)"]},
+      "tile-hover": {"role":"neutral","displayName":"Tile Hover","tonalRamp":["oklch(15% 0.0233 260.67)","oklch(27% 0.0233 260.67)","oklch(39% 0.0233 260.67)","oklch(51% 0.0233 260.67)","oklch(63% 0.0233 260.67)","oklch(75% 0.0233 260.67)","oklch(87% 0.0233 260.67)","oklch(95% 0.0233 260.67)"]},
+      "active": {"role":"primary","displayName":"Active Blue","tonalRamp":["oklch(15% 0.0447 251.71)","oklch(27% 0.0447 251.71)","oklch(39% 0.0447 251.71)","oklch(51% 0.0447 251.71)","oklch(63% 0.0447 251.71)","oklch(75% 0.0447 251.71)","oklch(87% 0.0447 251.71)","oklch(95% 0.0447 251.71)"]},
+      "frame": {"role":"neutral","displayName":"Frame","tonalRamp":["oklch(15% 0.0088 285.93)","oklch(27% 0.0088 285.93)","oklch(39% 0.0088 285.93)","oklch(51% 0.0088 285.93)","oklch(63% 0.0088 285.93)","oklch(75% 0.0088 285.93)","oklch(87% 0.0088 285.93)","oklch(95% 0.0088 285.93)"]},
+      "frame-active": {"role":"neutral","displayName":"Active Frame","tonalRamp":["oklch(15% 0.0246 254.09)","oklch(27% 0.0246 254.09)","oklch(39% 0.0246 254.09)","oklch(51% 0.0246 254.09)","oklch(63% 0.0246 254.09)","oklch(75% 0.0246 254.09)","oklch(87% 0.0246 254.09)","oklch(95% 0.0246 254.09)"]},
+      "button": {"role":"neutral","displayName":"Button","tonalRamp":["oklch(15% 0.0087 285.96)","oklch(27% 0.0087 285.96)","oklch(39% 0.0087 285.96)","oklch(51% 0.0087 285.96)","oklch(63% 0.0087 285.96)","oklch(75% 0.0087 285.96)","oklch(87% 0.0087 285.96)","oklch(95% 0.0087 285.96)"]},
+      "button-hover": {"role":"neutral","displayName":"Hovered Button","tonalRamp":["oklch(15% 0.0178 264.38)","oklch(27% 0.0178 264.38)","oklch(39% 0.0178 264.38)","oklch(51% 0.0178 264.38)","oklch(63% 0.0178 264.38)","oklch(75% 0.0178 264.38)","oklch(87% 0.0178 264.38)","oklch(95% 0.0178 264.38)"]},
+      "tile-border": {"role":"neutral","displayName":"Tile Border","tonalRamp":["oklch(15% 0.0084 286.03)","oklch(27% 0.0084 286.03)","oklch(39% 0.0084 286.03)","oklch(51% 0.0084 286.03)","oklch(63% 0.0084 286.03)","oklch(75% 0.0084 286.03)","oklch(87% 0.0084 286.03)","oklch(95% 0.0084 286.03)"]}
+    },
+    "typographyMeta": {
+      "title": {"displayName":"Workspace Title","purpose":"角色任务; relative to the host base font."},
+      "hud-title": {"displayName":"HUD Title","purpose":"当前任务; relative to the host base font."},
+      "heading": {"displayName":"Section Heading","purpose":"Inspector, events, and diagnostic headings."},
+      "body": {"displayName":"Host Body","purpose":"Chinese/Latin task identity, metadata, controls, and descriptions."}
+    },
+    "shadows": [],
+    "motion": [],
+    "breakpoints": [
+      {"name":"browser-side-by-side-available-width","value":"48 * ImGui::GetFontSize()"},
+      {"name":"search-filter-inline-available-width","value":"21 * ImGui::GetFontSize()"}
+    ]
+  },
+  "components": [
+    {
+      "name": "Clipboard Button",
+      "kind": "button",
+      "refersTo": "button",
+      "description": "Illustration of the native copy-list button; the native action copies filtered TSV records, but this snippet does not access the clipboard.",
+      "html": "<button class=\"ds-copy\" type=\"button\">复制列表</button>",
+      "css": ".ds-copy { font: inherit; color: rgb(94% 94% 95%); background: rgb(24% 24% 26%); border: 0; border-radius: 2px; padding: 3px 6px; } .ds-copy:hover { background: rgb(32% 34% 38%); } .ds-copy:focus-visible { outline: 1px solid rgb(64% 76% 90%); outline-offset: 2px; } .ds-copy:active { background: rgb(30% 38% 47%); } .ds-copy:disabled { color: rgb(72% 73% 75%); }"
+    },
+    {
+      "name": "Search and Filter",
+      "kind": "input",
+      "refersTo": "search",
+      "description": "Native ID/name search and seven record filters. The snippet illustrates wrapping controls, not working task filtering.",
+      "html": "<div class=\"ds-searchbar\"><input class=\"ds-search\" type=\"text\" aria-label=\"搜索编号或任务名称\" placeholder=\"搜索编号或任务名称\" /><select class=\"ds-filter\" aria-label=\"任务筛选\"><option>全部记录</option><option>进行中</option><option>已追踪</option><option>已完成 / 提交</option><option>异常</option><option>服务端</option><option>客户端</option></select></div>",
+      "css": ".ds-searchbar { display: flex; flex-wrap: wrap; gap: 4px 7px; padding: 9px 10px; background: rgb(15% 15% 16% / .98); font: inherit; } .ds-search, .ds-filter { font: inherit; color: rgb(94% 94% 95%); background: rgb(22% 22% 24%); border: 0; border-radius: 2px; padding: 3px 6px; } .ds-search { flex: 1 1 12em; min-width: 0; } .ds-filter { flex: 0 1 9em; max-width: 100%; } .ds-search::placeholder { color: rgb(72% 73% 75%); } .ds-search:hover, .ds-filter:hover { background: rgb(29% 29% 31%); } .ds-search:focus-visible, .ds-filter:focus-visible { outline: 1px solid rgb(64% 76% 90%); background: rgb(30% 34% 39%); } .ds-filter:active { background: rgb(30% 34% 39%); }"
+    },
+    {
+      "name": "Workspace Tabs",
+      "kind": "nav",
+      "refersTo": "tab-selected",
+      "description": "Five native tabs with a blue selected fill and overline. Graphics is optional, so the runtime may show four. This illustration fixes the first tab as selected; it does not implement navigation.",
+      "html": "<div class=\"ds-tabs\" role=\"tablist\" aria-label=\"任务工具\"><button class=\"ds-tab\" type=\"button\" role=\"tab\" aria-selected=\"true\">全部任务</button><button class=\"ds-tab\" type=\"button\" role=\"tab\" aria-selected=\"false\" tabindex=\"-1\">最近变化</button><button class=\"ds-tab\" type=\"button\" role=\"tab\" aria-selected=\"false\" tabindex=\"-1\">GM 工具</button><button class=\"ds-tab\" type=\"button\" role=\"tab\" aria-selected=\"false\" tabindex=\"-1\">画面诊断</button><button class=\"ds-tab\" type=\"button\" role=\"tab\" aria-selected=\"false\" tabindex=\"-1\">显示设置</button></div>",
+      "css": ".ds-tabs { display: flex; gap: 7px; overflow-x: auto; border-bottom: 1px solid rgb(29% 29% 31%); background: rgb(12% 12% 13% / .96); font: inherit; } .ds-tab { font: inherit; white-space: nowrap; color: rgb(94% 94% 95%); background: rgb(15% 15% 16% / .98); border: 0; border-top: 1px solid transparent; padding: 3px 6px; } .ds-tab[aria-selected=true] { background: rgb(24% 30% 38%); border-top-color: rgb(64% 76% 90%); } .ds-tab:hover { background: rgb(30% 34% 39%); } .ds-tab:focus-visible { outline: 1px solid rgb(64% 76% 90%); outline-offset: -1px; } .ds-tab:active { background: rgb(30% 34% 39%); }"
+    },
+    {
+      "name": "GM Allowlist Tables",
+      "kind": "custom",
+      "refersTo": "button",
+      "description": "Three dense two-column native command tables separate diagnosis from approved state operations. Every action maps to a compiled allowlist entry; destructive kill is a red direct action with its current-room scope stated beside it.",
+      "html": "<section class=\"ds-gm\" aria-label=\"GM 工具\"><p class=\"ds-gm-note\">仅提供已审核的固定白名单，不提供自由文本。</p><h3>任务诊断</h3><div class=\"ds-gm-row\"><button type=\"button\">打印当前任务</button><span>输出当前任务及可见、隐藏任务关系。<small>PrintCurrentTask · 客户端 · 日志</small></span></div><h3>位置与场景</h3><div class=\"ds-gm-row\"><button type=\"button\">查看角色朝向</button><span>显示主角当前 Pitch、Yaw、Roll。<small>GetRotation · 客户端 · 屏幕与聊天</small></span></div><h3>状态操作</h3><p class=\"ds-gm-warning\">以下操作会改变动画、角色或当前战斗场景状态。</p><div class=\"ds-gm-row\"><button type=\"button\">为自己添加 Buff</button><span>按 Buff ID 和层数添加 Buff。<small>AddBuff · 场景服 · 修改角色状态</small></span></div><div class=\"ds-gm-row\"><button class=\"is-danger\" type=\"button\">击杀当前房间敌人</button><span>单击提交；作用于当前房间内与玩家阵营敌对的所有怪物。<small>kill · 场景服 · 高风险</small></span></div></section>",
+      "css": ".ds-gm { padding: 9px 10px; color: rgb(94% 94% 95%); background: rgb(12% 12% 13% / .96); font: inherit; } .ds-gm-note { margin: 0 0 9px; color: rgb(72% 73% 75%); } .ds-gm-warning { margin: 0 0 5px; color: rgb(87% 75% 53%); } .ds-gm h3 { margin: 12px 0 4px; font: inherit; color: rgb(94% 94% 95%); } .ds-gm-row { display: grid; grid-template-columns: minmax(150px, 210px) 1fr; gap: 10px; padding: 7px 0; border-top: 1px solid rgb(29% 29% 31%); } .ds-gm-row button { align-self: start; font: inherit; color: rgb(94% 94% 95%); background: rgb(24% 24% 26%); border: 0; border-radius: 2px; padding: 4px 7px; } .ds-gm-row button:hover { background: rgb(32% 34% 38%); } .ds-gm-row button:focus-visible { outline: 1px solid rgb(64% 76% 90%); outline-offset: 2px; } .ds-gm-row button:active { background: rgb(30% 38% 47%); } .ds-gm-row button.is-danger { background: rgb(36% 14% 14%); } .ds-gm-row button.is-danger:hover { background: rgb(48% 18% 18%); } .ds-gm-row small { display: block; margin-top: 3px; color: rgb(72% 73% 75%); }"
+    },
+    {
+      "name": "Selected Task Tile",
+      "kind": "card",
+      "refersTo": "task-tile-selected",
+      "description": "Illustrative record, not captured task data: ID and completion percentage on the top row, then name and status/source. Native selection uses ID plus origin and opens local inspection only.",
+      "html": "<div class=\"ds-tile-surface\"><button class=\"ds-tile\" type=\"button\" aria-pressed=\"true\" aria-label=\"示例任务，100001，服务端，进行中，完成度 25%\"><span class=\"ds-tile-idrow\"><span class=\"ds-tile-id\">100001</span><span class=\"ds-tile-pct\">25%</span></span><span class=\"ds-tile-name\">示例任务</span><span class=\"ds-tile-meta\">进行中 · 服务端</span></button></div>",
+      "css": ".ds-tile-surface { background: rgb(15% 15% 16% / .98); padding: 9px 10px; font: inherit; } .ds-tile { position: relative; display: block; width: 100%; min-width: 60px; height: calc(3em + 24px); padding: 10px; border: 0; text-align: left; font: inherit; line-height: 1em; color: rgb(94% 94% 95%); background: transparent; } .ds-tile::after { content: ''; position: absolute; inset: 0; border: 1px solid rgb(30% 30% 32%); border-radius: 4px; pointer-events: none; } .ds-tile[aria-pressed=true] { background: rgb(24% 30% 38%); } .ds-tile[aria-pressed=true]::after { border-color: rgb(64% 76% 90%); } .ds-tile:hover { background: rgb(29% 32% 37%); } .ds-tile:active { background: rgb(30% 38% 47%); } .ds-tile:focus-visible { outline: 1px solid rgb(64% 76% 90%); outline-offset: 2px; } .ds-tile-idrow { display: flex; align-items: start; justify-content: space-between; gap: 8px; height: 1em; } .ds-tile-id { color: rgb(72% 73% 75%); } .ds-tile-pct { color: rgb(64% 76% 90%); } .ds-tile-name, .ds-tile-meta { display: block; margin-top: 3px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; } .ds-tile-meta { color: rgb(64% 76% 90%); }"
+    },
+    {
+      "name": "Task Progress Ring",
+      "kind": "custom",
+      "refersTo": "accent",
+      "description": "Illustrates the native 72px HUD ring; the inspector uses the same visual grammar at 88px. The completed arc is soft blue, milestone points are capped at 12, the first incomplete point is amber, and unknown progress renders --.",
+      "html": "<div class=\"ds-progress\" role=\"img\" aria-label=\"任务线进度 43%，已完成 3 / 7 个配置节点\"><div class=\"ds-ring\"><span class=\"ds-ring-label\">43%</span><i class=\"ds-point ds-point-1\"></i><i class=\"ds-point ds-point-2\"></i><i class=\"ds-point ds-point-3\"></i><i class=\"ds-point ds-point-4\"></i></div><div class=\"ds-progress-copy\"><strong>已完成 3 / 7 个配置节点</strong><span>后续 3 个节点</span></div></div>",
+      "css": ".ds-progress { display: flex; align-items: center; gap: 10px; padding: 9px 10px; color: rgb(94% 94% 95%); background: rgb(12% 12% 13% / .96); font: inherit; } .ds-ring { position: relative; flex: 0 0 72px; width: 72px; height: 72px; border-radius: 50%; background: conic-gradient(from -90deg, rgb(64% 76% 90%) 0 43%, rgb(29% 29% 31%) 43% 100%); } .ds-ring::after { content: ''; position: absolute; inset: 9px; border-radius: 50%; background: rgb(12% 12% 13%); } .ds-ring-label { position: absolute; z-index: 2; inset: 0; display: grid; place-items: center; } .ds-point { position: absolute; z-index: 3; width: 7px; height: 7px; margin: -3.5px; border: 1px solid rgb(15% 15% 16%); border-radius: 50%; background: rgb(64% 76% 90%); } .ds-point-1 { left: 50%; top: 0; } .ds-point-2 { right: 3px; top: 26%; } .ds-point-3 { right: 3px; bottom: 26%; background: rgb(87% 75% 53%); } .ds-point-4 { left: 50%; bottom: 0; background: rgb(38% 39% 41%); } .ds-progress-copy { display: grid; gap: 4px; min-width: 0; } .ds-progress-copy strong { font-weight: 400; } .ds-progress-copy span { color: rgb(72% 73% 75%); }"
+    },
+    {
+      "name": "Task Chip Queue",
+      "kind": "chip",
+      "refersTo": "task-tile-selected",
+      "description": "A compact non-interactive HUD queue. Each chip combines the bracketed ID and task name in one tinted block; chips wrap to at most two rows and overflow into a +N chip. Tasks changed in the last 12 seconds move first and use semantic color; the current task follows in cyan, then active, traced, and unchanged tasks.",
+      "html": "<section class=\"ds-activity\" aria-label=\"任务状态\"><div class=\"ds-activity-row\"><span class=\"ds-chip is-change\">[100101] 示例任务</span><span class=\"ds-chip is-current\">[100204] 当前任务</span><span class=\"ds-chip is-error\">[100306] 失败任务</span><span class=\"ds-chip\">[100408] 普通任务</span><span class=\"ds-chip ds-activity-more\">+6</span></div></section>",
+      "css": ".ds-activity { padding: 9px 10px; color: rgb(94% 94% 95%); background: rgb(12% 12% 13% / .96); font: inherit; } .ds-activity-row { display: flex; flex-wrap: wrap; gap: 4px 6px; max-height: calc(2 * (1em + 7px) + 4px); overflow: hidden; } .ds-chip { box-sizing: border-box; display: inline-flex; align-items: center; padding: 3.5px 8px; border: 1px solid rgb(30% 30% 32%); border-radius: 4px; color: rgb(72% 73% 75%); white-space: nowrap; } .ds-chip.is-change { color: rgb(87% 75% 53%); border-color: currentColor; background: rgb(87% 75% 53% / .16); } .ds-chip.is-current { color: rgb(64% 76% 90%); border-color: currentColor; background: rgb(64% 76% 90% / .16); } .ds-chip.is-error { color: rgb(95% 62% 60%); border-color: currentColor; background: rgb(95% 62% 60% / .16); } .ds-activity-more { color: rgb(72% 73% 75%); }"
+    },
+    {
+      "name": "Windows Installer",
+      "kind": "custom",
+      "refersTo": "button",
+      "description": "A single dense WinForms work surface for target discovery, HUD preferences, install/update, verify-only, status, and logs. It uses the same charcoal and muted-blue system as the overlay.",
+      "html": "<section class=\"ds-installer\" aria-label=\"Seria QA Overlay 安装与配置\"><h2>Seria QA Overlay</h2><p>安装、更新并配置游戏内任务工具</p><fieldset><legend>游戏目录</legend><div class=\"ds-path\"><input value=\"C:\\\\trunk\\\\bin\\\\WindowsNoEditor\\\\Client\\\\Seria\\\\Binaries\\\\Win64\" /><button>浏览...</button><button>自动检测</button></div></fieldset><fieldset><legend>显示设置</legend><label><input type=\"checkbox\" checked />显示左上角任务窗口</label><label class=\"ds-opacity\">背景不透明度<input type=\"range\" min=\"25\" max=\"100\" value=\"78\" /><span>78%</span></label></fieldset><div class=\"ds-installer-actions\"><button class=\"is-primary\">安装 / 更新</button><button>仅校验</button><button>关闭</button></div><output>准备就绪</output><pre>选择游戏目录后，可安装更新或只校验现有文件。</pre></section>",
+      "css": ".ds-installer { padding: 18px; color: rgb(94% 94% 95%); background: rgb(12% 12% 13% / .96); font: inherit; } .ds-installer h2 { margin: 0 0 3px; font-size: 1.35em; } .ds-installer > p, .ds-installer output { color: rgb(72% 73% 75%); } .ds-installer fieldset { margin: 14px 0 0; padding: 10px; border: 1px solid rgb(30% 30% 32%); background: rgb(15% 15% 16% / .98); } .ds-path { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; } .ds-installer input, .ds-installer button { font: inherit; color: rgb(94% 94% 95%); background: rgb(22% 22% 24%); border: 1px solid rgb(30% 30% 32%); border-radius: 2px; padding: 5px 8px; } .ds-opacity { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; margin-top: 10px; } .ds-installer-actions { display: flex; justify-content: end; gap: 7px; margin: 14px 0; } .ds-installer button.is-primary { background: rgb(30% 38% 47%); border-color: rgb(64% 76% 90%); } .ds-installer pre { min-height: 130px; margin: 8px 0 0; padding: 8px; color: rgb(94% 94% 95%); background: rgb(9% 9% 10%); border: 1px solid rgb(30% 30% 32%); white-space: pre-wrap; }"
+    },
+    {
+      "name": "HUD Display Settings",
+      "kind": "custom",
+      "refersTo": "opacity-setting",
+      "description": "Native visibility checkbox and 25-100% background-opacity slider, initially 78%. Browser controls illustrate appearance only; they do not persist preferences or change the game.",
+      "html": "<section class=\"ds-settings\" aria-label=\"显示设置\"><label class=\"ds-visible\"><input class=\"ds-check\" type=\"checkbox\" checked />显示左上角任务窗口</label><label class=\"ds-visible\"><input class=\"ds-check\" type=\"checkbox\" />Home 显示完整 ReShade 页面</label><label class=\"ds-opacity-label\">背景不透明度<input class=\"ds-opacity\" type=\"range\" min=\"25\" max=\"100\" value=\"78\" aria-label=\"背景不透明度，25% 至 100%\" /></label><p class=\"ds-setting-note\">默认 78%，范围 25-100%。数值越低，背景越透明。</p></section>",
+      "css": ".ds-settings { font: inherit; color: rgb(94% 94% 95%); background: rgb(12% 12% 13% / .96); border-radius: 3px; padding: 9px 10px; } .ds-visible { display: flex; gap: 7px; align-items: center; } .ds-check { accent-color: rgb(64% 76% 90%); } .ds-opacity-label { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin-top: 4px; } .ds-opacity { appearance: none; width: min(260px, 55%); height: 1em; background: rgb(22% 22% 24%); border-radius: 2px; } .ds-opacity:hover { background: rgb(29% 29% 31%); } .ds-opacity:active { background: rgb(30% 34% 39%); } .ds-opacity::-webkit-slider-thumb { appearance: none; width: 10px; height: 1em; border: 0; border-radius: 2px; background: rgb(72% 73% 75%); } .ds-opacity:active::-webkit-slider-thumb { background: rgb(64% 76% 90%); } .ds-opacity::-moz-range-thumb { width: 10px; height: 1em; border: 0; border-radius: 2px; background: rgb(72% 73% 75%); } .ds-opacity:active::-moz-range-thumb { background: rgb(64% 76% 90%); } .ds-opacity:focus-visible, .ds-check:focus-visible { outline: 1px solid rgb(64% 76% 90%); outline-offset: 2px; } .ds-check:hover { outline: 1px solid rgb(72% 73% 75%); } .ds-setting-note { margin: 4px 0 0; color: rgb(72% 73% 75%); }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Practical Task Browser",
+    "overview": "A plain Windows/ReShade ImGui tool for identifying held tasks by id, name, and completion percentage. Neutral gray surfaces, readable text, restrained blue selection, and native controls replace the explicitly rejected cyberpunk / industrial identity.",
+    "keyCharacteristics": [
+      "All held records are browsable, including hidden tasks and subtasks.",
+      "Search, filters, local selection, and clipboard actions support inspection.",
+      "Fixed task, location/scene, and explicitly approved GM actions are available without arbitrary command input.",
+      "A native Windows GUI installs, verifies, and configures the QA package while preserving the CLI automation entry.",
+      "A compact non-interactive HUD exposes current progress and recent task changes during gameplay.",
+      "In QA-only installs, Home opens a dedicated task workspace without ReShade's general-purpose tabs."
+    ],
+    "rules": [
+      {
+        "name": "State Is Text",
+        "body": "Pair state colors with explicit labels; id and name identify a record, while color only reinforces its state.",
+        "section": "colors"
+      }
+    ],
+    "dos": [
+      "Do keep id, name, and completion visible as the task identity.",
+      "Do preserve all-held-record browsing and distinguish client/server identity.",
+      "Do use native controls and font-relative responsive layout.",
+      "Do label retained data and provide actionable recovery guidance.",
+      "Do keep recent task changes visible without requiring the interactive workspace."
+    ],
+    "donts": [
+      "Don't restore neon, cyberpunk titles, decorative gutters, or dashboard chrome.",
+      "Don't mutate quests, in-game tracking, or graphics configuration through inspection controls.",
+      "Don't treat HTML illustrations as native screenshots or runtime verification.",
+      "Don't fabricate a percentage when the task-line root cannot be resolved."
+    ]
+  }
+}

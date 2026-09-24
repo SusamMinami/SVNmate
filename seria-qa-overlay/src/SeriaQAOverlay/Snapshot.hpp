@@ -58,15 +58,49 @@ namespace seria_qa
 		int64_t current_id = 0;
 		int64_t task_id = 0;
 		int64_t task_line_id = 0;
+		bool complex_chat = false;
+		bool camera_dialog = false;
 	};
 
 	struct focus_record
 	{
 		int64_t task_id = 0;
 		int64_t task_line_id = 0;
+		int completed_nodes = 0;
 		int remaining_nodes = 0;
+		int total_nodes = 0;
 		bool has_branches = false;
+		bool progress_known = false;
 		std::string source;
+	};
+
+	// Per-task structural progress, one record per unique held task id.
+	struct progress_record
+	{
+		int64_t task_id = 0;
+		int64_t task_line_id = 0;
+		int completed_nodes = 0;
+		int remaining_nodes = 0;
+		int total_nodes = 0;
+		bool has_branches = false;
+		bool progress_known = false;
+	};
+
+	struct task_node_record
+	{
+		int64_t task_line_id = 0;
+		int64_t task_id = 0;
+		int64_t parent_task_id = 0;
+		int depth = 0;
+		int order = 0;
+		int status = 0;
+		bool held = false;
+		bool selected_path = false;
+		bool branch = false;
+		bool status_inferred = false;
+		bool subtask_edge = false;
+		std::string name;
+		std::string description;
 	};
 
 	struct event_record
@@ -89,12 +123,15 @@ namespace seria_qa
 		bool task_list_ready = false;
 		int server_task_count = 0;
 		int client_task_count = 0;
+		bool task_nodes_truncated = false;
 		std::vector<task_record> tasks;
 		std::vector<next_record> next;
 		std::vector<trace_record> traces;
 		navigation_record navigation;
 		dialogue_record dialogue;
 		focus_record focus;
+		std::vector<progress_record> progress;
+		std::vector<task_node_record> task_nodes;
 		std::vector<event_record> events;
 	};
 

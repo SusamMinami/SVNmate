@@ -58,6 +58,18 @@ Copy-Item -LiteralPath (Join-Path $PSScriptRoot ([string]$manifest.installerCmd)
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot ([string]$manifest.restoreCmd)) `
     -Destination $recoveryRoot -Force
 
+if ([string]$manifest.packageId -eq "seria-qa-overlay") {
+    foreach ($guiFile in @(
+        "Install-SeriaQA-GUI.cmd",
+        "Install-SeriaQA-GUI.ps1"
+    )) {
+        $guiSource = Join-Path $PSScriptRoot $guiFile
+        if (Test-Path -LiteralPath $guiSource -PathType Leaf) {
+            Copy-Item -LiteralPath $guiSource -Destination $recoveryRoot -Force
+        }
+    }
+}
+
 $readmeSource = Join-Path $PSScriptRoot ([string]$manifest.readme)
 if (-not (Test-Path -LiteralPath $readmeSource -PathType Leaf)) {
     $readmeSource = Join-Path $PSScriptRoot "README.txt"

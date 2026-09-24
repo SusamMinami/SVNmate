@@ -3,7 +3,12 @@ param(
     [string]$TargetPath = "",
     [string]$ManifestPath = "",
     [switch]$Yes,
-    [switch]$VerifyOnly
+    [switch]$VerifyOnly,
+    [ValidateSet("Default", "On", "Off")]
+    [string]$HudVisibility = "Default",
+    [int]$HudOpacity = -1,
+    [ValidateSet("Default", "On", "Off")]
+    [string]$FullReShadeHome = "Default"
 )
 
 Set-StrictMode -Version Latest
@@ -210,6 +215,52 @@ function Get-IniValue {
     return $null
 }
 
+function Get-EffectiveIniValues {
+    param([object]$Manifest)
+
+    foreach ($setting in @($Manifest.iniValues)) {
+        $value = [string]$setting.value
+        $onlyIfMissing = (
+            $setting.PSObject.Properties.Name -contains "onlyIfMissing" -and
+            [bool]$setting.onlyIfMissing
+        )
+        $verifyExact = (
+            $setting.PSObject.Properties.Name -contains "verifyExact" -and
+            [bool]$setting.verifyExact
+        )
+
+        if ([string]$Manifest.packageId -eq "seria-qa-overlay" -and
+            [string]$setting.section -eq "SeriaQAOverlay") {
+            if ([string]$setting.key -eq "HudVisible" -and
+                $HudVisibility -ne "Default") {
+                $value = if ($HudVisibility -eq "On") { "1" } else { "0" }
+                $onlyIfMissing = $false
+                $verifyExact = $true
+            }
+            elseif ([string]$setting.key -eq "HudOpacity" -and
+                $HudOpacity -ne -1) {
+                $value = [string]$HudOpacity
+                $onlyIfMissing = $false
+                $verifyExact = $true
+            }
+            elseif ([string]$setting.key -eq "HomeOpensFullReShade" -and
+                $FullReShadeHome -ne "Default") {
+                $value = if ($FullReShadeHome -eq "On") { "1" } else { "0" }
+                $onlyIfMissing = $false
+                $verifyExact = $true
+            }
+        }
+
+        [pscustomobject]@{
+            section = [string]$setting.section
+            key = [string]$setting.key
+            value = $value
+            onlyIfMissing = $onlyIfMissing
+            verifyExact = $verifyExact
+        }
+    }
+}
+
 function Test-Installed {
     param(
         [object]$Manifest,
@@ -259,7 +310,7 @@ function Test-Installed {
         $errors.Add("Missing: ReShade.ini")
     }
     else {
-        foreach ($setting in @($Manifest.iniValues)) {
+        foreach ($setting in @(Get-EffectiveIniValues -Manifest $Manifest)) {
             $value = Get-IniValue -Path $iniPath -Section ([string]$setting.section) -Key ([string]$setting.key)
             if ($null -eq $value) {
                 $errors.Add("ReShade.ini is missing [$($setting.section)] $($setting.key)")
@@ -293,6 +344,10 @@ function Test-Installed {
 
 try {
     New-Item -ItemType Directory -Path $logRoot -Force | Out-Null
+
+    if ($HudOpacity -ne -1 -and ($HudOpacity -lt 25 -or $HudOpacity -gt 100)) {
+        throw "HudOpacity must be -1 (keep current/default) or between 25 and 100."
+    }
 
     if (-not (Test-Path -LiteralPath $ManifestPath -PathType Leaf)) {
         throw "Manifest not found: $ManifestPath"
@@ -455,7 +510,7 @@ try {
         Copy-Item -LiteralPath $iniTemplate -Destination $iniPath
     }
 
-    foreach ($setting in @($manifest.iniValues)) {
+    foreach ($setting in @(Get-EffectiveIniValues -Manifest $manifest)) {
         $arguments = @{
             Path = $iniPath
             Section = [string]$setting.section
