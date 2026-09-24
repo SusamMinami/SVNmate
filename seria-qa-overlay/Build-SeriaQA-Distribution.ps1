@@ -50,7 +50,8 @@ function Build-Package {
                 -Destination $packageRoot -Force
             foreach ($guiFile in @(
                 "Install-SeriaQA-GUI.cmd",
-                "Install-SeriaQA-GUI.ps1"
+                "Install-SeriaQA-GUI.ps1",
+                "SeriaQA-SelfUpdate.ps1"
             )) {
                 Copy-Item -LiteralPath (Join-Path $PSScriptRoot $guiFile) `
                     -Destination $packageRoot -Force

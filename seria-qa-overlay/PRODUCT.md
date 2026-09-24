@@ -29,7 +29,8 @@ It combines authoritative quest state from the game's existing Lua task manager 
   installed add-ons. A persisted desktop/in-game switch restores the complete
   ReShade surface without requiring a second daily-use shortcut.
 - Manual installation uses a native Windows GUI with direct path entry/paste,
-  optional target discovery, install, verification, and HUD preferences;
+  bounded target discovery from an approximate trunk location, install,
+  verification, completion feedback, daily update checks, and HUD preferences;
   SVNmate automation retains the CLI entry.
 - Task browsing, selection, export, status queries, and snapshots remain
   read-only by default. Task mutations may be added one command at a time after
@@ -67,8 +68,10 @@ It combines authoritative quest state from the game's existing Lua task manager 
 - The QA ZIP includes both GUI and CLI installers backed by the same verified
   PowerShell core. GUI configuration must not fork installation behavior.
 - The fixed release channel also publishes a single self-extracting Setup EXE
-  for manual users. It embeds that QA ZIP, opens the same GUI, and removes its
-  temporary extraction after the GUI exits; SVNmate continues to consume ZIP.
+  for manual users. It embeds that QA ZIP, runs its packaged GUI CMD entry, and
+  removes its temporary extraction after the GUI exits. The GUI checks the same
+  fixed channel at most once per local day and can launch the SHA-256 verified
+  next Setup; SVNmate continues to consume ZIP.
 - The current DLSS5 DX11 bridge package remains independently replaceable; the task UI must not make bridge failure affect quest logic.
 - Product name: Seria QA Overlay.
 - Lua-to-addon transport: validated double-buffered UTF-8 snapshots under

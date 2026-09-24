@@ -308,8 +308,10 @@ persistent recovery directories and desktop shortcuts.
 
 Planner distribution includes a portable ZIP and a single self-extracting GUI
 Setup EXE. The EXE embeds the exact QA ZIP, extracts it to a unique temporary
-directory, starts `Install-SeriaQA-GUI.ps1`, waits for the GUI to exit, and then
-removes the temporary files. The ZIP remains the authoritative SVNmate and
+directory, validates that the CMD, PowerShell GUI, and package manifest exist,
+then starts `Install-SeriaQA-GUI.cmd` in a synchronous host mode. The CMD waits
+for the GUI to exit before the EXE removes the temporary files. Ordinary CMD
+launches remain detached. The ZIP remains the authoritative SVNmate and
 automation payload. Both paths accept `Seria.exe`, the `Seria\Binaries\Win64`
 directory, or a supported game root, write no registry state, back up differing
 files, and perform post-copy verification.
@@ -318,12 +320,32 @@ Manual users launch `Install-SeriaQA-GUI.cmd`, which starts a DPI-aware WinForms
 surface in STA mode. The GUI starts without silently selecting an inferred
 target, accepts direct typing or clipboard paste of a game root, `Seria.exe`, or
 Win64 directory, and keeps browse plus explicit auto-detect as optional actions.
-It validates the path inline, accepts HUD visibility, Home surface preference,
-and 25-100% opacity, and runs `Install-SeriaTool.ps1` asynchronously with
-redirected output. Install, verify-only, and persistent-recovery steps remain
-in the existing scripts.
+Auto-detect treats the current text as a location hint: it checks the hint and
+its ancestors, then searches at most four nearby directory levels and 1500
+directories before falling back to the launch argument, `SERIA_TRUNK`, and
+`%SystemDrive%\trunk`. It validates the path inline, accepts HUD visibility,
+Home surface preference, and 25-100% opacity, and runs `Install-SeriaTool.ps1`
+asynchronously with redirected output. After install verification and optional
+persistent-recovery publication both succeed, the GUI displays a modal
+completion notice with the resolved target. Install, verify-only, and
+persistent-recovery steps remain in the existing scripts.
 `Install-SeriaQA.cmd` remains the machine-facing entry point required by
 SVNmate.
+
+The GUI runs one asynchronous update check per local calendar day. A clickable
+status dot beside the bottom-left version label replaces a separate update
+button: green is current, red has an update, blue is busy, amber is a failed
+check, and gray is unchecked. Tooltip and accessibility text carry the same
+meaning without relying on color. Clicking red downloads the update; clicking
+another idle state retries the check. It reads only the fixed
+`seria-qa-overlay-latest/module-manifest.json` channel. The manifest keeps the
+SVNmate ZIP URL/hash and also publishes `setup_url` plus `setup_sha256`.
+`SeriaQA-SelfUpdate.ps1` requires HTTPS, the exact GitHub repository/tag path,
+the expected Setup filename, a 64-character SHA-256, and the existing package
+id/entrypoint. A newer version is shown inline; downloading is user-initiated.
+After hash verification, the downloaded Setup is launched from LocalAppData
+with the current resolved target path. Network or update failures do not block
+manual installation or verification.
 
 SVNmate consumes the QA ZIP through the fixed `seria-qa-overlay-latest`
 release channel. It validates the updater manifest, HTTPS URL, archive SHA-256,

@@ -14,7 +14,8 @@ $releaseNotes = @"
 Manual installation: download the asset ending in -Setup.exe, exit Seria, and
 double-click it to open the graphical installer.
 
-SVNmate and automated updates use module-manifest.json and the ZIP asset.
+The graphical installer checks this fixed channel once per day and can download
+the next SHA-256 verified Setup directly. SVNmate uses the same manifest and ZIP.
 "@
 $sourceManifestPath = Join-Path $PSScriptRoot "manifest.json"
 $sourceManifest = Get-Content -LiteralPath $sourceManifestPath -Raw |
@@ -70,12 +71,21 @@ $downloadUrl = (
     "https://github.com/$repository/releases/download/" +
     "$releaseTag/$archiveName"
 )
+$setupSha256 = (
+    Get-FileHash -LiteralPath $setupPath -Algorithm SHA256
+).Hash.ToLowerInvariant()
+$setupDownloadUrl = (
+    "https://github.com/$repository/releases/download/" +
+    "$releaseTag/$setupName"
+)
 $moduleManifest = [ordered]@{
     id = "seria-qa-overlay"
     version = [string]$sourceManifest.moduleVersion
     download_url = $downloadUrl
     sha256 = $sha256
     entrypoint = [string]$sourceManifest.installerCmd
+    setup_url = $setupDownloadUrl
+    setup_sha256 = $setupSha256
 } | ConvertTo-Json
 $moduleManifestPath = Join-Path $dist "module-manifest.json"
 [IO.File]::WriteAllText(

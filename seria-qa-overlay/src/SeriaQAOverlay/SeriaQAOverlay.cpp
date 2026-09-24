@@ -35,7 +35,7 @@ namespace
 {
 	using seria_qa::snapshot;
 
-	constexpr char addon_version[] = "0.12.0";
+	constexpr char addon_version[] = "0.13.1";
 	constexpr ULONGLONG snapshot_poll_interval_ms = 100;
 	constexpr ULONGLONG diagnostics_poll_interval_ms = 1000;
 	constexpr ULONGLONG task_change_highlight_ms = 12'000;

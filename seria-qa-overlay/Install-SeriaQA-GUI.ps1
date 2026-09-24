@@ -3,6 +3,7 @@ param(
     [string]$ManifestPath = "",
     [string]$TargetPath = "",
     [switch]$SkipRecovery,
+    [switch]$SkipUpdateCheck,
     [switch]$ValidateOnly
 )
 
@@ -152,31 +153,121 @@ public sealed class SeriaQaForm : Form
         ApplyContentBounds();
     }
 }
+
+public sealed class SeriaQaStatusDot : Control
+{
+    private Color fillColor = Color.Gray;
+
+    public Color FillColor
+    {
+        get { return fillColor; }
+        set
+        {
+            fillColor = value;
+            Invalidate();
+        }
+    }
+
+    public SeriaQaStatusDot()
+    {
+        SetStyle(
+            ControlStyles.AllPaintingInWmPaint |
+            ControlStyles.OptimizedDoubleBuffer |
+            ControlStyles.ResizeRedraw |
+            ControlStyles.UserPaint,
+            true);
+        AccessibleRole = AccessibleRole.PushButton;
+        Cursor = Cursors.Hand;
+        TabStop = true;
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        base.OnPaint(e);
+        e.Graphics.SmoothingMode =
+            System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        Rectangle circle = new Rectangle(3, 3, Width - 7, Height - 7);
+        Color border = Enabled
+            ? Color.FromArgb(96, 0, 0, 0)
+            : SystemColors.GrayText;
+        using (Brush brush = new SolidBrush(
+            Enabled ? fillColor : SystemColors.GrayText))
+        using (Pen pen = new Pen(border, 1.0f))
+        {
+            e.Graphics.FillEllipse(brush, circle);
+            e.Graphics.DrawEllipse(pen, circle);
+        }
+        if (Focused && ShowFocusCues)
+            ControlPaint.DrawFocusRectangle(e.Graphics, ClientRectangle);
+    }
+
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        base.OnKeyDown(e);
+        if (e.KeyCode == Keys.Enter || e.KeyCode == Keys.Space)
+        {
+            OnClick(EventArgs.Empty);
+            e.Handled = true;
+        }
+    }
+}
 "@
 [System.Windows.Forms.Application]::EnableVisualStyles()
 [System.Windows.Forms.Application]::SetCompatibleTextRenderingDefault($false)
 
 $toolRoot = $PSScriptRoot
-if ([string]::IsNullOrWhiteSpace($ManifestPath)) {
-    $ManifestPath = Join-Path $toolRoot "manifest.qa.json"
-    if (-not (Test-Path -LiteralPath $ManifestPath -PathType Leaf)) {
-        $ManifestPath = Join-Path $toolRoot "manifest.json"
+function Resolve-QAManifestPath {
+    param(
+        [string]$Root,
+        [string]$RequestedPath
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($RequestedPath)) {
+        $candidate = if ([IO.Path]::IsPathRooted($RequestedPath)) {
+            $RequestedPath
+        }
+        else {
+            Join-Path $Root $RequestedPath
+        }
+        return [IO.Path]::GetFullPath($candidate)
     }
+
+    $probe = [IO.DirectoryInfo][IO.Path]::GetFullPath($Root)
+    for ($depth = 0; $depth -lt 3 -and $null -ne $probe; $depth++) {
+        foreach ($name in @("manifest.qa.json", "manifest.json")) {
+            $candidate = Join-Path $probe.FullName $name
+            if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+                return [IO.Path]::GetFullPath($candidate)
+            }
+        }
+        $probe = $probe.Parent
+    }
+    return [IO.Path]::GetFullPath((Join-Path $Root "manifest.json"))
 }
-elseif (-not [IO.Path]::IsPathRooted($ManifestPath)) {
-    $ManifestPath = Join-Path $toolRoot $ManifestPath
-}
-$ManifestPath = [IO.Path]::GetFullPath($ManifestPath)
+
+$ManifestPath = Resolve-QAManifestPath `
+    -Root $toolRoot `
+    -RequestedPath $ManifestPath
 
 $installerPath = Join-Path $toolRoot "Install-SeriaTool.ps1"
 if (-not (Test-Path -LiteralPath $installerPath -PathType Leaf)) {
     $installerPath = Join-Path $toolRoot "Reapply-DLSS5.ps1"
 }
 $recoveryPath = Join-Path $toolRoot "Publish-Persistent-Recovery.ps1"
+$selfUpdatePath = Join-Path $toolRoot "SeriaQA-SelfUpdate.ps1"
+$updateStateRoot = Join-Path (
+    [Environment]::GetFolderPath("LocalApplicationData")
+) "SVNmate\SeriaQAOverlay"
+$updateStatePath = Join-Path $updateStateRoot "update-state.json"
+$updateDownloadPath = Join-Path $updateStateRoot "updates"
 
 try {
     if (-not (Test-Path -LiteralPath $ManifestPath -PathType Leaf)) {
-        throw "安装清单不存在：$ManifestPath"
+        throw (
+            "安装清单不存在：$ManifestPath`r`n`r`n" +
+            "请直接双击完整的 Seria QA Overlay Setup.exe。不要在 ZIP " +
+            "压缩包预览中单独运行 CMD 或 PS1；如需解压，请先完整解压全部文件。"
+        )
     }
     if (-not (Test-Path -LiteralPath $installerPath -PathType Leaf)) {
         throw "安装核心不存在：$installerPath"
@@ -231,8 +322,119 @@ function Resolve-TargetCandidate {
     return $null
 }
 
+function Find-TargetFromHint {
+    param(
+        [string]$HintPath,
+        [int]$MaxDepth = 4,
+        [int]$MaxDirectories = 1500
+    )
+
+    if ([string]::IsNullOrWhiteSpace($HintPath)) {
+        return $null
+    }
+
+    $resolved = Resolve-TargetCandidate $HintPath
+    if ($null -ne $resolved) {
+        return $resolved
+    }
+
+    try {
+        $expanded = [Environment]::ExpandEnvironmentVariables(
+            $HintPath.Trim().Trim('"')
+        )
+        $fullHint = [IO.Path]::GetFullPath($expanded)
+    }
+    catch {
+        return $null
+    }
+
+    $probe = $fullHint
+    if (Test-Path -LiteralPath $probe -PathType Leaf) {
+        $probe = Split-Path -Parent $probe
+    }
+
+    $searchRoot = $null
+    while (-not [string]::IsNullOrWhiteSpace($probe)) {
+        $resolved = Resolve-TargetCandidate $probe
+        if ($null -ne $resolved) {
+            return $resolved
+        }
+        if ($null -eq $searchRoot -and
+            (Test-Path -LiteralPath $probe -PathType Container)) {
+            $searchRoot = $probe
+        }
+
+        $parent = Split-Path -Parent $probe
+        if ([string]::IsNullOrWhiteSpace($parent) -or
+            [string]::Equals(
+                $parent,
+                $probe,
+                [StringComparison]::OrdinalIgnoreCase
+            )) {
+            break
+        }
+        $probe = $parent
+    }
+
+    if ([string]::IsNullOrWhiteSpace($searchRoot)) {
+        return $null
+    }
+
+    $pending = New-Object System.Collections.Queue
+    $pending.Enqueue([pscustomobject]@{
+        Path = $searchRoot
+        Depth = 0
+    })
+    $visited = @{}
+    $directoryCount = 0
+
+    while ($pending.Count -gt 0 -and $directoryCount -lt $MaxDirectories) {
+        $current = $pending.Dequeue()
+        $currentPath = [string]$current.Path
+        if ($visited.ContainsKey($currentPath)) {
+            continue
+        }
+        $visited[$currentPath] = $true
+        $directoryCount++
+
+        $resolved = Resolve-TargetCandidate $currentPath
+        if ($null -ne $resolved) {
+            return $resolved
+        }
+        if ([int]$current.Depth -ge $MaxDepth) {
+            continue
+        }
+
+        $children = @(
+            Get-ChildItem -LiteralPath $currentPath -Directory -Force `
+                -ErrorAction SilentlyContinue |
+                Where-Object {
+                    -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint)
+                } |
+                Sort-Object `
+                    @{ Expression = {
+                        if ($_.Name -ieq "trunk") { 0 } else { 1 }
+                    } },
+                    Name
+        )
+        foreach ($child in $children) {
+            $pending.Enqueue([pscustomobject]@{
+                Path = $child.FullName
+                Depth = [int]$current.Depth + 1
+            })
+        }
+    }
+
+    return $null
+}
+
 function Find-DefaultTarget {
+    param([string]$HintPath = "")
+
     $roots = New-Object System.Collections.Generic.List[string]
+    if (-not [string]::IsNullOrWhiteSpace($HintPath)) {
+        $roots.Add($HintPath)
+    }
     if (-not [string]::IsNullOrWhiteSpace($TargetPath)) {
         $roots.Add($TargetPath)
     }
@@ -241,8 +443,14 @@ function Find-DefaultTarget {
     }
     $roots.Add((Join-Path $env:SystemDrive "trunk"))
 
+    $seen = @{}
     foreach ($root in $roots) {
-        $resolved = Resolve-TargetCandidate $root
+        $rootKey = $root.Trim().Trim('"')
+        if ($seen.ContainsKey($rootKey)) {
+            continue
+        }
+        $seen[$rootKey] = $true
+        $resolved = Find-TargetFromHint $root
         if ($null -ne $resolved) {
             return $resolved
         }
@@ -275,6 +483,11 @@ $colorButtonPressed = [Drawing.Color]::FromArgb(221, 221, 221)
 $colorRule = [Drawing.Color]::FromArgb(209, 209, 209)
 $colorSuccess = [Drawing.Color]::FromArgb(21, 59, 27)
 $colorError = [Drawing.Color]::FromArgb(180, 35, 24)
+$colorUpdateOk = [Drawing.Color]::FromArgb(16, 124, 16)
+$colorUpdateAvailable = [Drawing.Color]::FromArgb(196, 43, 28)
+$colorUpdateChecking = [Drawing.Color]::FromArgb(0, 103, 192)
+$colorUpdateUnknown = [Drawing.Color]::FromArgb(118, 118, 118)
+$colorUpdateError = [Drawing.Color]::FromArgb(157, 93, 0)
 $colorPrimaryText = [Drawing.Color]::White
 if ([Windows.Forms.SystemInformation]::HighContrast) {
     $colorWindow = [Windows.Forms.SystemColors]::Window
@@ -291,6 +504,11 @@ if ([Windows.Forms.SystemInformation]::HighContrast) {
     $colorRule = [Windows.Forms.SystemColors]::WindowText
     $colorSuccess = [Windows.Forms.SystemColors]::WindowText
     $colorError = [Windows.Forms.SystemColors]::WindowText
+    $colorUpdateOk = [Windows.Forms.SystemColors]::Highlight
+    $colorUpdateAvailable = [Windows.Forms.SystemColors]::Highlight
+    $colorUpdateChecking = [Windows.Forms.SystemColors]::Highlight
+    $colorUpdateUnknown = [Windows.Forms.SystemColors]::GrayText
+    $colorUpdateError = [Windows.Forms.SystemColors]::Highlight
     $colorPrimaryText = [Windows.Forms.SystemColors]::HighlightText
 }
 
@@ -501,7 +719,7 @@ else {
 }
 $targetBox.ShortcutsEnabled = $true
 $targetBox.AccessibleName = "游戏目录"
-$targetBox.AccessibleDescription = "可输入或粘贴游戏根目录、Seria.exe 或 Win64 目录"
+$targetBox.AccessibleDescription = "可输入 trunk 大概位置、游戏根目录、Seria.exe 或 Win64 目录"
 $targetBox.TabIndex = 0
 $targetBox.Margin = New-Object Windows.Forms.Padding(0, 5, 8, 5)
 $pasteButton = New-UiButton -Text "粘贴"
@@ -524,7 +742,7 @@ $targetLayout.SetColumnSpan($targetBox, 3)
 $targetLayout.Controls.Add($pasteButton, 3, 1)
 
 $targetFeedback = New-UiLabel `
-    -Text "输入或粘贴游戏根目录、Seria.exe 或 Win64 目录。" `
+    -Text "输入 trunk 大概位置，点击自动检测即可定位到具体游戏目录。" `
     -Size 9 `
     -Color $colorMuted
 $targetFeedback.AutoSize = $false
@@ -660,9 +878,27 @@ $actions.BackColor = $colorWindow
 $installButton = New-UiButton -Text "安装 / 更新" -Primary
 $verifyButton = New-UiButton -Text "仅校验"
 $closeButton = New-UiButton -Text "关闭"
-$installButton.Width = 118
-$verifyButton.Width = 88
-$closeButton.Width = 78
+$installButton.Width = [Math]::Max(
+    118,
+    [Windows.Forms.TextRenderer]::MeasureText(
+        $installButton.Text,
+        $installButton.Font
+    ).Width + $installButton.Padding.Horizontal + 24
+)
+$verifyButton.Width = [Math]::Max(
+    88,
+    [Windows.Forms.TextRenderer]::MeasureText(
+        $verifyButton.Text,
+        $verifyButton.Font
+    ).Width + $verifyButton.Padding.Horizontal + 24
+)
+$closeButton.Width = [Math]::Max(
+    78,
+    [Windows.Forms.TextRenderer]::MeasureText(
+        $closeButton.Text,
+        $closeButton.Font
+    ).Width + $closeButton.Padding.Horizontal + 24
+)
 $installButton.TabIndex = 7
 $verifyButton.TabIndex = 8
 $closeButton.TabIndex = 9
@@ -698,11 +934,27 @@ $logBox.TabIndex = 10
 $logBox.Text = "选择游戏目录后，可安装更新或只校验现有文件。`r`n"
 $main.Controls.Add($logBox, 0, 6)
 
-$footer = New-UiLabel `
+$footer = New-Object Windows.Forms.FlowLayoutPanel
+$footer.Dock = [Windows.Forms.DockStyle]::Fill
+$footer.FlowDirection = [Windows.Forms.FlowDirection]::LeftToRight
+$footer.WrapContents = $false
+$footer.BackColor = $colorWindow
+$footer.Margin = New-Object Windows.Forms.Padding(0)
+$updateDot = New-Object SeriaQaStatusDot
+$updateDot.Width = 22
+$updateDot.Height = 22
+$updateDot.BackColor = $colorWindow
+$updateDot.FillColor = $colorUpdateUnknown
+$updateDot.AccessibleName = "更新状态"
+$updateDot.AccessibleDescription = "尚未检查更新；点击检查"
+$updateDot.TabIndex = 11
+$updateDot.Margin = New-Object Windows.Forms.Padding(0, 1, 5, 0)
+$footerLabel = New-UiLabel `
     -Text "$($manifest.displayName)  $($manifest.packageVersion)  ·  CLI 更新入口保持兼容" `
     -Color $colorMuted
-$footer.Dock = [Windows.Forms.DockStyle]::Fill
-$footer.TextAlign = [Drawing.ContentAlignment]::MiddleLeft
+$footerLabel.Margin = New-Object Windows.Forms.Padding(0, 3, 0, 0)
+$footer.Controls.Add($updateDot)
+$footer.Controls.Add($footerLabel)
 $main.Controls.Add($footer, 0, 7)
 
 $toolTip = New-Object Windows.Forms.ToolTip
@@ -712,18 +964,19 @@ $toolTip.ReshowDelay = 100
 $toolTip.ShowAlways = $true
 $toolTip.SetToolTip(
     $targetBox,
-    '可直接输入，或按 Ctrl+V / 点击“粘贴”。支持游戏根目录、Seria.exe 和 Win64 目录。'
+    '可输入 trunk 大概位置、游戏根目录、Seria.exe 或 Win64 目录。'
 )
 $toolTip.SetToolTip($pasteButton, "读取剪贴板中的游戏路径")
 $toolTip.SetToolTip($browseButton, "从文件夹中选择游戏目录")
 $toolTip.SetToolTip(
     $detectButton,
-    "仅在点击后检查启动参数、SERIA_TRUNK 和默认 trunk 目录"
+    "优先从输入位置的上级和附近子目录查找，再检查默认 trunk 位置"
 )
 $toolTip.SetToolTip(
     $fullReShadeHome,
     "关闭时 Home 只打开 Seria QA；开启后 Home 显示完整 ReShade 页面。"
 )
+$toolTip.SetToolTip($updateDot, "尚未检查更新；点击检查")
 
 function Get-InstalledIniValue {
     param(
@@ -793,7 +1046,7 @@ function Load-InstalledPreferences {
 
 function Update-TargetFeedback {
     if ([string]::IsNullOrWhiteSpace($targetBox.Text)) {
-        $targetFeedback.Text = "输入或粘贴游戏根目录、Seria.exe 或 Win64 目录。"
+        $targetFeedback.Text = "输入 trunk 大概位置，点击自动检测即可定位到具体游戏目录。"
         $targetFeedback.ForeColor = $colorMuted
         $toolTip.SetToolTip($targetFeedback, $targetFeedback.Text)
         return $null
@@ -801,8 +1054,8 @@ function Update-TargetFeedback {
 
     $resolved = Resolve-TargetCandidate $targetBox.Text
     if ($null -eq $resolved) {
-        $targetFeedback.Text = "尚未找到 Seria.exe；可继续编辑，或使用浏览。"
-        $targetFeedback.ForeColor = $colorError
+        $targetFeedback.Text = "尚未定位到 Seria.exe；可点击自动检测继续查找附近目录。"
+        $targetFeedback.ForeColor = $colorMuted
         $toolTip.SetToolTip($targetFeedback, $targetFeedback.Text)
         return $null
     }
@@ -817,6 +1070,13 @@ $script:activeProcess = $null
 $script:activeMode = ""
 $script:activeTarget = ""
 $script:activeInstallOutput = ""
+$script:updateProcess = $null
+$script:updateMode = ""
+$script:updateVersion = ""
+$script:updateUrl = ""
+$script:updateSha256 = ""
+$script:updateManual = $false
+$script:updateStartedAt = [DateTime]::MinValue
 
 function Append-Log {
     param([string]$Text)
@@ -826,6 +1086,24 @@ function Append-Log {
     $logBox.AppendText($Text.TrimEnd() + "`r`n")
     $logBox.SelectionStart = $logBox.TextLength
     $logBox.ScrollToCaret()
+}
+
+function Set-UpdateIndicator {
+    param(
+        [ValidateSet("Unknown", "Checking", "UpToDate", "Available", "Error")]
+        [string]$State,
+        [string]$Detail
+    )
+
+    $updateDot.FillColor = switch ($State) {
+        "Checking" { $colorUpdateChecking }
+        "UpToDate" { $colorUpdateOk }
+        "Available" { $colorUpdateAvailable }
+        "Error" { $colorUpdateError }
+        default { $colorUpdateUnknown }
+    }
+    $updateDot.AccessibleDescription = $Detail
+    $toolTip.SetToolTip($updateDot, $Detail)
 }
 
 function Set-Busy {
@@ -842,10 +1120,35 @@ function Set-Busy {
     $opacity.Enabled = -not $Busy
     $installButton.Enabled = -not $Busy
     $verifyButton.Enabled = -not $Busy
+    $updateDot.Enabled = (
+        -not $Busy -and $null -eq $script:updateProcess
+    )
     $closeButton.Enabled = -not $Busy
     $status.Text = $Message
     $status.ForeColor = if ($Busy) { $colorAccent } else { $colorMuted }
     [Windows.Forms.Application]::UseWaitCursor = $Busy
+}
+
+function Set-UpdateBusy {
+    param(
+        [bool]$Busy,
+        [string]$Message = ""
+    )
+    $updateDot.Enabled = (
+        -not $Busy -and
+        $null -eq $script:updateProcess -and
+        $null -eq $script:activeProcess
+    )
+    $installButton.Enabled = (
+        -not $Busy -and $null -eq $script:activeProcess
+    )
+    $verifyButton.Enabled = (
+        -not $Busy -and $null -eq $script:activeProcess
+    )
+    if (-not [string]::IsNullOrWhiteSpace($Message)) {
+        $status.Text = $Message
+        $status.ForeColor = if ($Busy) { $colorAccent } else { $colorMuted }
+    }
 }
 
 function Start-PowerShellStep {
@@ -888,6 +1191,208 @@ function Start-PowerShellStep {
     }
     $script:activeProcess = $process
     $script:activeMode = $Mode
+}
+
+function Start-UpdateStep {
+    param(
+        [ValidateSet("Check", "Download")]
+        [string]$Mode,
+        [string[]]$Arguments,
+        [bool]$Manual
+    )
+
+    if (-not (Test-Path -LiteralPath $selfUpdatePath -PathType Leaf)) {
+        throw "自更新组件不存在：$selfUpdatePath"
+    }
+    $powershell = Join-Path $PSHOME "powershell.exe"
+    $parts = @(
+        "-NoLogo",
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-File", (Quote-ProcessArgument $selfUpdatePath),
+        "-Mode", $Mode
+    )
+    foreach ($argument in $Arguments) {
+        $parts += Quote-ProcessArgument ([string]$argument)
+    }
+
+    $startInfo = New-Object Diagnostics.ProcessStartInfo
+    $startInfo.FileName = $powershell
+    $startInfo.Arguments = $parts -join " "
+    $startInfo.WorkingDirectory = $toolRoot
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+
+    $process = New-Object Diagnostics.Process
+    $process.StartInfo = $startInfo
+    if (-not $process.Start()) {
+        throw "无法启动更新检查。"
+    }
+    $script:updateProcess = $process
+    $script:updateMode = $Mode
+    $script:updateManual = $Manual
+    $script:updateStartedAt = [DateTime]::UtcNow
+    $updatePollTimer.Start()
+}
+
+function Save-UpdateState {
+    param([object]$Result)
+
+    try {
+        New-Item -ItemType Directory -Path $updateStateRoot -Force | Out-Null
+        $state = [ordered]@{
+            lastCheckDate = [DateTime]::Today.ToString("yyyy-MM-dd")
+            status = [string]$Result.status
+            version = [string]$Result.version
+        }
+        if ([string]$Result.status -eq "update_available") {
+            $state.setupUrl = [string]$Result.setup_url
+            $state.setupSha256 = [string]$Result.setup_sha256
+        }
+        [IO.File]::WriteAllText(
+            $updateStatePath,
+            ($state | ConvertTo-Json),
+            (New-Object Text.UTF8Encoding($false))
+        )
+    }
+    catch {
+        Append-Log "更新检查日期未能保存：$($_.Exception.Message)"
+    }
+}
+
+function Restore-UpdateState {
+    try {
+        if (-not (Test-Path -LiteralPath $updateStatePath -PathType Leaf)) {
+            Set-UpdateIndicator `
+                -State "Unknown" `
+                -Detail "尚未检查更新；点击检查"
+            return
+        }
+        $state = Get-Content -LiteralPath $updateStatePath -Raw |
+            ConvertFrom-Json
+        if ([string]$state.lastCheckDate -ne
+            [DateTime]::Today.ToString("yyyy-MM-dd")) {
+            Set-UpdateIndicator `
+                -State "Unknown" `
+                -Detail "今天尚未检查更新；点击立即检查"
+            return
+        }
+        if ([string]$state.status -eq "update_available" -and
+            -not [string]::IsNullOrWhiteSpace([string]$state.version) -and
+            -not [string]::IsNullOrWhiteSpace([string]$state.setupUrl) -and
+            -not [string]::IsNullOrWhiteSpace([string]$state.setupSha256) -and
+            [Version]::Parse([string]$state.version) -gt
+            [Version]::Parse([string]$manifest.moduleVersion)) {
+            $script:updateVersion = [string]$state.version
+            $script:updateUrl = [string]$state.setupUrl
+            $script:updateSha256 = [string]$state.setupSha256
+            Set-UpdateIndicator `
+                -State "Available" `
+                -Detail "发现新版本 v$($script:updateVersion)；点击下载并打开更新"
+            return
+        }
+        Set-UpdateIndicator `
+            -State "UpToDate" `
+            -Detail "已是最新版本；点击重新检查"
+    }
+    catch {
+        Set-UpdateIndicator `
+            -State "Unknown" `
+            -Detail "更新状态不可用；点击重新检查"
+    }
+}
+
+function Test-UpdateDueToday {
+    try {
+        if (-not (Test-Path -LiteralPath $updateStatePath -PathType Leaf)) {
+            return $true
+        }
+        $state = Get-Content -LiteralPath $updateStatePath -Raw |
+            ConvertFrom-Json
+        return (
+            [string]$state.lastCheckDate -ne
+            [DateTime]::Today.ToString("yyyy-MM-dd")
+        )
+    }
+    catch {
+        return $true
+    }
+}
+
+function Start-UpdateCheck {
+    param([bool]$Manual)
+
+    if ($null -ne $script:updateProcess) {
+        if ($Manual) {
+            $status.Text = "更新检查已在进行。"
+            $status.ForeColor = $colorAccent
+        }
+        return
+    }
+    try {
+        Set-UpdateIndicator -State "Checking" -Detail "正在检查更新..."
+        Set-UpdateBusy `
+            -Busy $true `
+            -Message $(if ($Manual) { "正在检查 Seria QA 更新..." } else { "" })
+        if ($Manual) {
+            Append-Log "> 手动检查更新"
+        }
+        Start-UpdateStep `
+            -Mode "Check" `
+            -Arguments @(
+                "-CurrentVersion", [string]$manifest.moduleVersion
+            ) `
+            -Manual $Manual
+    }
+    catch {
+        Set-UpdateIndicator `
+            -State "Error" `
+            -Detail "更新检查失败；点击重试"
+        Set-UpdateBusy `
+            -Busy $false `
+            -Message $(if ($Manual) { "无法启动更新检查。" } else { "" })
+        if ($Manual) {
+            $status.ForeColor = $colorError
+        }
+        Append-Log "更新检查失败：$($_.Exception.Message)"
+    }
+}
+
+function Start-UpdateDownload {
+    if ([string]::IsNullOrWhiteSpace($script:updateVersion) -or
+        [string]::IsNullOrWhiteSpace($script:updateUrl) -or
+        [string]::IsNullOrWhiteSpace($script:updateSha256)) {
+        Start-UpdateCheck -Manual $true
+        return
+    }
+    try {
+        Set-UpdateIndicator `
+            -State "Checking" `
+            -Detail "正在下载并校验 v$($script:updateVersion)..."
+        Set-UpdateBusy `
+            -Busy $true `
+            -Message "正在下载 Seria QA v$($script:updateVersion)..."
+        Append-Log "> 下载 Seria QA v$($script:updateVersion)"
+        Start-UpdateStep `
+            -Mode "Download" `
+            -Arguments @(
+                "-UpdateUrl", $script:updateUrl,
+                "-ExpectedSha256", $script:updateSha256,
+                "-Version", $script:updateVersion,
+                "-DownloadDirectory", $updateDownloadPath
+            ) `
+            -Manual $true
+    }
+    catch {
+        Set-UpdateIndicator `
+            -State "Available" `
+            -Detail "新版本 v$($script:updateVersion) 下载失败；点击重试"
+        Set-UpdateBusy -Busy $false -Message "无法启动更新下载。"
+        $status.ForeColor = $colorError
+        Append-Log "更新下载失败：$($_.Exception.Message)"
+    }
 }
 
 function Complete-Operation {
@@ -1001,13 +1506,208 @@ $pollTimer.Add_Tick({
         return
     }
 
-    $message = if ($script:activeMode -eq "Verify") {
+    $completedMode = $script:activeMode
+    $completedTarget = $script:activeTarget
+    $message = if ($completedMode -eq "Verify") {
         "校验通过，未修改文件。"
     }
     else {
         "安装完成并通过校验。"
     }
     Complete-Operation -Succeeded $true -Message $message
+    if ($completedMode -ne "Verify") {
+        $form.Activate()
+        [Windows.Forms.MessageBox]::Show(
+            $form,
+            "Seria QA Overlay 已安装并通过校验。`r`n`r`n安装位置：$completedTarget`r`n`r`n现在可以启动游戏。",
+            "安装完成",
+            [Windows.Forms.MessageBoxButtons]::OK,
+            [Windows.Forms.MessageBoxIcon]::Information
+        ) | Out-Null
+    }
+})
+
+$updatePollTimer = New-Object Windows.Forms.Timer
+$updatePollTimer.Interval = 250
+$updatePollTimer.Add_Tick({
+    if ($null -eq $script:updateProcess) {
+        return
+    }
+
+    $timedOut = $false
+    if (-not $script:updateProcess.HasExited) {
+        $timeoutSeconds = if ($script:updateMode -eq "Download") {
+            180
+        }
+        else {
+            30
+        }
+        if (
+            ([DateTime]::UtcNow - $script:updateStartedAt).TotalSeconds -lt
+            $timeoutSeconds
+        ) {
+            return
+        }
+        $timedOut = $true
+        try {
+            $script:updateProcess.Kill()
+            $script:updateProcess.WaitForExit()
+        }
+        catch {
+        }
+    }
+
+    $updatePollTimer.Stop()
+    $output = $script:updateProcess.StandardOutput.ReadToEnd()
+    $errorOutput = $script:updateProcess.StandardError.ReadToEnd()
+    $exitCode = $script:updateProcess.ExitCode
+    $completedUpdateMode = $script:updateMode
+    $wasManual = $script:updateManual
+    $script:updateProcess.Dispose()
+    $script:updateProcess = $null
+    $script:updateMode = ""
+    $script:updateManual = $false
+    $script:updateStartedAt = [DateTime]::MinValue
+
+    if ($timedOut -or $exitCode -ne 0) {
+        $message = if ($timedOut) {
+            "更新检查超时；安装功能仍可正常使用。"
+        }
+        elseif ([string]::IsNullOrWhiteSpace($errorOutput)) {
+            "更新服务暂时不可用。"
+        }
+        else {
+            ($errorOutput.Trim() -split "\r?\n")[-1]
+        }
+        Set-UpdateIndicator `
+            -State "Error" `
+            -Detail "$message 点击重试"
+        Set-UpdateBusy `
+            -Busy $false `
+            -Message $(if ($wasManual) { $message } else { "" })
+        if ($wasManual) {
+            $status.ForeColor = $colorError
+        }
+        Append-Log "更新失败：$message"
+        return
+    }
+
+    try {
+        $result = $output.Trim() | ConvertFrom-Json
+    }
+    catch {
+        Set-UpdateIndicator `
+            -State "Error" `
+            -Detail "更新服务返回异常；点击重试"
+        Set-UpdateBusy `
+            -Busy $false `
+            -Message $(if ($wasManual) {
+                "更新服务返回了无法识别的数据。"
+            } else { "" })
+        if ($wasManual) {
+            $status.ForeColor = $colorError
+        }
+        Append-Log "更新数据解析失败：$($_.Exception.Message)"
+        return
+    }
+
+    if ($completedUpdateMode -eq "Check") {
+        if ([string]$result.status -eq "up_to_date") {
+            $script:updateVersion = ""
+            $script:updateUrl = ""
+            $script:updateSha256 = ""
+            Save-UpdateState -Result $result
+            Set-UpdateIndicator `
+                -State "UpToDate" `
+                -Detail "已是最新版本 v$($result.version)；点击重新检查"
+            Set-UpdateBusy `
+                -Busy $false `
+                -Message $(if ($wasManual) {
+                    "当前已是最新版本 v$($result.version)。"
+                } else { "" })
+            if ($wasManual) {
+                $status.ForeColor = $colorSuccess
+                Append-Log "当前已是最新版本 v$($result.version)。"
+            }
+            return
+        }
+        if ([string]$result.status -ne "update_available") {
+            Set-UpdateIndicator `
+                -State "Error" `
+                -Detail "更新服务返回未知状态；点击重试"
+            Set-UpdateBusy `
+                -Busy $false `
+                -Message $(if ($wasManual) {
+                    "更新服务返回了未知状态。"
+                } else { "" })
+            if ($wasManual) {
+                $status.ForeColor = $colorError
+            }
+            Append-Log "更新失败：更新服务返回了未知状态。"
+            return
+        }
+
+        $script:updateVersion = [string]$result.version
+        $script:updateUrl = [string]$result.setup_url
+        $script:updateSha256 = [string]$result.setup_sha256
+        Save-UpdateState -Result $result
+        Set-UpdateIndicator `
+            -State "Available" `
+            -Detail "发现新版本 v$($script:updateVersion)；点击下载并打开更新"
+        Set-UpdateBusy `
+            -Busy $false `
+            -Message $(if ($wasManual) {
+                "发现新版本 v$($script:updateVersion)。"
+            } else { "" })
+        if ($wasManual) {
+            $status.ForeColor = $colorUpdateAvailable
+        }
+        Append-Log "发现新版本 v$($script:updateVersion)。"
+        return
+    }
+
+    if ([string]$result.status -ne "downloaded" -or
+        -not (Test-Path -LiteralPath ([string]$result.path) -PathType Leaf)) {
+        Set-UpdateIndicator `
+            -State "Available" `
+            -Detail "新版本 v$($script:updateVersion) 下载失败；点击重试"
+        Set-UpdateBusy -Busy $false -Message "新版 Setup 下载结果无效。"
+        $status.ForeColor = $colorError
+        Append-Log "更新失败：新版 Setup 下载结果无效。"
+        return
+    }
+
+    try {
+        $setupPath = [IO.Path]::GetFullPath([string]$result.path)
+        $resolvedTarget = Resolve-TargetCandidate $targetBox.Text
+        $startInfo = New-Object Diagnostics.ProcessStartInfo
+        $startInfo.FileName = $setupPath
+        $startInfo.WorkingDirectory = Split-Path -Parent $setupPath
+        $startInfo.UseShellExecute = $true
+        if ($null -ne $resolvedTarget) {
+            $startInfo.Arguments = (
+                "-TargetPath " + (Quote-ProcessArgument $resolvedTarget)
+            )
+        }
+        if ($null -eq [Diagnostics.Process]::Start($startInfo)) {
+            throw "新版 Setup 无法启动。"
+        }
+    }
+    catch {
+        Set-UpdateIndicator `
+            -State "Available" `
+            -Detail "新版本 v$($script:updateVersion) 启动失败；点击重试"
+        Set-UpdateBusy -Busy $false -Message "新版 Setup 无法启动。"
+        $status.ForeColor = $colorError
+        Append-Log "更新失败：$($_.Exception.Message)"
+        return
+    }
+
+    Set-UpdateBusy `
+        -Busy $false `
+        -Message "新版 Setup 已启动，请在新窗口继续安装。"
+    Append-Log "已启动新版 Setup：$setupPath"
+    $form.Close()
 })
 
 $pasteButton.Add_Click({
@@ -1068,10 +1768,17 @@ $browseButton.Add_Click({
 })
 
 $detectButton.Add_Click({
-    $detected = Find-DefaultTarget
+    Set-Busy -Busy $true -Message "正在根据输入位置查找游戏目录..."
+    [Windows.Forms.Application]::DoEvents()
+    try {
+        $detected = Find-DefaultTarget -HintPath $targetBox.Text
+    }
+    finally {
+        Set-Busy -Busy $false
+    }
     if ([string]::IsNullOrWhiteSpace($detected)) {
         [Windows.Forms.MessageBox]::Show(
-            "未自动找到 Seria.exe，请点击浏览按钮选择游戏目录。",
+            "未在输入位置、其上级目录或附近子目录找到 Seria.exe。请缩小范围后重试，或点击浏览选择游戏目录。",
             "未找到游戏",
             [Windows.Forms.MessageBoxButtons]::OK,
             [Windows.Forms.MessageBoxIcon]::Information
@@ -1101,6 +1808,14 @@ $targetBox.Add_Leave({
 
 $installButton.Add_Click({ Start-Operation -Mode "Install" })
 $verifyButton.Add_Click({ Start-Operation -Mode "Verify" })
+$updateDot.Add_Click({
+    if ([string]::IsNullOrWhiteSpace($script:updateVersion)) {
+        Start-UpdateCheck -Manual $true
+    }
+    else {
+        Start-UpdateDownload
+    }
+})
 $closeButton.Add_Click({ $form.Close() })
 
 $form.Add_FormClosing({
@@ -1114,6 +1829,23 @@ $form.Add_FormClosing({
             [Windows.Forms.MessageBoxIcon]::Information
         ) | Out-Null
         $eventArgs.Cancel = $true
+        return
+    }
+    if ($null -ne $script:updateProcess -and
+        -not $script:updateProcess.HasExited) {
+        try {
+            $script:updateProcess.Kill()
+        }
+        catch {
+        }
+    }
+})
+
+$form.Add_Shown({
+    if (-not $SkipUpdateCheck -and (Test-UpdateDueToday)) {
+        [void]$form.BeginInvoke([Action]{
+            Start-UpdateCheck -Manual $false
+        })
     }
 })
 
@@ -1121,6 +1853,7 @@ $initialTarget = Update-TargetFeedback
 if ($null -ne $initialTarget) {
     Load-InstalledPreferences $initialTarget
 }
+Restore-UpdateState
 
 $launchWorkingArea = [Windows.Forms.Screen]::FromPoint(
     [Windows.Forms.Cursor]::Position
@@ -1142,5 +1875,6 @@ $form.LaunchWorkingArea = $launchWorkingArea
 $form.ExpectedDpi = [uint32]$expectedDpi
 [void]$form.ShowDialog()
 $pollTimer.Dispose()
+$updatePollTimer.Dispose()
 $toolTip.Dispose()
 $form.Dispose()

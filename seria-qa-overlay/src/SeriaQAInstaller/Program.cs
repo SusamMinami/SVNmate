@@ -30,7 +30,7 @@ internal static class Program
 
             string[] launchers = Directory.GetFiles(
                 extractionRoot,
-                "Install-SeriaQA-GUI.ps1",
+                "Install-SeriaQA-GUI.cmd",
                 SearchOption.AllDirectories);
             if (launchers.Length != 1)
             {
@@ -38,27 +38,35 @@ internal static class Program
                     "The embedded package does not contain exactly one GUI installer.");
             }
 
-            string powershellPath = Path.Combine(
-                Environment.SystemDirectory,
-                "WindowsPowerShell",
-                "v1.0",
-                "powershell.exe");
-            if (!File.Exists(powershellPath))
+            string packageRoot = Path.GetDirectoryName(launchers[0]);
+            string manifestPath = Path.Combine(packageRoot, "manifest.json");
+            string guiScriptPath = Path.Combine(packageRoot, "Install-SeriaQA-GUI.ps1");
+            if (!File.Exists(manifestPath) || !File.Exists(guiScriptPath))
+            {
+                throw new InvalidOperationException(
+                    "The embedded package is incomplete: manifest.json or the GUI script is missing.");
+            }
+
+            string commandProcessor = Environment.GetEnvironmentVariable("ComSpec");
+            if (string.IsNullOrWhiteSpace(commandProcessor))
+                commandProcessor = Path.Combine(Environment.SystemDirectory, "cmd.exe");
+            if (!File.Exists(commandProcessor))
             {
                 throw new FileNotFoundException(
-                    "Windows PowerShell was not found.",
-                    powershellPath);
+                    "The Windows command processor was not found.",
+                    commandProcessor);
             }
 
             ProcessStartInfo startInfo = new ProcessStartInfo
             {
-                FileName = powershellPath,
-                Arguments = BuildPowerShellArguments(launchers[0], args),
-                WorkingDirectory = Path.GetDirectoryName(launchers[0]),
+                FileName = commandProcessor,
+                Arguments = BuildCommandArguments(launchers[0], args),
+                WorkingDirectory = packageRoot,
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 WindowStyle = ProcessWindowStyle.Hidden
             };
+            startInfo.EnvironmentVariables["SERIA_QA_SETUP_HOST"] = "1";
 
             using (Process process = Process.Start(startInfo))
             {
@@ -97,18 +105,19 @@ internal static class Program
         }
     }
 
-    private static string BuildPowerShellArguments(string scriptPath, string[] args)
+    private static string BuildCommandArguments(string launcherPath, string[] args)
     {
         StringBuilder builder = new StringBuilder();
-        builder.Append("-NoLogo -NoProfile -ExecutionPolicy Bypass -Sta ");
-        builder.Append("-WindowStyle Hidden -File ");
-        builder.Append(QuoteArgument(scriptPath));
+        builder.Append("/d /s /c \"\"");
+        builder.Append(launcherPath);
+        builder.Append('"');
 
         foreach (string argument in args)
         {
             builder.Append(' ');
             builder.Append(QuoteArgument(argument));
         }
+        builder.Append('"');
         return builder.ToString();
     }
 

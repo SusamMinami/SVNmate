@@ -61,7 +61,8 @@ Copy-Item -LiteralPath (Join-Path $PSScriptRoot ([string]$manifest.restoreCmd)) 
 if ([string]$manifest.packageId -eq "seria-qa-overlay") {
     foreach ($guiFile in @(
         "Install-SeriaQA-GUI.cmd",
-        "Install-SeriaQA-GUI.ps1"
+        "Install-SeriaQA-GUI.ps1",
+        "SeriaQA-SelfUpdate.ps1"
     )) {
         $guiSource = Join-Path $PSScriptRoot $guiFile
         if (Test-Path -LiteralPath $guiSource -PathType Leaf) {
