@@ -1,6 +1,8 @@
 import shutil
 import subprocess
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -9,6 +11,7 @@ from svnmate_core import (
     WorkspaceUpdateService,
     create_cli_update_service,
     dedupe_folders,
+    find_working_copy_root,
     needs_process_restart,
     needs_svn_cleanup,
 )
@@ -29,6 +32,32 @@ class _SequenceExecutor:
         return next(self.results)
 
 
+class _ConcurrencyExecutor:
+    def __init__(self, delay: float = 0.08) -> None:
+        self.delay = delay
+        self.calls: list[Path] = []
+        self.active = 0
+        self.max_active = 0
+        self.lock = threading.Lock()
+
+    def __call__(
+        self,
+        cwd: Path,
+        _command: object,
+        _action: str,
+    ) -> CommandExecution:
+        with self.lock:
+            self.calls.append(cwd)
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+        try:
+            time.sleep(self.delay)
+            return CommandExecution(0)
+        finally:
+            with self.lock:
+                self.active -= 1
+
+
 class WorkspaceUpdateServiceTests(unittest.TestCase):
     def _service(
         self,
@@ -42,6 +71,7 @@ class WorkspaceUpdateServiceTests(unittest.TestCase):
             event_sink=lambda event: events.append(
                 (event.action, event.status)
             ),
+            max_parallel_working_copies=1,
         )
 
     def test_successful_update_does_not_cleanup(self) -> None:
@@ -156,6 +186,68 @@ class WorkspaceUpdateServiceTests(unittest.TestCase):
         self.assertEqual(payload["executed_by"], "core")
         self.assertEqual(payload["status"], "completed")
 
+    def test_batch_runs_different_working_copies_with_max_two_workers(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            folders = [root / name for name in ("one", "two", "three")]
+            for folder in folders:
+                (folder / ".svn").mkdir(parents=True)
+            executor = _ConcurrencyExecutor()
+            service = WorkspaceUpdateService(
+                executor=executor,
+                update_command=lambda _folder: ["svn", "update"],
+                cleanup_command=lambda _folder: ["svn", "cleanup"],
+                max_parallel_working_copies=2,
+            )
+
+            result = service.update_folders(folders)
+
+        self.assertTrue(result.success)
+        self.assertEqual(executor.max_active, 2)
+        self.assertEqual(
+            [item.folder for item in result.folders],
+            [str(folder) for folder in folders],
+        )
+
+    def test_batch_serializes_paths_from_the_same_working_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / ".svn").mkdir()
+            folders = [root / "first", root / "second"]
+            for folder in folders:
+                folder.mkdir()
+            executor = _ConcurrencyExecutor()
+            service = WorkspaceUpdateService(
+                executor=executor,
+                update_command=lambda _folder: ["svn", "update"],
+                cleanup_command=lambda _folder: ["svn", "cleanup"],
+                max_parallel_working_copies=2,
+            )
+
+            result = service.update_folders(folders)
+
+        self.assertTrue(result.success)
+        self.assertEqual(executor.max_active, 1)
+
+    def test_unresolved_working_copy_roots_use_one_serial_lane(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            folders = [root / "first", root / "second"]
+            for folder in folders:
+                folder.mkdir()
+            executor = _ConcurrencyExecutor()
+            service = WorkspaceUpdateService(
+                executor=executor,
+                update_command=lambda _folder: ["svn", "update"],
+                cleanup_command=lambda _folder: ["svn", "cleanup"],
+                max_parallel_working_copies=2,
+            )
+
+            result = service.update_folders(folders)
+
+        self.assertTrue(result.success)
+        self.assertEqual(executor.max_active, 1)
+
 
 class CoreUtilityTests(unittest.TestCase):
     def test_cleanup_message_detection(self) -> None:
@@ -171,6 +263,15 @@ class CoreUtilityTests(unittest.TestCase):
         folders = dedupe_folders([r"C:\Work\Res", r"c:\work\res"])
         expected = 1 if __import__("os").name == "nt" else 2
         self.assertEqual(len(folders), expected)
+
+    def test_working_copy_root_uses_nearest_svn_admin_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            nested = root / "Content" / "Nested"
+            nested.mkdir(parents=True)
+            (root / ".svn").mkdir()
+
+            self.assertEqual(find_working_copy_root(nested), root)
 
     @unittest.skipUnless(
         shutil.which("svn") and shutil.which("svnadmin"),

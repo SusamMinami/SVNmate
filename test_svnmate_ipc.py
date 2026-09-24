@@ -3,6 +3,7 @@ import queue
 import threading
 import time
 import unittest
+from collections import deque
 from unittest.mock import Mock, patch
 
 from migration_guard.svn_update_client import MigrationUpdateClient
@@ -92,25 +93,58 @@ class SvnMateIpcHandlerTests(unittest.TestCase):
         self.assertEqual(response["status"], "ready")
         self.assertEqual(response["version"], APP_VERSION)
 
-    def test_busy_instance_rejects_external_update(self) -> None:
+    def test_busy_instance_queues_external_update(self) -> None:
         tool = SvnAutoTool.__new__(SvnAutoTool)
         tool.running = True
+        tool.ipc_update_queue = deque()
+        tool._log = Mock()
         response: dict[str, object] = {}
         completed = threading.Event()
+        request = {
+            "request_id": "request-3",
+            "command": "update",
+            "source": "migration-guard",
+            "folders": [r"C:\trunk\res"],
+        }
 
         tool._start_ipc_update_on_ui_thread(
-            {
-                "request_id": "request-3",
-                "command": "update",
-                "folders": [r"C:\trunk\res"],
-            },
+            request,
             response,
             completed,
         )
 
-        self.assertTrue(completed.is_set())
-        self.assertFalse(response["ok"])
-        self.assertEqual(response["status"], "busy")
+        self.assertFalse(completed.is_set())
+        self.assertEqual(
+            list(tool.ipc_update_queue),
+            [(request, response, completed)],
+        )
+        tool._log.assert_called_once()
+
+    def test_queued_external_update_starts_after_current_task(self) -> None:
+        tool = SvnAutoTool.__new__(SvnAutoTool)
+        tool.running = False
+        request = {
+            "request_id": "request-queued",
+            "command": "update",
+            "source": "migration-guard",
+            "folders": [r"C:\trunk\res"],
+        }
+        response: dict[str, object] = {}
+        completed = threading.Event()
+        tool.ipc_update_queue = deque(
+            [(request, response, completed)]
+        )
+        tool._log = Mock()
+        tool._launch_ipc_update = Mock()
+
+        tool._start_next_queued_ipc_update()
+
+        tool._launch_ipc_update.assert_called_once_with(
+            request,
+            response,
+            completed,
+        )
+        self.assertFalse(tool.ipc_update_queue)
 
     def test_idle_instance_runs_requested_folders(self) -> None:
         tool = SvnAutoTool.__new__(SvnAutoTool)
@@ -175,6 +209,43 @@ class MigrationUpdateClientTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["executed_by"], "svnmate")
         ipc_client.update.assert_called_once()
+
+    def test_busy_legacy_svnmate_is_retried_in_place(self) -> None:
+        ipc_client = Mock()
+        ipc_client.update.side_effect = (
+            {
+                "protocol_version": IPC_PROTOCOL_VERSION,
+                "command": "update",
+                "ok": False,
+                "status": "busy",
+                "executed_by": "svnmate",
+            },
+            {
+                "protocol_version": IPC_PROTOCOL_VERSION,
+                "command": "update",
+                "ok": True,
+                "status": "completed",
+                "executed_by": "svnmate",
+            },
+        )
+        log = Mock()
+        client = MigrationUpdateClient(
+            ipc_client=ipc_client,
+            instance_running=lambda: True,
+            log=log,
+        )
+
+        with patch("migration_guard.svn_update_client.time.sleep"):
+            result = client.update_folders([r"C:\trunk\res"])
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(ipc_client.update.call_count, 2)
+        self.assertTrue(
+            any(
+                "等待队列" in call.args[0]
+                for call in log.call_args_list
+            )
+        )
 
     def test_running_instance_without_ipc_does_not_fallback(self) -> None:
         ipc_client = Mock()

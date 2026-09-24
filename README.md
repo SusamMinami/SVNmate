@@ -32,9 +32,11 @@ AI 开发从 [AGENTS.md](AGENTS.md) 开始；全部文档见 [索引](docs/READM
 | Seria QA Overlay | 游戏内只读任务诊断；DLSS5 作为独立可选安装包 | [README](seria-qa-overlay/README.txt) |
 | KindleLarkStatus | 外部桌面提示板，源码不在此仓库 | [公共更新通道交接](KINDLE_PUBLIC_CHANNEL_HANDOFF.md) |
 
-SVNmate 的工具模块入口管理 ConfigLinker、MigrationGuard 与 KindleLarkStatus，
-状态对应“安装/打开/更新”。各自版本和发布通道独立，升级不覆盖用户配置、缓存
-或凭据。SVNmate 不读取 ConfigLinker 的业务 CSV，也不读取 Kindle 的 Token/私钥。
+SVNmate 的工具模块入口管理 ConfigLinker、MigrationGuard、Seria QA Overlay 与
+KindleLarkStatus。桌面程序模块状态对应“安装/打开/更新”；QA Overlay 作为
+安装包型模块对应“安装/应用/更新”，部署前要求退出 `Seria.exe`。各自版本和发布
+通道独立，升级不覆盖用户配置、缓存或凭据。SVNmate 不读取 ConfigLinker 的业务
+CSV，也不读取 Kindle 的 Token/私钥。
 镜头沙盘是本仓库的另一独立工程，不因此成为上述模块管理器的一项。
 
 ## 模块调用 SVN 更新

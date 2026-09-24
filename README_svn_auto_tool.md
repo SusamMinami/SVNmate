@@ -116,11 +116,12 @@ https://bytedance.larkoffice.com/docx/BdDod9tjIo4rPbx2oWHchVRUnwh
 
 ## 工具模块
 
-“工具模块”卡片提供三个独立程序：
+“工具模块”卡片提供四个独立模块：
 
 ```text
 配置关系检索器（ConfigLinker）
 迁移核验助手（MigrationGuard）
+Seria QA Overlay
 Kindle 提示板（KindleLarkStatus）
 ```
 
@@ -134,11 +135,15 @@ Kindle 提示板（KindleLarkStatus）
 
 ```text
 modules\ConfigLinker\ConfigLinker.exe
+modules\SeriaQAOverlay\Install-SeriaQA.cmd
 modules\KindleLarkStatus\KindleLarkStatus.exe
 ```
 
 迁移核验助手使用独立的 `migration-guard-latest` 在线更新通道；同时仍会从同目录
 或 `dist\MigrationGuard.exe` 自动识别，也可手动选择。
+Seria QA Overlay 使用 `seria-qa-overlay-latest` 固定通道。安装或更新时必须先
+退出 `Seria.exe`；SVNmate 校验完整 ZIP 后调用包内安装器，将 QA 组件应用到
+`%SERIA_TRUNK%` 或默认 `C:\trunk`，并更新 trunk 外的恢复副本。
 其他模块不随 `SVNmate.zip` 预装。安装失败不会删除当前可用版本，也不会覆盖模块配置。
 
 MigrationGuard `1.0.5` 的无工程模式会缓存远端结果 5 分钟，并可按 2 分钟或
@@ -152,6 +157,7 @@ MigrationGuard `1.0.5` 的无工程模式会缓存远端结果 5 分钟，并可
 - ConfigLinker 必须选择 `ConfigLinker.exe`。
 - 迁移核验助手必须选择 `MigrationGuard.exe`。
 - Kindle 提示板必须选择 `KindleLarkStatus.exe`。
+- Seria QA Overlay 仅使用 SVNmate 管理的完整安装包，不允许选择单个 DLL 或脚本。
 - 新的 `tool_module_paths` 会保存到 `svn_auto_tool_config.json`。
 - 旧版 `kindle_status_path` 会自动迁移，不需要重新选择。
 
@@ -163,7 +169,8 @@ SVNmate 启动后会后台检查支持在线发布的模块。网络失败只把
 - 有更新时该行主动作变为“更新”，仍可从“更多”菜单直接打开当前版本。
 - 更新前必须人工确认，不会静默替换。
 - 模块正在运行时会先提示关闭；更新完成后按原状态重启。
-- 更新只替换 EXE 和公开 `VERSION`，不覆盖 JSON/INI 配置、日志、Token、缓存或 SSH 私钥。
+- EXE 模块只替换 EXE 和公开 `VERSION`；安装包型模块只替换已校验的模块副本并
+  调用自身安装器。两类更新均不覆盖无关 JSON/INI 配置、日志、Token、缓存或 SSH 私钥。
 
 ConfigLinker 还可以在自身标题区点击更新圆点独立更新。SVNmate、ConfigLinker 和 KindleLarkStatus Windows 模块拥有各自版本，互不覆盖。
 
@@ -240,21 +247,32 @@ dist\SVNAutoTool.exe
 
 文件夹分为“栏目一”和“栏目二”两栏，每栏左上角都有“添加文件夹”按钮。
 
-列表中的 `[x]` 表示会参与执行，`[ ]` 表示暂时不执行。点击第一列或双击选中行可以切换勾选状态；右键任意行可在资源管理器中打开对应文件夹。
+每一行是一个任务组并共享一个执行开关。列表中的 `[x]` 表示整组会参与执行，
+`[ ]` 表示整组暂不执行；点击“执行”列头可以全选或全不选当前栏目。
+
+- 把一行拖到另一行上，会把两个任务组合并；组内文件夹按显示顺序更新。
+- 把包含多个文件夹的行拖到当前栏目空白处，会拆分为独立任务组。
+- 把一行拖到另一栏空白处，会把整个任务组移到该栏。
+- 右键任务组可以打开其中任意文件夹，也可以直接拆分或与上一组合并。
+
+单个任务组不限制文件夹数量。旧版配置中的单个文件夹会自动迁移为单路径任务组。
 
 点击“保存配置”后，文件夹路径、勾选状态、执行选项、定时设置、工具模块路径和 Kindle 联动设置都会保存；下次打开软件会自动恢复。
 
 ## 执行流程
 
-工具使用分阶段流水线，并保持同类任务串行：
+工具使用任务组与 Working Copy Root 双重调度：
 
-1. 按勾选顺序逐个执行各文件夹的 `svn update`；失败时立即 cleanup，清理成功后重试一次 update。
-2. `bin` 更新成功后，`Update.bat` 进入单线程后台队列，同时主流程继续后续文件夹的 `svn update`。
-3. 等待全部 SVN Update 和后台 `Update.bat` 完成。
-4. 按勾选顺序逐个执行 `svn cleanup`。
-5. 如果开启“Clean up完成后，自动运行res目录Build.bat”，则在对应 `res` 文件夹 cleanup 成功后执行 `Build.bat`。
+1. 同时最多执行两个任务组；每组内部按显示顺序执行 `svn update`。
+2. 启动前识别每个路径所属的 Working Copy Root；相同 Root 即使属于不同任务组，
+   也会自动排队，禁止并发写同一个 `.svn\wc.db`。
+3. Update 失败时立即 cleanup，清理成功后只重试一次。
+4. `bin` 更新成功后，`Update.bat` 进入单线程后台队列；它可以和其他 Working
+   Copy 的 Update 重叠，但与同一 Root 的 SVN 操作互斥。
+5. 等待全部 SVN Update 和后台 `Update.bat` 完成。
+6. 按配置顺序执行 `svn cleanup`，并按设置执行对应 `Build.bat`。
 
-SVN Update 彼此不会并发，多个 `Update.bat` 也彼此串行；只有后台 `Update.bat` 会与后续文件夹的 SVN Update 重叠。
+无法识别 Working Copy Root 的路径统一进入保守串行通道，不会冒险并发。
 
 如果 `svn update` 返回失败，工具会自动执行一次 `svn cleanup`，清理成功后重试一次 `svn update`。重试仍失败时会记录错误并继续后续文件夹，不会循环重试。
 

@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import os
 import subprocess
+import threading
 import time
 import uuid
 from collections import deque
 from collections.abc import Callable, Iterable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,6 +16,8 @@ from pathlib import Path
 CommandFactory = Callable[[Path], list[str]]
 EventSink = Callable[["UpdateEvent"], None]
 OutputSink = Callable[[str], None]
+WorkingCopyResolver = Callable[[Path], Path]
+MAX_PARALLEL_WORKING_COPIES = 2
 
 
 def _utc_now() -> str:
@@ -190,11 +194,20 @@ class WorkspaceUpdateService:
         update_command: CommandFactory,
         cleanup_command: CommandFactory,
         event_sink: EventSink | None = None,
+        max_parallel_working_copies: int = MAX_PARALLEL_WORKING_COPIES,
+        working_copy_resolver: WorkingCopyResolver | None = None,
     ) -> None:
         self.executor = executor
         self.update_command = update_command
         self.cleanup_command = cleanup_command
         self.event_sink = event_sink
+        self.max_parallel_working_copies = max(
+            1,
+            int(max_parallel_working_copies),
+        )
+        self.working_copy_resolver = (
+            working_copy_resolver or find_working_copy_root
+        )
 
     def update_folder(
         self,
@@ -312,17 +325,63 @@ class WorkspaceUpdateService:
         request_id: str | None = None,
     ) -> BatchUpdateResult:
         started_at = _utc_now()
-        results: list[WorkspaceUpdateResult] = []
-        for folder in dedupe_folders(folders):
-            result = self.update_folder(folder)
-            results.append(result)
-            if result.status == "restart-required":
-                break
+        targets = dedupe_folders(folders)
+        indexed_targets = tuple(enumerate(targets))
+        grouped_targets: dict[str, list[tuple[int, Path]]] = {}
+        for index, target in indexed_targets:
+            root = self.working_copy_resolver(target)
+            key = (
+                normalized_path_key(root)
+                if (root / ".svn").is_dir()
+                else "__unresolved_working_copy__"
+            )
+            grouped_targets.setdefault(key, []).append((index, target))
+
+        stop_requested = threading.Event()
+        indexed_results: dict[int, WorkspaceUpdateResult] = {}
+
+        def update_working_copy_group(
+            group: list[tuple[int, Path]],
+        ) -> list[tuple[int, WorkspaceUpdateResult]]:
+            group_results: list[tuple[int, WorkspaceUpdateResult]] = []
+            for index, target in group:
+                if stop_requested.is_set():
+                    break
+                result = self.update_folder(target)
+                group_results.append((index, result))
+                if result.status == "restart-required":
+                    stop_requested.set()
+                    break
+            return group_results
+
+        groups = list(grouped_targets.values())
+        if groups:
+            worker_count = min(
+                self.max_parallel_working_copies,
+                len(groups),
+            )
+            with ThreadPoolExecutor(
+                max_workers=worker_count,
+                thread_name_prefix="svnmate-wc",
+            ) as executor:
+                futures = [
+                    executor.submit(update_working_copy_group, group)
+                    for group in groups
+                ]
+                for future in futures:
+                    for index, result in future.result():
+                        indexed_results[index] = result
+
+        results = tuple(
+            indexed_results[index]
+            for index, _target in indexed_targets
+            if index in indexed_results
+        )
         return BatchUpdateResult(
             request_id=request_id or str(uuid.uuid4()),
             started_at=started_at,
             finished_at=_utc_now(),
-            folders=tuple(results),
+            folders=results,
         )
 
     def _execute_step(
@@ -415,12 +474,30 @@ def dedupe_folders(folders: Iterable[Path | str]) -> tuple[Path, ...]:
     result: list[Path] = []
     for folder in folders:
         path = Path(folder).expanduser()
-        key = os.path.normcase(os.path.abspath(str(path)))
+        key = normalized_path_key(path)
         if key in seen:
             continue
         seen.add(key)
         result.append(path)
     return tuple(result)
+
+
+def normalized_path_key(path: Path | str) -> str:
+    return os.path.normcase(os.path.abspath(str(path)))
+
+
+def find_working_copy_root(folder: Path | str) -> Path:
+    target = Path(folder).expanduser()
+    try:
+        resolved = target.resolve(strict=False)
+    except OSError:
+        resolved = Path(os.path.abspath(str(target)))
+
+    probe = resolved if resolved.is_dir() else resolved.parent
+    for candidate in (probe, *probe.parents):
+        if (candidate / ".svn").is_dir():
+            return candidate
+    return resolved
 
 
 def needs_svn_cleanup(message: str) -> bool:

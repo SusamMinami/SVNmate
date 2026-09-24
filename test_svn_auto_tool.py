@@ -5,6 +5,7 @@ import tempfile
 import threading
 import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -20,9 +21,18 @@ from svn_auto_tool import (
     WindowsTrayIcon,
     _launch_detached_command,
     _window_dimensions_for_dpi,
+    folder_task_paths,
+    normalize_execution_groups,
+    normalize_folder_task_items,
     tool_module_primary_label,
+    working_copy_lock_identity,
 )
-from tool_modules import CONFIG_LINKER, KINDLE_STATUS, ToolModuleManager
+from tool_modules import (
+    CONFIG_LINKER,
+    KINDLE_STATUS,
+    SERIA_QA_OVERLAY,
+    ToolModuleManager,
+)
 
 
 class _Value:
@@ -222,6 +232,22 @@ class ToolModuleIntegrationTests(unittest.TestCase):
             ),
             "处理中",
         )
+        self.assertEqual(
+            tool_module_primary_label(
+                SERIA_QA_OVERLAY,
+                installed=True,
+                state="idle",
+            ),
+            "应用",
+        )
+        self.assertEqual(
+            tool_module_primary_label(
+                SERIA_QA_OVERLAY,
+                installed=True,
+                state="applying",
+            ),
+            "处理中",
+        )
 
     def test_empty_config_path_uses_managed_module_location(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -305,6 +331,44 @@ class ToolModuleIntegrationTests(unittest.TestCase):
                 "选择现有程序...",
                 "打开安装位置",
                 "复制程序路径",
+            ],
+        )
+
+    def test_installer_module_menu_does_not_offer_external_program(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            installer = Path(temp_dir) / "Install-SeriaQA.cmd"
+            installer.write_text("@echo off\n", encoding="utf-8")
+            tool = SvnAutoTool.__new__(SvnAutoTool)
+            tool.root = Mock()
+            tool.tool_module_manager = Mock()
+            tool.tool_module_manager.executable_path.return_value = installer
+            tool.tool_module_paths = {
+                SERIA_QA_OVERLAY.module_id: _Value(""),
+            }
+            tool.tool_module_states = {
+                SERIA_QA_OVERLAY.module_id: "idle",
+            }
+            tool.tool_module_manifests = {}
+            button = Mock()
+            button.winfo_rootx.return_value = 100
+            button.winfo_rooty.return_value = 50
+            button.winfo_height.return_value = 28
+            menu = Mock()
+
+            with patch("svn_auto_tool.Menu", return_value=menu):
+                tool._show_tool_module_menu(SERIA_QA_OVERLAY, button)
+
+        labels = [
+            call.kwargs["label"]
+            for call in menu.add_command.call_args_list
+        ]
+        self.assertEqual(
+            labels,
+            [
+                "重新应用Seria QA Overlay",
+                "检查更新",
+                "打开安装位置",
+                "复制模块路径",
             ],
         )
 
@@ -417,6 +481,22 @@ class SelfUpdateTests(unittest.TestCase):
             tool._restart_after_invalid_handle,
         )
         self.assertTrue(tool.invalid_handle_restart_pending)
+
+    def test_invalid_handle_restart_waits_for_active_worker(self) -> None:
+        tool = SvnAutoTool.__new__(SvnAutoTool)
+        tool.root = Mock()
+        tool.worker_thread = Mock()
+        tool.worker_thread.is_alive.return_value = True
+        tool._launch_restart_watcher = Mock()
+
+        tool._restart_after_invalid_handle()
+
+        tool.root.after.assert_called_once_with(
+            250,
+            tool._restart_after_invalid_handle,
+        )
+        tool._launch_restart_watcher.assert_not_called()
+        tool.root.destroy.assert_not_called()
 
     def test_invalid_handle_from_command_requests_restart(self) -> None:
         tool = SvnAutoTool.__new__(SvnAutoTool)
@@ -679,13 +759,135 @@ class LiveLogMemoryTests(unittest.TestCase):
 
 
 class FolderInteractionTests(unittest.TestCase):
+    def test_legacy_folder_config_migrates_to_task_groups(self) -> None:
+        items = normalize_folder_task_items(
+            [
+                {"path": r"C:\trunk\bin", "enabled": False},
+                {
+                    "paths": [
+                        r"C:\trunk\doc",
+                        r"C:\trunk\res",
+                        r"C:\trunk\doc",
+                    ],
+                    "enabled": True,
+                },
+                r"D:\server\17.0\res",
+                {
+                    "path": r"D:\Oversea\OStrunk\res",
+                    "paths": [],
+                    "enabled": "false",
+                },
+            ]
+        )
+
+        self.assertEqual(
+            items,
+            [
+                {"paths": [r"C:\trunk\bin"], "enabled": False},
+                {
+                    "paths": [r"C:\trunk\doc", r"C:\trunk\res"],
+                    "enabled": True,
+                },
+                {"paths": [r"D:\server\17.0\res"], "enabled": True},
+                {
+                    "paths": [r"D:\Oversea\OStrunk\res"],
+                    "enabled": True,
+                },
+            ],
+        )
+
+    def test_execution_groups_preserve_order_and_remove_duplicate_paths(self) -> None:
+        groups = normalize_execution_groups(
+            [
+                [r"C:\trunk\bin", r"C:\trunk\doc"],
+                [r"C:\trunk\doc", r"C:\trunk\res"],
+            ]
+        )
+
+        self.assertEqual(
+            groups,
+            [
+                [r"C:\trunk\bin", r"C:\trunk\doc"],
+                [r"C:\trunk\res"],
+            ],
+        )
+
+    def test_merge_and_split_folder_groups(self) -> None:
+        tool = SvnAutoTool.__new__(SvnAutoTool)
+        tool.folder_groups = {
+            "left": [
+                {"paths": [r"C:\trunk\bin"], "enabled": False},
+                {
+                    "paths": [r"C:\trunk\doc", r"C:\trunk\res"],
+                    "enabled": True,
+                },
+            ],
+            "right": [
+                {"paths": [r"D:\server\17.0\res"], "enabled": True},
+            ],
+        }
+
+        merged = tool._merge_folder_groups("left", 0, "left", 1)
+        merged_again = tool._merge_folder_groups("right", 0, "left", 0)
+
+        self.assertTrue(merged)
+        self.assertTrue(merged_again)
+        self.assertEqual(
+            folder_task_paths(tool.folder_groups["left"][0]),
+            (
+                r"C:\trunk\doc",
+                r"C:\trunk\res",
+                r"C:\trunk\bin",
+                r"D:\server\17.0\res",
+            ),
+        )
+        self.assertTrue(tool.folder_groups["left"][0]["enabled"])
+        self.assertEqual(tool.folder_groups["right"], [])
+
+        self.assertTrue(tool._split_folder_group("left", 0))
+        self.assertEqual(
+            [
+                folder_task_paths(item)
+                for item in tool.folder_groups["left"]
+            ],
+            [
+                (r"C:\trunk\doc",),
+                (r"C:\trunk\res",),
+                (r"C:\trunk\bin",),
+                (r"D:\server\17.0\res",),
+            ],
+        )
+
+    def test_execute_heading_toggles_all_groups(self) -> None:
+        tool = SvnAutoTool.__new__(SvnAutoTool)
+        tool.folder_groups = {
+            "left": [
+                {"paths": [r"C:\trunk\bin"], "enabled": True},
+                {"paths": [r"C:\trunk\doc"], "enabled": False},
+            ],
+            "right": [],
+        }
+        tool._refresh_folder_list = Mock()
+        tool._save_config = Mock()
+
+        tool._toggle_all_folder_groups("left")
+        self.assertTrue(
+            all(item["enabled"] for item in tool.folder_groups["left"])
+        )
+
+        tool._toggle_all_folder_groups("left")
+        self.assertFalse(
+            any(item["enabled"] for item in tool.folder_groups["left"])
+        )
+        self.assertEqual(tool._save_config.call_count, 2)
+
     def test_right_click_selects_folder_and_opens_context_action(self) -> None:
         tool = SvnAutoTool.__new__(SvnAutoTool)
         tree = Mock()
         tree.identify_row.return_value = "0"
         tool.folder_trees = {"left": tree}
         tool.folder_groups = {
-            "left": [{"path": r"C:\trunk\doc", "enabled": True}],
+            "left": [{"paths": [r"C:\trunk\doc"], "enabled": True}],
             "right": [],
         }
         event = SimpleNamespace(y=12, x_root=320, y_root=240)
@@ -703,7 +905,7 @@ class FolderInteractionTests(unittest.TestCase):
         tree.focus.assert_called_once_with("0")
         menu.tk_popup.assert_called_once_with(320, 240)
         menu.grab_release.assert_called_once_with()
-        open_folder.assert_called_once_with("left", 0)
+        open_folder.assert_called_once_with("left", 0, 0)
 
     @unittest.skipUnless(hasattr(os, "startfile"), "Windows folder opening only")
     def test_open_folder_uses_windows_shell(self) -> None:
@@ -711,7 +913,7 @@ class FolderInteractionTests(unittest.TestCase):
             folder = Path(temp_dir)
             tool = SvnAutoTool.__new__(SvnAutoTool)
             tool.folder_groups = {
-                "left": [{"path": str(folder), "enabled": True}],
+                "left": [{"paths": [str(folder)], "enabled": True}],
                 "right": [],
             }
 
@@ -840,6 +1042,8 @@ class TaskPipelineTests(unittest.TestCase):
             update_bat = bin_folder / "WindowsNoEditor" / "Update.bat"
             update_bat.parent.mkdir(parents=True)
             doc_folder.mkdir()
+            (bin_folder / ".svn").mkdir()
+            (doc_folder / ".svn").mkdir()
 
             tool = SvnAutoTool.__new__(SvnAutoTool)
             tool.run_bin_update = _Value(True)
@@ -880,12 +1084,18 @@ class TaskPipelineTests(unittest.TestCase):
             tool._run_command = fake_run_command
             tool._svn_update_command = lambda _folder: ["svn", "update"]
             tool._svn_cleanup_command = lambda _folder: ["svn", "cleanup"]
-            tool._find_update_bat_scripts = lambda folder: [update_bat] if folder == bin_folder else []
+            tool._find_update_bat_scripts = (
+                lambda folder, *_args:
+                [update_bat] if folder == bin_folder else []
+            )
             tool._find_bin_folders = lambda folder: [bin_folder] if folder == bin_folder else []
             tool._record = lambda *_args: None
             tool._log = lambda *_args: None
 
-            tool._run_all_tasks("test", [str(bin_folder), str(doc_folder)])
+            tool._run_all_tasks(
+                "test",
+                [[str(bin_folder), str(doc_folder)]],
+            )
 
             doc_update_index = calls.index(("svn update", "doc"))
             bat_finished_index = calls.index(("Update.bat finished", "WindowsNoEditor"))
@@ -893,6 +1103,158 @@ class TaskPipelineTests(unittest.TestCase):
             self.assertLess(doc_update_index, bat_finished_index)
             self.assertLess(bat_finished_index, first_cleanup_index)
             self.assertTrue(tool.last_bin_update_date)
+
+    def test_custom_update_bat_uses_its_own_working_copy_lock(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="SVNmate custom bat ") as temp_dir:
+            root = Path(temp_dir)
+            trigger_root = root / "trigger"
+            bat_root = root / "scripts"
+            trigger_root.mkdir()
+            bat_root.mkdir()
+            (trigger_root / ".svn").mkdir()
+            (bat_root / ".svn").mkdir()
+            update_bat = bat_root / "Update.bat"
+            update_bat.write_text("@echo off\n", encoding="utf-8")
+
+            tool = SvnAutoTool.__new__(SvnAutoTool)
+            tool._record = Mock()
+            tool._find_update_bat_scripts = Mock(
+                return_value=[update_bat]
+            )
+            tool._run_root_gated_command = Mock(return_value=True)
+            trigger_key, _trigger_wc = working_copy_lock_identity(
+                trigger_root
+            )
+            bat_key, bat_wc = working_copy_lock_identity(bat_root)
+            trigger_lock = threading.Lock()
+            bat_lock = threading.Lock()
+            root_locks = {
+                trigger_key: trigger_lock,
+                bat_key: bat_lock,
+            }
+
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                _attempted, _success, queued = (
+                    tool._queue_update_bat_scripts(
+                        trigger_root,
+                        True,
+                        True,
+                        executor,
+                        root_locks,
+                        str(update_bat),
+                    )
+                )
+                self.assertTrue(queued[0][1].result())
+
+        call = tool._run_root_gated_command.call_args
+        self.assertIs(call.args[0], bat_lock)
+        self.assertEqual(call.args[1], bat_wc)
+        self.assertEqual(call.args[2], bat_root)
+
+    def test_task_groups_use_at_most_two_parallel_update_workers(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="SVNmate groups ") as temp_dir:
+            root = Path(temp_dir)
+            folders = [root / name for name in ("one", "two", "three")]
+            for folder in folders:
+                folder.mkdir()
+                (folder / ".svn").mkdir()
+
+            tool = SvnAutoTool.__new__(SvnAutoTool)
+            tool.run_bin_update = _Value(False)
+            tool.run_build_after_cleanup = _Value(False)
+            tool.custom_update_bat_path = _Value("")
+            tool.custom_build_bat_path = _Value("")
+            tool.last_bin_update_date = ""
+            tool.log_queue = queue.Queue()
+            tool.tortoise_proc = None
+            tool._record = Mock()
+            tool._log = Mock()
+            tool._svn_update_command = lambda _folder: ["svn", "update"]
+            tool._run_cleanup_and_build = Mock()
+
+            active = 0
+            max_active = 0
+            active_lock = threading.Lock()
+
+            def fake_run_command(
+                _cwd: Path,
+                _command: list[str],
+                action: str,
+                auto_cleanup: bool = False,
+                visible_console: bool = False,
+            ) -> bool:
+                nonlocal active, max_active
+                del auto_cleanup, visible_console
+                if action != "svn update":
+                    return True
+                with active_lock:
+                    active += 1
+                    max_active = max(max_active, active)
+                time.sleep(0.08)
+                with active_lock:
+                    active -= 1
+                return True
+
+            tool._run_command = fake_run_command
+            tool._run_all_tasks(
+                "test",
+                [[str(folder)] for folder in folders],
+            )
+
+        self.assertEqual(max_active, 2)
+        self.assertEqual(tool._run_cleanup_and_build.call_count, 3)
+
+    def test_separate_groups_serialize_when_they_share_a_wc_root(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="SVNmate root lock ") as temp_dir:
+            root = Path(temp_dir)
+            (root / ".svn").mkdir()
+            folders = [root / "first", root / "second"]
+            for folder in folders:
+                folder.mkdir()
+
+            tool = SvnAutoTool.__new__(SvnAutoTool)
+            tool.run_bin_update = _Value(False)
+            tool.run_build_after_cleanup = _Value(False)
+            tool.custom_update_bat_path = _Value("")
+            tool.custom_build_bat_path = _Value("")
+            tool.last_bin_update_date = ""
+            tool.log_queue = queue.Queue()
+            tool.tortoise_proc = None
+            tool._record = Mock()
+            tool._log = Mock()
+            tool._svn_update_command = lambda _folder: ["svn", "update"]
+            tool._run_cleanup_and_build = Mock()
+
+            active = 0
+            max_active = 0
+            active_lock = threading.Lock()
+
+            def fake_run_command(
+                _cwd: Path,
+                _command: list[str],
+                action: str,
+                auto_cleanup: bool = False,
+                visible_console: bool = False,
+            ) -> bool:
+                nonlocal active, max_active
+                del auto_cleanup, visible_console
+                if action != "svn update":
+                    return True
+                with active_lock:
+                    active += 1
+                    max_active = max(max_active, active)
+                time.sleep(0.08)
+                with active_lock:
+                    active -= 1
+                return True
+
+            tool._run_command = fake_run_command
+            tool._run_all_tasks(
+                "test",
+                [[str(folders[0])], [str(folders[1])]],
+            )
+
+        self.assertEqual(max_active, 1)
 
 
 if __name__ == "__main__":

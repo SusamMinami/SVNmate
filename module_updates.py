@@ -53,7 +53,7 @@ class ModuleManifest:
             normalized_entrypoint.is_absolute()
             or len(normalized_entrypoint.parts) != 1
             or ".." in normalized_entrypoint.parts
-            or normalized_entrypoint.suffix.casefold() != ".exe"
+            or normalized_entrypoint.suffix.casefold() not in {".exe", ".cmd"}
         ):
             raise ModuleUpdateError("模块入口文件不安全")
 

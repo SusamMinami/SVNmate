@@ -62,6 +62,25 @@ class ModuleManifestTests(unittest.TestCase):
         with self.assertRaisesRegex(ModuleUpdateError, "入口文件"):
             ModuleManifest.from_dict(payload, expected_id="config-linker")
 
+    def test_manifest_accepts_managed_cmd_installer(self) -> None:
+        payload = self.valid_payload()
+        payload["id"] = "seria-qa-overlay"
+        payload["entrypoint"] = "Install-SeriaQA.cmd"
+
+        manifest = ModuleManifest.from_dict(
+            payload,
+            expected_id="seria-qa-overlay",
+        )
+
+        self.assertEqual(manifest.entrypoint, "Install-SeriaQA.cmd")
+
+    def test_manifest_rejects_unapproved_script_type(self) -> None:
+        payload = self.valid_payload()
+        payload["entrypoint"] = "Install-Module.ps1"
+
+        with self.assertRaisesRegex(ModuleUpdateError, "入口文件"):
+            ModuleManifest.from_dict(payload, expected_id="config-linker")
+
     def test_version_key_compares_numeric_versions(self) -> None:
         self.assertGreater(version_key("v1.10.0"), version_key("1.2.9"))
 

@@ -23,14 +23,17 @@ from svnmate_core import (
     CommandExecution,
     UpdateEvent,
     WorkspaceUpdateService,
+    find_working_copy_root,
     needs_process_restart,
     needs_svn_cleanup,
+    normalized_path_key,
 )
 from svnmate_ipc import IPC_PROTOCOL_VERSION, SvnMateIpcServer
 from tool_modules import (
     CONFIG_LINKER,
     KINDLE_STATUS,
     MIGRATION_GUARD,
+    SERIA_QA_OVERLAY,
     TOOL_MODULES,
     ToolModuleManager,
     ToolModuleSpec,
@@ -135,10 +138,88 @@ SCHEDULE_POLL_MS = 5000
 DPI_VISIBLE_POLL_MS = 1000
 DPI_HIDDEN_POLL_MS = 10000
 IPC_REQUEST_TIMEOUT_SECONDS = 6 * 60 * 60
+MAX_PENDING_IPC_UPDATES = 16
+MAX_PARALLEL_UPDATE_GROUPS = 2
+FOLDER_DRAG_THRESHOLD = 6
 ICON_MUSIC_ON = "\ue767"
 ICON_MUSIC_OFF = "\ue74f"
 ICON_HIDE_TO_TRAY = "\ue921"
 ICON_MORE = "\ue712"
+
+
+def folder_task_paths(item: object) -> tuple[str, ...]:
+    if not isinstance(item, dict):
+        return ()
+    raw_paths = item.get("paths")
+    if isinstance(raw_paths, list) and any(raw_paths):
+        candidates = raw_paths
+    else:
+        path = item.get("path")
+        candidates = [path] if path else []
+
+    seen: set[str] = set()
+    paths: list[str] = []
+    for candidate in candidates:
+        if not candidate:
+            continue
+        normalized = str(Path(str(candidate)))
+        key = normalized_path_key(normalized)
+        if key in seen:
+            continue
+        seen.add(key)
+        paths.append(normalized)
+    return tuple(paths)
+
+
+def normalize_folder_task_items(items: object) -> list[dict[str, object]]:
+    normalized: list[dict[str, object]] = []
+    if not isinstance(items, list):
+        return normalized
+    for item in items:
+        if isinstance(item, dict):
+            paths = folder_task_paths(item)
+            raw_enabled = item.get("enabled", True)
+            enabled = raw_enabled if isinstance(raw_enabled, bool) else True
+        elif item:
+            paths = (str(Path(str(item))),)
+            enabled = True
+        else:
+            continue
+        if paths:
+            normalized.append({"paths": list(paths), "enabled": enabled})
+    return normalized
+
+
+def normalize_execution_groups(
+    groups: Sequence[object],
+) -> list[list[str]]:
+    normalized: list[list[str]] = []
+    seen: set[str] = set()
+    for group in groups:
+        if isinstance(group, (str, Path)):
+            candidates = (str(group),)
+        elif isinstance(group, Sequence):
+            candidates = tuple(str(path) for path in group if path)
+        else:
+            continue
+        paths: list[str] = []
+        for candidate in candidates:
+            path = str(Path(candidate))
+            key = normalized_path_key(path)
+            if key in seen:
+                continue
+            seen.add(key)
+            paths.append(path)
+        if paths:
+            normalized.append(paths)
+    return normalized
+
+
+def working_copy_lock_identity(folder: Path | str) -> tuple[str, Path]:
+    root = find_working_copy_root(folder)
+    if (root / ".svn").is_dir():
+        return normalized_path_key(root), root
+    return "__unresolved_working_copy__", root
 
 
 def _powershell_literal(value: str | Path) -> str:
@@ -280,12 +361,12 @@ def tool_module_primary_label(
     installed: bool,
     state: str,
 ) -> str:
-    if state in {"checking", "downloading"}:
+    if state in {"checking", "downloading", "applying"}:
         return "处理中"
     if state == "ready":
         return "更新" if installed else "安装"
     if installed:
-        return "打开"
+        return "应用" if spec.module_kind == "installer" else "打开"
     return "安装" if spec.supports_updates else "选择"
 
 
@@ -790,12 +871,22 @@ class SvnAutoTool:
 
         self.folder_groups: dict[str, list[dict[str, object]]] = {"left": [], "right": []}
         self.folder_trees: dict[str, ttk.Treeview] = {}
+        self.folder_drag_state: dict[str, object] | None = None
+        self.folder_drop_target: tuple[str, str] | None = None
         self.log_queue: queue.Queue[tuple[str, object]] = queue.Queue(
             maxsize=MAX_PENDING_LOG_ITEMS
         )
+        self.log_lock = threading.Lock()
         self.dropped_live_log_items = 0
         self.worker_thread: threading.Thread | None = None
         self.running = False
+        self.ipc_update_queue: deque[
+            tuple[
+                dict[str, object],
+                dict[str, object],
+                threading.Event,
+            ]
+        ] = deque()
         self.invalid_handle_restart_pending = False
         self.invalid_handle_restart_lock = threading.Lock()
         self.last_scheduled_key = ""
@@ -824,6 +915,7 @@ class SvnAutoTool:
             MIGRATION_GUARD.module_id: StringVar(
                 value=str(detected_migration_guard or "")
             ),
+            SERIA_QA_OVERLAY.module_id: StringVar(value=""),
             KINDLE_STATUS.module_id: StringVar(
                 value=str(detected_kindle_status or "")
             ),
@@ -868,7 +960,11 @@ class SvnAutoTool:
             self._exit_application,
             {
                 spec.module_id: (
-                    f"打开{spec.display_name}",
+                    (
+                        f"应用{spec.display_name}"
+                        if spec.module_kind == "installer"
+                        else f"打开{spec.display_name}"
+                    ),
                     lambda current=spec: self._launch_tool_module(
                         current,
                         manual=True,
@@ -1014,7 +1110,7 @@ class SvnAutoTool:
         folder_title = ttk.Frame(folder_frame, style="Card.TFrame")
         folder_title.pack(fill=X, pady=(0, 7))
         ttk.Label(folder_title, text="工作目录", style="SectionTitle.TLabel").pack(side=LEFT)
-        ttk.Label(folder_title, text="仅执行已勾选项目，按列表顺序串行处理", style="CardMuted.TLabel").pack(
+        ttk.Label(folder_title, text="任务组 · 最多 2 组并行 · 同一 WC 自动排队", style="CardMuted.TLabel").pack(
             side=LEFT,
             padx=(10, 0),
         )
@@ -1197,7 +1293,7 @@ class SvnAutoTool:
         toolbar = ttk.Frame(column, style="Card.TFrame")
         toolbar.pack(fill=X, pady=(0, 5))
         ttk.Label(toolbar, text=title, style="CardTitle.TLabel").pack(side=LEFT)
-        ttk.Button(toolbar, text="清空", style="Compact.TButton", command=lambda: self._clear_folders(group_key)).pack(
+        ttk.Button(toolbar, text="全部移除", style="Compact.TButton", command=lambda: self._clear_folders(group_key)).pack(
             side=RIGHT,
         )
         ttk.Button(
@@ -1215,16 +1311,45 @@ class SvnAutoTool:
 
         tree_frame = ttk.Frame(column, style="Card.TFrame")
         tree_frame.pack(fill=BOTH, expand=True)
-        tree = ttk.Treeview(tree_frame, columns=("enabled", "path"), show="headings", height=6)
-        tree.heading("enabled", text="执行")
-        tree.heading("path", text="文件夹路径")
-        tree.column("enabled", width=52, anchor="center", stretch=False)
+        tree = ttk.Treeview(
+            tree_frame,
+            columns=("enabled", "path"),
+            show="headings",
+            height=6,
+        )
+        tree.heading(
+            "enabled",
+            text="执行 [ ]",
+            command=lambda: self._toggle_all_folder_groups(group_key),
+        )
+        tree.heading("path", text="任务组 / 文件夹路径")
+        tree.column("enabled", width=76, anchor="center", stretch=False)
         tree.column("path", width=430, anchor="w")
         tree.pack(side=LEFT, fill=BOTH, expand=True)
         scroll = ttk.Scrollbar(tree_frame, orient="vertical", command=tree.yview)
         scroll.pack(side=RIGHT, fill=Y)
         tree.configure(yscrollcommand=scroll.set)
-        tree.bind("<Button-1>", lambda event, key=group_key: self._on_folder_tree_click(event, key))
+        tree.bind(
+            "<ButtonPress-1>",
+            lambda event, key=group_key: self._on_folder_drag_press(
+                event,
+                key,
+            ),
+        )
+        tree.bind(
+            "<B1-Motion>",
+            lambda event, key=group_key: self._on_folder_drag_motion(
+                event,
+                key,
+            ),
+        )
+        tree.bind(
+            "<ButtonRelease-1>",
+            lambda event, key=group_key: self._on_folder_drag_release(
+                event,
+                key,
+            ),
+        )
         tree.bind("<Button-3>", lambda event, key=group_key: self._show_folder_context_menu(event, key))
         tree.bind("<Double-1>", lambda event, key=group_key: self._toggle_selected_folder(key))
         tree.bind("<space>", lambda _event, key=group_key: self._toggle_selected_folder(key))
@@ -1271,7 +1396,7 @@ class SvnAutoTool:
             controls,
             text=spec.display_name,
             style="CardTitle.TLabel",
-            width=14,
+            width=18,
         ).pack(side=LEFT)
         status_label = ttk.Label(
             controls,
@@ -1304,7 +1429,11 @@ class SvnAutoTool:
         self.tool_module_status_labels[spec.module_id] = status_label
         self.tool_module_path_tooltips[spec.module_id] = ToolTip(
             status_label,
-            "程序位置将在检查后显示",
+            (
+                "模块位置将在检查后显示"
+                if spec.module_kind == "installer"
+                else "程序位置将在检查后显示"
+            ),
         )
         self.tooltips.append(self.tool_module_path_tooltips[spec.module_id])
         self.tooltips.append(
@@ -1323,12 +1452,16 @@ class SvnAutoTool:
         )
         installed = executable.is_file()
         state = self.tool_module_states.get(spec.module_id, "idle")
-        busy = state in {"checking", "downloading"}
+        busy = state in {"checking", "downloading", "applying"}
         manifest = self.tool_module_manifests.get(spec.module_id)
 
         menu = Menu(self.root, tearoff=False)
         menu.add_command(
-            label=f"打开{spec.display_name}",
+            label=(
+                f"重新应用{spec.display_name}"
+                if spec.module_kind == "installer"
+                else f"打开{spec.display_name}"
+            ),
             state="normal" if installed and not busy else "disabled",
             command=lambda: self._launch_tool_module(spec, manual=True),
         )
@@ -1343,18 +1476,23 @@ class SvnAutoTool:
                 command=lambda: self._on_tool_module_update(spec),
             )
         menu.add_separator()
-        menu.add_command(
-            label="选择现有程序...",
-            state="disabled" if busy else "normal",
-            command=lambda: self._choose_tool_module_path(spec),
-        )
+        if spec.allow_custom_path:
+            menu.add_command(
+                label="选择现有程序...",
+                state="disabled" if busy else "normal",
+                command=lambda: self._choose_tool_module_path(spec),
+            )
         menu.add_command(
             label="打开安装位置",
             state="normal" if installed else "disabled",
             command=lambda: self._open_tool_module_folder(spec),
         )
         menu.add_command(
-            label="复制程序路径",
+            label=(
+                "复制模块路径"
+                if spec.module_kind == "installer"
+                else "复制程序路径"
+            ),
             command=lambda: self._copy_tool_module_path(spec),
         )
         if spec == KINDLE_STATUS:
@@ -1423,6 +1561,7 @@ class SvnAutoTool:
 
     def _save_config(self) -> None:
         data = {
+            "folder_groups_version": 2,
             "folder_groups": self.folder_groups,
             "run_bin_update": self.run_bin_update.get(),
             "run_build_after_cleanup": self.run_build_after_cleanup.get(),
@@ -1475,9 +1614,10 @@ class SvnAutoTool:
         candidates = []
         for folder_items in self.folder_groups.values():
             for item in folder_items:
-                path_text = str(item.get("path", ""))
-                if path_text:
-                    candidates.append(Path(path_text))
+                candidates.extend(
+                    Path(path)
+                    for path in folder_task_paths(item)
+                )
         candidates.sort(key=lambda path: len(str(path)), reverse=True)
         for base in candidates:
             try:
@@ -1574,6 +1714,8 @@ class SvnAutoTool:
                 status = "检查中..."
             elif state == "downloading":
                 status = "下载并安装中..."
+            elif state == "applying":
+                status = "应用中..."
             elif state == "failed":
                 status = "检查失败"
             elif state == "ready" and manifest:
@@ -1590,7 +1732,7 @@ class SvnAutoTool:
             action_button = self.tool_module_action_buttons.get(spec.module_id)
             status_label = self.tool_module_status_labels.get(spec.module_id)
             path_tooltip = self.tool_module_path_tooltips.get(spec.module_id)
-            busy = state in {"checking", "downloading"}
+            busy = state in {"checking", "downloading", "applying"}
             if action_button:
                 action_button.configure(
                     text=tool_module_primary_label(
@@ -1616,13 +1758,17 @@ class SvnAutoTool:
                 )
             if path_tooltip:
                 path_tooltip.set_text(
-                    f"{status}\n程序位置：{executable}"
+                    f"{status}\n"
+                    f"{'模块' if spec.module_kind == 'installer' else '程序'}"
+                    f"位置：{executable}"
                 )
 
     def _on_kindle_status_setting_changed(self) -> None:
         self._save_config()
 
     def _choose_tool_module_path(self, spec: ToolModuleSpec) -> None:
+        if not spec.allow_custom_path:
+            return
         executable = self._resolve_tool_module_executable(spec)
         initial_dir = executable.parent if executable else Path.home() / "Downloads"
         file_path = filedialog.askopenfilename(
@@ -1667,6 +1813,9 @@ class SvnAutoTool:
         *,
         manual: bool,
     ) -> None:
+        if spec.module_kind == "installer":
+            self._apply_installed_tool_module(spec, manual=manual)
+            return
         try:
             result = self.tool_module_manager.launch(
                 spec,
@@ -1693,6 +1842,102 @@ class SvnAutoTool:
             self._configured_tool_module_path(spec),
         )
         self._log(f"已启动{spec.display_name}：{executable}")
+
+    def _apply_installed_tool_module(
+        self,
+        spec: ToolModuleSpec,
+        *,
+        manual: bool,
+    ) -> None:
+        configured_path = self._configured_tool_module_path(spec)
+        if not self.tool_module_manager.is_installed(spec, configured_path):
+            message = f"{spec.display_name}尚未安装，请先安装。"
+            self._log(message)
+            if manual:
+                messagebox.showwarning("无法应用模块", message)
+            return
+        if self.tool_module_manager.is_running(spec):
+            message = "请先完全退出 Seria.exe，再重新应用。"
+            self._log(f"{spec.display_name}应用失败：{message}")
+            if manual:
+                messagebox.showwarning("无法应用模块", message)
+            return
+        if manual and not messagebox.askyesno(
+            f"应用{spec.display_name}",
+            "将把当前已安装版本重新应用到本机 trunk。\n"
+            "游戏配置中的无关设置不会被覆盖。",
+        ):
+            return
+        self.tool_module_states[spec.module_id] = "applying"
+        self._refresh_tool_module_rows()
+        threading.Thread(
+            target=self._apply_installed_tool_module_worker,
+            args=(spec, configured_path, manual),
+            daemon=True,
+        ).start()
+
+    def _apply_installed_tool_module_worker(
+        self,
+        spec: ToolModuleSpec,
+        configured_path: str | None,
+        manual: bool,
+    ) -> None:
+        try:
+            target = self.tool_module_manager.apply_installed_package(
+                spec,
+                configured_path,
+            )
+        except Exception as exc:
+            message = str(exc)
+            self.root.after(
+                0,
+                lambda: self._tool_module_apply_failed(spec, message, manual),
+            )
+            return
+        self.root.after(
+            0,
+            lambda: self._tool_module_apply_succeeded(
+                spec,
+                target,
+                manual,
+            ),
+        )
+
+    def _tool_module_apply_succeeded(
+        self,
+        spec: ToolModuleSpec,
+        target: Path,
+        manual: bool,
+    ) -> None:
+        self.tool_module_states[spec.module_id] = "idle"
+        self._refresh_tool_module_rows()
+        version = self.tool_module_manager.local_version(
+            spec,
+            self._configured_tool_module_path(spec),
+        )
+        self._log(
+            f"{spec.display_name} v{version} 已重新应用：{target}"
+        )
+        if manual:
+            messagebox.showinfo(
+                f"{spec.display_name}应用完成",
+                f"已重新应用 v{version}。",
+            )
+
+    def _tool_module_apply_failed(
+        self,
+        spec: ToolModuleSpec,
+        message: str,
+        manual: bool,
+    ) -> None:
+        self.tool_module_states[spec.module_id] = "idle"
+        self._refresh_tool_module_rows()
+        self._log(f"{spec.display_name}应用失败：{message}")
+        if manual:
+            messagebox.showerror(
+                f"{spec.display_name}应用失败",
+                message,
+            )
 
     def _on_tool_module_primary(self, spec: ToolModuleSpec) -> None:
         if (
@@ -1739,6 +1984,7 @@ class SvnAutoTool:
         if self.tool_module_states.get(spec.module_id) in {
             "checking",
             "downloading",
+            "applying",
         }:
             return
         self.tool_module_states[spec.module_id] = "checking"
@@ -1831,10 +2077,24 @@ class SvnAutoTool:
         installed = self.tool_module_manager.is_installed(spec, configured_path)
         running = self.tool_module_manager.is_running(spec)
         action = "更新" if installed else "安装"
-        details = (
-            f"将{action}{spec.display_name} v{manifest.version}。\n"
-            "只会替换程序文件和公开版本文件，模块配置不会被覆盖。"
-        )
+        if spec.module_kind == "installer":
+            if running:
+                messagebox.showwarning(
+                    f"无法{action}{spec.display_name}",
+                    "请先完全退出 Seria.exe，再重新执行。",
+                )
+                return
+            details = (
+                f"将{action}并应用{spec.display_name} "
+                f"v{manifest.version} 到本机 trunk。\n"
+                "会校验完整安装包并调用模块自带安装器；"
+                "游戏配置中的无关设置不会被覆盖。"
+            )
+        else:
+            details = (
+                f"将{action}{spec.display_name} v{manifest.version}。\n"
+                "只会替换程序文件和公开版本文件，模块配置不会被覆盖。"
+            )
         if running:
             interruption = (
                 "\n\n程序当前正在运行，确认后会关闭并在更新完成后重新启动。"
@@ -1923,11 +2183,17 @@ class SvnAutoTool:
         self.tool_module_states[spec.module_id] = "idle"
         self._refresh_tool_module_rows()
         self._log(
-            f"{spec.display_name} v{manifest.version} 已安装：{target}"
+            f"{spec.display_name} v{manifest.version} "
+            f"{'已安装并应用' if spec.module_kind == 'installer' else '已安装'}"
+            f"：{target}"
         )
         messagebox.showinfo(
             f"{spec.display_name}安装完成",
-            f"已安装 v{manifest.version}。",
+            (
+                f"已安装并应用 v{manifest.version}。"
+                if spec.module_kind == "installer"
+                else f"已安装 v{manifest.version}。"
+            ),
         )
 
     def _tool_module_install_failed(
@@ -2116,7 +2382,17 @@ class SvnAutoTool:
         return hour >= 19 or hour < 6
 
     def _apply_visual_theme(self, theme: str) -> None:
-        configure_svnmate_styles(self.root, self.ui_style, theme)
+        colors = configure_svnmate_styles(self.root, self.ui_style, theme)
+        for tree in self.folder_trees.values():
+            tree.tag_configure(
+                "folder-group",
+                foreground=colors["accent"],
+            )
+            tree.tag_configure(
+                "drop-target",
+                background=colors["selected"],
+                foreground=colors["selected_text"],
+            )
         self._refresh_update_dot()
         self._refresh_completion_summary_style()
 
@@ -2130,23 +2406,13 @@ class SvnAutoTool:
 
         old_folders = data.get("folders", [])
         return {
-            "left": [{"path": str(Path(p)), "enabled": True} for p in old_folders if p],
+            "left": normalize_folder_task_items(old_folders),
             "right": [],
         }
 
     @staticmethod
     def _normalize_folder_items(items: object) -> list[dict[str, object]]:
-        normalized: list[dict[str, object]] = []
-        if not isinstance(items, list):
-            return normalized
-        for item in items:
-            if isinstance(item, dict):
-                path = item.get("path")
-                if path:
-                    normalized.append({"path": str(Path(str(path))), "enabled": bool(item.get("enabled", True))})
-            elif item:
-                normalized.append({"path": str(Path(str(item))), "enabled": True})
-        return normalized
+        return normalize_folder_task_items(items)
 
     def _refresh_folder_list(self) -> None:
         for group_key, tree in self.folder_trees.items():
@@ -2154,7 +2420,31 @@ class SvnAutoTool:
                 tree.delete(item)
             for index, folder_item in enumerate(self.folder_groups[group_key]):
                 checked = "[x]" if bool(folder_item.get("enabled", True)) else "[ ]"
-                tree.insert("", END, iid=str(index), values=(checked, folder_item.get("path", "")))
+                paths = folder_task_paths(folder_item)
+                label = (
+                    paths[0]
+                    if len(paths) == 1
+                    else f"{len(paths)} 个文件夹  |  " + "  +  ".join(paths)
+                )
+                tags = ("folder-group",) if len(paths) > 1 else ()
+                tree.insert(
+                    "",
+                    END,
+                    iid=str(index),
+                    values=(checked, label),
+                    tags=tags,
+                )
+            enabled_count = sum(
+                bool(item.get("enabled", True))
+                for item in self.folder_groups[group_key]
+            )
+            if enabled_count == len(self.folder_groups[group_key]) and enabled_count:
+                marker = "[x]"
+            elif enabled_count:
+                marker = "[-]"
+            else:
+                marker = "[ ]"
+            tree.heading("enabled", text=f"执行 {marker}")
 
     def _add_folder(self, group_key: str) -> None:
         folder = filedialog.askdirectory(title="选择需要执行 svn update 的文件夹")
@@ -2164,7 +2454,9 @@ class SvnAutoTool:
         if self._folder_exists(normalized):
             messagebox.showinfo("文件夹已存在", "这个文件夹已经在列表中了。")
             return
-        self.folder_groups[group_key].append({"path": normalized, "enabled": True})
+        self.folder_groups[group_key].append(
+            {"paths": [normalized], "enabled": True}
+        )
         self._refresh_folder_list()
         self._save_config()
 
@@ -2181,26 +2473,254 @@ class SvnAutoTool:
         self._save_config()
 
     def _clear_folders(self, group_key: str) -> None:
-        if self.folder_groups[group_key] and not messagebox.askyesno("确认清空", "确定要清空本栏所有文件夹吗？"):
+        if self.folder_groups[group_key] and not messagebox.askyesno(
+            "确认全部移除",
+            "确定要移除本栏全部任务组吗？",
+        ):
             return
         self.folder_groups[group_key] = []
         self._refresh_folder_list()
         self._save_config()
 
     def _folder_exists(self, path: str) -> bool:
-        target = path.lower()
+        target = normalized_path_key(path)
         for folder_items in self.folder_groups.values():
             for item in folder_items:
-                if str(item.get("path", "")).lower() == target:
-                    return True
+                for existing in folder_task_paths(item):
+                    if normalized_path_key(existing) == target:
+                        return True
         return False
 
-    def _on_folder_tree_click(self, event: object, group_key: str) -> None:
+    def _toggle_all_folder_groups(self, group_key: str) -> None:
+        items = self.folder_groups[group_key]
+        if not items:
+            return
+        enabled = not all(
+            bool(item.get("enabled", True))
+            for item in items
+        )
+        for item in items:
+            item["enabled"] = enabled
+        self._refresh_folder_list()
+        self._save_config()
+
+    def _on_folder_drag_press(
+        self,
+        event: object,
+        group_key: str,
+    ) -> str | None:
         tree = self.folder_trees[group_key]
         row_id = tree.identify_row(event.y)
         column = tree.identify_column(event.x)
         if row_id and column == "#1":
             self._toggle_folder(group_key, int(row_id))
+            self.folder_drag_state = None
+            return "break"
+        if not row_id:
+            self.folder_drag_state = None
+            return None
+        tree.selection_set(row_id)
+        tree.focus(row_id)
+        self.folder_drag_state = {
+            "group_key": group_key,
+            "index": int(row_id),
+            "x_root": int(getattr(event, "x_root", 0)),
+            "y_root": int(getattr(event, "y_root", 0)),
+            "active": False,
+        }
+        return "break"
+
+    def _on_folder_drag_motion(
+        self,
+        event: object,
+        _group_key: str,
+    ) -> str | None:
+        state = self.folder_drag_state
+        if state is None:
+            return None
+        distance = max(
+            abs(int(getattr(event, "x_root", 0)) - int(state["x_root"])),
+            abs(int(getattr(event, "y_root", 0)) - int(state["y_root"])),
+        )
+        if distance < FOLDER_DRAG_THRESHOLD:
+            return "break"
+        state["active"] = True
+        for tree in self.folder_trees.values():
+            tree.configure(cursor="fleur")
+        self._set_folder_drop_target(
+            self._folder_drop_location(
+                int(getattr(event, "x_root", 0)),
+                int(getattr(event, "y_root", 0)),
+            )
+        )
+        return "break"
+
+    def _on_folder_drag_release(
+        self,
+        event: object,
+        _group_key: str,
+    ) -> str | None:
+        state = self.folder_drag_state
+        self.folder_drag_state = None
+        for tree in self.folder_trees.values():
+            tree.configure(cursor="")
+        target = self._folder_drop_location(
+            int(getattr(event, "x_root", 0)),
+            int(getattr(event, "y_root", 0)),
+        )
+        self._set_folder_drop_target(None)
+        if state is None or not bool(state.get("active")) or target is None:
+            return None
+
+        source_key = str(state["group_key"])
+        source_index = int(state["index"])
+        target_key, target_row = target
+        changed = False
+        status = ""
+        if target_row:
+            changed = self._merge_folder_groups(
+                source_key,
+                source_index,
+                target_key,
+                int(target_row),
+            )
+            status = "任务组已合并"
+        elif source_key == target_key:
+            changed = self._split_folder_group(source_key, source_index)
+            status = "任务组已拆分"
+            if not changed:
+                changed = self._move_folder_group_to_end(
+                    source_key,
+                    source_index,
+                    target_key,
+                )
+                status = "任务组已移动"
+        else:
+            changed = self._move_folder_group_to_end(
+                source_key,
+                source_index,
+                target_key,
+            )
+            status = "任务组已移动"
+
+        if changed:
+            self._refresh_folder_list()
+            self._save_config()
+            self.status_text.set(status)
+        return "break"
+
+    def _folder_drop_location(
+        self,
+        x_root: int,
+        y_root: int,
+    ) -> tuple[str, str] | None:
+        for group_key, tree in self.folder_trees.items():
+            left = tree.winfo_rootx()
+            top = tree.winfo_rooty()
+            if not (
+                left <= x_root < left + tree.winfo_width()
+                and top <= y_root < top + tree.winfo_height()
+            ):
+                continue
+            return group_key, tree.identify_row(y_root - top)
+        return None
+
+    def _set_folder_drop_target(
+        self,
+        target: tuple[str, str] | None,
+    ) -> None:
+        previous = self.folder_drop_target
+        if previous == target:
+            return
+        if previous is not None:
+            group_key, row_id = previous
+            tree = self.folder_trees.get(group_key)
+            if tree is not None and row_id in tree.get_children():
+                index = int(row_id)
+                tags = (
+                    ("folder-group",)
+                    if len(
+                        folder_task_paths(
+                            self.folder_groups[group_key][index]
+                        )
+                    )
+                    > 1
+                    else ()
+                )
+                tree.item(row_id, tags=tags)
+        self.folder_drop_target = target
+        if target is None:
+            return
+        group_key, row_id = target
+        tree = self.folder_trees[group_key]
+        if row_id and row_id in tree.get_children():
+            tree.item(row_id, tags=("drop-target",))
+
+    def _merge_folder_groups(
+        self,
+        source_key: str,
+        source_index: int,
+        target_key: str,
+        target_index: int,
+    ) -> bool:
+        source_groups = self.folder_groups[source_key]
+        target_groups = self.folder_groups[target_key]
+        if (
+            source_index < 0
+            or source_index >= len(source_groups)
+            or target_index < 0
+            or target_index >= len(target_groups)
+            or (
+                source_key == target_key
+                and source_index == target_index
+            )
+        ):
+            return False
+
+        source_item = source_groups.pop(source_index)
+        if source_key == target_key and source_index < target_index:
+            target_index -= 1
+        target_item = target_groups[target_index]
+        combined = list(folder_task_paths(target_item))
+        seen = {normalized_path_key(path) for path in combined}
+        for path in folder_task_paths(source_item):
+            key = normalized_path_key(path)
+            if key not in seen:
+                seen.add(key)
+                combined.append(path)
+        target_item["paths"] = combined
+        target_item.pop("path", None)
+        return True
+
+    def _split_folder_group(self, group_key: str, index: int) -> bool:
+        groups = self.folder_groups[group_key]
+        if index < 0 or index >= len(groups):
+            return False
+        item = groups[index]
+        paths = folder_task_paths(item)
+        if len(paths) < 2:
+            return False
+        enabled = bool(item.get("enabled", True))
+        groups[index:index + 1] = [
+            {"paths": [path], "enabled": enabled}
+            for path in paths
+        ]
+        return True
+
+    def _move_folder_group_to_end(
+        self,
+        source_key: str,
+        source_index: int,
+        target_key: str,
+    ) -> bool:
+        source_groups = self.folder_groups[source_key]
+        if source_index < 0 or source_index >= len(source_groups):
+            return False
+        if source_key == target_key and source_index == len(source_groups) - 1:
+            return False
+        item = source_groups.pop(source_index)
+        self.folder_groups[target_key].append(item)
+        return True
 
     def _show_folder_context_menu(self, event: object, group_key: str) -> None:
         tree = self.folder_trees[group_key]
@@ -2213,19 +2733,82 @@ class SvnAutoTool:
         tree.selection_set(row_id)
         tree.focus(row_id)
         menu = Menu(tree, tearoff=False)
-        menu.add_command(
-            label="在资源管理器中打开",
-            command=lambda: self._open_folder(group_key, index),
-        )
+        paths = folder_task_paths(self.folder_groups[group_key][index])
+        for path_index, path in enumerate(paths):
+            label = (
+                "在资源管理器中打开"
+                if len(paths) == 1
+                else f"打开 {Path(path).name or path}"
+            )
+            menu.add_command(
+                label=label,
+                command=lambda current=path_index: self._open_folder(
+                    group_key,
+                    index,
+                    current,
+                ),
+            )
+        if len(paths) > 1:
+            menu.add_separator()
+            menu.add_command(
+                label="拆分任务组",
+                command=lambda: self._split_folder_group_and_refresh(
+                    group_key,
+                    index,
+                ),
+            )
+        if index > 0:
+            menu.add_command(
+                label="与上一组合并",
+                command=lambda: self._merge_folder_groups_and_refresh(
+                    group_key,
+                    index,
+                    group_key,
+                    index - 1,
+                ),
+            )
         try:
             menu.tk_popup(event.x_root, event.y_root)
         finally:
             menu.grab_release()
 
-    def _open_folder(self, group_key: str, index: int) -> bool:
+    def _merge_folder_groups_and_refresh(
+        self,
+        source_key: str,
+        source_index: int,
+        target_key: str,
+        target_index: int,
+    ) -> None:
+        if self._merge_folder_groups(
+            source_key,
+            source_index,
+            target_key,
+            target_index,
+        ):
+            self._refresh_folder_list()
+            self._save_config()
+
+    def _split_folder_group_and_refresh(
+        self,
+        group_key: str,
+        index: int,
+    ) -> None:
+        if self._split_folder_group(group_key, index):
+            self._refresh_folder_list()
+            self._save_config()
+
+    def _open_folder(
+        self,
+        group_key: str,
+        index: int,
+        path_index: int = 0,
+    ) -> bool:
         if index < 0 or index >= len(self.folder_groups[group_key]):
             return False
-        folder = Path(str(self.folder_groups[group_key][index].get("path", "")))
+        paths = folder_task_paths(self.folder_groups[group_key][index])
+        if path_index < 0 or path_index >= len(paths):
+            return False
+        folder = Path(paths[path_index])
         if not folder.is_dir():
             messagebox.showwarning("无法打开文件夹", f"文件夹不存在：\n{folder}")
             return False
@@ -2249,13 +2832,30 @@ class SvnAutoTool:
         self._refresh_folder_list()
         self._save_config()
 
-    def _get_enabled_folders(self) -> list[str]:
-        enabled_paths: list[str] = []
+    def _get_enabled_folder_groups(self) -> list[list[str]]:
+        enabled_groups: list[list[str]] = []
+        seen: set[str] = set()
         for folder_items in self.folder_groups.values():
             for item in folder_items:
-                if bool(item.get("enabled", True)) and item.get("path"):
-                    enabled_paths.append(str(item["path"]))
-        return enabled_paths
+                if not bool(item.get("enabled", True)):
+                    continue
+                paths: list[str] = []
+                for path in folder_task_paths(item):
+                    key = normalized_path_key(path)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    paths.append(path)
+                if paths:
+                    enabled_groups.append(paths)
+        return enabled_groups
+
+    def _get_enabled_folders(self) -> list[str]:
+        return [
+            path
+            for group in self._get_enabled_folder_groups()
+            for path in group
+        ]
 
     def _on_schedule_changed(self) -> None:
         if self.enable_schedule.get() and self._parse_schedule_time() is None:
@@ -2325,6 +2925,9 @@ class SvnAutoTool:
                 "executed_by": "svnmate",
                 "ok": True,
                 "status": "busy" if self.running else "ready",
+                "queue_depth": len(
+                    getattr(self, "ipc_update_queue", ())
+                ),
                 "version": APP_VERSION,
             }
         if command != "update":
@@ -2360,6 +2963,7 @@ class SvnAutoTool:
                 "message": str(exc),
             }
         if not completed.wait(IPC_REQUEST_TIMEOUT_SECONDS):
+            completed.set()
             return {
                 "protocol_version": IPC_PROTOCOL_VERSION,
                 "request_id": request.get("request_id", ""),
@@ -2378,20 +2982,44 @@ class SvnAutoTool:
         completed: threading.Event,
     ) -> None:
         if self.running:
-            response.update(
-                {
-                    "protocol_version": IPC_PROTOCOL_VERSION,
-                    "request_id": request.get("request_id", ""),
-                    "command": "update",
-                    "executed_by": "svnmate",
-                    "ok": False,
-                    "status": "busy",
-                    "message": "SVNmate 当前有任务正在执行",
-                }
+            pending = getattr(self, "ipc_update_queue", None)
+            if pending is None:
+                pending = deque()
+                self.ipc_update_queue = pending
+            if len(pending) >= MAX_PENDING_IPC_UPDATES:
+                response.update(
+                    {
+                        "protocol_version": IPC_PROTOCOL_VERSION,
+                        "request_id": request.get("request_id", ""),
+                        "command": "update",
+                        "executed_by": "svnmate",
+                        "ok": False,
+                        "status": "queue-full",
+                        "message": "SVNmate 外部更新队列已满，请稍后重试",
+                    }
+                )
+                completed.set()
+                return
+            pending.append((request, response, completed))
+            source = " ".join(
+                str(request.get("source", "external")).split()
+            )[:80]
+            self._log(
+                f"[排队] 外部更新（{source}）已加入 SVNmate 队列，"
+                f"位置 {len(pending)}"
             )
-            completed.set()
             return
 
+        self._launch_ipc_update(request, response, completed)
+
+    def _launch_ipc_update(
+        self,
+        request: dict[str, object],
+        response: dict[str, object],
+        completed: threading.Event,
+    ) -> None:
+        if completed.is_set():
+            return
         folders = [
             str(folder)
             for folder in request.get("folders", [])
@@ -2423,6 +3051,26 @@ class SvnAutoTool:
             daemon=True,
         )
         self.worker_thread.start()
+
+    def _start_next_queued_ipc_update(self) -> None:
+        if self.running:
+            return
+        pending = getattr(self, "ipc_update_queue", None)
+        if not pending:
+            return
+        while pending:
+            request, response, completed = pending.popleft()
+            if completed.is_set():
+                continue
+            source = " ".join(
+                str(request.get("source", "external")).split()
+            )[:80]
+            self._log(
+                f"[出队] 开始执行外部更新（{source}），"
+                f"队列剩余 {len(pending)}"
+            )
+            self._launch_ipc_update(request, response, completed)
+            return
 
     def _run_ipc_update(
         self,
@@ -2461,8 +3109,8 @@ class SvnAutoTool:
         if self.running:
             messagebox.showinfo("正在执行", "当前任务还没有结束，请稍后再试。")
             return
-        enabled_folders = self._get_enabled_folders()
-        if not enabled_folders:
+        enabled_groups = self._get_enabled_folder_groups()
+        if not enabled_groups:
             messagebox.showwarning("没有勾选文件夹", "请先勾选至少一个需要更新的文件夹。")
             return
         self._save_config()
@@ -2472,44 +3120,137 @@ class SvnAutoTool:
         self.live_log.configure(style="LiveLog.Treeview")
         self.status_text.set(f"{trigger}中...")
         self._log(f"========== {trigger}开始：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ==========")
-        self.worker_thread = threading.Thread(target=self._run_all_tasks, args=(trigger, enabled_folders), daemon=True)
+        execution_settings = (
+            bool(self.run_bin_update.get()),
+            bool(self.run_build_after_cleanup.get()),
+            str(self.custom_update_bat_path.get()).strip(),
+            str(self.custom_build_bat_path.get()).strip(),
+        )
+        self.worker_thread = threading.Thread(
+            target=self._run_all_tasks,
+            args=(trigger, enabled_groups, execution_settings),
+            daemon=True,
+        )
         self.worker_thread.start()
 
-    def _run_all_tasks(self, trigger: str, enabled_folders: list[str]) -> None:
+    def _run_all_tasks(
+        self,
+        trigger: str,
+        enabled_folder_groups: Sequence[object],
+        execution_settings: tuple[bool, bool, str, str] | None = None,
+    ) -> None:
         today = datetime.now().strftime("%Y-%m-%d")
-        run_daily_bin_update = self.run_bin_update.get() and self.last_bin_update_date != today
+        if execution_settings is None:
+            execution_settings = (
+                bool(self.run_bin_update.get()),
+                bool(self.run_build_after_cleanup.get()),
+                str(self.custom_update_bat_path.get()).strip(),
+                str(self.custom_build_bat_path.get()).strip(),
+            )
+        (
+            run_bin_update,
+            run_build_after_cleanup,
+            custom_update_bat_path,
+            custom_build_bat_path,
+        ) = execution_settings
+        run_daily_bin_update = (
+            run_bin_update and self.last_bin_update_date != today
+        )
         bin_update_attempted = False
         bin_update_all_success = True
         valid_folders: list[Path] = []
         pending_bin_updates: list[tuple[Path, Future[bool]]] = []
         try:
-            with ThreadPoolExecutor(max_workers=1, thread_name_prefix="svnmate-update-bat") as bat_executor:
-                for folder_text in enabled_folders:
+            valid_groups: list[list[Path]] = []
+            for group in normalize_execution_groups(enabled_folder_groups):
+                valid_group: list[Path] = []
+                for folder_text in group:
                     folder = Path(folder_text)
                     if not folder.exists() or not folder.is_dir():
-                        self._record(folder_text, "检查文件夹", "失败", "文件夹不存在")
+                        self._record(
+                            folder_text,
+                            "检查文件夹",
+                            "失败",
+                            "文件夹不存在",
+                        )
                         continue
                     valid_folders.append(folder)
-                    update_ok = self._run_command(
-                        folder,
-                        self._svn_update_command(folder),
-                        "svn update",
-                        auto_cleanup=True,
-                    )
-                    if getattr(self, "invalid_handle_restart_pending", False):
-                        return
-                    attempted, success, queued = self._queue_update_bat_scripts(
-                        folder,
-                        update_ok,
-                        run_daily_bin_update,
-                        bat_executor,
-                    )
-                    bin_update_attempted = bin_update_attempted or attempted
-                    bin_update_all_success = bin_update_all_success and success
-                    pending_bin_updates.extend(queued)
+                    valid_group.append(folder)
+                if valid_group:
+                    valid_groups.append(valid_group)
 
+            root_locks = {
+                working_copy_lock_identity(folder)[0]: threading.Lock()
+                for folder in valid_folders
+            }
+            if custom_update_bat_path:
+                for folder in valid_folders:
+                    custom_update = self._resolve_custom_script(
+                        folder,
+                        custom_update_bat_path,
+                    )
+                    if custom_update is not None:
+                        root_key, _root = working_copy_lock_identity(
+                            custom_update.parent
+                        )
+                        root_locks.setdefault(root_key, threading.Lock())
+            worker_count = min(
+                MAX_PARALLEL_UPDATE_GROUPS,
+                len(valid_groups),
+            )
+            if valid_groups:
+                self._log(
+                    f"[调度] {len(valid_groups)} 个任务组，"
+                    f"最多 {worker_count} 组并行；同一 WC 自动排队"
+                )
+
+            with ThreadPoolExecutor(
+                max_workers=1,
+                thread_name_prefix="svnmate-update-bat",
+            ) as bat_executor:
+                with ThreadPoolExecutor(
+                    max_workers=max(1, worker_count),
+                    thread_name_prefix="svnmate-update-group",
+                ) as group_executor:
+                    group_futures = [
+                        group_executor.submit(
+                            self._run_update_group,
+                            group_index,
+                            folders,
+                            run_daily_bin_update,
+                            bat_executor,
+                            root_locks,
+                            custom_update_bat_path,
+                        )
+                        for group_index, folders in enumerate(valid_groups)
+                    ]
+                    for group_index, future in enumerate(group_futures):
+                        try:
+                            attempted, success, queued = future.result()
+                        except Exception as exc:
+                            bin_update_all_success = False
+                            self._record(
+                                "",
+                                f"任务组 {group_index + 1}",
+                                "失败",
+                                f"任务异常：{exc}",
+                            )
+                            continue
+                        bin_update_attempted = (
+                            bin_update_attempted or attempted
+                        )
+                        bin_update_all_success = (
+                            bin_update_all_success and success
+                        )
+                        pending_bin_updates.extend(queued)
+
+                if getattr(self, "invalid_handle_restart_pending", False):
+                    return
                 if pending_bin_updates:
-                    self._log("[等待] SVN Update 已全部完成，等待后台 Update.bat 结束")
+                    self._log(
+                        "[等待] SVN Update 已全部完成，"
+                        "等待后台 Update.bat 结束"
+                    )
                 for update_bat, future in pending_bin_updates:
                     try:
                         bin_update_all_success = future.result() and bin_update_all_success
@@ -2520,7 +3261,11 @@ class SvnAutoTool:
             for folder in valid_folders:
                 if getattr(self, "invalid_handle_restart_pending", False):
                     return
-                self._run_cleanup_and_build(folder)
+                self._run_cleanup_and_build(
+                    folder,
+                    run_build_after_cleanup=run_build_after_cleanup,
+                    custom_build_bat_path=custom_build_bat_path,
+                )
 
             if run_daily_bin_update and bin_update_attempted and bin_update_all_success:
                 self.last_bin_update_date = today
@@ -2529,35 +3274,105 @@ class SvnAutoTool:
         finally:
             self.log_queue.put(("done", self._make_run_summary(trigger)))
 
+    def _run_update_group(
+        self,
+        group_index: int,
+        folders: list[Path],
+        run_daily_bin_update: bool,
+        bat_executor: ThreadPoolExecutor,
+        root_locks: dict[str, object],
+        custom_update_bat_path: str,
+    ) -> tuple[bool, bool, list[tuple[Path, Future[bool]]]]:
+        bin_update_attempted = False
+        bin_update_success = True
+        queued_updates: list[tuple[Path, Future[bool]]] = []
+        self._log(
+            f"[任务组 {group_index + 1}] 开始，"
+            f"包含 {len(folders)} 个文件夹"
+        )
+        for folder in folders:
+            if getattr(self, "invalid_handle_restart_pending", False):
+                break
+            root_key, working_copy_root = working_copy_lock_identity(folder)
+            root_lock = root_locks[root_key]
+            if root_lock.locked():
+                self._log(
+                    f"[等待] {folder} | 同一 WC 正在更新："
+                    f"{working_copy_root}"
+                )
+            with root_lock:
+                if getattr(self, "invalid_handle_restart_pending", False):
+                    break
+                update_ok = self._run_command(
+                    folder,
+                    self._svn_update_command(folder),
+                    "svn update",
+                    auto_cleanup=True,
+                )
+            if getattr(self, "invalid_handle_restart_pending", False):
+                break
+            attempted, success, queued = self._queue_update_bat_scripts(
+                folder,
+                update_ok,
+                run_daily_bin_update,
+                bat_executor,
+                root_locks,
+                custom_update_bat_path,
+            )
+            bin_update_attempted = bin_update_attempted or attempted
+            bin_update_success = bin_update_success and success
+            queued_updates.extend(queued)
+        return bin_update_attempted, bin_update_success, queued_updates
+
     def _queue_update_bat_scripts(
         self,
         folder: Path,
         update_ok: bool,
         run_daily_bin_update: bool,
         executor: ThreadPoolExecutor,
+        root_locks: dict[str, object] | None = None,
+        custom_update_bat_path: str = "",
     ) -> tuple[bool, bool, list[tuple[Path, Future[bool]]]]:
         bin_update_attempted = False
         bin_update_success = True
         queued: list[tuple[Path, Future[bool]]] = []
 
         if update_ok and run_daily_bin_update:
-            update_scripts = self._find_update_bat_scripts(folder)
+            update_scripts = self._find_update_bat_scripts(
+                folder,
+                custom_update_bat_path,
+            )
             if update_scripts:
                 for update_bat in update_scripts:
                     bin_update_attempted = True
                     self._record(str(update_bat.parent), "Update.bat", "后台执行", "继续处理后续文件夹的 SVN Update")
+                    bat_root_key, bat_working_copy_root = (
+                        working_copy_lock_identity(update_bat.parent)
+                    )
+                    bat_root_lock = (
+                        root_locks[bat_root_key]
+                        if root_locks is not None
+                        else None
+                    )
                     future = executor.submit(
-                        self._run_command,
+                        self._run_root_gated_command,
+                        bat_root_lock,
+                        bat_working_copy_root,
                         update_bat.parent,
                         self._bat_command(update_bat),
                         "Update.bat",
                         visible_console=True,
                     )
                     queued.append((update_bat, future))
-            elif self.custom_update_bat_path.get().strip():
+            elif custom_update_bat_path:
                 bin_update_attempted = True
                 bin_update_success = False
-                self._record(str(folder), "Update.bat", "跳过", f"未找到自定义路径：{self.custom_update_bat_path.get().strip()}")
+                self._record(
+                    str(folder),
+                    "Update.bat",
+                    "跳过",
+                    f"未找到自定义路径：{custom_update_bat_path}",
+                )
             else:
                 for bin_folder in self._find_bin_folders(folder):
                     bin_update_attempted = True
@@ -2565,22 +3380,82 @@ class SvnAutoTool:
                     self._record(str(bin_folder / "WindowsNoEditor"), "Update.bat", "跳过", "未找到 WindowsNoEditor\\Update.bat")
         return bin_update_attempted, bin_update_success, queued
 
-    def _run_cleanup_and_build(self, folder: Path) -> None:
+    def _run_root_gated_command(
+        self,
+        root_lock: object | None,
+        working_copy_root: Path | None,
+        cwd: Path,
+        command: list[str],
+        action: str,
+        *,
+        visible_console: bool = False,
+    ) -> bool:
+        if root_lock is None:
+            return self._run_command(
+                cwd,
+                command,
+                action,
+                visible_console=visible_console,
+            )
+        if root_lock.locked():
+            self._log(
+                f"[等待] {action} | {cwd} | 同一 WC 正在执行："
+                f"{working_copy_root}"
+            )
+        with root_lock:
+            if getattr(self, "invalid_handle_restart_pending", False):
+                return False
+            return self._run_command(
+                cwd,
+                command,
+                action,
+                visible_console=visible_console,
+            )
+
+    def _run_cleanup_and_build(
+        self,
+        folder: Path,
+        *,
+        run_build_after_cleanup: bool | None = None,
+        custom_build_bat_path: str | None = None,
+    ) -> None:
         cleanup_ok = self._run_command(folder, self._svn_cleanup_command(folder), "svn cleanup")
 
-        if cleanup_ok and self.run_build_after_cleanup.get():
-            build_scripts = self._find_build_bat_scripts(folder)
+        if run_build_after_cleanup is None:
+            run_build_after_cleanup = bool(
+                self.run_build_after_cleanup.get()
+            )
+        if custom_build_bat_path is None:
+            custom_build_bat_path = str(
+                self.custom_build_bat_path.get()
+            ).strip()
+        if cleanup_ok and run_build_after_cleanup:
+            build_scripts = self._find_build_bat_scripts(
+                folder,
+                custom_build_bat_path,
+            )
             if build_scripts:
                 for build_bat in build_scripts:
                     self._run_command(build_bat.parent, self._bat_command(build_bat), "Build.bat", visible_console=True)
-            elif self.custom_build_bat_path.get().strip():
-                self._record(str(folder), "Build.bat", "跳过", f"未找到自定义路径：{self.custom_build_bat_path.get().strip()}")
+            elif custom_build_bat_path:
+                self._record(
+                    str(folder),
+                    "Build.bat",
+                    "跳过",
+                    f"未找到自定义路径：{custom_build_bat_path}",
+                )
             else:
                 for res_folder in self._find_res_folders(folder):
                     self._record(str(res_folder), "Build.bat", "跳过", "未找到 Build.bat")
 
-    def _find_update_bat_scripts(self, folder: Path) -> list[Path]:
-        custom = self._resolve_custom_script(folder, self.custom_update_bat_path.get())
+    def _find_update_bat_scripts(
+        self,
+        folder: Path,
+        custom_path: str | None = None,
+    ) -> list[Path]:
+        if custom_path is None:
+            custom_path = str(self.custom_update_bat_path.get())
+        custom = self._resolve_custom_script(folder, custom_path)
         if custom:
             return [custom]
         candidates = []
@@ -2590,8 +3465,14 @@ class SvnAutoTool:
                 candidates.append(update_bat)
         return self._dedupe_paths(candidates)
 
-    def _find_build_bat_scripts(self, folder: Path) -> list[Path]:
-        custom = self._resolve_custom_script(folder, self.custom_build_bat_path.get())
+    def _find_build_bat_scripts(
+        self,
+        folder: Path,
+        custom_path: str | None = None,
+    ) -> list[Path]:
+        if custom_path is None:
+            custom_path = str(self.custom_build_bat_path.get())
+        custom = self._resolve_custom_script(folder, custom_path)
         if custom:
             return [custom]
         candidates = []
@@ -2870,7 +3751,9 @@ class SvnAutoTool:
 
             ready_for_pause_input = childless_since is not None and now - childless_since >= 1
             if ready_for_pause_input and now - started_at > 5 and now - last_enter_at > 5:
-                console_input_sent = self._write_enter_to_process_console(process.pid)
+                console_input_sent = self._write_enter_to_process_console(
+                    process.pid
+                )
                 if not console_input_sent and not fallback_enter_sent:
                     fallback_enter_sent = self._press_enter_for_process_window(process.pid, console_title)
                 last_enter_at = now
@@ -3343,12 +4226,24 @@ class SvnAutoTool:
 
     def _log(self, line: str) -> None:
         timestamped = f"{datetime.now().strftime('%H:%M:%S')}  {line}"
-        try:
-            LOG_DIR.mkdir(parents=True, exist_ok=True)
-            with self._current_log_path().open("a", encoding="utf-8") as fp:
-                fp.write(timestamped + "\n")
-        except OSError:
-            pass
+        log_lock = getattr(self, "log_lock", None)
+
+        def write_to_disk() -> None:
+            try:
+                LOG_DIR.mkdir(parents=True, exist_ok=True)
+                with self._current_log_path().open(
+                    "a",
+                    encoding="utf-8",
+                ) as fp:
+                    fp.write(timestamped + "\n")
+            except OSError:
+                pass
+
+        if log_lock is None:
+            write_to_disk()
+        else:
+            with log_lock:
+                write_to_disk()
         if len(timestamped) > MAX_LIVE_LOG_CHARS:
             visible_text = (
                 timestamped[:MAX_LIVE_LOG_CHARS]
@@ -3359,7 +4254,11 @@ class SvnAutoTool:
         try:
             self.log_queue.put_nowait(("log", visible_text))
         except queue.Full:
-            self.dropped_live_log_items += 1
+            if log_lock is None:
+                self.dropped_live_log_items += 1
+            else:
+                with log_lock:
+                    self.dropped_live_log_items += 1
 
     def _current_log_path(self) -> Path:
         return LOG_DIR / f"svn_auto_tool_{datetime.now().strftime('%Y-%m-%d')}.log"
@@ -3437,6 +4336,8 @@ class SvnAutoTool:
                 }[summary.tone]
             )
             self._fade_out_music_after_tasks()
+        if done_payloads and not self.running:
+            self._start_next_queued_ipc_update()
         delay = (
             LOG_ACTIVE_POLL_MS
             if self.running or not self.log_queue.empty()
@@ -3558,6 +4459,14 @@ class SvnAutoTool:
         return True
 
     def _restart_after_invalid_handle(self) -> None:
+        worker = getattr(self, "worker_thread", None)
+        if (
+            worker is not None
+            and worker is not threading.current_thread()
+            and worker.is_alive()
+        ):
+            self.root.after(250, self._restart_after_invalid_handle)
+            return
         try:
             self._launch_restart_watcher()
         except Exception as restart_error:

@@ -24,6 +24,12 @@ class ToolModuleSpec:
     executable_name: str
     install_folder: str
     supports_updates: bool = True
+    module_kind: str = "application"
+    allow_custom_path: bool = True
+    process_name: str = ""
+    can_stop_process: bool = True
+    installer_script: str = ""
+    recovery_publisher: str = ""
 
 
 CONFIG_LINKER = ToolModuleSpec(
@@ -59,7 +65,29 @@ MIGRATION_GUARD = ToolModuleSpec(
     install_folder="MigrationGuard",
 )
 
-TOOL_MODULES = (CONFIG_LINKER, MIGRATION_GUARD, KINDLE_STATUS)
+SERIA_QA_OVERLAY = ToolModuleSpec(
+    module_id="seria-qa-overlay",
+    display_name="Seria QA Overlay",
+    manifest_url=(
+        "https://github.com/SusamMinami/SVNmate/releases/download/"
+        "seria-qa-overlay-latest/module-manifest.json"
+    ),
+    executable_name="Install-SeriaQA.cmd",
+    install_folder="SeriaQAOverlay",
+    module_kind="installer",
+    allow_custom_path=False,
+    process_name="Seria.exe",
+    can_stop_process=False,
+    installer_script="Install-SeriaTool.ps1",
+    recovery_publisher="Publish-Persistent-Recovery.ps1",
+)
+
+TOOL_MODULES = (
+    CONFIG_LINKER,
+    MIGRATION_GUARD,
+    SERIA_QA_OVERLAY,
+    KINDLE_STATUS,
+)
 
 
 def module_paths_from_config(
@@ -72,6 +100,7 @@ def module_paths_from_config(
     paths = {
         CONFIG_LINKER.module_id: detected_config_linker,
         MIGRATION_GUARD.module_id: detected_migration_guard,
+        SERIA_QA_OVERLAY.module_id: "",
         KINDLE_STATUS.module_id: detected_kindle_status,
     }
     if not isinstance(data, dict):
@@ -99,19 +128,23 @@ class ToolModuleManager:
         process_stopper: Callable[[str], bool] | None = None,
         launcher: Callable[[Path], None] | None = None,
         manifest_fetcher: Callable[[str, str], ModuleManifest] | None = None,
+        package_installer: Callable[[ToolModuleSpec, Path], None] | None = None,
     ) -> None:
         self.app_dir = Path(app_dir)
         self._process_checker = process_checker or self._default_process_checker
         self._process_stopper = process_stopper or self._default_process_stopper
         self._launcher = launcher or self._default_launcher
         self._manifest_fetcher = manifest_fetcher or fetch_manifest
+        self._package_installer = (
+            package_installer or self._default_package_installer
+        )
 
     def executable_path(
         self,
         spec: ToolModuleSpec,
         configured_path: Path | str | None = None,
     ) -> Path:
-        if configured_path:
+        if configured_path and spec.allow_custom_path:
             return Path(configured_path).expanduser()
         return (
             self.app_dir
@@ -128,7 +161,7 @@ class ToolModuleManager:
         return self.executable_path(spec, configured_path).is_file()
 
     def is_running(self, spec: ToolModuleSpec) -> bool:
-        return self._process_checker(spec.executable_name)
+        return self._process_checker(spec.process_name or spec.executable_name)
 
     def local_version(
         self,
@@ -159,10 +192,26 @@ class ToolModuleManager:
         self._launcher(executable)
         return "started"
 
+    def apply_installed_package(
+        self,
+        spec: ToolModuleSpec,
+        configured_path: Path | str | None = None,
+    ) -> Path:
+        if spec.module_kind != "installer":
+            raise ModuleUpdateError(f"{spec.display_name}不是安装包型模块")
+        entrypoint = self.executable_path(spec, configured_path)
+        if not entrypoint.is_file():
+            raise ModuleUpdateError(f"{spec.display_name}尚未安装")
+        self._package_installer(spec, entrypoint.parent)
+        return entrypoint
+
     def stop(self, spec: ToolModuleSpec, timeout: float = 5.0) -> bool:
         if not self.is_running(spec):
             return True
-        if not self._process_stopper(spec.executable_name):
+        if not spec.can_stop_process:
+            return False
+        process_name = spec.process_name or spec.executable_name
+        if not self._process_stopper(process_name):
             return False
         deadline = time.monotonic() + timeout
         while self.is_running(spec) and time.monotonic() < deadline:
@@ -172,7 +221,13 @@ class ToolModuleManager:
     def check_update(self, spec: ToolModuleSpec) -> ModuleManifest:
         if not spec.supports_updates or not spec.manifest_url:
             raise ModuleUpdateError(f"{spec.display_name}暂未配置更新通道")
-        return self._manifest_fetcher(spec.manifest_url, spec.module_id)
+        manifest = self._manifest_fetcher(spec.manifest_url, spec.module_id)
+        if manifest.entrypoint.casefold() != spec.executable_name.casefold():
+            raise ModuleUpdateError(
+                f"模块入口不匹配：期望 {spec.executable_name}，"
+                f"实际 {manifest.entrypoint}"
+            )
+        return manifest
 
     def update_available(
         self,
@@ -193,6 +248,8 @@ class ToolModuleManager:
     ) -> Path:
         if manifest.module_id != spec.module_id:
             raise ModuleUpdateError("模块清单与安装目标不匹配")
+        if manifest.entrypoint.casefold() != spec.executable_name.casefold():
+            raise ModuleUpdateError("模块清单入口与安装目标不匹配")
         verify_sha256(archive, manifest.sha256)
         target = self.executable_path(spec, configured_path)
         update_root = self.app_dir / "_module_updates" / spec.module_id
@@ -203,6 +260,14 @@ class ToolModuleManager:
         if len(candidates) != 1 or not candidates[0].is_file():
             raise ModuleUpdateError(
                 f"模块压缩包缺少唯一入口文件：{manifest.entrypoint}"
+            )
+        if spec.module_kind == "installer":
+            return self._install_package(
+                spec,
+                manifest,
+                candidates[0].parent,
+                target,
+                extract_dir,
             )
 
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -226,6 +291,137 @@ class ToolModuleManager:
         finally:
             shutil.rmtree(extract_dir, ignore_errors=True)
         return target
+
+    def _install_package(
+        self,
+        spec: ToolModuleSpec,
+        manifest: ModuleManifest,
+        package_root: Path,
+        target: Path,
+        extract_dir: Path,
+    ) -> Path:
+        target_dir = target.parent
+        staged_dir = target_dir.with_name(target_dir.name + ".new")
+        backup_dir = target_dir.with_name(target_dir.name + ".bak")
+        shutil.rmtree(staged_dir, ignore_errors=True)
+        shutil.rmtree(backup_dir, ignore_errors=True)
+
+        try:
+            self._package_installer(spec, package_root)
+            shutil.copytree(package_root, staged_dir)
+            for state_dir_name in ("backups", "logs"):
+                current_state = target_dir / state_dir_name
+                if current_state.is_dir():
+                    shutil.copytree(
+                        current_state,
+                        staged_dir / state_dir_name,
+                        dirs_exist_ok=True,
+                    )
+            (staged_dir / "VERSION").write_text(
+                manifest.version + "\n",
+                encoding="utf-8",
+            )
+
+            target_dir.parent.mkdir(parents=True, exist_ok=True)
+            had_existing = target_dir.is_dir()
+            if had_existing:
+                os.replace(target_dir, backup_dir)
+            try:
+                os.replace(staged_dir, target_dir)
+            except Exception:
+                if had_existing and backup_dir.is_dir():
+                    os.replace(backup_dir, target_dir)
+                raise
+            shutil.rmtree(backup_dir, ignore_errors=True)
+        except ModuleUpdateError:
+            raise
+        except Exception as exc:
+            raise ModuleUpdateError(f"安装包应用失败：{exc}") from exc
+        finally:
+            shutil.rmtree(staged_dir, ignore_errors=True)
+            shutil.rmtree(extract_dir, ignore_errors=True)
+        return target
+
+    @staticmethod
+    def _default_package_installer(
+        spec: ToolModuleSpec,
+        package_root: Path,
+    ) -> None:
+        if os.name != "nt":
+            raise ModuleUpdateError("安装包型模块仅支持 Windows")
+        installer = package_root / spec.installer_script
+        manifest = package_root / "manifest.json"
+        publisher = package_root / spec.recovery_publisher
+        required = [installer, manifest, publisher]
+        missing = [path.name for path in required if not path.is_file()]
+        if missing:
+            raise ModuleUpdateError(
+                "模块安装包缺少文件：" + "、".join(missing)
+            )
+
+        system_drive = os.environ.get("SystemDrive", "C:")
+        seria_root = os.environ.get(
+            "SERIA_TRUNK",
+            str(Path(system_drive + "\\") / "trunk"),
+        )
+        commands = [
+            [
+                "powershell.exe",
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(installer),
+                "-ManifestPath",
+                str(manifest),
+                "-TargetPath",
+                seria_root,
+                "-Yes",
+            ],
+            [
+                "powershell.exe",
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(publisher),
+                "-ManifestPath",
+                str(manifest),
+                "-TargetPath",
+                seria_root,
+            ],
+        ]
+        for command in commands:
+            try:
+                result = subprocess.run(
+                    command,
+                    cwd=str(package_root),
+                    stdin=subprocess.DEVNULL,
+                    capture_output=True,
+                    text=True,
+                    errors="replace",
+                    timeout=10 * 60,
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                    close_fds=True,
+                    check=False,
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                raise ModuleUpdateError(
+                    f"{spec.display_name}安装器启动失败：{exc}"
+                ) from exc
+            if result.returncode != 0:
+                output = "\n".join(
+                    (result.stdout + "\n" + result.stderr).splitlines()[-12:]
+                ).strip()
+                detail = f"\n{output}" if output else ""
+                raise ModuleUpdateError(
+                    f"{spec.display_name}安装器返回 "
+                    f"{result.returncode}{detail}"
+                )
 
     @staticmethod
     def _default_process_checker(executable_name: str) -> bool:
