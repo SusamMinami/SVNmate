@@ -94,7 +94,10 @@ function Get-RemoteReleaseAssets {
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to read the remote module assets."
     }
-    return @($json | ConvertFrom-Json)
+    $parsedAssets = $json | ConvertFrom-Json
+    foreach ($asset in @($parsedAssets)) {
+        Write-Output $asset
+    }
 }
 
 function Publish-ReleaseAsset {
