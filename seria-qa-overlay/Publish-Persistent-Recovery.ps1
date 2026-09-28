@@ -9,6 +9,22 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+function Get-Sha256 {
+    param([string]$Path)
+
+    $stream = [IO.File]::OpenRead([IO.Path]::GetFullPath($Path))
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        return [BitConverter]::ToString(
+            $sha.ComputeHash($stream)
+        ).Replace("-", "")
+    }
+    finally {
+        $stream.Dispose()
+        $sha.Dispose()
+    }
+}
+
 if ([string]::IsNullOrWhiteSpace($ManifestPath)) {
     $ManifestPath = Join-Path $PSScriptRoot "manifest.json"
 }
@@ -84,7 +100,7 @@ foreach ($entry in @($manifest.payloadFiles)) {
     $destination = Join-Path $payloadTarget ([string]$entry.path)
     New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
     Copy-Item -LiteralPath $source -Destination $destination -Force
-    $actual = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash
+    $actual = Get-Sha256 $destination
     if ($actual -ne ([string]$entry.sha256).ToUpperInvariant()) {
         throw "Recovery payload hash mismatch: $($entry.path)"
     }

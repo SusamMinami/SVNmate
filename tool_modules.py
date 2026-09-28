@@ -218,6 +218,23 @@ class ToolModuleManager:
             time.sleep(0.1)
         return not self.is_running(spec)
 
+    @staticmethod
+    def _replace_path_with_retry(
+        source: Path,
+        destination: Path,
+        *,
+        timeout: float = 5.0,
+    ) -> None:
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                os.replace(source, destination)
+                return
+            except PermissionError:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.1)
+
     def check_update(self, spec: ToolModuleSpec) -> ModuleManifest:
         if not spec.supports_updates or not spec.manifest_url:
             raise ModuleUpdateError(f"{spec.display_name}暂未配置更新通道")
@@ -325,12 +342,12 @@ class ToolModuleManager:
             target_dir.parent.mkdir(parents=True, exist_ok=True)
             had_existing = target_dir.is_dir()
             if had_existing:
-                os.replace(target_dir, backup_dir)
+                self._replace_path_with_retry(target_dir, backup_dir)
             try:
-                os.replace(staged_dir, target_dir)
+                self._replace_path_with_retry(staged_dir, target_dir)
             except Exception:
                 if had_existing and backup_dir.is_dir():
-                    os.replace(backup_dir, target_dir)
+                    self._replace_path_with_retry(backup_dir, target_dir)
                 raise
             shutil.rmtree(backup_dir, ignore_errors=True)
         except ModuleUpdateError:
@@ -364,9 +381,30 @@ class ToolModuleManager:
             "SERIA_TRUNK",
             str(Path(system_drive + "\\") / "trunk"),
         )
+        system_root = Path(os.environ.get("SystemRoot", r"C:\Windows"))
+        powershell = (
+            system_root
+            / "System32"
+            / "WindowsPowerShell"
+            / "v1.0"
+            / "powershell.exe"
+        )
+        if not powershell.is_file():
+            powershell = Path("powershell.exe")
+        powershell_env = os.environ.copy()
+        for variable_name in tuple(powershell_env):
+            if variable_name.casefold() == "psmodulepath":
+                del powershell_env[variable_name]
+        powershell_env["PSModulePath"] = str(
+            system_root
+            / "System32"
+            / "WindowsPowerShell"
+            / "v1.0"
+            / "Modules"
+        )
         commands = [
             [
-                "powershell.exe",
+                str(powershell),
                 "-NoLogo",
                 "-NoProfile",
                 "-NonInteractive",
@@ -381,7 +419,7 @@ class ToolModuleManager:
                 "-Yes",
             ],
             [
-                "powershell.exe",
+                str(powershell),
                 "-NoLogo",
                 "-NoProfile",
                 "-NonInteractive",
@@ -400,6 +438,7 @@ class ToolModuleManager:
                 result = subprocess.run(
                     command,
                     cwd=str(package_root),
+                    env=powershell_env,
                     stdin=subprocess.DEVNULL,
                     capture_output=True,
                     text=True,

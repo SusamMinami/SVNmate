@@ -27,6 +27,22 @@ $headers = @{
 }
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
+function Get-Sha256 {
+    param([string]$Path)
+
+    $stream = [IO.File]::OpenRead([IO.Path]::GetFullPath($Path))
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        return [BitConverter]::ToString(
+            $sha.ComputeHash($stream)
+        ).Replace("-", "")
+    }
+    finally {
+        $stream.Dispose()
+        $sha.Dispose()
+    }
+}
+
 function Convert-ModuleVersion {
     param([string]$Value)
 
@@ -151,9 +167,7 @@ try {
     $destination = Join-Path $DownloadDirectory $fileName
     $expected = $ExpectedSha256.ToUpperInvariant()
     if (Test-Path -LiteralPath $destination -PathType Leaf) {
-        $existing = (
-            Get-FileHash -LiteralPath $destination -Algorithm SHA256
-        ).Hash
+        $existing = Get-Sha256 $destination
         if ($existing -eq $expected) {
             Write-Result @{
                 status = "downloaded"
@@ -173,7 +187,7 @@ try {
             -UseBasicParsing `
             -TimeoutSec 120 `
             -OutFile $partial
-        $actual = (Get-FileHash -LiteralPath $partial -Algorithm SHA256).Hash
+        $actual = Get-Sha256 $partial
         if ($actual -ne $expected) {
             throw "新版 Setup SHA-256 校验失败，已阻止运行。"
         }

@@ -406,6 +406,26 @@ class ToolModuleManagerTests(unittest.TestCase):
                 "2026.9.21\n",
             )
 
+    def test_installer_retries_transient_directory_access_denied(self) -> None:
+        source = Path("SeriaQAOverlay.new")
+        destination = Path("SeriaQAOverlay")
+        access_denied = PermissionError(5, "Access is denied")
+
+        with (
+            patch(
+                "tool_modules.os.replace",
+                side_effect=[access_denied, None],
+            ) as replace,
+            patch("tool_modules.time.sleep") as sleep,
+        ):
+            ToolModuleManager._replace_path_with_retry(
+                source,
+                destination,
+            )
+
+        self.assertEqual(replace.call_count, 2)
+        sleep.assert_called_once_with(0.1)
+
     @unittest.skipUnless(os.name == "nt", "Windows installer only")
     def test_default_package_installer_runs_deploy_then_recovery(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -423,7 +443,15 @@ class ToolModuleManagerTests(unittest.TestCase):
             )
 
             with (
-                patch.dict("os.environ", {"SERIA_TRUNK": r"D:\trunk"}),
+                patch.dict(
+                    "os.environ",
+                    {
+                        "SERIA_TRUNK": r"D:\trunk",
+                        "PSMODULEPATH": (
+                            r"C:\Program Files\PowerShell\7\Modules"
+                        ),
+                    },
+                ),
                 patch(
                     "tool_modules.subprocess.run",
                     return_value=completed,
@@ -437,6 +465,27 @@ class ToolModuleManagerTests(unittest.TestCase):
             self.assertEqual(run.call_count, 2)
             install_command = run.call_args_list[0].args[0]
             recovery_command = run.call_args_list[1].args[0]
+            powershell_env = run.call_args_list[0].kwargs["env"]
+            module_path_keys = [
+                key
+                for key in powershell_env
+                if key.casefold() == "psmodulepath"
+            ]
+            self.assertEqual(module_path_keys, ["PSModulePath"])
+            self.assertTrue(Path(install_command[0]).is_absolute())
+            self.assertEqual(
+                Path(install_command[0]).name.casefold(),
+                "powershell.exe",
+            )
+            self.assertNotIn(
+                "\\PowerShell\\7\\Modules",
+                powershell_env["PSModulePath"],
+            )
+            self.assertTrue(
+                powershell_env["PSModulePath"].casefold().endswith(
+                    "\\windowspowershell\\v1.0\\modules"
+                )
+            )
             self.assertIn("-Yes", install_command)
             self.assertEqual(
                 install_command[
