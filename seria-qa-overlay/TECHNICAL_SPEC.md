@@ -44,12 +44,13 @@ is process-local and must be repeated after a game restart.
 The same input state machine supports a compiled allowlist:
 `PrintCurrentTask`, `TaskListPrint`, `DebugTaskInfo`,
 `ShowMissionDialogInfo <positive task ID>`, `GetRotation`, `GetTOD`,
-`sceneOnlineNum`, `showLocation`, `SkipLevelSequence`,
+`MessageCurrentDateTime`, `sceneOnlineNum`, `showLocation`, `SkipLevelSequence`,
 `addtask <positive task ID>`, `AddBuff <positive Buff ID> <1-999 stacks>`, and
-`kill`. The UI can select only these enum-backed definitions. A second validation
-layer rejects any other
-command text and validates every numeric argument; arbitrary GM, Lua, unreviewed
-task mutation, and engine-command input remain unreachable. `kill` has no argument,
+`settime <YYYY-MM-DD HH:MM:SS>` and `kill`. The UI can select only these
+enum-backed definitions. A second validation layer rejects any other command
+text, validates every numeric argument, and checks the complete Gregorian date
+and 24-hour time before compiling `settime`; arbitrary GM, Lua, unreviewed task
+mutation, and engine-command input remain unreachable. `kill` has no argument,
 so it retains the game's safer default scope: hostile monsters in the player's
 current room.
 
@@ -247,9 +248,12 @@ Visual system: practical native task browser.
 - 最近变化, GM 工具, 画面诊断 and 显示设置 are separate tabs, retaining full
   diagnostic evidence without competing with held-task browsing. The GM page
   groups task, location/scene, and state commands in dense two-column tables.
-  State commands are explicitly labeled; destructive `kill` uses a red direct
-  action whose current-room enemy scope is stated beside it. Raw collection
-  metadata and task technical details are collapsed by default.
+  State commands are explicitly labeled. Server time has a strict date-time
+  field plus a local-current-time fill action and calendar-safe minute, hour,
+  and day adjustments. These controls only change the pending value and state
+  its logic-server-wide activity/refresh impact. Destructive `kill` uses a red
+  direct action whose current-room enemy scope is stated beside it. Raw
+  collection metadata and task technical details are collapsed by default.
 - The HUD never requests mouse or keyboard capture.
 
 ## 7. DLSS5 Diagnostics
@@ -371,9 +375,11 @@ the user must close the game first.
 - An existing development client reaches `LIVE` after the one-click GM
   activation without rebuilding its PAK files.
 - Every GM 工具 action submits only its compiled allowlist command. Invalid or
-  zero task/Buff IDs and Buff stacks outside 1-999 stay disabled. `kill`
-  submits directly with no argument, and the page reports submission rather
-  than claiming that the game executed the command.
+  zero task/Buff IDs, Buff stacks outside 1-999, and invalid server date-time
+  values stay disabled. `settime` accepts valid dates from 1970 onward in the
+  exact `YYYY-MM-DD HH:MM:SS` form. `kill` submits directly with no argument,
+  and the page reports submission rather than claiming that the game executed
+  the command.
 - Selecting a held task shows every configured node in its task line. Held or
   already-cached statuses remain exact; local graph inference labels traversed
   predecessors as `路径已过`. Task-card double-click copies its ID; non-held

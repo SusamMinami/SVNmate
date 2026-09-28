@@ -55,9 +55,14 @@ It combines authoritative quest state from the game's existing Lua task manager 
   the built-in GM dialog and submitting only commands compiled into the add-on.
 - The GM surface separates read-only diagnosis from approved state actions. It
   never accepts arbitrary command or Lua text. Task and Buff IDs accept positive
-  integers only; Buff stacks are bounded to 1-999. Destructive actions remain
-  visually distinct and state their exact scope, but submit directly. Task
-  mutation commands follow the same review and allowlist requirements.
+  integers only; Buff stacks are bounded to 1-999. Server time accepts only a
+  valid `YYYY-MM-DD HH:MM:SS` value and submits the fixed `settime` command.
+  Testers can fill the local current time or adjust the entered value by day,
+  hour, ten minutes, or one minute before submission. The UI states that this
+  changes logic-server activity, refresh, and date evaluation. Destructive
+  actions remain visually distinct and state their exact scope, but submit
+  directly. Task mutation commands follow the same review and allowlist
+  requirements.
 - `addtask <ID>` is an approved task mutation. A non-held configured node can be
   added from its row button or by double-clicking the node; held nodes disable
   the action to prevent an obvious duplicate request.

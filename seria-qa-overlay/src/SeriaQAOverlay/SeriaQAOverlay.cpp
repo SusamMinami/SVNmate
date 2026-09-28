@@ -53,11 +53,13 @@ namespace
 		show_mission_dialog_info,
 		get_rotation,
 		get_tod,
+		message_current_date_time,
 		scene_online_num,
 		show_location,
 		add_task,
 		skip_level_sequence,
 		add_buff,
+		set_server_time,
 		kill_hostile_monsters,
 	};
 
@@ -74,6 +76,7 @@ namespace
 		task_id,
 		node_task_id,
 		buff,
+		server_datetime,
 	};
 
 	struct gm_command_definition
@@ -88,7 +91,7 @@ namespace
 		bool destructive;
 	};
 
-	constexpr std::array<gm_command_definition, 12> gm_command_definitions = {{
+	constexpr std::array<gm_command_definition, 14> gm_command_definitions = {{
 		{ gm_command_id::print_current_task, gm_command_category::task,
 			"PrintCurrentTask", "打印当前任务",
 			"输出当前任务及可见、隐藏任务关系。", "客户端 · 日志",
@@ -113,6 +116,10 @@ namespace
 			"GetTOD", "查看场景时间",
 			"显示当前场景 TOD 时间值。", "客户端 · 屏幕与日志",
 			gm_parameter_kind::none, false },
+		{ gm_command_id::message_current_date_time, gm_command_category::location,
+			"MessageCurrentDateTime", "核对服务器时间",
+			"显示客户端当前采用的服务器日期时间，用于修改后核对。",
+			"客户端 · 游戏消息", gm_parameter_kind::none, false },
 		{ gm_command_id::scene_online_num, gm_command_category::location,
 			"sceneOnlineNum", "查询场景在线数",
 			"查询场景服帧率和在线人数；权限或环境不支持时由游戏拒绝。",
@@ -133,6 +140,10 @@ namespace
 			"AddBuff", "为自己添加 Buff",
 			"按 Buff ID 和层数为当前角色添加 Buff；需要 GM 1 级权限。",
 			"场景服 · 修改角色状态", gm_parameter_kind::buff, false },
+		{ gm_command_id::set_server_time, gm_command_category::action,
+			"settime", "设置服务器时间",
+			"修改当前逻辑服时间，影响活动开放、刷新和日期判定；仅用于测试环境。",
+			"逻辑服 · 修改全局时间", gm_parameter_kind::server_datetime, false },
 		{ gm_command_id::kill_hostile_monsters, gm_command_category::action,
 			"kill", "击杀当前房间敌人",
 			"击杀当前房间内与玩家阵营敌对的所有怪物。",
@@ -172,6 +183,8 @@ namespace
 	int64_t g_mission_dialog_task_id = 0;
 	int64_t g_buff_id = 0;
 	int g_buff_stacks = 1;
+	char g_server_datetime[20] = {};
+	bool g_server_datetime_initialized = false;
 	std::filesystem::path g_module_dir;
 	FILETIME g_process_start_time = {};
 
@@ -319,6 +332,150 @@ namespace
 		return parsed > 0;
 	}
 
+	constexpr bool parse_decimal_component(
+		std::string_view value,
+		size_t offset,
+		size_t length,
+		int &result)
+	{
+		result = 0;
+		if (offset + length > value.size())
+			return false;
+		for (size_t index = offset; index < offset + length; ++index)
+		{
+			const char character = value[index];
+			if (character < '0' || character > '9')
+				return false;
+			result = result * 10 + (character - '0');
+		}
+		return true;
+	}
+
+	constexpr bool is_leap_year(int year)
+	{
+		return year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+	}
+
+	constexpr int days_in_month(int year, int month)
+	{
+		switch (month)
+		{
+		case 2:
+			return is_leap_year(year) ? 29 : 28;
+		case 4:
+		case 6:
+		case 9:
+		case 11:
+			return 30;
+		default:
+			return 31;
+		}
+	}
+
+	constexpr bool is_valid_server_datetime(std::string_view value)
+	{
+		if (value.size() != 19 ||
+			value[4] != '-' || value[7] != '-' || value[10] != ' ' ||
+			value[13] != ':' || value[16] != ':')
+			return false;
+
+		int year = 0;
+		int month = 0;
+		int day = 0;
+		int hour = 0;
+		int minute = 0;
+		int second = 0;
+		if (!parse_decimal_component(value, 0, 4, year) ||
+			!parse_decimal_component(value, 5, 2, month) ||
+			!parse_decimal_component(value, 8, 2, day) ||
+			!parse_decimal_component(value, 11, 2, hour) ||
+			!parse_decimal_component(value, 14, 2, minute) ||
+			!parse_decimal_component(value, 17, 2, second))
+			return false;
+
+		return year >= 1970 && month >= 1 && month <= 12 &&
+			day >= 1 && day <= days_in_month(year, month) &&
+			hour <= 23 && minute <= 59 && second <= 59;
+	}
+
+	static_assert(is_valid_server_datetime("2024-02-29 23:59:59"));
+	static_assert(!is_valid_server_datetime("2023-02-29 23:59:59"));
+	static_assert(!is_valid_server_datetime("2026-09-28;kill 00:00"));
+
+	void set_server_datetime_to_local_now()
+	{
+		SYSTEMTIME local_time = {};
+		GetLocalTime(&local_time);
+		std::snprintf(
+			g_server_datetime,
+			sizeof(g_server_datetime),
+			"%04u-%02u-%02u %02u:%02u:%02u",
+			static_cast<unsigned>(local_time.wYear),
+			static_cast<unsigned>(local_time.wMonth),
+			static_cast<unsigned>(local_time.wDay),
+			static_cast<unsigned>(local_time.wHour),
+			static_cast<unsigned>(local_time.wMinute),
+			static_cast<unsigned>(local_time.wSecond));
+		g_server_datetime_initialized = true;
+	}
+
+	bool offset_server_datetime(int64_t seconds)
+	{
+		const std::string_view value(g_server_datetime);
+		if (!is_valid_server_datetime(value))
+			return false;
+
+		int year = 0;
+		int month = 0;
+		int day = 0;
+		int hour = 0;
+		int minute = 0;
+		int second = 0;
+		parse_decimal_component(value, 0, 4, year);
+		parse_decimal_component(value, 5, 2, month);
+		parse_decimal_component(value, 8, 2, day);
+		parse_decimal_component(value, 11, 2, hour);
+		parse_decimal_component(value, 14, 2, minute);
+		parse_decimal_component(value, 17, 2, second);
+
+		SYSTEMTIME system_time = {};
+		system_time.wYear = static_cast<WORD>(year);
+		system_time.wMonth = static_cast<WORD>(month);
+		system_time.wDay = static_cast<WORD>(day);
+		system_time.wHour = static_cast<WORD>(hour);
+		system_time.wMinute = static_cast<WORD>(minute);
+		system_time.wSecond = static_cast<WORD>(second);
+
+		FILETIME file_time = {};
+		if (!SystemTimeToFileTime(&system_time, &file_time))
+			return false;
+		ULARGE_INTEGER ticks = {};
+		ticks.LowPart = file_time.dwLowDateTime;
+		ticks.HighPart = file_time.dwHighDateTime;
+		const int64_t shifted_ticks =
+			static_cast<int64_t>(ticks.QuadPart) + seconds * 10'000'000;
+		if (shifted_ticks < 0)
+			return false;
+		ticks.QuadPart = static_cast<uint64_t>(shifted_ticks);
+		file_time.dwLowDateTime = ticks.LowPart;
+		file_time.dwHighDateTime = ticks.HighPart;
+		if (!FileTimeToSystemTime(&file_time, &system_time) ||
+			system_time.wYear < 1970)
+			return false;
+
+		std::snprintf(
+			g_server_datetime,
+			sizeof(g_server_datetime),
+			"%04u-%02u-%02u %02u:%02u:%02u",
+			static_cast<unsigned>(system_time.wYear),
+			static_cast<unsigned>(system_time.wMonth),
+			static_cast<unsigned>(system_time.wDay),
+			static_cast<unsigned>(system_time.wHour),
+			static_cast<unsigned>(system_time.wMinute),
+			static_cast<unsigned>(system_time.wSecond));
+		return true;
+	}
+
 	bool is_allowed_gm_submission(
 		std::string_view command,
 		bool wait_for_capture)
@@ -354,6 +511,8 @@ namespace
 				return is_positive_decimal(argument.substr(0, separator)) &&
 					is_positive_decimal(argument.substr(separator + 1), 999);
 			}
+			if (definition.parameters == gm_parameter_kind::server_datetime)
+				return is_valid_server_datetime(argument);
 		}
 		return false;
 	}
@@ -404,7 +563,8 @@ namespace
 		reshade::api::effect_runtime *runtime,
 		gm_command_id id,
 		int64_t first_argument = 0,
-		int64_t second_argument = 0)
+		int64_t second_argument = 0,
+		std::string_view text_argument = {})
 	{
 		const gm_command_definition *const definition = find_gm_command(id);
 		if (definition == nullptr)
@@ -445,6 +605,20 @@ namespace
 			}
 			command += " " + std::to_string(first_argument);
 			command += " " + std::to_string(second_argument);
+		}
+		else if (definition->parameters == gm_parameter_kind::server_datetime)
+		{
+			if (!is_valid_server_datetime(text_argument))
+			{
+				g_pending_gm_command = command;
+				g_pending_gm_label = definition->action;
+				g_pending_gm_is_capture = false;
+				fail_gm_submission(
+					"请输入有效的服务器时间，格式为 YYYY-MM-DD HH:MM:SS。");
+				return;
+			}
+			command += " ";
+			command.append(text_argument.data(), text_argument.size());
 		}
 		begin_gm_submission(runtime, std::move(command), definition->action, false);
 	}
@@ -2507,6 +2681,8 @@ namespace
 			return g_selected_task_node_id > 0;
 		case gm_parameter_kind::buff:
 			return g_buff_id > 0 && g_buff_stacks >= 1 && g_buff_stacks <= 999;
+		case gm_parameter_kind::server_datetime:
+			return is_valid_server_datetime(g_server_datetime);
 		default:
 			return true;
 		}
@@ -2565,11 +2741,16 @@ namespace
 					definition.parameters == gm_parameter_kind::buff
 						? g_buff_stacks
 						: 0;
+				const std::string_view text_argument =
+					definition.parameters == gm_parameter_kind::server_datetime
+						? std::string_view(g_server_datetime)
+						: std::string_view();
 				begin_whitelisted_gm_submission(
 					runtime,
 					definition.id,
 					first_argument,
-					second_argument);
+					second_argument,
+					text_argument);
 			}
 			if (definition.destructive)
 				ImGui::PopStyleColor(3);
@@ -2657,7 +2838,7 @@ namespace
 		ImGui::SeparatorText("状态操作");
 		ImGui::TextColored(
 			color_yellow,
-			"以下操作会改变任务、动画、角色或战斗场景状态，仅用于开发和测试环境。");
+			"以下操作会改变任务、动画、角色、服务器时间或战斗场景状态，仅用于开发和测试环境。");
 		ImGui::SetNextItemWidth(std::min(
 			ImGui::GetFontSize() * 12.0f,
 			ImGui::GetContentRegionAvail().x * 0.45f));
@@ -2692,6 +2873,73 @@ namespace
 		if (g_buff_id <= 0)
 			ImGui::TextColored(color_yellow,
 				"“为自己添加 Buff”需要有效的 Buff ID；层数范围为 1-999。");
+
+		if (!g_server_datetime_initialized)
+			set_server_datetime_to_local_now();
+		ImGui::TextUnformatted("服务器时间");
+		const float server_time_available_width = ImGui::GetContentRegionAvail().x;
+		const bool server_time_controls_inline =
+			server_time_available_width >= ImGui::GetFontSize() * 27.0f;
+		const float server_time_button_width =
+			ImGui::CalcTextSize("填入本机时间").x +
+			ImGui::GetStyle().FramePadding.x * 2.0f;
+		ImGui::SetNextItemWidth(server_time_controls_inline
+			? std::min(
+				ImGui::GetFontSize() * 17.0f,
+				server_time_available_width -
+					server_time_button_width -
+					ImGui::GetStyle().ItemSpacing.x)
+			: server_time_available_width);
+		ImGui::InputTextWithHint(
+			"##server-time",
+			"YYYY-MM-DD HH:MM:SS",
+			g_server_datetime,
+			sizeof(g_server_datetime));
+		if (server_time_controls_inline)
+			ImGui::SameLine();
+		if (ImGui::Button("填入本机时间"))
+			set_server_datetime_to_local_now();
+		if (!is_valid_server_datetime(g_server_datetime))
+			ImGui::TextColored(color_yellow,
+				"请输入有效时间，格式为 YYYY-MM-DD HH:MM:SS。");
+
+		struct time_adjustment
+		{
+			const char *label;
+			int64_t seconds;
+		};
+		constexpr std::array<time_adjustment, 8> time_adjustments = {{
+			{ "-1天", -86'400 },
+			{ "-1小时", -3'600 },
+			{ "-10分", -600 },
+			{ "-1分", -60 },
+			{ "+1分", 60 },
+			{ "+10分", 600 },
+			{ "+1小时", 3'600 },
+			{ "+1天", 86'400 },
+		}};
+		const bool time_adjustments_disabled =
+			!is_valid_server_datetime(g_server_datetime);
+		const float adjustment_row_right =
+			ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x;
+		ImGui::BeginDisabled(time_adjustments_disabled);
+		for (size_t index = 0; index < time_adjustments.size(); ++index)
+		{
+			const time_adjustment &adjustment = time_adjustments[index];
+			if (index > 0)
+			{
+				const float next_right =
+					ImGui::GetItemRectMax().x +
+					ImGui::GetStyle().ItemSpacing.x +
+					ImGui::CalcTextSize(adjustment.label).x +
+					ImGui::GetStyle().FramePadding.x * 2.0f;
+				if (next_right <= adjustment_row_right)
+					ImGui::SameLine();
+			}
+			if (ImGui::Button(adjustment.label))
+				offset_server_datetime(adjustment.seconds);
+		}
+		ImGui::EndDisabled();
 		draw_gm_command_group(
 			runtime, gm_command_category::action, "gm-state-commands");
 

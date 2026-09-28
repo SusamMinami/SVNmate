@@ -53,21 +53,23 @@ CSV 可直接用 Excel 筛选，JSON 可供后续 Overlay 构建命令面板。
 | 方向 | 指令 |
 | --- | --- |
 | 已接入：任务 | `PrintCurrentTask`、`TaskListPrint`、`DebugTaskInfo`、`ShowMissionDialogInfo` |
-| 已接入：场景与角色诊断 | `GetRotation`、`GetTOD`、`sceneOnlineNum`、`showLocation` |
-| 已批准状态操作 | `SkipLevelSequence`、`AddBuff`、`kill` |
-| 运行状态 | `MessageCurrentDateTime`、`GetVersion`、`GetSceneVersion`、`GetParam` |
+| 已接入：场景与角色诊断 | `GetRotation`、`GetTOD`、`MessageCurrentDateTime`、`sceneOnlineNum`、`showLocation` |
+| 已批准状态操作 | `SkipLevelSequence`、`AddBuff`、`settime`、`kill` |
+| 运行状态 | `GetVersion`、`GetSceneVersion`、`GetParam` |
 | UI/输入诊断 | `PrintUIStack`、`DiagnoseInputControl` |
 | 战斗只读输出 | `PrintSelfBuff`、`PrintBossAttributes`、`PrintMonsterAttribute`、`PrintPuppetInfo` |
 
 `DebugTaskInfo` 会切换本地调试显示，`showLocation` 会打开本地位置面板。
 `AddBuff` 只允许正整数 Buff ID 和 1-999 层；`kill` 固定使用无参数形式，
-仅作用于当前房间内与玩家阵营敌对的怪物，以红色按钮单击提交。
+仅作用于当前房间内与玩家阵营敌对的怪物，以红色按钮单击提交。`settime`
+只接受经过真实日历校验的 `YYYY-MM-DD HH:MM:SS`，并可用
+`MessageCurrentDateTime` 在客户端消息中核对结果。
 
 ## 暂不接入
 
 - `RunLuaString` 只保留现有固定 QA bootstrap；不得开放任意 Lua 输入。
 - `RunLua`、`RunScript`、`ExecEngineCmd`、`Debug.Eval` 等任意执行入口。
-- 除上述三个经明确批准、参数受限的状态操作外，其他含 `add`、`set`、
+- 除上述经明确批准、参数受限的状态操作外，其他含 `add`、`set`、
   `finish`、`remove`、`clear`、`kill`、`unlock`、`teleport` 等状态修改
   或破坏性指令。
 - 账号、支付、SDK、网络代理、崩溃、停服与压测指令。
