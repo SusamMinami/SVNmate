@@ -1,0 +1,69 @@
+.task-glyph {
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+.task-glyph svg { width: 100%; height: 100%; overflow: visible; }
+.task-glyph__corners { opacity: .55; transform-origin: center; }
+.task-glyph[data-phase="ready"] .task-glyph__corners,
+.task-glyph[data-phase="success"] .task-glyph__corners { transform: scale(.85); opacity: .3; }
+.task-glyph[data-phase="success"] { color: var(--state); }
+.task-glyph[data-phase="warning"],
+.task-glyph[data-phase="uncertain"] { color: var(--warning-strong); }
+.task-glyph[data-phase="failed"] { color: var(--danger); }
+.task-glyph[data-phase="cancelled"] { color: var(--text-muted); }
+.task-glyph__sweep { opacity: 0; }
+.task-glyph[data-running="true"] .task-glyph__sweep {
+  animation: task-scan 1400ms linear 250ms infinite;
+}
+.task-glyph[data-running="true"][data-variant="signal"] .task-glyph__corners {
+  animation: task-capture 1400ms cubic-bezier(.77, 0, .175, 1) 250ms infinite;
+}
+.task-glyph[data-variant="nodes"] { width: 32px; height: 32px; flex-basis: 32px; }
+.task-glyph[data-running="true"][data-variant="nodes"] .task-glyph__symbol {
+  animation: task-link 1400ms cubic-bezier(.77, 0, .175, 1) 250ms infinite;
+}
+@keyframes task-link {
+  0%, 100% { opacity: .4; }
+  50% { opacity: 1; }
+}
+.task-notice[data-phase="ready"],
+.task-notice[data-phase="running"] { color: var(--text); }
+.task-notice[data-phase="success"] { color: var(--state); }
+.task-notice[data-phase="warning"],
+.task-notice[data-phase="uncertain"] { color: var(--warning-strong); }
+.task-notice[data-phase="failed"] { color: var(--danger); }
+@keyframes task-scan {
+  0% { transform: translateY(0); opacity: 0; }
+  15% { opacity: .8; }
+  85% { opacity: .8; }
+  100% { transform: translateY(10px); opacity: 0; }
+}
+@keyframes task-capture {
+  0%, 100% { transform: scale(1); opacity: .55; }
+  50% { transform: scale(.88); opacity: 1; }
+}
+.task-progress { height: 2px; overflow: hidden; background: var(--border); }
+.task-progress > span {
+  display: block;
+  height: 100%;
+  background: var(--ink);
+  transform-origin: left;
+}
+.task-progress[data-motion="true"][data-phase="running"] > span {
+  transition: transform 160ms cubic-bezier(.23, 1, .32, 1);
+}
+.task-progress[data-phase="warning"] > span,
+.task-progress[data-phase="uncertain"] > span { background: var(--warning-strong); }
+.task-progress[data-phase="failed"] > span { background: var(--danger); }
+.task-progress[data-phase="cancelled"] > span { background: var(--text-muted); }
+@media (prefers-reduced-motion: reduce) {
+  .task-glyph .task-glyph__sweep,
+  .task-glyph .task-glyph__symbol,
+  .task-glyph .task-glyph__corners { animation: none; }
+  .task-progress > span { transition: none !important; }
+}

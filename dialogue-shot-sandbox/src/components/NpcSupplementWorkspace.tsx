@@ -1,19 +1,19 @@
 import {
   AlertTriangle,
   Check,
-  CheckCircle2,
   ClipboardCheck,
   FileInput,
   FolderOpen,
   LayoutGrid,
   ListChecks,
-  LoaderCircle,
   PackageCheck,
   Play,
   RefreshCw,
   ScanFace,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { TaskNotice } from "./TaskMotion";
+import type { TaskPhase } from "../taskFeedback";
 import type {
   NpcSupplementApplyResult,
   NpcSupplementKind,
@@ -90,6 +90,8 @@ export function NpcSupplementWorkspace({
   const [sort, setSort] = useState<SupplementSort>("modified-desc");
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
+  const [noticePhase, setNoticePhase] = useState<TaskPhase>("ready");
+  const [runId, setRunId] = useState(0);
   const reviewRevision = useRef(0);
   const selectAllCheckboxRef = useRef<HTMLInputElement>(null);
   const isFace = kind === "face";
@@ -171,6 +173,8 @@ export function NpcSupplementWorkspace({
     }
 
     setReviewSyncing(true);
+    setNoticePhase("ready");
+    setRunId((id) => id + 1);
     const selectedSnapshot = Array.from(selectedFiles);
     const faceOptionsSnapshot = Array.from(
       faceOptions,
@@ -192,6 +196,7 @@ export function NpcSupplementWorkspace({
           setPlan(next);
           setReviewedSelectionKey(selectionSnapshotKey);
           setError("");
+          setNoticePhase(next.blockedReasons.length > 0 ? "warning" : "ready");
           const reviewedItems = next.items.filter((item) => item.included);
           const reviewedFaceCount = reviewedItems.filter(
             (item) =>
@@ -237,6 +242,8 @@ export function NpcSupplementWorkspace({
   function clearFeedback(): void {
     setError("");
     setStatus("");
+    setNoticePhase("ready");
+    setRunId((id) => id + 1);
   }
 
   function acceptPlan(
@@ -267,6 +274,7 @@ export function NpcSupplementWorkspace({
     );
     setReviewSyncing(false);
     setResult(null);
+    setNoticePhase(next.blockedReasons.length > 0 ? "warning" : "ready");
     setStatus(
       statusMessage ??
         (next.blockedReasons.length > 0
@@ -447,6 +455,7 @@ export function NpcSupplementWorkspace({
     try {
       const next = await applyNpcSupplement(plan);
       setResult(next);
+      setNoticePhase(next.status === "partial" || next.montageFailures.length > 0 || next.manualChecks.length > 0 ? "warning" : "success");
       const montageFailureCount = next.montageFailures.length;
       setStatus(
         montageFailureCount > 0
@@ -456,6 +465,7 @@ export function NpcSupplementWorkspace({
             : `动作增补完成：Body ${selectedItems.length}，Face ${next.lockedRootAssetPaths.length}，创建 Montage ${next.createdMontageAssetPaths.length}`,
       );
     } catch (applyError) {
+      setNoticePhase("uncertain");
       setError(
         applyError instanceof Error ? applyError.message : "增补执行失败",
       );
@@ -466,18 +476,37 @@ export function NpcSupplementWorkspace({
 
   return (
     <div className="npc-migration-workspace npc-supplement-workspace">
-      {(error || status) && (
-        <div
-          className={`npc-migration-message ${error ? "is-error" : "is-success"}`}
-          role={error ? "alert" : "status"}
+      <div className="workspace-floating-actions">
+        <button
+          className="button workspace-floating-command"
+          type="button"
+          disabled={busy !== null}
+          onClick={() => void readTarget()}
+          title="读取策划 UE 内容浏览器中选中的 NPC BP、Body Skeletal Mesh 或 Skeleton"
+          aria-label="读取 UE 目标"
         >
-          {error ? (
-            <AlertTriangle size={16} />
-          ) : (
-            <CheckCircle2 size={16} />
-          )}
-          <span>{error || status}</span>
-        </div>
+          <RefreshCw size={16} />
+          读取 UE
+        </button>
+        <button
+          className="icon-button workspace-floating-back"
+          type="button"
+          disabled={busy !== null}
+          onClick={onBack}
+          title="返回模块选择"
+          aria-label="返回模块选择"
+        >
+          <LayoutGrid size={17} />
+        </button>
+      </div>
+      {(busy || reviewSyncing || error || status) && (
+        <TaskNotice phase={busy || reviewSyncing ? "running" : error ? noticePhase === "uncertain" ? "uncertain" : "failed" : noticePhase} runId={runId}>
+          {busy
+            ? { target: "正在读取 NPC 并匹配动作目录", plan: "正在检查动作清单", apply: "正在导入动作并配置资产" }[busy]
+            : reviewSyncing ? "正在审核当前选择"
+            : error ? `${error}${noticePhase === "uncertain" ? "；请核对目标资产与执行记录后再继续" : ""}`
+            : `${status}${result?.manualChecks.length ? `；${result.manualChecks.length} 项待人工终检` : ""}`}
+        </TaskNotice>
       )}
 
       <div className="npc-supplement-layout">
@@ -490,33 +519,6 @@ export function NpcSupplementWorkspace({
                   <strong>已有 NPC</strong>
                   <small>TARGET UE</small>
                 </span>
-              </div>
-              <div className="npc-supplement-section-actions">
-                <button
-                  className="button"
-                  type="button"
-                  disabled={busy !== null}
-                  onClick={() => void readTarget()}
-                  title="读取策划 UE 内容浏览器中选中的 NPC BP、Body Skeletal Mesh 或 Skeleton"
-                  aria-label="读取 UE 目标"
-                >
-                  {busy === "target" ? (
-                    <LoaderCircle className="spin" size={16} />
-                  ) : (
-                    <RefreshCw size={16} />
-                  )}
-                  读取
-                </button>
-                <button
-                  className="icon-button"
-                  type="button"
-                  disabled={busy !== null}
-                  onClick={onBack}
-                  title="返回模块选择"
-                  aria-label="返回模块选择"
-                >
-                  <LayoutGrid size={17} />
-                </button>
               </div>
             </header>
             {target ? (
@@ -616,11 +618,7 @@ export function NpcSupplementWorkspace({
               }
               onClick={() => void inspectPlan()}
             >
-              {busy === "plan" ? (
-                <LoaderCircle className="spin" size={16} />
-              ) : (
-                <ClipboardCheck size={16} />
-              )}
+              <ClipboardCheck size={16} />
               {plan ? "重新扫描动作目录" : "生成动作清单"}
             </button>
           </section>
@@ -889,11 +887,7 @@ export function NpcSupplementWorkspace({
               {!reviewIsCurrent && (
                 <div className="npc-migration-review-list is-syncing">
                   <strong>
-                    {reviewSyncing ? (
-                      <LoaderCircle className="spin" size={15} />
-                    ) : (
-                      <AlertTriangle size={15} />
-                    )}
+                    <AlertTriangle size={15} />
                     {reviewSyncing ? "正在同步选择" : "自动审核未完成"}
                   </strong>
                   <p>
@@ -936,9 +930,7 @@ export function NpcSupplementWorkspace({
                 }
                 onClick={() => void applyPlan()}
               >
-                {busy === "apply" ? (
-                  <LoaderCircle className="spin" size={16} />
-                ) : result?.status === "partial" ? (
+                {result && (result.status === "partial" || result.manualChecks.length > 0) ? (
                   <AlertTriangle size={16} />
                 ) : result ? (
                   <Check size={16} />

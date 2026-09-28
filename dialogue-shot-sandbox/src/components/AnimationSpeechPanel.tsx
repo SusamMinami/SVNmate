@@ -1,11 +1,28 @@
-import { AudioLines, ArrowDown, ArrowUp, Check, Download, Play, RefreshCw, Square } from "lucide-react";
+import { AudioLines, Download, Play, RefreshCw, Square } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { SequenceSnapshot } from "../animationVoice";
 import type { useAnimationSpeech } from "../app/useAnimationSpeech";
+import type { SubtitleRow } from "../app/useAnimationVoice";
+import { AnimationSubtitleList } from "./AnimationSubtitleList";
+import { TaskGlyph } from "./TaskMotion";
+import type { TaskPhase } from "../taskFeedback";
 
-export function AnimationSpeechPanel({ speech, snapshot, disabled, active, onAdopt }: {
+export function AnimationSpeechPanel({
+  speech,
+  snapshot,
+  rows,
+  disabled,
+  active,
+  onRowsChange,
+  onInvalidate,
+  onAdopt,
+}: {
   speech: ReturnType<typeof useAnimationSpeech>; snapshot: SequenceSnapshot; disabled: boolean;
-  active: boolean; onAdopt: () => void;
+  rows: SubtitleRow[];
+  active: boolean;
+  onRowsChange: (rows: SubtitleRow[]) => void;
+  onInvalidate: () => void;
+  onAdopt: (keys: string[]) => void;
 }) {
   const s = speech.session;
   const player = useRef<HTMLAudioElement>(null);
@@ -13,12 +30,16 @@ export function AnimationSpeechPanel({ speech, snapshot, disabled, active, onAdo
   const playbackKey = useRef<string | undefined>(undefined);
   const [playing, setPlaying] = useState<string>();
   const running = s.job?.state === "running";
+  const phase: TaskPhase = running && s.jobStatusUnknown ? "uncertain"
+    : s.loading || running ? "running"
+    : s.job?.state === "complete" ? "ready"
+    : s.job?.state === "failed" ? "failed"
+    : s.job?.state === "cancelled" ? "cancelled" : "idle";
   const locked = disabled || s.loading || running;
   const sections = snapshot.tracks.flatMap((t) => t.sections).filter((section) => section.active && section.audioEvent?.startsWith("A_Voice_"));
   useEffect(() => {
     if (!active) player.current?.pause();
   }, [active]);
-  const pending = s.job?.result?.lines.filter((line) => !s.adoptedKeys[line.key]) ?? [];
   function stop() {
     stopAt.current = undefined; playbackKey.current = undefined; setPlaying(undefined);
   }
@@ -35,16 +56,20 @@ export function AnimationSpeechPanel({ speech, snapshot, disabled, active, onAdo
       await player.current.play();
     } catch (e) { stop(); speech.update({ error: `试听失败：${String(e)}` }); }
   }
-  function reorder(index: number, delta: number) {
-    const reference = [...s.reference];
-    [reference[index], reference[index + delta]] = [reference[index + delta], reference[index]];
-    speech.edit({ reference });
-  }
   return <section className="animation-speech" aria-label="语音识别与强制对齐">
     <div className="animation-voice__section-title">
       <h3><AudioLines size={16} />语音识别与对齐</h3>
-      <span className="animation-speech__status" role="status">{speech.status?.reason || "本地模型状态未检测"}</span>
-      <button type="button" title="检测本地语音模型" aria-label="检测本地语音模型" disabled={locked} onClick={() => void speech.check()}><RefreshCw size={14} /></button>
+      <div className="animation-speech__runtime">
+        {speech.status?.installing && <TaskGlyph phase="running" runId="speech-install" active={active} />}
+        <span className="animation-speech__status" role="status" title={speech.status?.root}>
+          {speech.status?.reason || "正在检测端侧语音环境…"}
+        </span>
+        {speech.status && !speech.status.ready && !speech.status.installing && speech.status.canInstall !== false &&
+          <button type="button" disabled={locked} title="下载依赖与两个 Qwen3 端侧模型到本机，不上传音频"
+            onClick={() => void speech.install()}><Download size={14} />{speech.status.installError ? "重新安装" : "安装端侧模型"}</button>}
+        <button type="button" title="重新检测端侧语音环境" aria-label="重新检测端侧语音环境"
+          disabled={locked || speech.status?.installing} onClick={() => void speech.check()}><RefreshCw size={14} /></button>
+      </div>
     </div>
     <div className="animation-speech__source">
       <label>语音事件
@@ -95,43 +120,28 @@ export function AnimationSpeechPanel({ speech, snapshot, disabled, active, onAdo
             <Play size={14} />{s.mode === "align" ? "开始对齐" : "开始识别"}
           </button>}
       </div>
-      {s.mode === "align" && <details className="animation-speech__reference">
-        <summary>对齐台词顺序 · {s.reference.filter((line) => line.selected).length} 条已选</summary>
-        {s.reference.length === 0 && <p>未匹配到正式台词，可先使用语音转文字。</p>}
-        {s.reference.map((line, index) => <div key={line.key}>
-          <input type="checkbox" aria-label={`对齐台词 ${index + 1}`} disabled={locked} checked={line.selected}
-            onChange={(e) => speech.edit({ reference: s.reference.map((l) => l.key === line.key ? { ...l, selected: e.target.checked } : l) })} />
-          <code>{line.dialogueId}</code><span>{line.text}</span>
-          <button title="上移台词" aria-label={`上移台词 ${index + 1}`} disabled={locked || index === 0} onClick={() => reorder(index, -1)}><ArrowUp size={13} /></button>
-          <button title="下移台词" aria-label={`下移台词 ${index + 1}`} disabled={locked || index === s.reference.length - 1} onClick={() => reorder(index, 1)}><ArrowDown size={13} /></button>
-        </div>)}
-      </details>}
     </>}
-    {(s.loading || s.job) && <p role="status">{s.loading ? "正在读取本地语音资源…" : s.job?.stage}
-      {s.job?.result && ` · ${s.job.result.device} · ${s.job.result.elapsed.toFixed(1)} 秒`}
+    {(s.loading || s.job) && <p role="status" className="animation-speech__task">
+      <TaskGlyph phase={phase} runId={`${snapshot.assetPath}:${s.job?.id ?? "resources"}`} variant="signal" active={active} />
+      <span>{s.loading ? s.loadingStage : s.jobStatusUnknown && running ? "任务状态待核对" : s.job?.stage}
+        {s.job?.result && ` · ${s.job.result.device} · ${s.job.result.elapsed.toFixed(1)} 秒`}
+      </span>
     </p>}
     {s.error && <p role="alert" className="animation-voice__error">{s.error}</p>}
-    {s.job?.result && <div className="animation-speech__result" aria-label="语音分析结果">
-      {s.job.result.warnings.map((warning) => <p className="animation-voice__warning" key={warning}>{warning}</p>)}
-      <table><thead><tr>
-        <th><input type="checkbox" aria-label="选择全部语音结果" disabled={disabled || !pending.length}
-          checked={pending.length > 0 && pending.every((line) => s.chosen[line.key])}
-          onChange={(e) => speech.update({ chosen: Object.fromEntries(pending.map((line) => [line.key, e.target.checked])) })} /></th>
-        <th>台词 / ID</th><th>动画起止 / 秒</th><th>复核</th><th />
-      </tr></thead><tbody>{s.job.result.lines.map((line, index) => <tr key={line.key}>
-        <td><input type="checkbox" aria-label={`选择语音结果 ${index + 1}`} disabled={disabled || s.adoptedKeys[line.key]} checked={s.chosen[line.key] || Boolean(s.adoptedKeys[line.key])}
-          onChange={(e) => speech.update({ chosen: { ...s.chosen, [line.key]: e.target.checked } })} /></td>
-        <td><small>{line.dialogueId || "识别草稿 · 待关联配音 ID"}</small><span>{line.text}</span></td>
-        <td>{line.start.toFixed(3)} – {line.end.toFixed(3)}</td>
-        <td>
-          <span role="status">{playing === line.key ? "试听中" : s.auditioned[line.key] ? "已试听" : "待试听"}{s.adoptedKeys[line.key] ? " · 已采用" : ""}</span>
-          {line.warnings.length > 0 && <span className="animation-voice__warning">{line.warnings.join("；")}</span>}
-        </td>
-        <td><button title="试听本句" aria-label={`试听语音结果 ${index + 1}`} onClick={() => void play(line.key, line.audioStart, line.audioEnd)}><Play size={14} /></button></td>
-      </tr>)}</tbody></table>
-      <button disabled={disabled || !pending.some((line) => s.chosen[line.key])} onClick={onAdopt}>
-        <Check size={14} />{pending.length ? "采用所选时间到草稿" : "已加入字幕草稿"}
-      </button>
-    </div>}
+    {s.job?.result?.warnings.map((warning) =>
+      <p className="animation-speech__notice" role="note" key={warning}>{warning}</p>)}
+    <AnimationSubtitleList
+      speech={speech}
+      snapshot={snapshot}
+      rows={rows}
+      disabled={disabled}
+      locked={locked}
+      active={active}
+      playing={playing}
+      onPlay={(line) => void play(line.key, line.audioStart, line.audioEnd)}
+      onRowsChange={onRowsChange}
+      onInvalidate={onInvalidate}
+      onAdopt={onAdopt}
+    />
   </section>;
 }

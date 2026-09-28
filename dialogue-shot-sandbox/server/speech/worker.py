@@ -113,7 +113,7 @@ def run(request):
         mode=request["mode"],
         model="Qwen3-ForcedAligner-0.6B" if request["mode"] == "align" else "Qwen3-ASR-0.6B + Qwen3-ForcedAligner-0.6B",
         device=device, elapsed=round(time.perf_counter() - started, 2), lines=mapped,
-        warnings=["模型未提供可信度分数；强制对齐不证明台词与音频一致，须试听审核。"],
+        warnings=["对齐结果仅提供时间建议，不含可信度评分，也不校验音频内容是否与台词一致。"],
     )
 
 

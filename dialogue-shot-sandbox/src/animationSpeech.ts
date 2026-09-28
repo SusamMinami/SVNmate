@@ -54,6 +54,13 @@ export interface SpeechJob {
   error?: string;
 }
 export interface SpeechStatus {
-  ready: boolean; reason: string; root: string; busy: boolean;
+  ready: boolean;
+  reason: string;
+  root: string;
+  busy: boolean;
+  canInstall?: boolean;
+  installing?: boolean;
+  installStage?: string;
+  installError?: string;
 }
 export const speechTextKey = (text: string) => text.normalize("NFKC").replace(/[^\p{L}\p{N}]/gu, "").toLowerCase();

@@ -61,19 +61,27 @@ import {
 import { readSelectedDialogueNodePersistent } from "./dialogueSelection";
 import {
   listAnimationSequences, scanAnimationSequence,
-  reviewAnimationSequence, applyAnimationSequence,
+  reviewAnimationSequence, applyAnimationSequence, getAnimationVoiceCache,
 } from "../animationVoice";
 import { listAnimationSpeechMedia, prepareAnimationSpeechAudio, getAnimationSpeechAudio } from "../animationSpeechMedia";
-import { animationSpeechStatus, startAnimationSpeech, getAnimationSpeechJob, cancelAnimationSpeech } from "../animationSpeechRuntime";
+import {
+  animationSpeechStatus,
+  installAnimationSpeechRuntime,
+  startAnimationSpeech,
+  getAnimationSpeechJob,
+  cancelAnimationSpeech,
+} from "../animationSpeechRuntime";
 
 export const ueServices = {
   listAnimationSpeechMedia,
   prepareAnimationSpeechAudio,
   getAnimationSpeechAudio,
   animationSpeechStatus,
+  installAnimationSpeechRuntime,
   startAnimationSpeech,
   getAnimationSpeechJob,
   cancelAnimationSpeech,
+  getAnimationVoiceCache,
   listAnimationSequences,
   scanAnimationSequence,
   reviewAnimationSequence,

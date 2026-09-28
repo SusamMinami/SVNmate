@@ -121,6 +121,10 @@ export async function routeUeRequest(
       sendJson(response, 200, { ok: true, data: await services.animationSpeechStatus() });
       return true;
     }
+    if (url.pathname === "/api/ue/animation-voice/speech-install") {
+      sendJson(response, 200, { ok: true, data: await services.installAnimationSpeechRuntime() });
+      return true;
+    }
     if (url.pathname === "/api/ue/animation-voice/speech-media") {
       sendJson(response, 200, { ok: true, data: await services.listAnimationSpeechMedia(body) });
       return true;
@@ -143,6 +147,10 @@ export async function routeUeRequest(
     }
     if (url.pathname === "/api/ue/animation-voice/catalog") {
       sendJson(response, 200, { ok: true, data: await services.listAnimationSequences(body) });
+      return true;
+    }
+    if (url.pathname === "/api/ue/animation-voice/cache") {
+      sendJson(response, 200, { ok: true, data: await services.getAnimationVoiceCache(body) });
       return true;
     }
     if (url.pathname === "/api/ue/animation-voice/scan") {

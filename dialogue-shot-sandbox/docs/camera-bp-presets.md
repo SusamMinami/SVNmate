@@ -1,5 +1,9 @@
 # Camera BP 预设机位与小窗实现边界
 
+> 状态：现行小窗规则与历史 UE 只读调查合并维护。
+> 实现入口见下文；调查参数是当时样本，不作为所有角色的固定机位或物理眼高。
+> 源码实现、自动化测试与真实 UE 写入验收分别表述。
+
 ## 调查范围
 
 2026-09-11，读取本地工程接口声明，并通过已经连接的 UE MCP 查询类型和组件属性。
@@ -79,8 +83,9 @@ Blend、FOV 覆盖和角色走位后的跟随行为，避免旧参数遮盖新�
 
 现有“添加默认镜头”操作已扩展为紧凑的“角色 / 预设机位”选择，不另建工作区：
 
-1. 在小窗镜头页展开“添加默认镜头”时先生成原有默认 `c1 / EPush` 草稿，
-   同时读取一次当前 Formation 预览中的数字命名 CameraComponent。右侧刷新图标
+1. 展开“添加默认镜头/修改当前镜头”时，当前节点没有预设快照才读取一次当前
+   Formation 预览中的数字命名 CameraComponent，再次展开复用快照。空镜头同时
+   生成默认 `c1 / EPush` 草稿；已有镜头等待用户选择修改方案。右侧刷新图标
    用于预览发生变化后的手动重读。
 2. 角色列表优先复用动作编辑器已经读取的模型槽和角色名。机位 Transform 仍从
    当前 Formation 预览读取；同类关卡实例与预览实例并存时，以精确 Actor 标签
@@ -111,7 +116,18 @@ Blend、FOV 覆盖和角色走位后的跟随行为，避免旧参数遮盖新�
 本操作保留 `DialogBlendCameraData` 和职业覆盖；差异区在有职业覆盖时提示
 它可能覆盖主镜头。选择其他角色、刷新或切换节点后原确认草稿失效。
 
-职业覆盖使用固定的玩家胶囊体高度分组，不在每次操作时重新读取角色体型。
+## 职业相机高度适配
+
+职业覆盖使用固定的玩家胶囊体高度锚点，不在每次操作时重新读取角色体型，
+也不把锚点描述为实测眼睛高度。唯一常量源是
+`src/ue/schoolCameraHeight.ts` 的 `SCHOOL_CAMERA_HEIGHT_REFERENCE_CM`：
+
+| 配置键 | 对应组 | 高度锚点 |
+| --- | --- | --- |
+| `ENone` | 主镜头标准组：Eric、Serena、Lan、Sylvan | 92 cm |
+| `ERing` / `ENino` | Ring、Nino 共用组 | 79 cm |
+| `EJodie` | Jodie | 68 cm |
+
 2026-09-23 对正式角色 BP 的 `CollisionCylinder.CapsuleHalfHeight` 只读核对：
 Eric、Serena、Lan、Sylvan 为 `92 cm`，Ring 为 `78 cm`、Nino 为 `80 cm`、
 Jodie 为 `68 cm`、Tritz 为 `93 cm`。Ring 与 Nino 归为同组并采用中值
@@ -123,21 +139,27 @@ Z 偏移 = 目标职业高度锚点 - 来源职业高度锚点
 ```
 
 从主镜头补齐 Ring、Nino、Jodie 分别为 `-13 cm / -13 cm / -24 cm`。
-只平移结构完整的 `EPush.PushCameraArg.StartPoint.Z / EndPoint.Z`；旋转、FOV、
+对数组内每一段 `EPush` 平移 `PushCameraArg.StartPoint.Z / EndPoint.Z`；旋转、FOV、
 速度、Blend Out 与未知扩展字段保持不变。其他运镜继续完整复制，不猜测其坐标
-语义；声明为 EPush 但坐标不完整时阻断写入。确认区必须显示实际 Z 偏移。
+语义；EPush 参数或起终点结构无效、Z 非有限数值时阻断写入。确认区必须显示实际
+Z 偏移。这里是职业覆盖的数组转换，不沿用 NPC 预设机位“只接受单段 EPush”的限制。
+
+入口：`adaptSchoolCameraMovesForHeight`、`schoolCameraHeightDeltaCm`；
+服务端 `server/ueBridge.ts` 处理职业补齐与复制，前端
+`src/components/NodeCameraQuickActions.tsx` 展示差异。
 
 ## 自动化验证
 
-- `server/ue/cameraPresets.test.ts`：13 项，覆盖局部/世界坐标、默认值、
+- `server/ue/cameraPresets.test.ts`：覆盖局部/世界坐标、默认值、
   原值和零值保留、多段拒绝、来源指纹及重复编号拒绝。
-- `server/storyboardExport.test.ts` 的预设事务组：8 项，覆盖只读预检、
+- `server/storyboardExport.test.ts` 的预设事务组：覆盖只读预检、
   单节点写入、源机位与节点变化、可选审核令牌、单次保存和保存失败恢复。
-- `e2e/camera-presets.spec.ts`：4 项，覆盖自动读取/手动刷新、本地草稿、底栏确认、
-  角色/节点切换、延迟响应、错误状态与 420×820、520×720 桌面小窗布局；
-  第 4 项验证多段运镜阻断时显示“无法应用此预设”，而非“当前参数已经一致”。
+- `src/ue/schoolCameraHeight.test.ts`：覆盖高度分组、职业间偏移、其他字段保留和非法 Z。
+- `e2e/camera-presets.spec.ts`：覆盖自动读取/手动刷新、本地草稿、底栏确认、
+  角色/节点切换、延迟响应、错误状态及桌面小窗布局；多段运镜阻断显示
+  “无法应用此预设”，而非“当前参数已经一致”。
 
-已有验证记录：517 项单测、57 项单 Worker 桌面 E2E 与生产构建通过，
+2026-09-11 历史记录：517 项单测、57 项单 Worker 桌面 E2E 与生产构建通过，
 仍有超过 500 KB 的构建分块警告。420×820、520×720 小窗截图已检查。
 
 这些测试不向实际 UE 资产写入。真实 UE 只读检查时选中节点为 `null`，

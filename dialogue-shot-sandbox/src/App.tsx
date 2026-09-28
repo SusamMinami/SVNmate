@@ -64,9 +64,11 @@ import { AudioLibraryBrowser } from "./components/AudioLibraryBrowser";
 import { CharacterActionEditor } from "./components/CharacterActionEditor";
 import { DataSourceStatus } from "./components/DataSourceStatus";
 import { DirectorControl } from "./components/DirectorControl";
+import { TaskGlyph, TaskMotionScope } from "./components/TaskMotion";
 import { ExistingAudioConfiguration } from "./components/ExistingAudioConfiguration";
 import { LaunchScreen } from "./components/LaunchScreen";
 import { MissingNpcModelModal } from "./components/MissingNpcModelModal";
+import type { NpcMigrationMode } from "./components/NpcMigrationWorkspace";
 import {
   NodeCameraQuickActions,
   type NodeCameraQuickActionHandle,
@@ -2043,6 +2045,8 @@ export default function App() {
     switchWorkspace,
     closeToolWorkspace,
   } = useWorkspaceNavigation();
+  const [npcMigrationMode, setNpcMigrationMode] =
+    useState<NpcMigrationMode>(null);
   const [loadedToolWorkspaces, setLoadedToolWorkspaces] = useState<
     Set<"npc" | "migration" | "targets" | "animation">
   >(() => new Set());
@@ -2589,6 +2593,8 @@ export default function App() {
     currentShotNumber: storyboardExportShotNumber,
     busy: storyboardExportBusy,
     busyLabel: storyboardExportBusyLabel,
+    runId: storyboardExportRunId,
+    errorPhase: storyboardExportErrorPhase,
     error: storyboardExportError,
     result: storyboardExportResult,
     canExport: canExportStoryboard,
@@ -5268,15 +5274,32 @@ export default function App() {
           </span>
           <div>
             <h1>
-              {activeWorkspace === "storyboard"
-                ? "分镜工作台"
-                : activeWorkspace === "npc"
-                  ? "注册 NPC"
-                  : activeWorkspace === "migration"
-                    ? "NPC 迁移"
-                    : activeWorkspace === "animation"
-                      ? "动画语音"
-                    : "任务目标物"}
+              {activeWorkspace === "migration" && npcMigrationMode ? (
+                <>
+                  <span>NPC 迁移</span>
+                  <span
+                    className="workspace-identity__separator"
+                    aria-hidden="true"
+                  />
+                  <span>
+                    {npcMigrationMode === "new"
+                      ? "全新 NPC"
+                      : npcMigrationMode === "actions"
+                        ? "动作补充与修改"
+                        : "面部补充"}
+                  </span>
+                </>
+              ) : activeWorkspace === "storyboard" ? (
+                "分镜工作台"
+              ) : activeWorkspace === "npc" ? (
+                "注册 NPC"
+              ) : activeWorkspace === "migration" ? (
+                "NPC 迁移"
+              ) : activeWorkspace === "animation" ? (
+                "动画语音"
+              ) : (
+                "任务目标物"
+              )}
             </h1>
             <p>
               {activeWorkspace === "storyboard"
@@ -5284,7 +5307,13 @@ export default function App() {
                 : activeWorkspace === "npc"
                   ? "UE SELECTION REGISTRATION"
                   : activeWorkspace === "migration"
-                    ? "ASSET MIGRATION & BLUEPRINT"
+                    ? npcMigrationMode === "new"
+                      ? "NEW NPC ASSET PIPELINE"
+                      : npcMigrationMode === "actions"
+                        ? "BODY & FACE SUPPLEMENT"
+                        : npcMigrationMode === "face"
+                          ? "FACE SUPPLEMENT"
+                          : "ASSET MIGRATION & BLUEPRINT"
                     : activeWorkspace === "animation"
                       ? "SEQUENCE & VOICE"
                     : "MISSION TARGET & BLUEPRINT"}
@@ -5548,6 +5577,7 @@ export default function App() {
               </div>
             )}
             <DirectorControl
+              active={activeWorkspace === "storyboard"}
               mode={directorMode}
               selectedMode={selectedDirectorMode}
               appliedMode={appliedDirector}
@@ -5910,8 +5940,9 @@ export default function App() {
                 </Suspense>
               ) : <div className="stage-view" />}
               {directorLoading && (
+                <TaskMotionScope active={activeWorkspace === "storyboard"}>
                 <div className="director-loading" role="status">
-                  <LoaderCircle className="spin" size={20} />
+                  <TaskGlyph phase="running" runId={activeTraeRequestId ?? "director"} variant="nodes" />
                   <div>
                     <strong>
                       {directorLoadingMode === "trae"
@@ -5944,15 +5975,12 @@ export default function App() {
                       }
                       onClick={() => void interruptTraeAnalysis()}
                     >
-                      {traeCancelBusy ? (
-                        <LoaderCircle className="spin" size={13} />
-                      ) : (
-                        <Square size={12} fill="currentColor" />
-                      )}
+                      <Square size={12} fill="currentColor" />
                       {traeCancelBusy ? "中断中" : "中断分析"}
                     </button>
                   )}
                 </div>
+                </TaskMotionScope>
               )}
               <div
                 className={`dialogue-strip ${editingDialogueId ? "is-editing" : ""}`}
@@ -6445,7 +6473,12 @@ export default function App() {
         aria-label="NPC 迁移工作区"
       >
           <Suspense fallback={<ToolWorkspaceLoading />}>
-            <LazyNpcMigrationWorkspace onClose={closeToolWorkspace} />
+            <TaskMotionScope active={activeWorkspace === "migration"}>
+            <LazyNpcMigrationWorkspace
+              onClose={closeToolWorkspace}
+              onModeChange={setNpcMigrationMode}
+            />
+            </TaskMotionScope>
           </Suspense>
         </section>
       )}
@@ -6507,6 +6540,8 @@ export default function App() {
             currentShotNumber={storyboardExportShotNumber}
             busy={storyboardExportBusy}
             busyLabel={storyboardExportBusyLabel}
+            runId={storyboardExportRunId}
+            errorPhase={storyboardExportErrorPhase}
             error={storyboardExportError}
             result={storyboardExportResult}
             onClose={closeStoryboardExport}

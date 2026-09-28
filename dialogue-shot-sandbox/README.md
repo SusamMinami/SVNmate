@@ -35,9 +35,11 @@ UE4 编辑器与 OmniMcpCore。首次启动在“设置与更新”中选择：
 | 注册 NPC | 读取 UE 关卡 Actor -> 复用/新增模型与 NPC -> 审核 Excel 草稿 | [NPC 注册](docs/npc-registration.md) |
 | 任务目标物 | 解析任务 -> 勾选目标物 -> UE 预览、BP 注册或双向位置同步 | [目标物与 BP](docs/mission-target-preview.md) |
 | NPC 迁移 | 全新 NPC 跨工程迁移，或已有 NPC 的 Body/Face 动作补充 | [NPC 迁移](docs/npc-migration.md) |
-| 动画语音 | 全量扫描 LevelSequence -> 可选语音识别/对齐并采用草稿 -> 核对字幕/skip/事件 -> 精确差异审核 | [动画语音](docs/animation-voice-workspace.md) |
+| 动画语音 | 读取列表/复用缓存 -> 按需扫描 LevelSequence -> 可选语音识别/对齐并采用草稿 -> 核对字幕/skip/事件 -> 精确差异审核 | [动画语音](docs/animation-voice-workspace.md) |
 
 普通工作区切换保留已访问工具的输入和结果；配置小窗会卸载工具工作区以释放资源。
+NPC 迁移进入具体模块后，顶栏显示“NPC 迁移｜当前模块”，读取与返回模块选择固定在
+工作区右上角。
 视觉与交互规范见 [DESIGN.md](DESIGN.md)。
 
 ## 分镜与节点编辑

@@ -22,6 +22,8 @@
 }
 .animation-voice button:hover:not(:disabled) { background: var(--ink); color: var(--surface); }
 .animation-voice button:disabled { opacity: .5; cursor: not-allowed; }
+.animation-voice button[aria-busy="true"] { opacity: 1; color: var(--text-muted); }
+.animation-voice button[aria-busy="true"] .task-glyph { color: var(--ink); }
 .animation-voice :focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
 .animation-voice input:not([type="checkbox"]) {
   min-width: 0;
@@ -35,13 +37,17 @@
   font-variant-numeric: tabular-nums;
 }
 .animation-voice input[type="checkbox"] { accent-color: var(--ink); width: 14px; height: 14px; }
-.animation-voice__toolbar { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
-.animation-voice__root { display: flex; align-items: center; gap: 12px; flex: 1; }
-.animation-voice__root input { flex: 1; }
 .animation-voice__body { display: grid; grid-template-columns: minmax(220px, 25%) minmax(0, 1fr); flex: 1; min-height: 0; }
 .animation-voice__catalog { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--border); }
-.animation-voice__catalog > input { margin: 12px; }
-.animation-voice__asset-list { overflow: auto; flex: 1; }
+.animation-voice__catalog-head { position: relative; display: grid; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+.animation-voice__catalog-head > .task-progress { position: absolute; inset: auto 0 -1px; }
+.animation-voice__catalog-controls, .animation-voice__catalog-filter { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.animation-voice__root { display: flex; flex: 1; align-items: center; gap: 6px; min-width: 0; }
+.animation-voice__root span { flex-shrink: 0; }
+.animation-voice__root input, .animation-voice__catalog-filter input { width: 100%; flex: 1; }
+.animation-voice__catalog-controls > button { width: 30px; flex: 0 0 30px; padding: 4px; }
+.animation-voice__catalog-filter span { flex-shrink: 0; min-width: 42px; color: var(--text-muted); text-align: right; font-variant-numeric: tabular-nums; }
+.animation-voice__asset-list { overflow: auto; overflow: overlay; flex: 1; }
 .animation-voice__asset-list button { display: flex; flex-direction: column; align-items: flex-start; width: 100%; min-height: 56px; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; text-align: left; padding: 10px 14px; }
 .animation-voice__asset-list button[aria-pressed="true"] { background: var(--surface-muted); box-shadow: inset 3px 0 var(--signal); }
 .animation-voice__asset-list button span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -53,25 +59,20 @@
 .animation-voice h2 { font-size: 18px; margin: 0 0 6px; overflow-wrap: anywhere; }
 .animation-voice h3 { font-size: 14px; margin: 16px 0 10px; }
 .animation-voice__identity span { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.animation-voice__identity small { display: block; margin-top: 4px; color: var(--warning-strong); }
 .animation-voice__tabs { display: flex; gap: 8px; padding: 0 16px 10px; border-bottom: 1px solid var(--border); }
 .animation-voice__tabs button[aria-selected="true"] { background: var(--ink); color: var(--surface); }
-.animation-voice__scroll { overflow: auto; flex: 1; min-height: 0; padding: 0 16px 16px; }
+.animation-voice__scroll { overflow: auto; overflow: overlay; flex: 1; min-height: 0; }
+.animation-voice__content { padding: 0 16px 16px; }
 .animation-voice__section-title { display: flex; align-items: center; justify-content: space-between; margin: 10px 0; }
 .animation-voice__section-title h3 { margin: 0; }
-.animation-voice__subtitles { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 11px; }
-.animation-voice__subtitles th { position: sticky; top: 0; background: var(--paper); text-align: left; height: 34px; z-index: 1; }
-.animation-voice__subtitles td, .animation-voice__subtitles th { padding: 6px 4px; border-bottom: 1px solid var(--border); }
-.animation-voice__subtitles th:first-child { width: 26px; }
-.animation-voice__subtitles th:nth-child(2) { width: 92px; }
-.animation-voice__subtitles th:nth-child(4), .animation-voice__subtitles th:nth-child(5) { width: 92px; }
-.animation-voice__subtitles th:nth-child(6) { width: 64px; }
-.animation-voice__subtitles th:last-child { width: 38px; }
-.animation-voice__subtitles input:not([type="checkbox"]) { width: 100%; }
-.animation-voice__subtitles td span, .animation-voice__subtitles td small { display: block; overflow-wrap: anywhere; }
-.animation-voice__subtitles small { color: var(--text-muted); margin-bottom: 3px; }
-.animation-voice__subtitles tr[data-selected="true"] { background: var(--paper); }
 .animation-voice__model { display: flex; align-items: center; gap: 8px; color: var(--text-muted); margin: 16px 0; }
 .animation-voice__skip { border-top: 1px solid var(--border); margin-top: 20px; }
+.animation-voice__skip-status { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 0; border-block: 1px solid var(--border); }
+.animation-voice__skip-status div { min-width: 0; padding: 9px 10px; }
+.animation-voice__skip-status div + div { border-left: 1px solid var(--border); }
+.animation-voice__skip-status dt { color: var(--text-muted); font-size: 10px; }
+.animation-voice__skip-status dd { margin: 3px 0 0; overflow-wrap: anywhere; }
 .animation-voice__controls { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin: 10px 0; }
 .animation-voice__controls label { display: inline-flex; align-items: center; gap: 6px; }
 .animation-voice__controls input[type="number"] { width: 110px; }
@@ -95,9 +96,14 @@
 .animation-voice__detail > .animation-voice__empty { flex: 1; }
 
 .animation-speech { border-bottom: 1px solid var(--border); padding-bottom: 12px; }
-.animation-speech .animation-voice__warning { color: #8a5612; }
+.animation-speech .animation-voice__warning { color: var(--warning-strong); }
 .animation-speech h3 { display: inline-flex; align-items: center; gap: 8px; }
 .animation-speech__status { color: var(--text-muted); font-size: 11px; overflow-wrap: anywhere; }
+.animation-speech__task { display: flex; align-items: center; gap: 8px; min-height: 24px; }
+.animation-speech__task .task-glyph { width: 28px; height: 28px; flex-basis: 28px; }
+.animation-speech__runtime { display: flex; min-width: 0; align-items: center; justify-content: flex-end; gap: 8px; }
+.animation-speech__runtime .animation-speech__status { max-width: 360px; text-align: right; }
+.animation-speech__runtime button:not([aria-label]) { white-space: nowrap; }
 .animation-speech__source { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; }
 .animation-speech__source label { display: flex; flex: 1 1 250px; min-width: 0; align-items: center; gap: 8px; }
 .animation-speech select { min-width: 0; flex: 1; width: 100%; height: 30px; font: inherit; border: 1px solid var(--border); border-radius: 2px; background: var(--surface); color: var(--ink); padding: 3px 6px; }
@@ -110,15 +116,66 @@
 .animation-speech__actions > div { display: flex; }
 .animation-speech__actions button[aria-pressed="true"] { background: var(--ink); color: var(--surface); }
 .animation-speech__actions > button:last-child { margin-left: auto; }
-.animation-speech__reference { margin: 12px 0; }
-.animation-speech__reference summary { cursor: pointer; }
-.animation-speech__reference > div { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); }
-.animation-speech__reference > div > span { flex: 1; overflow-wrap: anywhere; }
-.animation-speech__result table { table-layout: fixed; border-collapse: collapse; width: 100%; font-size: 11px; margin-bottom: 10px; }
-.animation-speech__result th, .animation-speech__result td { padding: 7px 4px; text-align: left; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
-.animation-speech__result th:first-child { width: 26px; }
-.animation-speech__result th:nth-child(3) { width: 130px; }
-.animation-speech__result th:nth-child(4) { width: 160px; }
-.animation-speech__result th:last-child { width: 38px; }
-.animation-speech__result td small { display: block; color: var(--text-muted); margin-bottom: 4px; }
-.animation-speech__result td span { display: block; }
+.animation-speech__notice { margin: 10px 0; padding: 8px 10px; border-block: 1px solid var(--border); background: var(--paper); color: var(--text-muted); }
+.animation-subtitle { margin-top: 14px; }
+.animation-subtitle__title-actions { display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 11px; }
+.animation-subtitle__table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 11px; }
+.animation-subtitle__table th { height: 34px; background: var(--paper); text-align: left; }
+.animation-subtitle__table th, .animation-subtitle__table td { padding: 7px 5px; border-bottom: 1px solid var(--border); vertical-align: top; overflow-wrap: anywhere; }
+.animation-subtitle__table th:first-child { width: 64px; }
+.animation-subtitle__table th:nth-child(2) { width: 112px; }
+.animation-subtitle__table th:nth-child(4) { width: 190px; }
+.animation-subtitle__table th:nth-child(5) { width: 190px; }
+.animation-subtitle__table th:last-child { width: 38px; }
+.animation-subtitle__table tr[data-selected="true"] { background: var(--paper); }
+.animation-subtitle__table tr[data-result="pending"] { background: var(--surface-muted); }
+.animation-subtitle__table button { min-height: 26px; padding: 3px 6px; }
+.animation-subtitle__write-all { display: flex; align-items: center; gap: 5px; }
+.animation-subtitle__identity { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 8px; }
+.animation-subtitle__identity input { width: 88px; }
+.animation-subtitle__identity span, .animation-subtitle__identity small { display: block; overflow-wrap: anywhere; }
+.animation-subtitle__identity small { margin-bottom: 3px; color: var(--text-muted); }
+.animation-subtitle__draft-id { display: flex; align-items: center; min-height: 30px; color: var(--warning-strong); }
+.animation-subtitle__time { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 5px; }
+.animation-subtitle__time input { width: 100%; }
+.animation-subtitle__time small { grid-column: 1 / -1; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.animation-subtitle__order { display: grid; grid-template-columns: 16px 18px 26px 26px; align-items: center; gap: 3px; font-variant-numeric: tabular-nums; }
+.animation-subtitle__order button { width: 26px; padding: 3px; }
+.animation-subtitle__suggestion-time { display: flex; align-items: center; justify-content: space-between; gap: 5px; font-variant-numeric: tabular-nums; }
+.animation-subtitle__table td:nth-child(5) > small { display: block; margin: 3px 0; color: var(--text-muted); }
+.animation-subtitle__table td:nth-child(5) > .animation-voice__warning { color: var(--warning-strong); }
+.animation-subtitle__table td:nth-child(5) > button { margin-top: 4px; }
+.animation-subtitle__adopted { display: inline-flex; align-items: center; gap: 4px; margin-top: 4px; color: var(--ink); transform-origin: left center; }
+.animation-subtitle__adopted > svg { color: var(--state); }
+.animation-subtitle__muted { color: var(--text-muted); }
+.animation-subtitle__bulk { display: flex; justify-content: flex-end; padding-top: 10px; }
+
+.animation-voice__asset-list,
+.animation-voice__scroll,
+.animation-voice__review,
+.animation-voice__footer > div {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--ink) 34%, transparent) transparent;
+}
+.animation-voice__asset-list::-webkit-scrollbar,
+.animation-voice__scroll::-webkit-scrollbar,
+.animation-voice__review::-webkit-scrollbar,
+.animation-voice__footer > div::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.animation-voice__asset-list::-webkit-scrollbar-track,
+.animation-voice__scroll::-webkit-scrollbar-track,
+.animation-voice__review::-webkit-scrollbar-track,
+.animation-voice__footer > div::-webkit-scrollbar-track {
+  background: transparent;
+}
+.animation-voice__asset-list::-webkit-scrollbar-thumb,
+.animation-voice__scroll::-webkit-scrollbar-thumb,
+.animation-voice__review::-webkit-scrollbar-thumb,
+.animation-voice__footer > div::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--ink) 34%, transparent);
+  background-clip: content-box;
+}

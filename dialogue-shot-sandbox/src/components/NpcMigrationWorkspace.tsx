@@ -2,13 +2,11 @@ import {
   AlertTriangle,
   ArrowLeft,
   Check,
-  CheckCircle2,
   ChevronDown,
   ClipboardCheck,
   FileBox,
   FolderOpen,
   LayoutGrid,
-  LoaderCircle,
   PackageCheck,
   PersonStanding,
   Play,
@@ -19,7 +17,7 @@ import {
   Sparkles,
   UserRoundPlus,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type {
   NpcMigrationPlan,
   NpcMigrationSourceScan,
@@ -42,10 +40,15 @@ import {
   inferStandardAbpTemplate,
 } from "../data/npcMigration";
 import { NpcSupplementWorkspace } from "./NpcSupplementWorkspace";
+import { TaskNotice } from "./TaskMotion";
+import type { TaskPhase } from "../taskFeedback";
 
 interface NpcMigrationWorkspaceProps {
   onClose: () => void;
+  onModeChange?: (mode: NpcMigrationMode) => void;
 }
+
+export type NpcMigrationMode = "new" | "actions" | "face" | null;
 
 type BusyAction =
   | "source"
@@ -116,8 +119,9 @@ function templateLabel(
 
 export function NpcMigrationWorkspace({
   onClose,
+  onModeChange,
 }: NpcMigrationWorkspaceProps) {
-  const [mode, setMode] = useState<"new" | "actions" | "face" | null>(null);
+  const [mode, setMode] = useState<NpcMigrationMode>(null);
   const [source, setSource] = useState<NpcMigrationSourceScan | null>(null);
   const [targetContentDirectory, setTargetContentDirectory] = useState("");
   const [animationSourceDirectory, setAnimationSourceDirectory] = useState("");
@@ -147,6 +151,8 @@ export function NpcMigrationWorkspace({
   const [busy, setBusy] = useState<BusyAction>(null);
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
+  const [noticePhase, setNoticePhase] = useState<TaskPhase>("ready");
+  const [runId, setRunId] = useState(0);
   const [sourceExpanded, setSourceExpanded] = useState(true);
   const [parametersExpanded, setParametersExpanded] = useState(true);
   const migrationIdentity = useMemo(
@@ -162,6 +168,10 @@ export function NpcMigrationWorkspace({
   const animationBlueprintName = npcName
     ? migrationIdentity.animationBlueprintName
     : "";
+
+  useEffect(() => {
+    onModeChange?.(mode);
+  }, [mode, onModeChange]);
 
   const totalBytes = useMemo(
     () =>
@@ -264,6 +274,8 @@ export function NpcMigrationWorkspace({
   function clearFeedback(): void {
     setError("");
     setStatus("");
+    setNoticePhase("ready");
+    setRunId((id) => id + 1);
   }
 
   async function readSource(): Promise<void> {
@@ -373,6 +385,7 @@ export function NpcMigrationWorkspace({
       setResult(null);
       setSourceExpanded(false);
       setParametersExpanded(false);
+      setNoticePhase(next.blockedReasons.length > 0 ? "warning" : "ready");
       setStatus(
         next.blockedReasons.length > 0
           ? `计划已生成，存在 ${next.blockedReasons.length} 个阻断项`
@@ -429,10 +442,12 @@ export function NpcMigrationWorkspace({
     try {
       const copyResult = await applyNpcAssetMigration(plan);
       setMigrated(true);
+      setNoticePhase("success");
       setStatus(
         `基础资产迁移完成：复制 ${copyResult.copiedFiles.length} 个，复用 ${copyResult.reusedFiles.length} 个文件，共写入 ${fileSize(copyResult.copiedBytes)}`,
       );
     } catch (migrationError) {
+      setNoticePhase("uncertain");
       setError(
         migrationError instanceof Error
           ? migrationError.message
@@ -475,6 +490,7 @@ export function NpcMigrationWorkspace({
           ? `资产校验完成，存在 ${inspection.blockedReasons.length} 个阻断项`
           : "资产校验通过，可以配置 BP 文件",
       );
+      setNoticePhase(inspection.blockedReasons.length > 0 ? "warning" : "ready");
     } catch (inspectionError) {
       setError(
         inspectionError instanceof Error
@@ -505,10 +521,12 @@ export function NpcMigrationWorkspace({
     try {
       const configured = await configureNpcMigrationTarget(request);
       setResult(configured);
+      setNoticePhase(configured.manualChecks.length > 0 ? "warning" : "success");
       setStatus(
-        `BP 文件配置完成：导入 ${configured.importedAnimationAssetPaths.length} 个动作，创建 ${configured.createdMontageAssetPaths.length} 个 Montage`,
+        `BP 文件配置完成：导入 ${configured.importedAnimationAssetPaths.length} 个动作，创建 ${configured.createdMontageAssetPaths.length} 个 Montage${configured.manualChecks.length > 0 ? `；${configured.manualChecks.length} 项待人工终检` : ""}`,
       );
     } catch (configurationError) {
+      setNoticePhase("uncertain");
       setError(
         configurationError instanceof Error
           ? configurationError.message
@@ -522,21 +540,23 @@ export function NpcMigrationWorkspace({
   if (!mode) {
     return (
       <div className="npc-migration-workspace npc-migration-mode-workspace">
+        <div className="workspace-floating-actions" key="migration-mode-actions">
+          <button
+            className="icon-button workspace-floating-back"
+            type="button"
+            onClick={onClose}
+            title="返回分镜工作台"
+            aria-label="返回分镜工作台"
+          >
+            <ArrowLeft size={17} />
+          </button>
+        </div>
         <div className="npc-migration-mode-shell">
           <header>
             <div>
               <strong>选择处理类型</strong>
               <small>NPC WORKFLOW</small>
             </div>
-            <button
-              className="icon-button"
-              type="button"
-              onClick={onClose}
-              title="返回分镜工作台"
-              aria-label="返回分镜工作台"
-            >
-              <ArrowLeft size={17} />
-            </button>
           </header>
           <div className="npc-migration-mode-grid">
             <button
@@ -598,18 +618,34 @@ export function NpcMigrationWorkspace({
 
   return (
     <div className="npc-migration-workspace">
-      {(error || status) && (
-        <div
-          className={`npc-migration-message ${error ? "is-error" : "is-success"}`}
-          role={error ? "alert" : "status"}
+      <div className="workspace-floating-actions" key="new-npc-actions">
+        <button
+          className="button workspace-floating-command"
+          type="button"
+          disabled={busy !== null}
+          onClick={() => void readSource()}
+          title="读取美术 UE 内容浏览器中选中的 Skeletal Mesh"
         >
-          {error ? (
-            <AlertTriangle size={16} />
-          ) : (
-            <CheckCircle2 size={16} />
-          )}
-          <span>{error || status}</span>
-        </div>
+          <RefreshCw size={16} />
+          读取源资产
+        </button>
+        <button
+          className="icon-button workspace-floating-back"
+          type="button"
+          disabled={busy !== null}
+          onClick={() => setMode(null)}
+          title="返回模块选择"
+          aria-label="返回模块选择"
+        >
+          <LayoutGrid size={17} />
+        </button>
+      </div>
+      {(busy || error || status) && (
+        <TaskNotice phase={busy ? "running" : error ? noticePhase === "uncertain" ? "uncertain" : "failed" : noticePhase} runId={runId}>
+          {busy
+            ? { source: "正在采集源资产与依赖", plan: "正在检查迁移计划", migrate: "正在复制基础资产", target: "正在校验目标资产", configure: "正在配置 BP 与动作资产" }[busy]
+            : error ? `${error}${noticePhase === "uncertain" ? "；请核对目标资产与执行记录后再继续" : ""}` : status}
+        </TaskNotice>
       )}
 
       <div className="npc-migration-layout">
@@ -684,32 +720,6 @@ export function NpcMigrationWorkspace({
                 </span>
                 <ChevronDown size={15} />
               </button>
-              <div className="npc-migration-section__actions">
-                <button
-                  className="button"
-                  type="button"
-                  disabled={busy !== null}
-                  onClick={() => void readSource()}
-                  title="读取美术 UE 内容浏览器中选中的 Skeletal Mesh"
-                >
-                  {busy === "source" ? (
-                    <LoaderCircle className="spin" size={16} />
-                  ) : (
-                    <RefreshCw size={16} />
-                  )}
-                  读取源资产
-                </button>
-                <button
-                  className="icon-button"
-                  type="button"
-                  disabled={busy !== null}
-                  onClick={() => setMode(null)}
-                  title="返回模块选择"
-                  aria-label="返回模块选择"
-                >
-                  <LayoutGrid size={17} />
-                </button>
-              </div>
             </header>
             {sourceExpanded &&
               (source ? (
@@ -884,11 +894,7 @@ export function NpcMigrationWorkspace({
                 disabled={!source || busy !== null}
                 onClick={() => void buildPlan()}
               >
-                {busy === "plan" ? (
-                  <LoaderCircle className="spin" size={16} />
-                ) : (
-                  <ClipboardCheck size={16} />
-                )}
+                <ClipboardCheck size={16} />
                 检查迁移计划
               </button>
             </div>
@@ -1101,9 +1107,7 @@ export function NpcMigrationWorkspace({
                 disabled={!plan.canMigrate || busy !== null || migrated}
                 onClick={() => void migrateAssets()}
               >
-                {busy === "migrate" ? (
-                  <LoaderCircle className="spin" size={16} />
-                ) : migrated ? (
+                {migrated ? (
                   <Check size={16} />
                 ) : (
                   <PackageCheck size={16} />
@@ -1117,11 +1121,7 @@ export function NpcMigrationWorkspace({
                   disabled={!migrated || busy !== null}
                   onClick={() => void inspectTarget()}
                 >
-                  {busy === "target" ? (
-                    <LoaderCircle className="spin" size={16} />
-                  ) : (
-                    <ScanSearch size={16} />
-                  )}
+                  <ScanSearch size={16} />
                   校验资产
                 </button>
                 <button
@@ -1135,8 +1135,8 @@ export function NpcMigrationWorkspace({
                   }
                   onClick={() => void configureTarget()}
                 >
-                  {busy === "configure" ? (
-                    <LoaderCircle className="spin" size={16} />
+                  {result?.manualChecks.length ? (
+                    <AlertTriangle size={16} />
                   ) : result ? (
                     <Check size={16} />
                   ) : (

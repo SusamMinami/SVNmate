@@ -201,6 +201,8 @@ export function useStoryboardExport({
   const [busyLabel, setBusyLabel] = useState("");
   const [error, setError] = useState("");
   const [result, setResult] = useState("");
+  const [runId, setRunId] = useState(0);
+  const [errorPhase, setErrorPhase] = useState<"failed" | "uncertain">("failed");
 
   const availability = useMemo(
     () =>
@@ -481,6 +483,8 @@ export function useStoryboardExport({
     }
     setBusy(true);
     setBusyLabel("刷新中");
+    setRunId((id) => id + 1);
+    setErrorPhase("failed");
     setError("");
     setResult("");
     try {
@@ -509,7 +513,10 @@ export function useStoryboardExport({
       }
       setBusy(true);
       setBusyLabel(preview.reviewToken ? "写入中" : "检查中");
+      setRunId((id) => id + 1);
+      setErrorPhase("failed");
       setError("");
+      let writeSubmitted = false;
       try {
         const selectedIndexes = new Set(selectedShotIndexes);
         const selectedShots = request.shots.filter((_, index) =>
@@ -579,6 +586,7 @@ export function useStoryboardExport({
           && exportsAllMusic
           ? preview
           : await inspectDialogueStoryboardExport(selectedRequest);
+        writeSubmitted = true;
         const exportResult = await exportDialogueStoryboard(
           selectedRequest,
           selectedPreview.reviewToken,
@@ -590,6 +598,7 @@ export function useStoryboardExport({
             : `已写入 ${exportResult.changedNodeCount} 个镜头节点、${exportResult.changedCharacterActionCount ?? 0} 组角色动作、${exportResult.changedSoundEffectCount ?? 0} 个音效和 ${exportResult.changedMusicCount ?? 0} 首音乐并保存`,
         );
       } catch (exportError) {
+        setErrorPhase(writeSubmitted ? "uncertain" : "failed");
         setError(
           exportError instanceof Error
             ? exportError.message
@@ -732,6 +741,8 @@ export function useStoryboardExport({
     currentShotNumber,
     busy,
     busyLabel,
+    runId,
+    errorPhase,
     error,
     result,
     canExport,

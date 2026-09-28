@@ -181,6 +181,8 @@ test("opens the NPC migration workspace without layout overflow", async ({
     .getByRole("textbox", { name: "目标工程 Content", exact: true })
     .fill("D:/Seria/res/Content");
   await page.getByRole("button", { name: "检查迁移计划" }).click();
+  await expect(page.locator(".task-notice")).toHaveAttribute("data-phase", "warning");
+  await expect(page.locator(".task-notice .task-glyph")).toHaveAttribute("data-running", "false");
   await expect(
     page.locator(".npc-migration-section").filter({ hasText: "源资产" }),
   ).toHaveAttribute("data-collapsed", "true");
@@ -704,6 +706,10 @@ test("sorts action supplements by source modification time", async ({
   await expect(
     page.getByRole("button", { name: "执行有遗漏" }),
   ).toBeVisible();
+  await expect(page.locator(".task-notice")).toHaveAttribute("data-phase", "warning");
+  await expect(page.locator(".task-notice")).toContainText("待人工终检");
+  expect(await page.locator(".task-notice").evaluate((el) => el.getAnimations({ subtree: true }).length)).toBe(0);
+  await page.screenshot({ path: testInfo.outputPath("npc-partial-review.png"), fullPage: true });
   await expect(page.getByText("待补 Montage 1")).toBeVisible();
   await expect(
     page.getByText(
@@ -719,4 +725,73 @@ test("sorts action supplements by source modification time", async ({
   await expect(
     page.getByRole("button", { name: /面部补充/ }),
   ).toBeVisible();
+});
+
+test("keeps NPC migration breadcrumbs and workspace actions aligned", async ({
+  page,
+}, testInfo) => {
+  await page.addInitScript(() => {
+    window.sessionStorage.setItem("shot-sandbox.launch-screen-seen", "1");
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "NPC 迁移" }).click();
+  await page.locator(".workspace-floating-actions").evaluate((element) => {
+    element.dataset.reconciliationProbe = "module-selector";
+  });
+
+  const assertFloatingActions = async (readButtonName: string) => {
+    const workspace = page.locator(".npc-migration-workspace");
+    const actions = workspace.locator(".workspace-floating-actions");
+    const readButton = actions.getByRole("button", {
+      name: readButtonName,
+    });
+    const backButton = actions.getByRole("button", {
+      name: "返回模块选择",
+    });
+    const contentLayout = workspace
+      .locator(".npc-migration-layout, .npc-supplement-layout")
+      .first();
+    await expect(readButton).toBeVisible();
+    await expect(backButton).toBeVisible();
+    const [workspaceBox, contentBox, readBox, backBox] = await Promise.all([
+      workspace.boundingBox(),
+      contentLayout.boundingBox(),
+      readButton.boundingBox(),
+      backButton.boundingBox(),
+    ]);
+    expect(workspaceBox && contentBox && readBox && backBox).toBeTruthy();
+    expect(Math.abs(contentBox!.y - workspaceBox!.y)).toBeLessThanOrEqual(1);
+    expect(Math.abs(readBox!.y - backBox!.y)).toBeLessThanOrEqual(1);
+    expect(
+      workspaceBox!.x + workspaceBox!.width - (backBox!.x + backBox!.width),
+    ).toBeLessThanOrEqual(20);
+  };
+
+  await page.getByRole("button", { name: /全新 NPC/ }).click();
+  await expect(page.locator(".workspace-floating-actions")).not.toHaveAttribute(
+    "data-reconciliation-probe",
+    "module-selector",
+  );
+  await expect(page.locator(".workspace-identity h1")).toHaveText(
+    /NPC 迁移\s*全新 NPC/,
+  );
+  await assertFloatingActions("读取源资产");
+  await page.getByRole("button", { name: "返回模块选择" }).click();
+
+  await page.getByRole("button", { name: /动作补充与修改/ }).click();
+  await expect(page.locator(".workspace-identity h1")).toHaveText(
+    /NPC 迁移\s*动作补充与修改/,
+  );
+  await assertFloatingActions("读取 UE 目标");
+  await page.getByRole("button", { name: "返回模块选择" }).click();
+
+  await page.getByRole("button", { name: /面部补充/ }).click();
+  await expect(page.locator(".workspace-identity h1")).toHaveText(
+    /NPC 迁移\s*面部补充/,
+  );
+  await assertFloatingActions("读取 UE 目标");
+  await page.screenshot({
+    path: testInfo.outputPath("npc-migration-unified-navigation.png"),
+    fullPage: true,
+  });
 });

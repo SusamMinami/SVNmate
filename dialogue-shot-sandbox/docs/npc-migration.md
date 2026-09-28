@@ -49,6 +49,9 @@ Skeletal Mesh 自带的 Skeleton。动作库命中当前 NPC 时，会导入对�
 3. **面部补充**：读取已有 NPC、Body Skeleton、Face Skeletal Mesh 与
    Face Skeleton，只处理以 `_Face` 结尾且能找到同名 Body 动作的 FBX。
 
+进入任一模块后，应用顶栏以“NPC 迁移｜当前模块”显示当前位置；“读取源资产”或
+“读取 UE”与“返回模块选择”固定在工作区右上角，三个模块使用相同位置和操作顺序。
+
 目标动作目录统一位于 NPC 命名目录下：Body 写入 `<NPC>/Animation`，Face
 写入 `<NPC>/Animation/Face`。当 Body Mesh 或 Skeleton 位于 `<NPC>/body`
 等子目录时，工具会沿包路径向上定位与 NPC 名称相同的目录，不把网格体分类目录

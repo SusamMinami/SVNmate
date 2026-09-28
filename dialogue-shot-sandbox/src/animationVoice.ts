@@ -21,49 +21,69 @@ export const SequencePatchSchema = z.object({
 export type SequencePatch = z.infer<typeof SequencePatchSchema>;
 export type SubtitleDraft = z.infer<typeof SubtitleDraftSchema>;
 
-export interface SequenceSection {
-  path: string;
-  className: string;
-  start: number | null;
-  end: number | null;
-  active: boolean;
-  dialogueId?: number;
-  audioEvent?: string;
-  subSequence?: string;
-}
-export interface SequenceTrack {
-  path: string;
-  name: string;
-  className: string;
-  binding: string;
-  sections: SequenceSection[];
-}
-export interface SequenceEvent {
-  sectionPath: string;
-  channel: number;
-  key: number;
-  frame: number;
-  seconds: number;
-  endpoint: string;
-  role: "show" | "hide" | "other";
-}
-export interface SequenceSnapshot {
-  assetPath: string;
-  name: string;
-  revision: string;
-  stateRevision: string;
-  dirty: boolean;
-  displayRate: number;
-  tickResolution: number;
-  start: number;
-  end: number;
-  director: { path: string; parent: string };
-  tracks: SequenceTrack[];
-  events: SequenceEvent[];
-  marks: Array<{ label: string; frame: number; seconds: number }>;
-  warnings: string[];
-  voices: Array<{ id: number; name: string; text: string; delayMs: number }>;
-  skipBlockedReasons: string[];
+export const SequenceSectionSchema = z.object({
+  path: z.string(),
+  className: z.string(),
+  start: z.number().finite().nullable(),
+  end: z.number().finite().nullable(),
+  active: z.boolean(),
+  dialogueId: z.number().int().optional(),
+  audioEvent: z.string().optional(),
+  subSequence: z.string().optional(),
+});
+export type SequenceSection = z.infer<typeof SequenceSectionSchema>;
+
+export const SequenceTrackSchema = z.object({
+  path: z.string(),
+  name: z.string(),
+  className: z.string(),
+  binding: z.string(),
+  sections: z.array(SequenceSectionSchema),
+});
+export type SequenceTrack = z.infer<typeof SequenceTrackSchema>;
+
+export const SequenceEventSchema = z.object({
+  sectionPath: z.string(),
+  channel: z.number().int().nonnegative(),
+  key: z.number().int().nonnegative(),
+  frame: z.number().int(),
+  seconds: z.number().finite(),
+  endpoint: z.string(),
+  endpointFunction: z.string().optional(),
+  role: z.enum(["show", "hide", "other"]),
+});
+export type SequenceEvent = z.infer<typeof SequenceEventSchema>;
+
+export const SequenceSnapshotSchema = z.object({
+  assetPath: SequencePathSchema,
+  name: z.string(),
+  revision: z.string(),
+  stateRevision: z.string(),
+  dirty: z.boolean(),
+  displayRate: z.number().finite(),
+  tickResolution: z.number().finite().positive(),
+  start: z.number().finite(),
+  end: z.number().finite(),
+  director: z.object({ path: z.string(), parent: z.string() }),
+  tracks: z.array(SequenceTrackSchema),
+  events: z.array(SequenceEventSchema),
+  marks: z.array(z.object({ label: z.string(), frame: z.number().int(), seconds: z.number().finite() })),
+  warnings: z.array(z.string()),
+  voices: z.array(z.object({
+    id: z.number().int(),
+    name: z.string(),
+    text: z.string(),
+    delayMs: z.number().finite(),
+  })),
+  skipBlockedReasons: z.array(z.string()),
+});
+export type SequenceSnapshot = z.infer<typeof SequenceSnapshotSchema>;
+
+export interface AnimationVoiceCache {
+  root: string;
+  catalog: Array<{ path: string; name: string }>;
+  catalogCachedAt: string | null;
+  snapshots: Record<string, { snapshot: SequenceSnapshot; cachedAt: string }>;
 }
 export interface SequenceReview {
   token: string;

@@ -288,11 +288,11 @@ Adobe 将主镜头定义为覆盖人物、动作与空间关系的全景，并�
 
 ## 推荐协议
 
-大模型不应输出 XYZ 坐标，但需要输出足够完整的镜头语义：
+大模型不应输出 XYZ 坐标，但需要输出足够完整的镜头语义。下面仅为响应
+`shots[]` 中的一个 `DirectorDecisionSchema` 元素，不是可直接提交的整段响应：
 
 ```json
 {
-  "schema_version": "shot-plan.v5",
   "dialogue_ids": ["204803", "204804"],
   "template": "reverse_medium",
   "subject": "B",
@@ -314,6 +314,12 @@ Adobe 将主镜头定义为覆盖人物、动作与空间关系的全景，并�
 }
 ```
 
+整段就绪响应还须包含 `schema_version: "shot-plan.v5"`、原 `request_id`、
+`status: "ready"`、`scene_analysis`、`blocking`、`shots` 和 `sound_effects`。
+以 `src/director/contracts.ts` 的 `MiraReadyResponseSchema` 为准；
+TRAE 当前镜头精修使用单独的 `shot-refinement.v1` 交接，见
+[局部精修](storyboard-workflow.md#当前镜头局部精修)。
+
 大模型必须声明 `subject`、`look_target`、`coverage_intent`、焦段/景深字段、
 镜内运动字段和四个构图字段。Three.js 据此生成稳定的无序关系轴 ID
 （例如 `A-B`）、同侧机位、逐镜头朝向覆盖、视觉落点、运动起止机位和
@@ -332,7 +338,7 @@ Adobe 将主镜头定义为覆盖人物、动作与空间关系的全景，并�
 7. 规则导演定向调整失败镜头；大模型收到失败镜头和原因后重新设计。
 8. 每套方案最多返修一次，并比较返修前后的失败镜头数和警告数。
 9. 采用质量更好的结果；仍未通过的镜头保留并标红，供人工复核。
-9. 输出实测标签、违规说明、规则集版本和规则集指纹。
+10. 输出实测标签、违规说明、规则集版本和规则集指纹。
 
 规则表动态同步与执行快照仍为后续能力，不应依赖在线表格执行当前导演。
 场景参考和无对白空镜的分阶段接入见

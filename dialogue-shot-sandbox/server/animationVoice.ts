@@ -6,10 +6,16 @@ import {
   SequencePatchSchema, SequencePathSchema, sequencePatchProblems,
   type SequenceSnapshot, type SequenceReview, type SubtitleDraft,
 } from "../src/animationVoice";
+import {
+  cacheAnimationVoiceCatalog,
+  cacheAnimationVoiceSnapshot,
+  readAnimationVoiceCache,
+} from "./animationVoiceCache";
 import { readAnimationVoiceRows } from "./configRepository";
 import { getUnrealMcpEndpoint, UnrealMcpConnection, type UnrealInvoker } from "./ue/transport";
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+const SequenceRootSchema = z.string().trim().regex(/^\/Game(?:\/[A-Za-z0-9_]+)*$/);
 const reviews = new Map<string, { review: SequenceReview; expires: number; endpoint: string; voiceProof: string }>();
 let busy = false;
 
@@ -106,6 +112,7 @@ export function attachSequenceEndpoints(snapshot: SequenceSnapshot, text: string
     const functionLine = lines.find((line) => line.startsWith("FunctionReference=")) ?? "";
     if (!functionLine.includes("bSelfContext=True")) continue;
     const name = /MemberName="([^"]+)"/.exec(functionLine)?.[1];
+    if (name) event.endpointFunction = name;
     if (name === "Show SkipButton") {
       const mark = lines.find((line) => line.includes('PinName="Mark"')) ?? "";
       if (!mark.includes("LinkedTo=") && mark.includes('DefaultValue="skip"')) event.role = "show";
@@ -117,10 +124,29 @@ export function attachSequenceEndpoints(snapshot: SequenceSnapshot, text: string
   if (!directorName) snapshot.skipBlockedReasons.push("缺少 Director Blueprint，请在 UE 创建并配置跳过端点");
   else if (snapshot.director.parent !== "/Game/Seria/Sequences/CommonSequenceDirector.CommonSequenceDirector_C") {
     snapshot.skipBlockedReasons.push("Director 父类不是 CommonSequenceDirector，第一版不会自动修改父类");
-  }
-  for (const role of ["show", "hide"]) {
-    if (snapshot.events.filter((event) => event.role === role).length !== 1) {
-      snapshot.skipBlockedReasons.push(`无法唯一确认${role === "show" ? "显示" : "隐藏"}跳过按钮的已绑定端点，请在 UE 检查`);
+  } else {
+    const boundEvents = snapshot.events.filter((event) => event.endpoint);
+    const functionCounts = new Map<string, number>();
+    for (const event of boundEvents) {
+      const name = event.endpointFunction || "未识别调用";
+      functionCounts.set(name, (functionCounts.get(name) ?? 0) + 1);
+    }
+    const boundSummary = [...functionCounts]
+      .map(([name, count]) => `${name}${count > 1 ? `×${count}` : ""}`)
+      .join("、");
+    for (const role of ["show", "hide"] as const) {
+      const matches = snapshot.events.filter((event) => event.role === role);
+      const label = role === "show" ? "显示" : "隐藏";
+      const functionName = role === "show" ? "Show SkipButton（Mark=skip）" : "HideSkipButton";
+      if (matches.length === 0) {
+        snapshot.skipBlockedReasons.push(
+          `未识别到${label}跳过按钮端点。需要 1 个已绑定 Custom Event 直接调用 ${functionName}；当前 ${snapshot.events.length} 个事件键中有 ${boundEvents.length} 个已绑定${boundSummary ? `，实际调用 ${boundSummary}` : ""}`,
+        );
+      } else if (matches.length > 1) {
+        snapshot.skipBlockedReasons.push(
+          `识别到 ${matches.length} 个${label}跳过按钮端点，必须在 UE 中只保留 1 个 ${functionName} 直连端点`,
+        );
+      }
     }
   }
 }
@@ -158,13 +184,30 @@ async function connected<T>(work: (connection: UnrealInvoker) => Promise<T>): Pr
 }
 
 export async function listAnimationSequences(raw: unknown) {
-  const { root } = z.object({ root: z.string().trim().regex(/^\/Game(?:\/[A-Za-z0-9_]+)*$/) }).parse(raw);
-  return exclusive(() => connected((c) => evaluate(c, { action: "catalog", root })));
+  const { root } = z.object({ root: SequenceRootSchema }).parse(raw);
+  return exclusive(async () => {
+    const catalog = await connected((c) => evaluate(c, { action: "catalog", root })) as Array<{ path: string; name: string }>;
+    await cacheAnimationVoiceCatalog(root, catalog);
+    return catalog;
+  });
 }
 
 export async function scanAnimationSequence(raw: unknown) {
-  const { assetPath } = z.object({ assetPath: SequencePathSchema }).parse(raw);
-  return exclusive(() => connected((c) => scan(c, assetPath)));
+  const { assetPath, root } = z.object({
+    assetPath: SequencePathSchema,
+    root: SequenceRootSchema.optional(),
+  }).parse(raw);
+  if (root && !assetPath.startsWith(`${root}/`)) throw new Error("动画不在当前扫描目录中");
+  return exclusive(async () => {
+    const snapshot = await connected((c) => scan(c, assetPath));
+    if (root) await cacheAnimationVoiceSnapshot(root, snapshot);
+    return snapshot;
+  });
+}
+
+export async function getAnimationVoiceCache(raw: unknown) {
+  const { root } = z.object({ root: SequenceRootSchema }).parse(raw);
+  return readAnimationVoiceCache(root);
 }
 
 export function validateSpeechVoices(subtitles: SubtitleDraft[], voices: Array<{ id: number; text: string; name: string }>) {

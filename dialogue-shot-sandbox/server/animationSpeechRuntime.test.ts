@@ -3,9 +3,16 @@ import { PassThrough } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { spawn } from "node:child_process";
 import { scanAnimationSequence } from "./animationVoice";
-import { animationSpeechStatus, startAnimationSpeech, getAnimationSpeechJob, cancelAnimationSpeech } from "./animationSpeechRuntime";
+import {
+  animationSpeechStatus,
+  installAnimationSpeechRuntime,
+  startAnimationSpeech,
+  getAnimationSpeechJob,
+  cancelAnimationSpeech,
+} from "./animationSpeechRuntime";
 
-vi.mock("node:fs", () => ({ existsSync: () => true }));
+const fileSystem = vi.hoisted(() => ({ exists: vi.fn(() => true) }));
+vi.mock("node:fs", () => ({ existsSync: fileSystem.exists }));
 vi.mock("node:child_process", () => ({ spawn: vi.fn() }));
 vi.mock("./animationSpeechMedia", () => ({
   getAnimationSpeechAudio: async () => ({
@@ -28,6 +35,8 @@ describe("speech process lifecycle", () => {
   let child = fakeChild();
   beforeEach(() => {
     child = fakeChild();
+    fileSystem.exists.mockReset();
+    fileSystem.exists.mockReturnValue(true);
     vi.mocked(spawn).mockReturnValue(child as never);
     vi.mocked(scanAnimationSequence).mockResolvedValue({ revision: "r1", start: 0, end: 30 } as never);
   });
@@ -71,5 +80,20 @@ describe("speech process lifecycle", () => {
     expect(job.error).toBe("显存不足");
     expect(job.result).toBeUndefined();
     expect((await animationSpeechStatus()).busy).toBe(false);
+  });
+  it("starts the bundled installer and exposes its current stage", async () => {
+    fileSystem.exists.mockImplementation((path) => !String(path).endsWith("ready.json"));
+    const started = await installAnimationSpeechRuntime();
+    expect(started.installing).toBe(true);
+    expect(spawn).toHaveBeenLastCalledWith("powershell.exe", expect.arrayContaining([
+      "-File", expect.stringContaining("install-speech-runtime.ps1"),
+    ]), expect.objectContaining({ windowsHide: true }));
+
+    child.stdout.write("SHOT_SANDBOX_STAGE:正在下载端侧模型 Qwen3-ASR-0.6B\n");
+    expect((await animationSpeechStatus()).reason).toBe("正在下载端侧模型 Qwen3-ASR-0.6B");
+
+    fileSystem.exists.mockReturnValue(true);
+    child.emit("close", 0);
+    expect((await animationSpeechStatus()).ready).toBe(true);
   });
 });

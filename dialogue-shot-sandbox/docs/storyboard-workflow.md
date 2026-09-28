@@ -77,9 +77,7 @@
 6. 提供“中断分析”。生成期间重新读取 BP 时，先确认并中断任务，再刷新位置；
    保留已显示分镜与占位。
 
-## 缓存、共享与反馈
-
-### 当前镜头局部精修
+## 当前镜头局部精修
 
 生成方案后，在右侧“导演 → TRAE 局部精修”填写要求并提交。提交会停止当前端侧
 优化，固定此时的方案作为基线；在 TRAE 中执行“处理待分镜任务”，完成后可预览、
@@ -102,7 +100,7 @@
 - 新工具需重启源码 MCP 才会注册；旧进程无法完成局部任务时，停用再启用 MCP，
   然后重新提交。没有真实 UE 图像/深度验证时，仍只代表代理几何验收。
 
-### 整段方案与反馈
+## 缓存、共享与反馈
 
 - 指纹包含对白、角色、上下文、约束、占位策略与版本；精确命中可恢复，
   相同活动任务可复用。输入变化使旧命中失效。
@@ -124,6 +122,10 @@
 | 搜索与索引 | `src/data/dialogueRepository.ts`、`src/data/databaseIndex.ts` |
 | 站位 | `src/data/blueprintFormation.ts`、`src/director/blockingResolver.ts` |
 | 协作状态 | `src/app/useCollaborationConnections.ts`、`server/traeBridge.ts`、`mcp/storyboardServer.ts` |
+| 端侧分析生命周期 | `src/app/useRuleAdvisorSession.ts`、`src/director/ruleAdvisor.ts` |
+| 已有镜头评估/建议 | `src/app/useExistingStoryboardReview.ts`、`src/app/useExistingStoryboardSuggestions.ts` |
+| 局部精修 | `src/app/useShotRefinement.ts`、`src/director/shotRefinement.ts`、`server/storyboardTaskStore.ts` |
 
+按改动选择对应测试，具体文件见 [代码与验证地图](code-map.md)，不必从 App 全文开始查找。
 变更后至少验证：纯文字加载不请求 UE、不启动 AI；无分镜节点编辑；切换方案不
 重复生成；等待与中断区分；缓存策略变更失效；后台晚到结果不覆盖另一段对话。

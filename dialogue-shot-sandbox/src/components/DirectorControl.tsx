@@ -1,8 +1,5 @@
 import {
   Bot,
-  CircleAlert,
-  Cpu,
-  LoaderCircle,
   SlidersHorizontal,
   SquareTerminal,
 } from "lucide-react";
@@ -11,8 +8,10 @@ import type {
   RuleAdvisorRunSummary,
 } from "../director/orchestrator";
 import type { RuleAdvisorProgress } from "../director/ruleAdvisorContracts";
+import { TaskGlyph, TaskMotionScope } from "./TaskMotion";
 
 interface DirectorControlProps {
+  active?: boolean;
   mode: DirectorMode;
   selectedMode: DirectorMode | null;
   appliedMode: DirectorMode;
@@ -35,6 +34,7 @@ function modeLabel(mode: DirectorMode): string {
 }
 
 export function DirectorControl({
+  active = true,
   mode,
   selectedMode,
   appliedMode,
@@ -62,6 +62,7 @@ export function DirectorControl({
       : advisorSummary?.message ?? advisorProgress?.message;
 
   return (
+    <TaskMotionScope active={active}>
     <div className="director-control">
       <div className="section-label">
         <span>导演模式</span>
@@ -121,13 +122,8 @@ export function DirectorControl({
           role="status"
           aria-live="polite"
         >
-          {advisorBusy ? (
-            <LoaderCircle className="spin" size={14} />
-          ) : advisorState === "unavailable" ? (
-            <CircleAlert size={14} />
-          ) : (
-            <Cpu size={14} />
-          )}
+          <TaskGlyph phase={advisorBusy ? "running" : advisorState === "unavailable" || advisorState === "partial" ? "warning" : advisorState === "disabled" ? "cancelled" : "ready"}
+            runId={advisorProgress?.request_id ?? "advisor"} variant="nodes" />
           <span>
             <strong>{advisorSummary?.model ?? "端侧 VLM"}</strong>
             <small>{advisorMessage ?? "将在生成时逐镜检查合法机位"}</small>
@@ -140,5 +136,6 @@ export function DirectorControl({
         </div>
       )}
     </div>
+    </TaskMotionScope>
   );
 }

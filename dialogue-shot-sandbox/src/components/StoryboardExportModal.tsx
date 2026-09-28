@@ -3,7 +3,6 @@ import {
   CheckCircle2,
   ChevronDown,
   Layers3,
-  LoaderCircle,
   Music2,
   PersonStanding,
   RefreshCw,
@@ -14,6 +13,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import type { StoryboardExportMode } from "../app/useStoryboardExport";
 import type { DialogueStoryboardExportPreview } from "../types";
+import { TaskGlyph, TaskMotionScope } from "./TaskMotion";
 
 interface StoryboardExportModalProps {
   preview: DialogueStoryboardExportPreview;
@@ -21,6 +21,8 @@ interface StoryboardExportModalProps {
   currentShotNumber: number;
   busy: boolean;
   busyLabel: string;
+  runId: number;
+  errorPhase: "failed" | "uncertain";
   error: string;
   result: string;
   onClose: () => void;
@@ -68,6 +70,8 @@ export function StoryboardExportModal({
   currentShotNumber,
   busy,
   busyLabel,
+  runId,
+  errorPhase,
   error,
   result,
   onClose,
@@ -328,6 +332,7 @@ export function StoryboardExportModal({
   }
 
   return (
+    <TaskMotionScope active>
     <div className="modal-backdrop storyboard-export-backdrop" role="presentation">
       <section
         className="storyboard-export-modal"
@@ -365,11 +370,7 @@ export function StoryboardExportModal({
                 onClick={onShowAll}
                 disabled={busy || Boolean(result)}
               >
-                {busy ? (
-                  <LoaderCircle className="spin" size={15} />
-                ) : (
-                  <Layers3 size={15} />
-                )}
+                <Layers3 size={15} />
                 全部导出
               </button>
             )}
@@ -468,11 +469,7 @@ export function StoryboardExportModal({
                     disabled={busy || Boolean(result)}
                     onClick={onRefresh}
                   >
-                    {busy ? (
-                      <LoaderCircle className="spin" size={13} />
-                    ) : (
-                      <RefreshCw size={13} />
-                    )}
+                    <RefreshCw size={13} />
                     刷新
                   </button>
                 )}
@@ -485,9 +482,15 @@ export function StoryboardExportModal({
               </p>
             ))}
             {error && (
-              <p className="is-error" role="alert">
+              <p className={errorPhase === "uncertain" ? "is-warning" : "is-error"} role="alert">
                 <AlertTriangle size={14} />
-                <span>{error}</span>
+                <span>{error}{errorPhase === "uncertain" ? "；请核对 UE 资产与恢复记录后重新检查" : ""}</span>
+                {errorPhase === "uncertain" && (
+                  <button className="storyboard-export-message__refresh" type="button" disabled={busy}
+                    onClick={() => { setConfirmed(false); onRefresh(); }}>
+                    <RefreshCw size={13} />重新检查 UE
+                  </button>
+                )}
               </p>
             )}
             {result && (
@@ -1019,20 +1022,20 @@ export function StoryboardExportModal({
                 )
               }
             >
-              {busy ? (
-                <LoaderCircle className="spin" size={16} />
-              ) : (
-                <Upload size={16} />
-              )}
+              <TaskGlyph phase={busy ? "running" : error ? errorPhase : result ? "success" : blocked ? "warning" : "ready"} runId={runId} />
+              <span aria-live="polite">
               {busy
                 ? busyLabel || "处理中"
+                : result ? "已完成"
                 : reviewed
                   ? "确认写入并保存"
                   : "检查所选内容"}
+              </span>
             </button>
           </div>
         </footer>
       </section>
     </div>
+    </TaskMotionScope>
   );
 }

@@ -1,6 +1,6 @@
 ---
-name: "internal-storyboard-director"
-description: "Designs UE4 dialogue storyboards through the local storyboard MCP queue. Invoke when the user asks to process pending storyboard tasks or design shots for 镜头沙盘."
+name: internal-storyboard-director
+description: Designs and refines UE4 dialogue shots through the local MCP queue. Use when asked to process pending storyboard tasks or design shots for 镜头沙盘.
 ---
 
 # 内部 TRAE 分镜导演
@@ -18,6 +18,8 @@ description: "Designs UE4 dialogue storyboards through the local storyboard MCP 
 
 1. 调用 `storyboard_get_pending_request`。
 2. 如果 `found=false`，明确回复当前没有待处理任务并结束。
+   如果 `task_type=refine_shots`，按下方“局部精修”处理，再回到第 11 步；
+   不执行整段分析、站位设计或音效推荐。
 3. 阅读返回的完整 `request`：
    - `outline`：场景梗概
    - 可选 `scene_reference`：用户明确允许分享的场景快照，`objects.center/size`
@@ -62,6 +64,26 @@ description: "Designs UE4 dialogue storyboards through the local storyboard MCP 
 12. 单次最多连续处理 5 项，或在 `found=false` 时停止，并汇总实际完成的
    `request_id`。若队列仍有任务，明确提示用户再次触发。
 13. 若无法完成，调用 `storyboard_fail_request` 写入明确原因。
+
+## 局部精修
+
+只读取任务包里的 `instruction`、当前/相邻镜头、角色、相关对白和已有反馈。
+`shot_index` 是零基索引；仅修改 `editable=true` 的镜头，并覆盖全部
+`target_indexes`。相邻镜头提供连续性边界，不能修改。
+
+- 原样回传 `baseline_version`，保持每镜 `dialogue_ids` 的内容和顺序。
+- 保留站位、朝向、动作和音频；`facingOverrides` 是该镜头实际朝向。
+  摄影机坐标是当前基线参考，只返回语义 `decision`。
+- 先解决几何/连续性问题，再完成用户的叙事要求，最后参考视觉评分。
+  评分和文字建议是参考，不能以情绪强度代替运镜动机。
+- 至少每 60 秒调用 `storyboard_heartbeat_request`，提交前再次确认
+  `continue=true`。调用 `storyboard_submit_shot_patch`，参数为
+  `request_id` 和 `patch={baseline_version,replacements:[{shot_index,decision}]}`。
+  `decision` 沿用任务内现有字段结构。
+- 验收失败时依据 `failed_shots` 在原范围内修正一次；仍失败则调用
+  `storyboard_fail_request` 说明原因，工作台保留原镜头。
+  版本不一致或任务取消时停止，不自行换版本、扩大范围或提交整段方案。
+- 只有 `accepted=true` 才计为完成；采纳由工作台用户执行。
 
 ## 分镜要求
 

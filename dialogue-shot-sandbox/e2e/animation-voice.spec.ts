@@ -16,6 +16,34 @@ const sample: SequenceSnapshot = {
   skipBlockedReasons: ["缺少 Director Blueprint，请在 UE 创建并配置跳过端点"],
 };
 
+test("animation workspace restores cached scans without reading every UE asset", async ({ page }) => {
+  let scanCalls = 0;
+  await page.addInitScript(() => sessionStorage.setItem("shot-sandbox.launch-screen-seen", "1"));
+  await page.route("**/api/ue/animation-voice/*", async (route) => {
+    const action = route.request().url().split("/").at(-1);
+    let data: unknown;
+    if (action === "cache") data = {
+      root: "/Game/Seria/Sequences",
+      catalog: [{ path: sample.assetPath, name: sample.name }],
+      catalogCachedAt: "2026-09-24T12:00:00.000Z",
+      snapshots: {
+        [sample.assetPath]: { snapshot: sample, cachedAt: "2026-09-24T12:00:00.000Z" },
+      },
+    };
+    else if (action === "speech-status") data = { ready: false, reason: "端侧语音环境未安装", root: "runtime", busy: false, canInstall: true, installing: false };
+    else if (action === "scan") { scanCalls++; data = sample; }
+    else if (action === "catalog") data = [{ path: sample.assetPath, name: sample.name }];
+    else throw new Error(`Unexpected request: ${action}`);
+    await route.fulfill({ json: { ok: true, data } });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "动画语音", exact: true }).click();
+  await expect(page.getByText("本地缓存", { exact: false }).first()).toBeVisible();
+  await expect(page.getByText("目标锁定", { exact: true })).toBeVisible();
+  expect(scanCalls).toBe(0);
+});
+
 test("animation workspace scans, reviews exact changes and preserves drafts", async ({ page }) => {
   let scanCalls = 0;
   let applyCalls = 0;
@@ -24,8 +52,10 @@ test("animation workspace scans, reviews exact changes and preserves drafts", as
     const action = route.request().url().split("/").at(-1);
     const body = route.request().postDataJSON();
     let data: unknown;
-    if (action === "catalog") data = [{ path: sample.assetPath, name: sample.name }];
+    if (action === "cache") data = { root: "/Game/Seria/Sequences", catalog: [], catalogCachedAt: null, snapshots: {} };
+    else if (action === "catalog") data = [{ path: sample.assetPath, name: sample.name }];
     else if (action === "scan") { scanCalls++; data = sample; }
+    else if (action === "speech-status") data = { ready: false, reason: "端侧语音环境未安装", root: "runtime", busy: false, canInstall: true, installing: false };
     else if (action === "review") data = { token: "token", patch: body, changes: ["修改字幕 9032023：4.200–5.400s → 4.200–5.600s"] };
     else {
       applyCalls++; expect(body).toEqual({ token: "token" });
@@ -37,8 +67,30 @@ test("animation workspace scans, reviews exact changes and preserves drafts", as
   await page.getByRole("button", { name: "动画语音", exact: true }).click();
   await expect(page.getByRole("heading", { name: "动画语音", exact: true })).toBeVisible();
   expect(scanCalls).toBe(0);
-  await page.getByRole("button", { name: "全量扫描" }).click();
+  await page.getByRole("button", { name: "读取列表" }).click();
+  expect(scanCalls).toBe(0);
+  await page.getByRole("button", { name: "扫描配置" }).click();
   await expect(page.getByText("目标锁定", { exact: true })).toBeVisible();
+  const layout = await page.evaluate(() => {
+    const catalogHead = document.querySelector(".animation-voice__catalog-head")!.getBoundingClientRect();
+    const identity = document.querySelector(".animation-voice__identity")!.getBoundingClientRect();
+    const filter = document.querySelector<HTMLInputElement>(".animation-voice__catalog-filter input")!.getBoundingClientRect();
+    const scroller = document.querySelector<HTMLElement>(".animation-voice__scroll")!;
+    const tableHeader = document.querySelector<HTMLElement>(".animation-subtitle__table th")!;
+    return {
+      topDelta: Math.abs(catalogHead.top - identity.top),
+      filterTop: filter.top,
+      identityBottom: identity.bottom,
+      identityInsideScroller: scroller.contains(document.querySelector(".animation-voice__identity")),
+      tableHeaderPosition: getComputedStyle(tableHeader).position,
+      scrollbarWidth: getComputedStyle(scroller, "::-webkit-scrollbar").width,
+    };
+  });
+  expect(layout.topDelta).toBeLessThanOrEqual(1);
+  expect(layout.filterTop).toBeLessThan(layout.identityBottom);
+  expect(layout.identityInsideScroller).toBe(true);
+  expect(layout.tableHeaderPosition).not.toBe("sticky");
+  expect(layout.scrollbarWidth).toBe("8px");
   await expect(page.getByLabel("校正已有事件")).toBeDisabled();
   await expect(page.getByLabel("字幕 2 开始")).toHaveValue("");
   await page.getByLabel("字幕 1 结束").fill("5.6");
@@ -75,7 +127,11 @@ test("animation workspace reports scan failures and retains old revision after r
   let revision = "r1";
   await page.addInitScript(() => sessionStorage.setItem("shot-sandbox.launch-screen-seen", "1"));
   await page.route("**/api/ue/animation-voice/*", async (route) => {
-    if (route.request().url().endsWith("/catalog")) {
+    if (route.request().url().endsWith("/cache")) {
+      await route.fulfill({ json: { ok: true, data: { root: "/Game/Seria/Sequences", catalog: [], catalogCachedAt: null, snapshots: {} } } });
+    } else if (route.request().url().endsWith("/speech-status")) {
+      await route.fulfill({ json: { ok: true, data: { ready: false, reason: "端侧语音环境未安装", root: "runtime", busy: false, canInstall: true, installing: false } } });
+    } else if (route.request().url().endsWith("/catalog")) {
       await route.fulfill({ json: { ok: true, data: [
         { path: sample.assetPath, name: sample.name }, { path: "/Game/Bad.Bad", name: "Bad" },
       ] } });
@@ -85,12 +141,13 @@ test("animation workspace reports scan failures and retains old revision after r
   });
   await page.goto("/");
   await page.getByRole("button", { name: "动画语音", exact: true }).click();
-  await page.getByRole("button", { name: "全量扫描" }).click();
-  await expect(page.getByText("扫描失败", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "读取列表" }).click();
+  await page.getByRole("button", { name: "扫描配置" }).click();
+  await expect(page.getByText("读取失败", { exact: true })).toBeVisible();
   await page.getByLabel("字幕 1 结束").fill("5.6");
   revision = "r2";
-  await page.getByRole("button", { name: "全量扫描" }).click();
-  await expect(page.getByRole("button", { name: "全量扫描" })).toBeEnabled();
+  await page.getByRole("button", { name: "扫描配置" }).click();
+  await expect(page.getByRole("button", { name: "扫描配置" })).toBeEnabled();
   await page.getByRole("button", { name: "检查写入差异" }).click();
   await expect(page.getByRole("alert")).toContainText("动画配置已变化");
 });
@@ -99,18 +156,23 @@ test("event correction inputs lock when a rescan loses the director", async ({ p
   let blocked = false;
   await page.addInitScript(() => sessionStorage.setItem("shot-sandbox.launch-screen-seen", "1"));
   await page.route("**/api/ue/animation-voice/*", (route) => route.fulfill({
-    json: { ok: true, data: route.request().url().endsWith("/catalog")
-      ? [{ path: sample.assetPath, name: sample.name }]
-      : { ...sample, skipBlockedReasons: blocked ? sample.skipBlockedReasons : [] } },
+    json: { ok: true, data: route.request().url().endsWith("/cache")
+      ? { root: "/Game/Seria/Sequences", catalog: [], catalogCachedAt: null, snapshots: {} }
+      : route.request().url().endsWith("/speech-status")
+        ? { ready: false, reason: "端侧语音环境未安装", root: "runtime", busy: false, canInstall: true, installing: false }
+        : route.request().url().endsWith("/catalog")
+          ? [{ path: sample.assetPath, name: sample.name }]
+          : { ...sample, skipBlockedReasons: blocked ? sample.skipBlockedReasons : [] } },
   }));
   await page.goto("/");
   await page.getByRole("button", { name: "动画语音", exact: true }).click();
-  await page.getByRole("button", { name: "全量扫描" }).click();
+  await page.getByRole("button", { name: "读取列表" }).click();
+  await page.getByRole("button", { name: "扫描配置" }).click();
   await page.getByLabel("校正已有事件").check();
   await expect(page.getByLabel("显示跳过按钮时间")).toBeEnabled();
   blocked = true;
-  await page.getByRole("button", { name: "全量扫描" }).click();
-  await expect(page.getByRole("button", { name: "全量扫描" })).toBeEnabled();
+  await page.getByRole("button", { name: "扫描配置" }).click();
+  await expect(page.getByRole("button", { name: "扫描配置" })).toBeEnabled();
   await expect(page.getByLabel("显示跳过按钮时间")).toBeDisabled();
   await expect(page.getByLabel("隐藏跳过按钮时间")).toBeDisabled();
 });

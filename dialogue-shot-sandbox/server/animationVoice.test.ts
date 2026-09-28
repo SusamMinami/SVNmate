@@ -38,8 +38,11 @@ describe("attachSequenceEndpoints", () => {
   it("resolves a compiled direct Show endpoint with the skip mark", () => {
     const source = snapshot(); attachSequenceEndpoints(source, text);
     expect(source.events[0].role).toBe("show");
+    expect(source.events[0].endpointFunction).toBe("Show SkipButton");
     expect(source.director.parent).toContain("CommonSequenceDirector_C");
-    expect(source.skipBlockedReasons).toEqual(["无法唯一确认隐藏跳过按钮的已绑定端点，请在 UE 检查"]);
+    expect(source.skipBlockedReasons).toEqual([
+      "未识别到隐藏跳过按钮端点。需要 1 个已绑定 Custom Event 直接调用 HideSkipButton；当前 1 个事件键中有 1 个已绑定，实际调用 Show SkipButton",
+    ]);
   });
   it.each([
     ['Function=Function\'"CompiledEntry"\'', "Function=None"],

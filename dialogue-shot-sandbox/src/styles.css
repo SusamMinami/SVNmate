@@ -50,6 +50,7 @@
   --cool: #2f96e8;
   --success: #16825c;
   --warning: #a76816;
+  --warning-strong: #8a5612;
   letter-spacing: 0;
 }
 
@@ -935,7 +936,7 @@ textarea:focus-visible {
 
 .rule-advisor-state {
   display: grid;
-  grid-template-columns: 16px minmax(0, 1fr);
+  grid-template-columns: 32px minmax(0, 1fr);
   align-items: center;
   min-height: 38px;
   margin-top: 7px;
@@ -959,7 +960,7 @@ textarea:focus-visible {
   border-color: #e2b8ae;
 }
 
-.rule-advisor-state > span {
+.rule-advisor-state > span:not(.task-glyph) {
   display: grid;
   min-width: 0;
   gap: 1px;
@@ -1842,7 +1843,7 @@ textarea:focus-visible {
   top: 55px;
   left: 50%;
   display: grid;
-  grid-template-columns: 24px minmax(0, 1fr) auto;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
   align-items: center;
   min-width: 250px;
   gap: 9px;
@@ -9218,6 +9219,20 @@ textarea:focus-visible {
   animation: workspace-identity-in 300ms ease both;
 }
 
+.workspace-identity h1 {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.workspace-identity__separator {
+  width: 1px;
+  height: 14px;
+  margin: 0 9px;
+  background: #aeb0aa;
+}
+
 .app-shell[data-ark-theme="endfield"] .brand h1 {
   color: var(--ink);
   font-size: 15px;
@@ -9338,6 +9353,7 @@ textarea:focus-visible {
 }
 
 .npc-migration-workspace {
+  position: relative;
   display: flex;
   height: 100%;
   min-width: 0;
@@ -9648,8 +9664,7 @@ textarea:focus-visible {
 }
 
 .npc-migration-section__header {
-  justify-content: space-between;
-  padding: 0 10px 0 0 !important;
+  padding: 0 !important;
 }
 
 .npc-migration-section__toggle {
@@ -10278,19 +10293,6 @@ textarea:focus-visible {
   gap: 2px;
 }
 
-.npc-supplement-section-actions {
-  display: flex !important;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 6px !important;
-}
-
-.npc-supplement-section-actions .button,
-.npc-supplement-section-actions .icon-button {
-  min-height: 32px;
-  height: 32px;
-}
-
 .npc-supplement-setup section > header > div,
 .npc-supplement-review > header > div {
   display: grid;
@@ -10647,6 +10649,11 @@ textarea:focus-visible {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.npc-migration-workspace:has(> .npc-migration-message)
+  > .workspace-floating-actions {
+  top: 46px;
 }
 
 .workspace-floating-command,
