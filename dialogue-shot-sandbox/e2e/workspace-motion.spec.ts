@@ -12,7 +12,7 @@ async function fixture(page: Page) {
   return errors;
 }
 
-// Freeze a real compositor animation mid-flight, then redirect it in the same
+// Freeze a real compositor animation mid-fade, then redirect it in the same
 // browser task. Comparing its new first frame catches fixed-origin replay.
 async function interrupt(page: Page, label: string) {
   return page.evaluate(async (name) => {
@@ -23,7 +23,12 @@ async function interrupt(page: Page, label: string) {
         animation.pause();
         animation.currentTime = 75;
       });
-      return { id: element.dataset.workspaceId!, transform: getComputedStyle(element).transform };
+      const style = getComputedStyle(element);
+      return {
+        id: element.dataset.workspaceId!,
+        opacity: Number(style.opacity),
+        transform: style.transform,
+      };
     });
     const button = Array.from(document.querySelectorAll<HTMLButtonElement>(".app-rail button"))
       .find((element) => element.title === name)!;
@@ -36,7 +41,7 @@ async function interrupt(page: Page, label: string) {
       return {
         ...sample,
         hidden: element.hidden,
-        from: (animation?.effect as KeyframeEffect)?.getKeyframes()[0].transform,
+        from: Number((animation?.effect as KeyframeEffect)?.getKeyframes()[0].opacity),
       };
     });
   }, label);
@@ -61,11 +66,12 @@ for (const scale of [1, 1.5, 2]) {
         expect(samples.length).toBeGreaterThanOrEqual(2);
         for (const sample of samples) {
           expect(sample.hidden).toBe(false);
-          expect(sample.from).toBe(sample.transform);
+          expect(sample.from).toBeCloseTo(sample.opacity, 2);
+          expect(sample.transform).toBe("none");
         }
       }
       await expect(page.locator(".app-shell")).toHaveAttribute("data-workspace-direction", "up");
-      // All three interrupted pages survive until the final movement completes.
+      // All three interrupted pages survive until the final fade completes.
       await expect(page.locator('[data-workspace-state="exiting"]')).toHaveCount(2);
       await page.screenshot({ path: testInfo.outputPath(`workspace-midflight-${scale}.png`) });
       await page.evaluate(() => document.querySelectorAll<HTMLElement>("[data-workspace-id]")

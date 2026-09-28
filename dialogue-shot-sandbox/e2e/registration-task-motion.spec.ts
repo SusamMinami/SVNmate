@@ -294,6 +294,28 @@ test("target errors stay centered and map reload interruptions remain recoverabl
   const region = page.getByRole("region", { name: "任务目标物", exact: true });
   const taskInput = region.getByLabel("任务节点 ID");
   const resolveButton = region.getByRole("button", { name: "解析任务目标物" });
+  const queryLayout = await region.evaluate((element) => {
+    const regionBounds = element.getBoundingClientRect();
+    const query = element.querySelector<HTMLElement>(".mission-target-query")!;
+    const body = element.querySelector<HTMLElement>(".mission-target-body")!;
+    const taskField = element.querySelector<HTMLInputElement>("#mission-task-id")!;
+    const blueprintField = element.querySelector<HTMLInputElement>(
+      "#mission-blueprint-name",
+    )!;
+    const queryBounds = query.getBoundingClientRect();
+    return {
+      topGap: queryBounds.top - regionBounds.top,
+      height: queryBounds.height,
+      bodyGap: body.getBoundingClientRect().top - queryBounds.bottom,
+      fieldTopDelta:
+        taskField.getBoundingClientRect().top -
+        blueprintField.getBoundingClientRect().top,
+    };
+  });
+  expect(Math.abs(queryLayout.topGap)).toBeLessThanOrEqual(1);
+  expect(queryLayout.height).toBeLessThanOrEqual(58);
+  expect(Math.abs(queryLayout.bodyGap)).toBeLessThanOrEqual(1);
+  expect(Math.abs(queryLayout.fieldTopDelta)).toBeLessThanOrEqual(1);
 
   await taskInput.fill("331101");
   await resolveButton.click();

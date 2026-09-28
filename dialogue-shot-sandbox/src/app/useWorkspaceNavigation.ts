@@ -22,7 +22,7 @@ export function useWorkspaceNavigation(
     direction: "up" as WorkspaceDirection,
   });
   const currentRef = useRef(navigation);
-  const positionsRef = useRef(new Map<WorkspaceView, string>());
+  const opacitiesRef = useRef(new Map<WorkspaceView, string>());
   const animationsRef = useRef<Animation[]>([]);
   const revisionRef = useRef(0);
 
@@ -34,7 +34,7 @@ export function useWorkspaceNavigation(
 
   const settle = useCallback(() => {
     cancelAnimations();
-    positionsRef.current.clear();
+    opacitiesRef.current.clear();
     const next = { ...currentRef.current, visible: new Set([currentRef.current.active]) };
     currentRef.current = next;
     setNavigation(next);
@@ -44,13 +44,13 @@ export function useWorkspaceNavigation(
     (nextWorkspace: WorkspaceView) => {
       const current = currentRef.current;
       if (nextWorkspace === current.active) return;
-      // Sample before cancelling: reversing and third-page navigation both retain
-      // the actual visible positions, including every still-departing page.
-      positionsRef.current.clear();
+      // Sample before cancelling so reversals and third-page navigation continue
+      // from each page's currently visible opacity.
+      opacitiesRef.current.clear();
       shellRef.current?.querySelectorAll<HTMLElement>(":scope > [data-workspace-id]:not([hidden])")
         .forEach((element) => {
-          positionsRef.current.set(element.dataset.workspaceId as WorkspaceView,
-            getComputedStyle(element).transform);
+          opacitiesRef.current.set(element.dataset.workspaceId as WorkspaceView,
+            getComputedStyle(element).opacity);
         });
       cancelAnimations();
       const instant = reducedMotion ||
@@ -78,14 +78,13 @@ export function useWorkspaceNavigation(
     shellRef.current.querySelectorAll<HTMLElement>(":scope > [data-workspace-id]:not([hidden])")
       .forEach((element) => {
         const workspace = element.dataset.workspaceId as WorkspaceView;
-        const target = workspace === navigation.active ? 0
-          : WORKSPACE_ORDER[workspace] < WORKSPACE_ORDER[navigation.active] ? -100 : 100;
-        const from = positionsRef.current.get(workspace)
-          ?? `translate3d(0, ${navigation.direction === "up" ? 100 : -100}%, 0)`;
+        const target = workspace === navigation.active ? "1" : "0";
+        const from = opacitiesRef.current.get(workspace)
+          ?? (workspace === navigation.active ? "0" : "1");
         animations.push(element.animate(
-          [{ transform: from }, { transform: `translate3d(0, ${target}%, 0)` }],
+          [{ opacity: from }, { opacity: target }],
           { duration: Number.isFinite(duration) ? duration : 0,
-            easing: "cubic-bezier(0.32, 0.72, 0, 1)", fill: "both" },
+            easing: "cubic-bezier(0.2, 0, 0, 1)", fill: "both" },
         ));
       });
     animationsRef.current = animations;
