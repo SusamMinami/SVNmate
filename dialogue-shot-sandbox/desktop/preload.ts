@@ -12,6 +12,13 @@ contextBridge.exposeInMainWorld("shotSandboxDesktop", {
     ipcRenderer.invoke("desktop:set-ue-port", port),
   getConfigurationWindowMode: () =>
     ipcRenderer.invoke("desktop:get-configuration-window-mode"),
+  monitorConfigurationActivity: (enabled: boolean) =>
+    ipcRenderer.invoke("desktop:monitor-configuration-activity", enabled),
+  onConfigurationActivity: (listener: (snapshot: import("../src/configurationActivity").ConfigurationActivity) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, snapshot: import("../src/configurationActivity").ConfigurationActivity) => listener(snapshot);
+    ipcRenderer.on("desktop:configuration-activity", handler);
+    return () => ipcRenderer.removeListener("desktop:configuration-activity", handler);
+  },
   setConfigurationWindowMode: (
     enabled: boolean,
     contentSize?: { width: number; height: number },
@@ -29,6 +36,8 @@ contextBridge.exposeInMainWorld("shotSandboxDesktop", {
   chooseNpcMigrationDirectory: (
     kind: "target-content" | "animations",
   ) => ipcRenderer.invoke("desktop:choose-npc-migration-directory", kind),
+  chooseNpcAnimationDirectories: () =>
+    ipcRenderer.invoke("desktop:choose-npc-animation-directories"),
   addNpcAnimationDirectory: () =>
     ipcRenderer.invoke("desktop:add-npc-animation-directory"),
   removeNpcAnimationDirectory: (directoryPath: string) =>

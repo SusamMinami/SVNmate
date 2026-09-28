@@ -1,19 +1,18 @@
 import {
-  AlertTriangle,
   ArrowLeft,
-  CheckCircle2,
   Check,
   Copy,
   FilePenLine,
   FileSpreadsheet,
   ListChecks,
-  LoaderCircle,
   PencilLine,
   RefreshCw,
   UserRoundPlus,
   X,
 } from "lucide-react";
 import { type ClipboardEvent, useState } from "react";
+import { useOperationFeedback } from "../app/useOperationFeedback";
+import { OperationIcon, TaskNotice } from "./TaskMotion";
 import {
   formatUnrealRotator,
   formatUnrealVector,
@@ -234,7 +233,7 @@ export function NpcRegistrationModal({
   const titleId = editMode
     ? "npc-target-edit-title"
     : "npc-registration-title";
-  const initialEditState = initialTargetEditState(editRequest);
+  const [initialEditState] = useState(() => initialTargetEditState(editRequest));
   const [selection, setSelection] =
     useState<SelectedLevelActorsResult | null>(initialEditState.selection);
   const [candidates, setCandidates] = useState<
@@ -261,9 +260,7 @@ export function NpcRegistrationModal({
   const [writtenTargetIds, setWrittenTargetIds] = useState<Set<string>>(
     new Set(),
   );
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [status, setStatus] = useState(
+  const { busy, setBusy, setError, setStatus, beginTask, feedback, activeOperation } = useOperationFeedback(
     initialEditState.matchedCount > 0
       ? `已复用首次读取的 ${initialEditState.matchedCount} 个 UE Actor 位置，无需再次读取`
       : "",
@@ -334,7 +331,7 @@ export function NpcRegistrationModal({
           initialMatches: undefined,
         }).drafts
       : null;
-    setBusy(true);
+    beginTask(editRequest ? "正在读取 UE Actor 与目标物位置" : "正在读取 UE 选择并匹配模型、NPC 与地图", "read");
     setError("");
     setStatus("");
     if (resetEditDrafts) {
@@ -670,10 +667,10 @@ export function NpcRegistrationModal({
         `将按目标物 ID 修改 ${items.length} 行，仅更新位置和旋转。\n\n工作簿会保持未保存状态，是否继续？`,
       )
     ) {
-      setStatus("已取消写入 Excel");
+      setStatus("已取消写入 Excel", "cancelled");
       return;
     }
-    setBusy(true);
+    beginTask("正在核对并写入目标物位置 · Excel 将保持未保存", "write-updates");
     setError("");
     setStatus("");
     try {
@@ -688,12 +685,14 @@ export function NpcRegistrationModal({
             ? `，${result.unchangedTargetIds.length} 个已是目标值`
             : ""
         }`,
+        "success",
       );
     } catch (writeError) {
       setError(
-        writeError instanceof Error
+        (writeError instanceof Error
           ? writeError.message
-          : "修改目标物位置失败",
+          : "修改目标物位置失败") + "；请先核对 Excel 未保存内容，勿立即重复写入。",
+        "uncertain",
       );
     } finally {
       setBusy(false);
@@ -805,10 +804,10 @@ export function NpcRegistrationModal({
         `将只向 NPC 表新增 ${items.length} 行，不写入目标物表。\n\n新增单元格会标红，工作簿保持未保存状态，是否继续？`,
       )
     ) {
-      setStatus("已取消写入 NPC 表");
+      setStatus("已取消写入 NPC 表", "cancelled");
       return;
     }
-    setBusy(true);
+    beginTask("正在核对并新增 NPC · Excel 将保持未保存", "write-npc");
     setError("");
     setStatus("");
     try {
@@ -823,12 +822,14 @@ export function NpcRegistrationModal({
       );
       setStatus(
         `已写入未保存 NPC 草稿：${assignments.join("，")}`,
+        "success",
       );
     } catch (writeError) {
       setError(
-        writeError instanceof Error
+        (writeError instanceof Error
           ? writeError.message
-          : "写入 NPC 表失败",
+          : "写入 NPC 表失败") + "；请先核对 Excel 未保存内容，勿立即重复写入。",
+        "uncertain",
       );
     } finally {
       setBusy(false);
@@ -887,10 +888,10 @@ export function NpcRegistrationModal({
         `将只向目标物表新增 ${targetItems.length} 行，不写入模型资源表或 NPC 表。\n\n新增单元格会标红，工作簿保持未保存状态，是否继续？`,
       )
     ) {
-      setStatus("已取消写入目标物表");
+      setStatus("已取消写入目标物表", "cancelled");
       return;
     }
-    setBusy(true);
+    beginTask("正在核对并新增目标物 · Excel 将保持未保存", "write-target");
     setError("");
     setStatus("");
     try {
@@ -927,12 +928,14 @@ export function NpcRegistrationModal({
       ];
       setStatus(
         `已写入未保存目标物草稿：${statusAssignments.join("，")}`,
+        "success",
       );
     } catch (writeError) {
       setError(
-        writeError instanceof Error
+        (writeError instanceof Error
           ? writeError.message
-          : "写入目标物表失败",
+          : "写入目标物表失败") + "；请先核对 Excel 未保存内容，勿立即重复写入。",
+        "uncertain",
       );
     } finally {
       setBusy(false);
@@ -991,10 +994,10 @@ export function NpcRegistrationModal({
           : `将向 Excel 源表写入 ${requestItems.length} 个目标物，并按需新增 ${newModelCount} 个模型、${pendingNpcCount} 个 NPC；没有新增内容的表不会打开。\n\n新增单元格会标红，工作簿保持未保存状态，是否继续？`,
       )
     ) {
-      setStatus("已取消写入 Excel");
+      setStatus("已取消写入 Excel", "cancelled");
       return;
     }
-    setBusy(true);
+    beginTask("正在核对并写入新增项 · Excel 将保持未保存", "write-new");
     setError("");
     setStatus("");
     try {
@@ -1031,12 +1034,14 @@ export function NpcRegistrationModal({
             ? `；目标物 ID：${targetAssignments.join("，")}`
             : ""
         }`,
+        "success",
       );
     } catch (writeError) {
       setError(
-        writeError instanceof Error
+        (writeError instanceof Error
           ? writeError.message
-          : "写入 Excel 草稿失败",
+          : "写入 Excel 草稿失败") + "；请先核对 Excel 未保存内容，勿立即重复写入。",
+        "uncertain",
       );
     } finally {
       setBusy(false);
@@ -1070,7 +1075,7 @@ export function NpcRegistrationModal({
     table: "missionTarget" | "npc" | "model",
     label: string,
   ) {
-    setBusy(true);
+    beginTask(`正在打开${label}`);
     setError("");
     try {
       await openConfigTable(table);
@@ -1093,11 +1098,7 @@ export function NpcRegistrationModal({
       onClick={() => void refreshSelection()}
       disabled={busy}
     >
-      {busy ? (
-        <LoaderCircle className="spin" size={16} />
-      ) : (
-        <RefreshCw size={16} />
-      )}
+      <OperationIcon kind="read" busy={activeOperation === "read"}><RefreshCw size={16} /></OperationIcon>
       {editMode && selection ? "重新读取 UE 选择" : "读取 UE 选择"}
     </button>
   );
@@ -1199,17 +1200,10 @@ export function NpcRegistrationModal({
           </header>
         )}
 
-        {error && (
-          <div className="npc-registration-message is-error" role="alert">
-            <AlertTriangle size={16} />
-            <span>{error}</span>
-          </div>
-        )}
-        {status && (
-          <div className="npc-registration-message is-success" role="status">
-            <CheckCircle2 size={16} />
-            <span>{status}</span>
-          </div>
+        {feedback.message && (
+          <TaskNotice {...feedback} className="npc-registration-message">
+            {feedback.message}
+          </TaskNotice>
         )}
 
         <div className="npc-registration-body">
@@ -1374,6 +1368,7 @@ export function NpcRegistrationModal({
                         }
                       }}
                       onChange={toggleAllCandidates}
+                      disabled={busy}
                       aria-label="选择全部待注册 Actor"
                     />
                   </th>
@@ -1713,7 +1708,7 @@ export function NpcRegistrationModal({
                     busy || changedEditCount === 0 || invalidEditCount > 0
                   }
                 >
-                  <PencilLine size={15} />
+                  <OperationIcon kind="write" busy={activeOperation === "write-updates"}><PencilLine size={15} /></OperationIcon>
                   写入修改
                 </button>
               </>
@@ -1735,7 +1730,7 @@ export function NpcRegistrationModal({
                   onClick={() => void writeNpcOnly()}
                   disabled={busy || newNpcCount === 0}
                 >
-                  <FilePenLine size={15} />
+                  <OperationIcon kind="write" busy={activeOperation === "write-npc"}><PencilLine size={15} /></OperationIcon>
                   NPC 表
                 </button>
                 <button
@@ -1745,7 +1740,7 @@ export function NpcRegistrationModal({
                   onClick={() => void writeTargetOnly()}
                   disabled={busy || newTargetCount === 0}
                 >
-                  <FilePenLine size={15} />
+                  <OperationIcon kind="write" busy={activeOperation === "write-target"}><PencilLine size={15} /></OperationIcon>
                   目标物表
                 </button>
                 <button
@@ -1754,7 +1749,7 @@ export function NpcRegistrationModal({
                   onClick={() => void writeNewItems()}
                   disabled={busy || newTargetCount === 0}
                 >
-                  <FilePenLine size={15} />
+                  <OperationIcon kind="write" busy={activeOperation === "write-new"}><PencilLine size={15} /></OperationIcon>
                   写入新增项
                 </button>
               </>

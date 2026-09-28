@@ -15,6 +15,11 @@ export default defineConfig(async () => {
     appDataDirectory: process.env.APPDATA,
   });
   return {
+    // Keep math/camera imports tree-shakeable at source-module granularity.
+    // All renderers share this resolution, avoiding a second Three.js instance.
+    resolve: {
+      alias: [{ find: /^three$/, replacement: "three/src/Three.js" }],
+    },
     plugins: [
       react(),
       traeBridgePlugin(),

@@ -25,6 +25,8 @@ import {
 import {
   applyNpcSupplement,
   inspectNpcSupplementPlan,
+  openNpcFaceAnimationPreview,
+  openNpcMontagePreview,
   scanNpcSupplementTarget,
 } from "../npcSupplement";
 import { readSceneReference } from "./sceneReference";
@@ -112,6 +114,8 @@ export const ueServices = {
   inspectNpcSupplementPlan,
   inspectSoundEffectPreview,
   loadMissionTargetPreview,
+  openNpcFaceAnimationPreview,
+  openNpcMontagePreview,
   openConfigTable,
   populateMissionTargetBlueprint,
   prepareSoundEffectPreview,

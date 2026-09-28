@@ -40,10 +40,12 @@
 
 ## 研究与历史
 
+- [2026-09-28 注册交互与小窗性能核对](research/registration-performance-2026-09-28.md)：
+  NPC 注册/目标物反馈、前台自动暂停、请求计数与后续性能优先级；含检测边界。
 - [2026-09-28 AE Blob Tracker 任务动效研究](research/ae-blob-tracker-motion-2026-09-28.md)：
   接入位置与真实进度边界；动画语音、导演等待、NPC 迁移和分镜导出反馈已实现。
 - [2026-09-16 Emil 动效技能分析](research/motion-design-emil-2026-09-16.md)：
-  前三轮切镜、浮层与工作区转场已修改；第四轮两批任务反馈已接入，VLM 候选级与启动待后续。
+  前三轮切镜、浮层与工作区转场已修改；第四轮三批任务反馈已接入，VLM 候选级与启动待后续。
 - [2026-09-15 UE 崩溃调查](research/ue-editor-stability-2026-09-15.md)：
   PostLoad/GC 调用断言、Niagara/Slate 分类证据；跨模式缓存已改，原生修复仍待接入。
 - [2026-09-14 N113 身体重定向测试](research/kimodo-n113-validation-2026-09-14.md)：

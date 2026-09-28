@@ -27,6 +27,7 @@ import type {
   CharacterActionEditorController,
   CharacterActionTrackDraft,
 } from "../app/useCharacterActionEditor";
+import { isReducedMotionEnabled } from "../app/useReducedMotionPreference";
 import type {
   BlueprintMontageAction,
   DialogueCharacterActionItem,
@@ -219,7 +220,7 @@ const MontagePicker = memo(function MontagePicker({
       }
       viewport.scrollTo({
         top: nextScrollTop,
-        behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
+        behavior: isReducedMotionEnabled()
           ? "auto"
           : "smooth",
       });
@@ -536,6 +537,12 @@ function blueprintActorLabel(classPath: string, modelIndex: number): string {
   return assetName.replace(/^BP_/i, "") || `BP 槽 ${modelIndex}`;
 }
 
+export function npcCodeFromBlueprintClassPath(classPath: string): string {
+  const normalized = classPath.replaceAll("\\", "/");
+  const match = normalized.match(/(?:^|[_/])n(\d+)(?=[_./]|$)/i);
+  return match ? `n${match[1]}` : "";
+}
+
 function groupTracksByDialogue<T extends { dialogueId: string }>(
   tracks: readonly T[],
 ): Map<string, T[]> {
@@ -598,19 +605,27 @@ export function CharacterActionEditor({
       controller.catalogs
         .map((catalog) => {
           const participant = participantByModelIndex.get(catalog.modelIndex);
+          const name =
+            roleLabelsByModelIndex.get(catalog.modelIndex) ??
+            participant?.name ??
+            catalog.characterLabel ??
+            blueprintActorLabel(
+              catalog.blueprintClassPath,
+              catalog.modelIndex,
+            );
+          const characterCode = npcCodeFromBlueprintClassPath(
+            catalog.blueprintClassPath,
+          );
           return {
             instanceId:
               participant?.instanceId ??
               `bp:${catalog.blueprintClassPath}:${catalog.modelIndex}`,
             modelIndex: catalog.modelIndex,
-            name:
-              roleLabelsByModelIndex.get(catalog.modelIndex) ??
-              participant?.name ??
-              catalog.characterLabel ??
-              blueprintActorLabel(
-                catalog.blueprintClassPath,
-                catalog.modelIndex,
-              ),
+            name,
+            characterCode,
+            displayName: characterCode
+              ? `${name} · ${characterCode}`
+              : name,
             color:
               participant?.color ??
               PARTICIPANT_COLORS[
@@ -954,13 +969,19 @@ export function CharacterActionEditor({
                           {effectiveViewLines.length > 0 && (
                             <div className="dialogue-view-lines__list">
                               {effectiveViewLines.map((line) => {
-                                const observer =
+                                const editableObserver =
                                   editableParticipantByModelIndex.get(
                                     line.observerModelIndex,
-                                  ) ??
+                                  );
+                                const observer =
+                                  editableObserver ??
                                   participantByModelIndex.get(
                                     line.observerModelIndex,
                                   );
+                                const observerName =
+                                  editableObserver?.displayName ??
+                                  observer?.name ??
+                                  `BP 槽 ${line.observerModelIndex}`;
                                 const pending = pendingViewLines.some(
                                   (candidate) =>
                                     candidate.observerModelIndex ===
@@ -982,12 +1003,11 @@ export function CharacterActionEditor({
                                       {line.observerModelIndex}
                                     </span>
                                     <strong>
-                                      {observer?.name ??
-                                        `BP 槽 ${line.observerModelIndex}`}
+                                      {observerName}
                                     </strong>
                                     <ChevronRight size={13} />
                                     <select
-                                      aria-label={`${observer?.name ?? `槽位 ${line.observerModelIndex}`} 的视线目标`}
+                                      aria-label={`${observerName} 的视线目标`}
                                       value={line.targetModelIndex}
                                       disabled={editingDisabled}
                                       onChange={(event) =>
@@ -1017,7 +1037,7 @@ export function CharacterActionEditor({
                                             value={participant.modelIndex}
                                           >
                                             {participant.modelIndex}{" "}
-                                            {participant.name}
+                                            {participant.displayName}
                                           </option>
                                         ))}
                                     </select>
@@ -1031,8 +1051,8 @@ export function CharacterActionEditor({
                                       }
                                       aria-label={
                                         pending
-                                          ? `撤销 ${observer?.name ?? line.observerModelIndex} 的视线修改`
-                                          : `${observer?.name ?? line.observerModelIndex} 的 UE 已有视线`
+                                          ? `撤销 ${observerName} 的视线修改`
+                                          : `${observerName} 的 UE 已有视线`
                                       }
                                       disabled={editingDisabled || !pending}
                                       onClick={() =>
@@ -1083,7 +1103,8 @@ export function CharacterActionEditor({
                                   key={participant.instanceId}
                                   value={participant.modelIndex}
                                 >
-                                  {participant.modelIndex} {participant.name}
+                                  {participant.modelIndex}{" "}
+                                  {participant.displayName}
                                 </option>
                               ))}
                             </select>
@@ -1107,7 +1128,8 @@ export function CharacterActionEditor({
                                   key={participant.instanceId}
                                   value={participant.modelIndex}
                                 >
-                                  {participant.modelIndex} {participant.name}
+                                  {participant.modelIndex}{" "}
+                                  {participant.displayName}
                                 </option>
                               ))}
                             </select>
@@ -1172,11 +1194,19 @@ export function CharacterActionEditor({
                         aria-labelledby={`character-actions-toggle-${row.id}`}
                       >
                   {modelIndexes.map((modelIndex) => {
+                    const editableParticipant =
+                      editableParticipantByModelIndex.get(modelIndex);
                     const participant =
-                      editableParticipantByModelIndex.get(modelIndex) ??
+                      editableParticipant ??
                       participantByModelIndex.get(modelIndex);
+                    const participantName =
+                      participant?.name ?? `BP 槽 ${modelIndex}`;
+                    const participantDisplayName =
+                      editableParticipant?.displayName ?? participantName;
+                    const participantCharacterCode =
+                      editableParticipant?.characterCode ?? "";
                     const catalog =
-                      editableParticipantByModelIndex.has(modelIndex)
+                      editableParticipant
                         ? catalogByModelIndex.get(modelIndex)
                         : undefined;
                     const existingTrack = existingTracks.find(
@@ -1203,8 +1233,11 @@ export function CharacterActionEditor({
                           >
                             {modelIndex}
                           </span>
-                          <strong>
-                            {participant?.name ?? `BP 槽 ${modelIndex}`}
+                          <strong className="character-action-track__identity">
+                            <span>{participantName}</span>
+                            {participantCharacterCode && (
+                              <code>· {participantCharacterCode}</code>
+                            )}
                           </strong>
                           {(existingTrack?.actions.length ?? 0) > 0 && (
                             <small>
@@ -1222,8 +1255,8 @@ export function CharacterActionEditor({
                               }
                               aria-label={
                                 pendingTrack.editMode === "replace_editable"
-                                  ? `撤销 ${participant?.name ?? `BP 槽 ${modelIndex}`} 的动作调整`
-                                  : `移除 ${participant?.name ?? `BP 槽 ${modelIndex}`} 的新增动作`
+                                  ? `撤销 ${participantDisplayName} 的动作调整`
+                                  : `移除 ${participantDisplayName} 的新增动作`
                               }
                               disabled={editingDisabled}
                               onClick={() =>
@@ -1256,7 +1289,7 @@ export function CharacterActionEditor({
                                     className="character-action-existing-row__lock"
                                     type="button"
                                     title="解锁后可调整延迟和顺序"
-                                    aria-label={`解锁 ${participant?.name ?? `BP 槽 ${modelIndex}`} 的现有动作 ${action.montageName}`}
+                                    aria-label={`解锁 ${participantDisplayName} 的现有动作 ${action.montageName}`}
                                     disabled={editingDisabled}
                                     onClick={() =>
                                       controller.toggleExistingActionLock(
@@ -1387,7 +1420,7 @@ export function CharacterActionEditor({
                                       }
                                       aria-label={`${
                                         unlocked ? "锁定" : "解锁"
-                                      } ${participant?.name ?? `BP 槽 ${modelIndex}`} 的现有动作 ${action.montageName}`}
+                                      } ${participantDisplayName} 的现有动作 ${action.montageName}`}
                                       disabled={editingDisabled}
                                       onClick={() =>
                                         controller.toggleExistingActionLock(
@@ -1410,7 +1443,7 @@ export function CharacterActionEditor({
                                       size={14}
                                     />
                                   )}
-                                  {existingAction ? (
+                                  {existingAction && !unlocked ? (
                                     <code
                                       className="character-action-row__name"
                                       title={action.montageName}
@@ -1430,42 +1463,53 @@ export function CharacterActionEditor({
                                       }
                                       disabled={editingDisabled}
                                       dialogueId={row.id}
-                                      label={`${participant?.name ?? "角色"} 新增动作 ${actionIndex + 1}`}
+                                      label={`${participantDisplayName} ${
+                                        existingAction ? "现有" : "新增"
+                                      }动作 ${actionIndex + 1}`}
                                       modelIndex={modelIndex}
                                       actionId={action.id}
                                       onUpdate={controller.updateAction}
                                       value={action.montageName}
                                     />
                                   )}
-                                  <label>
-                                    <span>延迟</span>
-                                    <input
-                                      type="number"
-                                      min="0"
-                                      max="120"
-                                      step="0.1"
-                                      value={action.delaySeconds}
-                                      aria-label={`${participant?.name ?? "角色"} 动作 ${action.montageName || actionIndex + 1} 的延迟`}
-                                      disabled={actionDisabled}
-                                      onChange={(event) =>
-                                        controller.updateAction(
-                                          row.id,
-                                          modelIndex,
-                                          action.id,
-                                          {
-                                            delaySeconds: Math.max(
-                                              0,
-                                              Math.min(
-                                                120,
-                                                Number(event.target.value) || 0,
+                                  {existingAction && !unlocked ? (
+                                    <span className="character-action-row__summary">
+                                      {actionTypeLabel(action)} ·{" "}
+                                      {action.delaySeconds.toFixed(1)}s
+                                    </span>
+                                  ) : (
+                                    <label>
+                                      <span>延迟</span>
+                                      <input
+                                        type="number"
+                                        min="0"
+                                        max="120"
+                                        step="0.1"
+                                        value={action.delaySeconds}
+                                        aria-label={`${participantDisplayName} 动作 ${action.montageName || actionIndex + 1} 的延迟`}
+                                        disabled={actionDisabled}
+                                        onChange={(event) =>
+                                          controller.updateAction(
+                                            row.id,
+                                            modelIndex,
+                                            action.id,
+                                            {
+                                              delaySeconds: Math.max(
+                                                0,
+                                                Math.min(
+                                                  120,
+                                                  Number(
+                                                    event.target.value,
+                                                  ) || 0,
+                                                ),
                                               ),
-                                            ),
-                                          },
-                                        )
-                                      }
-                                    />
-                                    <small>s</small>
-                                  </label>
+                                            },
+                                          )
+                                        }
+                                      />
+                                      <small>s</small>
+                                    </label>
+                                  )}
                                   {!existingAction && (
                                     <button
                                       className="icon-button"
@@ -1548,7 +1592,8 @@ export function CharacterActionEditor({
                             key={participant.instanceId}
                             value={participant.modelIndex!}
                           >
-                            {participant.modelIndex} {participant.name}
+                            {participant.modelIndex}{" "}
+                            {participant.displayName}
                           </option>
                       ))}
                     </select>

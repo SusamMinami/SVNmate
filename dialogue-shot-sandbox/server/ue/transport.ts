@@ -119,6 +119,9 @@ export class UnrealMcpConnection implements UnrealInvoker {
     const debugTrace = process.env.DEBUG_SESSION_ID === "ue-search-compact-crash" ? { id: `${Date.now()}-${Math.random().toString(16).slice(2)}`, startedAt: Date.now(), connectionPort: this.socket.localPort } : null;
     if (debugTrace) void fetch(process.env.DEBUG_SERVER_URL || "http://127.0.0.1:7777/event", { method: "POST", signal: AbortSignal.timeout(750), body: JSON.stringify({ sessionId: "ue-search-compact-crash", runId: process.env.DEBUG_RUN_ID || "pre-fix", hypothesisId: "A-B-C", traceId: debugTrace.id, location: "server/ue/transport.ts:invoke", msg: "[DEBUG] UE request begin", ts: debugTrace.startedAt, data: { action, propertyName: args.PropertyName, connectionPort: debugTrace.connectionPort, pendingOnConnection: this.waiters.length, socketState: this.socket.readyState, selectionProbe: typeof args.Expression === "string" && args.Expression.includes("get_current_selected_dialog_node_info") } }) }).catch(() => {});
     // #endregion
+    // #region debug-point B-C:config-save-runtime
+    if (process.env.DEBUG_SESSION_ID === "npc-config-save-mismatch") void fetch(process.env.DEBUG_SERVER_URL || "http://127.0.0.1:7777/event", { method: "POST", signal: AbortSignal.timeout(750), body: JSON.stringify({ sessionId: "npc-config-save-mismatch", runId: process.env.DEBUG_RUN_ID || "pre-fix", hypothesisId: "B-C", location: "server/ue/transport.ts:invoke", msg: "[DEBUG] UE diagnostic request", ts: Date.now(), data: { action, expressionTag: typeof args.Expression === "string" ? args.Expression.match(/debug_probe_[a-z_]+/)?.[0] ?? "" : "", socketState: this.socket.readyState } }) }).catch(() => {});
+    // #endregion
     const response = await this.request(
       {
         proto_type: "tool_call",

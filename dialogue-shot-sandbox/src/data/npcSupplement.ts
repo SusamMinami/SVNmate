@@ -284,10 +284,38 @@ export function buildNpcSupplementPlan(
     );
   }
 
-  const pairedFaceCount = items.filter(
+  const pairedFaceCount = selectedItems.filter(
     (item) => item.pairedFace && item.pairedFace.state !== "blocked",
   ).length;
-  const warnings =
+  const requiresFaceRuntime = request.kind === "face" || pairedFaceCount > 0;
+  if (requiresFaceRuntime) {
+    if (!request.target.faceRuntime) {
+      blockedReasons.push("未找到可审核的 Face 运行时配置");
+    } else {
+      blockedReasons.push(...request.target.faceRuntime.blockedReasons);
+      if (request.target.faceRuntime.bindings.length === 0) {
+        blockedReasons.push("未找到使用当前 Body / Face Mesh 的 NPC BP");
+      }
+    }
+  }
+  const faceRuntimeWarnings =
+    requiresFaceRuntime && request.target.faceRuntime
+      ? [
+          request.target.faceRuntime.animationBlueprintState === "create"
+            ? `将创建 Face 动画蓝图 ${request.target.faceRuntime.animationBlueprintAssetPath}`
+            : `将复用 Face 动画蓝图 ${request.target.faceRuntime.animationBlueprintAssetPath}`,
+          ...(request.target.faceRuntime.bindings.some(
+            (binding) => binding.state === "configure",
+          )
+            ? [
+                `将为 ${request.target.faceRuntime.bindings.filter((binding) => binding.state === "configure").length} 个 NPC BP 补齐 Face AnimClass`,
+              ]
+            : ["NPC BP 的 Face AnimClass 已就绪"]),
+        ]
+      : [];
+  const warnings = [
+    ...request.target.warnings,
+    ...(
     request.kind === "face"
       ? [
           "将使用 Face Skeleton 导入动作、锁定根骨骼并自动保存",
@@ -301,7 +329,9 @@ export function buildNpcSupplementPlan(
                 `已自动匹配 ${pairedFaceCount} 个同名 _Face FBX，将在 Body 导入后连续处理且不重建 Montage`,
               ]
             : []),
-        ];
+        ]),
+    ...faceRuntimeWarnings,
+  ];
   const selectedBlocked = selectedItems.filter(
     (item) => item.state === "blocked",
   );

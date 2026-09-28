@@ -83,6 +83,8 @@ interface Window {
     openTraeDownload: () => Promise<void>;
     setUeMcpPort: (port: number) => Promise<DesktopSetupStatus>;
     getConfigurationWindowMode?: () => Promise<boolean>;
+    monitorConfigurationActivity?: (enabled: boolean) => Promise<import("./configurationActivity").ConfigurationActivity>;
+    onConfigurationActivity?: (listener: (snapshot: import("./configurationActivity").ConfigurationActivity) => void) => () => void;
     setConfigurationWindowMode?: (
       enabled: boolean,
       contentSize?: { width: number; height: number },
@@ -95,6 +97,8 @@ interface Window {
     chooseNpcMigrationDirectory?: (
       kind: "target-content" | "animations",
     ) => Promise<string | null>;
+    chooseNpcAnimationDirectories?: () =>
+      Promise<DesktopSetupStatus | null>;
     addNpcAnimationDirectory?: () =>
       Promise<DesktopSetupStatus | null>;
     removeNpcAnimationDirectory?: (

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useReducedMotionPreference } from "./useReducedMotionPreference";
 
 export type WorkspaceView = "storyboard" | "npc" | "migration" | "targets" | "animation";
 export type WorkspaceDirection = "up" | "down";
@@ -13,6 +14,7 @@ const WORKSPACE_ORDER: Record<WorkspaceView, number> = {
 export function useWorkspaceNavigation(
   initialWorkspace: WorkspaceView = "storyboard",
 ) {
+  const { reducedMotion } = useReducedMotionPreference();
   const shellRef = useRef<HTMLElement>(null);
   const [navigation, setNavigation] = useState({
     active: initialWorkspace,
@@ -51,8 +53,8 @@ export function useWorkspaceNavigation(
             getComputedStyle(element).transform);
         });
       cancelAnimations();
-      const instant = window.matchMedia("(prefers-reduced-motion: reduce)").matches
-        || shellRef.current?.dataset.navigationInput === "keyboard";
+      const instant = reducedMotion ||
+        shellRef.current?.dataset.navigationInput === "keyboard";
       const next = {
         active: nextWorkspace,
         visible: instant ? new Set([nextWorkspace]) : new Set([...current.visible, nextWorkspace]),
@@ -62,7 +64,7 @@ export function useWorkspaceNavigation(
       currentRef.current = next;
       setNavigation(next);
     },
-    [cancelAnimations],
+    [cancelAnimations, reducedMotion],
   );
 
   useLayoutEffect(() => {
@@ -94,11 +96,8 @@ export function useWorkspaceNavigation(
   }, [navigation, cancelAnimations, settle]);
 
   useEffect(() => {
-    const media = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const onChange = () => { if (media.matches) settle(); };
-    media.addEventListener("change", onChange);
-    return () => media.removeEventListener("change", onChange);
-  }, [settle]);
+    if (reducedMotion) settle();
+  }, [reducedMotion, settle]);
 
   const closeToolWorkspace = useCallback(
     () => switchWorkspace("storyboard"),

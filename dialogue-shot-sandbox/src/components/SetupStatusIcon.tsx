@@ -1,5 +1,6 @@
 import { Check, Circle, CircleAlert, CircleX, LoaderCircle } from "lucide-react";
 import { useCallback, useEffect, useState, type CSSProperties } from "react";
+import { useReducedMotionPreference } from "../app/useReducedMotionPreference";
 import "./setupStatusIcon.css";
 
 const INTRO_STORAGE_KEY = "shot-sandbox.settings-status-intro.v1";
@@ -7,13 +8,14 @@ const INTRO_DURATION_MS = 1250;
 let introSeenInWindow = false;
 
 export function useSetupStatusIntro() {
+  const { reducedMotion } = useReducedMotionPreference();
   const [intro, setIntro] = useState(() => {
     if (introSeenInWindow) return false;
     try {
       return localStorage.getItem(INTRO_STORAGE_KEY) !== "seen" &&
-        !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        !reducedMotion;
     } catch {
-      return !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      return !reducedMotion;
     }
   });
   const finishIntro = useCallback(() => {
@@ -32,17 +34,15 @@ export function useSetupStatusIntro() {
       finishIntro();
       return;
     }
-    const preference = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const onPreferenceChange = () => {
-      if (preference.matches) finishIntro();
-    };
+    if (reducedMotion) {
+      finishIntro();
+      return;
+    }
     const timer = window.setTimeout(finishIntro, INTRO_DURATION_MS);
-    preference.addEventListener("change", onPreferenceChange);
     return () => {
       window.clearTimeout(timer);
-      preference.removeEventListener("change", onPreferenceChange);
     };
-  }, [intro, finishIntro]);
+  }, [intro, finishIntro, reducedMotion]);
 
   return { intro, finishIntro };
 }

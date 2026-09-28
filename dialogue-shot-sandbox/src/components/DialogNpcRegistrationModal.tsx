@@ -2,11 +2,12 @@ import {
   AlertTriangle,
   CheckCircle2,
   Database,
-  LoaderCircle,
   Save,
   X,
 } from "lucide-react";
 import { type FormEvent, useMemo, useState } from "react";
+import { TaskNotice } from "./TaskMotion";
+import type { TaskPhase } from "../taskFeedback";
 import type {
   DialogNpcTableRegistrationDraft,
   DialogNpcTableRegistrationReview,
@@ -25,6 +26,7 @@ interface DialogNpcRegistrationModalProps {
   review: DialogNpcTableRegistrationReview;
   busy: boolean;
   error: string;
+  feedback?: { phase: TaskPhase; runId: number; message: string };
   onClose: () => void;
   onSubmit: (rows: EditableDialogNpcRow[]) => void;
 }
@@ -53,6 +55,7 @@ export function DialogNpcRegistrationModal({
   review,
   busy,
   error,
+  feedback,
   onClose,
   onSubmit,
 }: DialogNpcRegistrationModalProps) {
@@ -275,11 +278,11 @@ export function DialogNpcRegistrationModal({
           </datalist>
         </div>
 
-        {error && (
-          <div className="dialog-npc-registration-error" role="alert">
-            <AlertTriangle size={15} />
-            <span>{error}</span>
-          </div>
+        {(busy || error) && (
+          <TaskNotice phase={busy ? "running" : "uncertain"} runId={feedback?.runId ?? 0}
+            className="mission-target-message">
+            {busy ? feedback?.message || "正在登记并保存 DialogNPCTable" : error}
+          </TaskNotice>
         )}
 
         <footer>
@@ -302,11 +305,7 @@ export function DialogNpcRegistrationModal({
               type="submit"
               disabled={busy || invalidCount > 0}
             >
-              {busy ? (
-                <LoaderCircle className="spin" size={16} />
-              ) : (
-                <Save size={16} />
-              )}
+              <Save size={16} />
               {busy ? "正在登记..." : "保存登记"}
             </button>
           </div>

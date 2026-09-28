@@ -14,7 +14,7 @@ async function cameraPresetFixture(page: Page, moveCameraCount = 1) {
     writes: [] as Array<DialogueCameraQuickActionRequest & { reviewToken?: string }>,
   };
   await page.route("**/api/**", (route) => route.fulfill({ status: 503, json: { ok: false } }));
-  await page.route("**/api/ue/dialogue/selection", (route) => route.fulfill({
+  await page.route("**/api/ue/dialogue/selection*", (route) => route.fulfill({
     json: { ok: true, data: {
       status: "selected", dialogueNodeId: state.node, selectedNodeCount: 1,
       nodes: [{ nodeClass: "SeriaEdDialogGraphNode", dialogueNodeId: state.node, nodeTitle: `节点 ${state.node}`, nodeComment: "" }],

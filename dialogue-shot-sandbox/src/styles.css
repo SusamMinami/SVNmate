@@ -2937,6 +2937,25 @@ textarea:focus-visible {
   white-space: nowrap;
 }
 
+.character-action-track__identity {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 5px;
+}
+
+.character-action-track__identity > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.character-action-track__identity > code {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font: 8px/1 "Cascadia Code", Consolas, monospace;
+}
+
 .character-action-track > header small {
   color: var(--warning);
   font-size: 8px;
@@ -2980,7 +2999,7 @@ textarea:focus-visible {
   padding: 3px 6px;
   color: #686f75;
   background: #eceeeb;
-  border-left: 2px solid #aeb2ad;
+  border-left: 1px solid #aeb2ad;
 }
 
 .character-action-existing-row__lock,
@@ -3049,13 +3068,22 @@ textarea:focus-visible {
 }
 
 .character-action-row.is-existing {
+  grid-template-columns: 20px minmax(0, 1fr) auto;
   padding: 4px 5px;
   color: #686f75;
   background: #eceeeb;
   border: 1px solid transparent;
 }
 
+.character-action-row.is-existing:not(.is-unlocked) {
+  min-height: 27px;
+  padding: 3px 6px;
+  border-width: 0 0 0 1px;
+  border-left-color: #aeb2ad;
+}
+
 .character-action-row.is-existing.is-unlocked {
+  min-height: 38px;
   color: var(--ink);
   background: var(--surface);
   border-color: var(--border);
@@ -3095,6 +3123,13 @@ textarea:focus-visible {
 .character-action-row.is-unlocked .character-action-row__name {
   background: #f7f8f7;
   border-color: var(--border);
+}
+
+.character-action-row.is-existing:not(.is-unlocked)
+  .character-action-row__name {
+  align-self: center;
+  padding: 0;
+  line-height: 14px;
 }
 
 .character-action-picker__input,
@@ -3264,6 +3299,30 @@ textarea:focus-visible {
   border: 1px solid var(--border);
   font-family: "Cascadia Code", Consolas, monospace;
   font-size: 9px;
+}
+
+.character-action-row.is-existing .character-action-row__lock,
+.character-action-row.is-existing .character-action-row__name,
+.character-action-row.is-existing .character-action-picker,
+.character-action-row.is-existing label,
+.character-action-row.is-existing .character-action-row__summary {
+  grid-row: 1;
+}
+
+.character-action-row.is-existing .character-action-row__lock {
+  align-self: center;
+}
+
+.character-action-row.is-existing label {
+  grid-column: 3;
+  justify-self: end;
+}
+
+.character-action-row__summary {
+  grid-column: 3;
+  color: var(--text-muted);
+  font-size: 8px;
+  white-space: nowrap;
 }
 
 .character-action-row .icon-button {
@@ -5773,9 +5832,28 @@ textarea:focus-visible {
 }
 
 .mission-target-body {
-  flex: 1 1 auto;
+  width: 100%;
+  height: 100%;
   min-height: 0;
   overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.mission-target-modal > .inspector-scroll-frame {
+  flex: 1 1 auto;
+}
+
+.mission-target-body::-webkit-scrollbar {
+  width: 0;
+  height: 8px;
+}
+
+.mission-target-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.mission-target-body::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--ink) 38%, transparent);
 }
 
 .mission-target-summary {
@@ -6663,6 +6741,12 @@ textarea:focus-visible {
 
 .mission-map-choice__error svg {
   flex: 0 0 auto;
+}
+
+.mission-map-choice__error.is-pending {
+  color: #6d571e;
+  background: #fff8e9;
+  border-color: #e8d2a7;
 }
 
 .mission-map-choice > footer {
@@ -7631,25 +7715,6 @@ textarea:focus-visible {
   min-height: 54px;
 }
 
-.setup-directory-select {
-  width: 100%;
-  min-width: 0;
-  height: 20px;
-  padding: 0 18px 0 0;
-  overflow: hidden;
-  color: var(--text-muted);
-  background: transparent;
-  border: 0;
-  font: 9px/1.3 "Cascadia Code", Consolas, monospace;
-  text-overflow: ellipsis;
-  cursor: pointer;
-}
-
-.setup-directory-select:focus-visible {
-  outline: 1px solid var(--accent-strong);
-  outline-offset: 1px;
-}
-
 .setup-directory-actions {
   display: flex;
   align-items: center;
@@ -7726,6 +7791,23 @@ textarea:focus-visible {
   min-height: 28px;
   border: 1px solid var(--border);
   border-radius: 4px;
+}
+
+.setup-motion-preference label {
+  min-width: 0;
+  cursor: pointer;
+}
+
+.setup-motion-preference > svg {
+  color: var(--text-muted);
+}
+
+.setup-motion-preference input {
+  width: 14px;
+  height: 14px;
+  margin: 0 7px;
+  accent-color: var(--ink);
+  cursor: pointer;
 }
 
 .setup-instructions {
@@ -9007,10 +9089,19 @@ textarea:focus-visible {
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
+:root[data-reduced-motion="true"] .app-shell :is(
   .launch-screen,
   .launch-screen *,
-  .app-shell[data-ark-theme="endfield"] .shot-row {
+  .shot-row
+) {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-reduced-motion])
+    :is(.launch-screen, .launch-screen *, .app-shell[data-ark-theme="endfield"] .shot-row) {
     animation-duration: 0.001ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
@@ -10490,6 +10581,23 @@ textarea:focus-visible {
   display: grid;
   min-width: 0;
   gap: 3px;
+}
+
+.npc-supplement-row__action.has-asset-preview {
+  grid-template-columns: minmax(0, 1fr) 22px;
+  align-items: center;
+}
+
+.npc-supplement-row__action.has-asset-preview
+  .npc-supplement-source-meta {
+  grid-column: 1 / -1;
+}
+
+.npc-supplement-asset-preview.icon-button {
+  width: 22px;
+  height: 22px;
+  flex-basis: 22px;
+  border-radius: 2px;
 }
 
 .npc-supplement-row strong,
@@ -12317,7 +12425,7 @@ textarea:focus-visible {
   grid-column: 1;
   min-height: 54px;
   justify-content: flex-end;
-  padding: 0 10px;
+  padding: 0 16px;
 }
 
 .app-shell[data-configuration-mode="true"] > .app-header .brand {
@@ -12329,6 +12437,7 @@ textarea:focus-visible {
 }
 
 .app-shell[data-configuration-mode="true"] > .workspace {
+  position: relative;
   display: grid;
   grid-row: 2;
   grid-column: 1;
@@ -12341,6 +12450,33 @@ textarea:focus-visible {
   overflow: hidden;
   animation: none;
   transform: none;
+}
+
+.configuration-pause-notice {
+  grid-row: 1;
+  padding: 12px;
+  color: var(--text);
+  background: var(--paper);
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  line-height: 1.5;
+  pointer-events: none;
+}
+
+.app-shell[data-configuration-mode="true"] .right-panel[inert] {
+  opacity: 0.5;
+}
+
+.app-shell[data-configuration-mode="true"] > .workspace:has(> .configuration-pause-notice) {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.app-shell[data-configuration-mode="true"] > .workspace:has(> .configuration-pause-notice) > .right-panel {
+  grid-row: 2;
+}
+
+.workspace-status-icon[data-state="paused"]::after {
+  background: var(--text-muted);
 }
 
 .app-shell[data-configuration-mode="true"] .right-panel {
@@ -12392,7 +12528,7 @@ textarea:focus-visible {
   border-color: #c9c500;
 }
 
-@media (prefers-reduced-motion: reduce) {
+:root[data-reduced-motion="true"] .app-shell :is(
   .app-rail,
   .app-rail *,
   .app-header,
@@ -12403,26 +12539,70 @@ textarea:focus-visible {
   .workspace-identity,
   .tool-workspace,
   .launch-screen,
-  .launch-screen * {
+  .launch-screen *
+) {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+}
+
+:root[data-reduced-motion="true"] .app-shell .workspace-status-light {
+  animation: none !important;
+}
+
+:root[data-reduced-motion="true"] .app-shell .button--primary:has(> .spin)::before {
+  animation: none;
+}
+
+:root[data-reduced-motion="true"] .app-shell
+  .workspace-status-icon--data[data-state="listening"]
+  .workspace-status-light--link,
+:root[data-reduced-motion="true"] .app-shell
+  .workspace-status-icon--data[data-state="configuration"]
+  .workspace-status-light--link,
+:root[data-reduced-motion="true"] .app-shell
+  .workspace-status-icon--data[data-state="offline"]
+  .workspace-status-light--write {
+  opacity: 0.58;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-reduced-motion]) :is(
+    .app-rail,
+    .app-rail *,
+    .app-header,
+    .shot-list__selection,
+    .stage-pointer-probe,
+    .inspector-tab-panel,
+    .workspace,
+    .workspace-identity,
+    .tool-workspace,
+    .launch-screen,
+    .launch-screen *
+  ) {
     animation-duration: 0.001ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
   }
 
-  .workspace-status-light {
+  :root:not([data-reduced-motion]) .workspace-status-light {
     animation: none !important;
   }
 
-  .app-shell[data-ark-theme="endfield"]
+  :root:not([data-reduced-motion])
+    .app-shell[data-ark-theme="endfield"]
     .button--primary:has(> .spin)::before {
     animation: none;
   }
 
-  .workspace-status-icon--data[data-state="listening"]
+  :root:not([data-reduced-motion])
+    .workspace-status-icon--data[data-state="listening"]
     .workspace-status-light--link,
-  .workspace-status-icon--data[data-state="configuration"]
+  :root:not([data-reduced-motion])
+    .workspace-status-icon--data[data-state="configuration"]
     .workspace-status-light--link,
-  .workspace-status-icon--data[data-state="offline"]
+  :root:not([data-reduced-motion])
+    .workspace-status-icon--data[data-state="offline"]
     .workspace-status-light--write {
     opacity: 0.58;
   }
@@ -12564,14 +12744,26 @@ textarea:focus-visible {
   transform: none;
 }
 
+:root[data-reduced-motion="true"] .app-shell
+  :is(.button, .icon-button, .app-rail__button, .workspace-status-icon, .inspector-tabs button, .top-view):active:not(:disabled) {
+  transform: none;
+}
+
+:root[data-reduced-motion="true"] .app-shell :is(
+  .workspace-status-popover,
+  .workspace-status-tooltip
+) {
+  transition: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .app-shell
+  :root:not([data-reduced-motion]) .app-shell
     :is(.button, .icon-button, .app-rail__button, .workspace-status-icon, .inspector-tabs button, .top-view):active:not(:disabled) {
     transform: none;
   }
 
-  .app-shell .workspace-status-popover,
-  .app-shell .workspace-status-tooltip {
+  :root:not([data-reduced-motion]) .app-shell .workspace-status-popover,
+  :root:not([data-reduced-motion]) .app-shell .workspace-status-tooltip {
     transition: none;
   }
 }

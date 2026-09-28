@@ -34,6 +34,10 @@ import type {
   MissionTargetUpdateResult,
   MissionTargetPreviewLoadResult,
   MissionTargetPreviewPlan,
+  NpcFaceAnimationPreviewRequest,
+  NpcFaceAnimationPreviewResult,
+  NpcMontagePreviewRequest,
+  NpcMontagePreviewResult,
   NpcMigrationCopyResult,
   NpcMigrationPlan,
   NpcMigrationPlanRequest,
@@ -536,8 +540,8 @@ export function readSelectedLevelActors(): Promise<SelectedLevelActorsResult> {
   return postUe("/api/ue/selection/read");
 }
 
-export function readSelectedDialogueNode(): Promise<SelectedDialogueNodeResult> {
-  return postUe("/api/ue/dialogue/selection", undefined, false);
+export function readSelectedDialogueNode(fresh = false): Promise<SelectedDialogueNodeResult> {
+  return postUe(`/api/ue/dialogue/selection${fresh ? "?fresh=1" : ""}`, undefined, false);
 }
 
 export function scanSelectedNpcRegistration(): Promise<NpcRegistrationScanResult> {
@@ -604,6 +608,26 @@ export function applyNpcSupplement(
   return postUe(
     "/api/ue/npc-migration/supplement-apply",
     { plan, reviewToken: plan.reviewToken },
+    false,
+  );
+}
+
+export function openNpcFaceAnimationPreview(
+  request: NpcFaceAnimationPreviewRequest,
+): Promise<NpcFaceAnimationPreviewResult> {
+  return postUe(
+    "/api/ue/npc-migration/face-preview",
+    request,
+    false,
+  );
+}
+
+export function openNpcMontagePreview(
+  request: NpcMontagePreviewRequest,
+): Promise<NpcMontagePreviewResult> {
+  return postUe(
+    "/api/ue/npc-migration/montage-preview",
+    request,
     false,
   );
 }

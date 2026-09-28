@@ -18,6 +18,7 @@ import {
   type Rectangle,
 } from "electron";
 import updater from "electron-updater";
+import { ConfigurationActivityMonitor } from "./configurationActivity";
 import storyboardSkill from "../../.agents/skills/internal-storyboard-director/SKILL.md";
 import {
   routeStoryboardMcpRequest,
@@ -130,6 +131,11 @@ let localServer: Server | null = null;
 let updateSnapshot: UpdateSnapshot = { state: "idle" };
 let advisorModelDownload: Promise<RuleAdvisorModelSnapshot> | null = null;
 let configurationWindowRestoreState: WindowRestoreState | null = null;
+const configurationActivity = new ConfigurationActivityMonitor((snapshot) => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("desktop:configuration-activity", snapshot);
+  }
+});
 
 function dataRoot(): string {
   return join(app.getPath("appData"), "Shot Sandbox");
@@ -859,6 +865,27 @@ function registerDesktopIpc(): void {
     },
   );
   ipcMain.handle(
+    "desktop:choose-npc-animation-directories",
+    async () => {
+      const state = await readDesktopState();
+      const result = await dialog.showOpenDialog(mainWindow!, {
+        title: "选择 NPC 动作库根目录（可多选，将替换当前目录）",
+        defaultPath: state.npcAnimationDirectories[0],
+        properties: ["openDirectory", "multiSelections"],
+      });
+      if (result.canceled || result.filePaths.length === 0) return null;
+      const directories = normalizeNpcAnimationDirectories(result.filePaths);
+      for (const directory of directories) {
+        if (!(await pathExists(directory))) throw new Error("NPC 动作文件夹不存在");
+      }
+      await writeDesktopState({
+        ...await readDesktopState(),
+        npcAnimationDirectories: directories,
+      });
+      return setupStatus();
+    },
+  );
+  ipcMain.handle(
     "desktop:add-npc-animation-directory",
     async () => {
       const result = await dialog.showOpenDialog(mainWindow!, {
@@ -942,6 +969,11 @@ function registerDesktopIpc(): void {
     "desktop:get-configuration-window-mode",
     () => configurationWindowRestoreState !== null,
   );
+  ipcMain.handle("desktop:monitor-configuration-activity", (_event, enabled: unknown) => {
+    if (enabled === true) configurationActivity.start();
+    else configurationActivity.stop();
+    return configurationActivity.getSnapshot();
+  });
   ipcMain.handle("desktop:write-clipboard-text", (_event, text: unknown) => {
     if (typeof text !== "string") {
       throw new Error("剪贴板内容必须是文本");
@@ -1064,6 +1096,7 @@ async function createMainWindow(port: number): Promise<void> {
     }
   });
   mainWindow.on("closed", () => {
+    configurationActivity.stop();
     mainWindow = null;
     configurationWindowRestoreState = null;
   });
@@ -1131,6 +1164,7 @@ if (isMcpProcess) {
 }
 
 app.on("window-all-closed", () => {
+  configurationActivity.stop();
   localServer?.close();
   stopManagedRuleAdvisorRuntime();
   app.quit();

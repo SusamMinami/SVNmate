@@ -106,6 +106,12 @@ const SKELETAL_MESH_COMPONENT_CLASS =
 const STATIC_MESH_COMPONENT_CLASS = "/Script/Engine.StaticMeshComponent";
 const PARTICLE_SYSTEM_COMPONENT_CLASS =
   "/Script/Engine.ParticleSystemComponent";
+
+function isExpectedLevelOpenInterruption(message: string): boolean {
+  return /(?:超时|连接已关闭|['"]?this['"]?\s+pointer is invalid)/i.test(
+    message,
+  );
+}
 const NIAGARA_COMPONENT_CLASS = "/Script/Niagara.NiagaraComponent";
 const DIALOGUE_SEARCH_PATH = "/Game/Seria/Task/dialoggraph";
 const SOUND_EFFECT_SEARCH_PATH = "/Game/Seria/WwiseSoundData/Events";
@@ -1842,15 +1848,16 @@ function replaceEditableCharacterActionItems(
       return newCharacterBehaviourItem(action);
     }
     const existingItem = existingItems[action.sourceIndex];
-    if (
-      !isReplaceableCharacterActionItem(existingItem) ||
-      String(existingItem.MontageName ?? "") !== action.montageName
-    ) {
+    if (!isReplaceableCharacterActionItem(existingItem)) {
       throw new Error("现有动作快照已变化，请重新读取后再调整");
     }
     return {
       ...clonedValue(existingItem),
       StartTime: action.delaySeconds,
+      MontageName: action.montageName,
+      CharacterBehaviourType: behaviourTypeForMontageName(
+        action.montageName,
+      ),
     };
   });
 
@@ -10100,7 +10107,7 @@ export async function switchEditorToAutoTest(
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "UE 地图切换失败";
-      if (message.includes("超时") || message.includes("连接已关闭")) {
+      if (isExpectedLevelOpenInterruption(message)) {
         activeMissionPreviewActors = [];
         activeMissionPreviewMap = "";
         return {
@@ -10368,8 +10375,8 @@ export async function loadMissionTargetPreview(
         const message =
           error instanceof Error ? error.message : "UE 地图加载失败";
         throw new Error(
-          message.includes("超时") || message.includes("连接已关闭")
-            ? `UE 正在加载 ${plan.mapName}，加载期间通信暂时不可用；请等待引擎完成后选择“检查并加载”`
+          isExpectedLevelOpenInterruption(message)
+            ? `UE 已发起 ${plan.mapName} 的地图切换，加载期间通信暂时不可用；请等待引擎完成后选择“检查并加载”`
             : `UE 自动切换到 ${plan.mapName} 失败：${message}`,
         );
       }

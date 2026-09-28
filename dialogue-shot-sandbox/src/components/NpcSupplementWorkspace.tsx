@@ -2,6 +2,7 @@ import {
   AlertTriangle,
   Check,
   ClipboardCheck,
+  Eye,
   FileInput,
   FolderOpen,
   LayoutGrid,
@@ -23,6 +24,8 @@ import type {
 import {
   applyNpcSupplement,
   inspectNpcSupplementPlan,
+  openNpcFaceAnimationPreview,
+  openNpcMontagePreview,
   scanNpcSupplementTarget,
 } from "../ue/client";
 
@@ -53,6 +56,10 @@ function formatSourceModifiedTime(value: number): string {
 
 function selectionKey(files: Iterable<string>): string {
   return Array.from(files).sort().join("\n");
+}
+
+function assetPackageKey(value: string): string {
+  return value.split(".", 1)[0].toLowerCase();
 }
 
 function reviewKey(
@@ -87,6 +94,7 @@ export function NpcSupplementWorkspace({
   const [result, setResult] = useState<NpcSupplementApplyResult | null>(null);
   const [busy, setBusy] = useState<BusyAction>(null);
   const [reviewSyncing, setReviewSyncing] = useState(false);
+  const [previewingAsset, setPreviewingAsset] = useState("");
   const [sort, setSort] = useState<SupplementSort>("modified-desc");
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
@@ -148,6 +156,23 @@ export function NpcSupplementWorkspace({
       return sort === "modified-desc" ? -timeDifference : timeDifference;
     });
   }, [plan, sort]);
+  const importedAssetKeys = useMemo(
+    () =>
+      new Set(
+        (result?.importedAssetPaths ?? []).map(assetPackageKey),
+      ),
+    [result],
+  );
+  const availableMontageKeys = useMemo(
+    () =>
+      new Set(
+        [
+          ...(result?.createdMontageAssetPaths ?? []),
+          ...(result?.reusedMontageAssetPaths ?? []),
+        ].map(assetPackageKey),
+      ),
+    [result],
+  );
 
   useEffect(() => {
     if (selectAllCheckboxRef.current) {
@@ -474,6 +499,67 @@ export function NpcSupplementWorkspace({
     }
   }
 
+  async function previewFaceAnimation(
+    actionName: string,
+    faceAnimationAssetPath: string,
+  ): Promise<void> {
+    if (!target || !faceAnimationAssetPath || previewingAsset) {
+      return;
+    }
+    setError("");
+    setPreviewingAsset(faceAnimationAssetPath);
+    try {
+      await openNpcFaceAnimationPreview({
+        targetProjectFile: target.targetProjectFile,
+        faceAnimationAssetPath,
+        faceSkeletalMeshAssetPath: target.faceSkeletalMeshAssetPath,
+        faceSkeletonAssetPath: target.faceSkeletonAssetPath,
+      });
+      setNoticePhase(result?.manualChecks.length ? "warning" : "ready");
+      setRunId((id) => id + 1);
+      setStatus(`已在 UE 打开 ${actionName} 的 Face 动作预览`);
+    } catch (previewError) {
+      setNoticePhase("failed");
+      setError(
+        previewError instanceof Error
+          ? previewError.message
+          : "Face 动作预览打开失败",
+      );
+    } finally {
+      setPreviewingAsset("");
+    }
+  }
+
+  async function previewMontage(
+    actionName: string,
+    montageAssetPath: string,
+  ): Promise<void> {
+    if (!target || !montageAssetPath || previewingAsset) {
+      return;
+    }
+    setError("");
+    setPreviewingAsset(montageAssetPath);
+    try {
+      await openNpcMontagePreview({
+        targetProjectFile: target.targetProjectFile,
+        montageAssetPath,
+        bodySkeletonAssetPath: target.skeletonAssetPath,
+      });
+      setNoticePhase(result?.manualChecks.length ? "warning" : "ready");
+      setRunId((id) => id + 1);
+      setStatus(`已在 UE 打开 ${actionName} 的 Montage 预览`);
+    } catch (previewError) {
+      setNoticePhase("failed");
+      setError(
+        previewError instanceof Error
+          ? previewError.message
+          : "Montage 预览打开失败",
+      );
+    } finally {
+      setPreviewingAsset("");
+    }
+  }
+
   return (
     <div className="npc-migration-workspace npc-supplement-workspace">
       <div className="workspace-floating-actions">
@@ -539,6 +625,18 @@ export function NpcSupplementWorkspace({
                     {target.faceSkeletonAssetPath
                       ? compactPath(target.faceSkeletonAssetPath)
                       : "未找到"}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Face Runtime</dt>
+                  <dd title={target.faceRuntime?.animationBlueprintAssetPath}>
+                    {!target.faceRuntime
+                      ? "未找到"
+                      : target.faceRuntime.animationBlueprintState === "blocked"
+                        ? "配置阻断"
+                        : target.faceRuntime.animationBlueprintState === "create"
+                          ? "待创建 Face ABP"
+                          : `${target.faceRuntime.bindings.length} 个 BP 已识别`}
                   </dd>
                 </div>
                 <div>
@@ -683,8 +781,23 @@ export function NpcSupplementWorkspace({
                 {isFace && <span role="columnheader">曲线</span>}
                 {isFace && <span role="columnheader">Montage</span>}
               </div>
-              {sortedItems.map((item) => (
-                <div
+              {sortedItems.map((item) => {
+                const previewAssetPath = isFace
+                  ? item.targetAssetPath
+                  : item.montageAssetPath;
+                const canPreviewAsset = isFace
+                  ? Boolean(previewAssetPath) &&
+                    (item.state === "update" ||
+                      importedAssetKeys.has(
+                        assetPackageKey(previewAssetPath),
+                      ))
+                  : Boolean(previewAssetPath) &&
+                    (item.montageState === "reuse" ||
+                      availableMontageKeys.has(
+                        assetPackageKey(previewAssetPath),
+                      ));
+                return (
+                  <div
                   className={`npc-supplement-row ${
                     item.state === "blocked" ? "is-blocked" : ""
                   } ${
@@ -707,8 +820,41 @@ export function NpcSupplementWorkspace({
                       onChange={() => toggleItem(item.sourceFile)}
                     />
                   </span>
-                  <span className="npc-supplement-row__action" role="cell">
+                  <span
+                    className={`npc-supplement-row__action ${
+                      canPreviewAsset ? "has-asset-preview" : ""
+                    }`}
+                    role="cell"
+                  >
                     <strong>{item.actionName || item.sourceAssetName}</strong>
+                    {canPreviewAsset && (
+                      <button
+                        className="icon-button npc-supplement-asset-preview"
+                        type="button"
+                        disabled={Boolean(previewingAsset)}
+                        onClick={() =>
+                          void (isFace
+                            ? previewFaceAnimation(
+                                item.actionName || item.sourceAssetName,
+                                previewAssetPath,
+                              )
+                            : previewMontage(
+                                item.actionName || item.sourceAssetName,
+                                previewAssetPath,
+                              ))
+                        }
+                        title={
+                          isFace
+                            ? "在 UE 动画编辑器中打开对应 Face 动作"
+                            : "在 UE 动画编辑器中打开并播放最终 Montage"
+                        }
+                        aria-label={`在 UE 中预览 ${
+                          item.actionName || item.sourceAssetName
+                        } 的${isFace ? "面部动作" : "动画 Montage"}`}
+                      >
+                        {isFace ? <Eye size={13} /> : <Play size={12} />}
+                      </button>
+                    )}
                     <small className="npc-supplement-source-meta">
                       <span>{item.sourceAssetName}</span>
                       <time
@@ -848,8 +994,9 @@ export function NpcSupplementWorkspace({
                       </span>
                     </label>
                   )}
-                </div>
-              ))}
+                  </div>
+                );
+              })}
             </div>
           ) : (
             <div className="npc-migration-empty">
@@ -960,6 +1107,10 @@ export function NpcSupplementWorkspace({
                           {result.createdMontageAssetPaths.length +
                             result.reusedMontageAssetPaths.length}
                         </span>
+                        <span>
+                          Face BP{" "}
+                          {result.configuredFaceBlueprintAssetPaths?.length ?? 0}
+                        </span>
                       </>
                     ) : (
                       <>
@@ -969,6 +1120,13 @@ export function NpcSupplementWorkspace({
                             result.lockedRootAssetPaths.length}
                         </span>
                         <span>Face {result.lockedRootAssetPaths.length}</span>
+                        {(result.configuredFaceBlueprintAssetPaths?.length ?? 0) >
+                          0 && (
+                          <span>
+                            Face BP{" "}
+                            {result.configuredFaceBlueprintAssetPaths.length}
+                          </span>
+                        )}
                         <span>
                           Montage{" "}
                           {result.createdMontageAssetPaths.length +

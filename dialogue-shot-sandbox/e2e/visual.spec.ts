@@ -138,6 +138,10 @@ async function expectPickerMenuAutoReveal(
 }
 
 test.beforeEach(async ({ page }) => {
+  // Unspecified UE calls must never reach a real editor during visual regression.
+  await page.route("**/api/ue/**", (route) =>
+    route.fulfill({ status: 503, json: { ok: false, error: { message: "Unmocked UE request" } } }),
+  );
   await page.route("**/api/ue/dialogue/storyboard/read", async (route) => {
     await route.fulfill({
       status: 200,
@@ -192,7 +196,7 @@ test.beforeEach(async ({ page }) => {
       }),
     });
   });
-  await page.route("**/api/ue/dialogue/selection", async (route) => {
+  await page.route("**/api/ue/dialogue/selection*", async (route) => {
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -1608,6 +1612,16 @@ test("switches the main canvas between shot and blocking views", async ({
 test("keeps configuration mode aligned with the selected UE node", async ({
   page,
 }, testInfo) => {
+  await page.route("**/api/ue/sound-effects/preview-prepare", (route) => {
+    const { assetName } = route.request().postDataJSON();
+    return route.fulfill({ json: { ok: true, data: {
+      assetName, available: true, reason: "隔离试听夹具", durationSeconds: 10, mediaCount: 1,
+      url: `/api/ue/sound-effects/preview-file?assetName=${assetName}`,
+    } } });
+  });
+  await page.route("**/api/ue/sound-effects/preview-file?**", (route) =>
+    route.fulfill({ contentType: "audio/wav", body: silentWavBuffer(10_000) }),
+  );
   const requestedWindowModes: Array<{
     enabled: boolean;
     contentSize?: { width: number; height: number };
@@ -1644,8 +1658,8 @@ test("keeps configuration mode aligned with the selected UE node", async ({
       cameraPresetReadRequests += 1;
     }
   });
-  await page.unroute("**/api/ue/dialogue/selection");
-  await page.route("**/api/ue/dialogue/selection", async (route) => {
+  await page.unroute("**/api/ue/dialogue/selection*");
+  await page.route("**/api/ue/dialogue/selection*", async (route) => {
     selectionRequests += 1;
     if (selectionResponseDelayMs > 0) {
       await new Promise((resolve) =>
@@ -2811,7 +2825,7 @@ test("keeps configuration mode aligned with the selected UE node", async ({
     page.getByRole("heading", { name: "UE 当前选中了 2 个图节点" }),
   ).toBeVisible();
   selectionResponseDelayMs = 500;
-  await page.waitForRequest("**/api/ue/dialogue/selection");
+  await page.waitForRequest("**/api/ue/dialogue/selection*");
   await expect(ueDataStatus).toHaveAttribute("data-activity", "read");
   await expect(
     ueDataStatus.locator(".workspace-status-light--read"),
@@ -5857,8 +5871,8 @@ test("offers the detected Blueprint formation before designing shots", async ({
 }, testInfo) => {
   test.setTimeout(90_000);
   let selectedDialogueNodeId = "735001";
-  await page.unroute("**/api/ue/dialogue/selection");
-  await page.route("**/api/ue/dialogue/selection", async (route) => {
+  await page.unroute("**/api/ue/dialogue/selection*");
+  await page.route("**/api/ue/dialogue/selection*", async (route) => {
     await route.fulfill({
       status: 200,
       contentType: "application/json",

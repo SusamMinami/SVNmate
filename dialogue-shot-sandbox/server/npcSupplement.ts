@@ -4,6 +4,8 @@ import { extname, join, relative, resolve, sep } from "node:path";
 import { z } from "zod";
 import { buildNpcSupplementPlan } from "../src/data/npcSupplement";
 import type {
+  NpcFaceAnimationPreviewResult,
+  NpcMontagePreviewResult,
   NpcSupplementApplyResult,
   NpcSupplementPlan,
   NpcSupplementPlanRequest,
@@ -39,6 +41,19 @@ const SupplementTargetSchema = z.object({
   skeletonAssetPath: z.string().startsWith("/Game/"),
   faceSkeletalMeshAssetPath: z.string(),
   faceSkeletonAssetPath: z.string(),
+  faceRuntime: z.object({
+    animationBlueprintAssetPath: z.string().startsWith("/Game/"),
+    animationBlueprintState: z.enum(["ready", "create", "blocked"]),
+    bindings: z.array(
+      z.object({
+        blueprintAssetPath: z.string().startsWith("/Game/"),
+        componentName: z.string().min(1),
+        currentAnimClassPath: z.string(),
+        state: z.enum(["ready", "configure", "blocked"]),
+      }),
+    ),
+    blockedReasons: z.array(z.string()),
+  }).nullable(),
   targetPackagePath: z.string().startsWith("/Game/"),
   animationPackagePath: z.string().startsWith("/Game/"),
   montagePackagePath: z.string().startsWith("/Game/"),
@@ -67,6 +82,19 @@ const SupplementApplyRequestSchema = z.object({
     (value) => Boolean(value && typeof value === "object"),
   ),
   reviewToken: z.string().regex(/^[a-f0-9]{64}$/),
+});
+
+const FaceAnimationPreviewRequestSchema = z.object({
+  targetProjectFile: z.string().min(1),
+  faceAnimationAssetPath: z.string().startsWith("/Game/"),
+  faceSkeletalMeshAssetPath: z.string().startsWith("/Game/"),
+  faceSkeletonAssetPath: z.string().startsWith("/Game/"),
+});
+
+const MontagePreviewRequestSchema = z.object({
+  targetProjectFile: z.string().min(1),
+  montageAssetPath: z.string().startsWith("/Game/"),
+  bodySkeletonAssetPath: z.string().startsWith("/Game/"),
 });
 
 function faceSupplementScriptPath(): string {
@@ -323,6 +351,49 @@ def asset_data_class_name(asset_data):
         except Exception:
             return ''
 
+def object_path(value):
+    return value.get_path_name() if value else ''
+
+def body_mesh_for_blueprint(blueprint):
+    generated_class = blueprint_generated_class(blueprint)
+    if not generated_class:
+        return None
+    cdo = unreal.get_default_object(generated_class)
+    try:
+        mesh_component = cdo.get_editor_property('mesh')
+        mesh = mesh_component.get_editor_property('skeletal_mesh')
+        if mesh:
+            return mesh
+    except Exception:
+        pass
+    for component in actor_components(cdo):
+        if not isinstance(component, unreal.SkeletalMeshComponent):
+            continue
+        try:
+            mesh = component.get_editor_property('skeletal_mesh')
+        except Exception:
+            mesh = None
+        if mesh and 'face' not in component.get_name().lower():
+            return mesh
+    return None
+
+def face_component_templates(blueprint, face_mesh):
+    generated_class = blueprint_generated_class(blueprint)
+    if not generated_class:
+        return []
+    prefix = generated_class.get_path_name() + ':'
+    result = []
+    for component in unreal.ObjectIterator(unreal.SkeletalMeshComponent):
+        if not component.get_path_name().startswith(prefix):
+            continue
+        try:
+            mesh = component.get_editor_property('skeletal_mesh')
+        except Exception:
+            mesh = None
+        if object_path(mesh) == object_path(face_mesh):
+            result.append(component)
+    return result
+
 def npc_package_root(body_package, npc_name):
     body_directory = body_package.rsplit('/', 1)[0]
     parts = body_directory.split('/')
@@ -491,6 +562,95 @@ else:
         )
         body_skeleton = body_mesh.get_editor_property('skeleton')
         face_skeleton = face_mesh.get_editor_property('skeleton') if face_mesh else None
+        face_runtime = None
+        if face_mesh and face_skeleton:
+            face_abp_name = 'ABP_' + npc_name + '_Face'
+            face_abp_path = target_root + '/' + face_abp_name
+            face_abp_class_path = face_abp_path + '.' + face_abp_name + '_C'
+            face_parent = getattr(unreal, 'SeriaFaceAnimInstance', None)
+            face_abp = unreal.load_asset(face_abp_path)
+            face_abp_state = 'create'
+            face_runtime_blocked = []
+            if not face_parent or not hasattr(unreal, 'AnimBlueprintFactory'):
+                face_abp_state = 'blocked'
+                face_runtime_blocked.append(
+                    '当前 UE 未开放 SeriaFaceAnimInstance 或 AnimBlueprintFactory'
+                )
+            elif face_abp:
+                if face_abp.get_class().get_name() != 'AnimBlueprint':
+                    face_abp_state = 'blocked'
+                    face_runtime_blocked.append(
+                        face_abp_path + ' 已存在但不是 AnimBlueprint'
+                    )
+                else:
+                    actual_face_skeleton = face_abp.get_editor_property('target_skeleton')
+                    if object_path(actual_face_skeleton) != object_path(face_skeleton):
+                        face_abp_state = 'blocked'
+                        face_runtime_blocked.append(
+                            face_abp_path + ' 的 Target Skeleton 与 Face Skeleton 不一致'
+                        )
+                    else:
+                        face_abp_state = 'ready'
+
+            bindings = []
+            matching_blueprints = []
+            registry = unreal.AssetRegistryHelpers.get_asset_registry()
+            if selected_type == 'Blueprint':
+                blueprint_candidates = [selected]
+            else:
+                blueprint_candidates = [
+                    asset_data.get_asset()
+                    for asset_data in registry.get_assets_by_path(
+                        unreal.Name(target_root),
+                        recursive=True
+                    )
+                    if asset_data_class_name(asset_data) == 'Blueprint'
+                ]
+            for candidate_bp in blueprint_candidates:
+                if not candidate_bp:
+                    continue
+                candidate_body_mesh = body_mesh_for_blueprint(candidate_bp)
+                if object_path(candidate_body_mesh) != object_path(body_mesh):
+                    continue
+                candidate_path = candidate_bp.get_outermost().get_path_name()
+                matching_blueprints.append(candidate_path)
+                components = face_component_templates(candidate_bp, face_mesh)
+                if len(components) != 1:
+                    face_runtime_blocked.append(
+                        candidate_path
+                        + (' 缺少 Face 组件' if not components else ' 包含多个 Face 组件')
+                    )
+                    continue
+                component = components[0]
+                current_class = component.get_editor_property('anim_class')
+                current_path = object_path(current_class)
+                state = (
+                    'ready' if current_path == face_abp_class_path
+                    else 'configure' if not current_class
+                    else 'blocked'
+                )
+                if state == 'blocked':
+                    face_runtime_blocked.append(
+                        candidate_path + ' 的 Face AnimClass 已指向其他类：' + current_path
+                    )
+                bindings.append({
+                    'blueprint_asset_path': candidate_path,
+                    'component_name': component.get_name().replace('_GEN_VARIABLE', ''),
+                    'current_anim_class_path': current_path,
+                    'state': state,
+                })
+            if not matching_blueprints:
+                face_runtime_blocked.append(
+                    '未找到使用当前 Body Mesh 的 NPC Blueprint'
+                )
+            face_runtime = {
+                'animation_blueprint_asset_path': face_abp_path,
+                'animation_blueprint_state': (
+                    'blocked' if face_runtime_blocked else face_abp_state
+                ),
+                'bindings': bindings,
+                'blocked_reasons': face_runtime_blocked,
+            }
         dirty = [
             str(package.get_path_name())
             for package in unreal.EditorLoadingAndSavingUtils.get_dirty_content_packages()
@@ -506,6 +666,7 @@ else:
             'skeleton_asset_path': body_skeleton.get_path_name() if body_skeleton else '',
             'face_skeletal_mesh_asset_path': face_mesh.get_path_name() if face_mesh else '',
             'face_skeleton_asset_path': face_skeleton.get_path_name() if face_skeleton else '',
+            'face_runtime': face_runtime,
             'target_package_path': target_root,
             'animation_package_path': animation_root,
             'montage_package_path': montage_root,
@@ -530,6 +691,91 @@ else:
     } else if (!raw.face_skeletal_mesh_asset_path) {
       warnings.push("未找到与当前 NPC 对应的 Face Skeletal Mesh");
     }
+    const rawFaceRuntime =
+      raw.face_runtime && typeof raw.face_runtime === "object"
+        ? (raw.face_runtime as Record<string, unknown>)
+        : null;
+    const faceRuntime = rawFaceRuntime
+      ? {
+          animationBlueprintAssetPath: String(
+            rawFaceRuntime.animation_blueprint_asset_path ?? "",
+          ),
+          animationBlueprintState:
+            rawFaceRuntime.animation_blueprint_state === "ready"
+              ? "ready" as const
+              : rawFaceRuntime.animation_blueprint_state === "create"
+                ? "create" as const
+                : "blocked" as const,
+          bindings: (
+            Array.isArray(rawFaceRuntime.bindings)
+              ? rawFaceRuntime.bindings
+              : []
+          ).map((binding) => {
+            const value = binding as Record<string, unknown>;
+            return {
+              blueprintAssetPath: String(value.blueprint_asset_path ?? ""),
+              componentName: String(value.component_name ?? ""),
+              currentAnimClassPath: String(
+                value.current_anim_class_path ?? "",
+              ),
+              state:
+                value.state === "ready"
+                  ? "ready" as const
+                  : value.state === "configure"
+                    ? "configure" as const
+                    : "blocked" as const,
+            };
+          }),
+          blockedReasons: (
+            Array.isArray(rawFaceRuntime.blocked_reasons)
+              ? rawFaceRuntime.blocked_reasons
+              : []
+          ).map(String),
+        }
+      : null;
+    if (
+      faceRuntime?.animationBlueprintState === "ready" &&
+      faceRuntime.animationBlueprintAssetPath
+    ) {
+      const faceBlueprint = await connection.invoke(
+        "bp.get_blueprint_by_path",
+        { AssetPath: faceRuntime.animationBlueprintAssetPath },
+      );
+      const basicInfo = faceBlueprint
+        ? await connection.invoke("bp.get_blueprint_basic_info", {
+            Bp: faceBlueprint,
+          }) as { ParentClass?: unknown }
+        : null;
+      if (
+        String(basicInfo?.ParentClass ?? "") !==
+        "/Script/Seria.SeriaFaceAnimInstance"
+      ) {
+        faceRuntime.animationBlueprintState = "blocked";
+        faceRuntime.blockedReasons.push(
+          `${faceRuntime.animationBlueprintAssetPath} 未继承 SeriaFaceAnimInstance`,
+        );
+      }
+    }
+    const dirtyPackageNames = (
+      Array.isArray(raw.dirty_package_names)
+        ? raw.dirty_package_names
+        : []
+    ).map(String);
+    if (faceRuntime) {
+      const dirtyPackages = new Set(
+        dirtyPackageNames.map((path) => packagePath(path).toLowerCase()),
+      );
+      const dirtyRuntimeAssets = [
+        faceRuntime.animationBlueprintAssetPath,
+        ...faceRuntime.bindings.map((binding) => binding.blueprintAssetPath),
+      ].filter((path) => dirtyPackages.has(packagePath(path).toLowerCase()));
+      if (dirtyRuntimeAssets.length > 0) {
+        faceRuntime.animationBlueprintState = "blocked";
+        faceRuntime.blockedReasons.push(
+          `Face 运行时资产存在未保存修改：${dirtyRuntimeAssets.join("、")}`,
+        );
+      }
+    }
     const target: NpcSupplementTarget = {
       targetProjectFile: String(raw.target_project_file ?? ""),
       targetContentDirectory: String(raw.target_content_directory ?? ""),
@@ -548,6 +794,7 @@ else:
         raw.face_skeletal_mesh_asset_path ?? "",
       ),
       faceSkeletonAssetPath: String(raw.face_skeleton_asset_path ?? ""),
+      faceRuntime,
       targetPackagePath: String(raw.target_package_path ?? ""),
       animationPackagePath: String(raw.animation_package_path ?? ""),
       montagePackagePath: String(
@@ -560,11 +807,7 @@ else:
           ? raw.existing_asset_paths
           : []
       ).map(String),
-      dirtyPackageNames: (
-        Array.isArray(raw.dirty_package_names)
-          ? raw.dirty_package_names
-          : []
-      ).map(String),
+      dirtyPackageNames,
       warnings,
     };
     if (!target.skeletonAssetPath) {
@@ -608,11 +851,144 @@ export async function inspectNpcSupplementPlan(
   return plan;
 }
 
+export async function openNpcFaceAnimationPreview(
+  rawRequest: unknown,
+  connectionFactory: () => UnrealInvoker = () => new UnrealMcpConnection(),
+): Promise<NpcFaceAnimationPreviewResult> {
+  const request = FaceAnimationPreviewRequestSchema.parse(rawRequest);
+  const connection = connectionFactory();
+  await connectUnreal(connection);
+  try {
+    const script = `
+import os
+
+def object_path(value):
+    return value.get_path_name() if value else ''
+
+expected_project = os.path.normcase(os.path.abspath(${JSON.stringify(request.targetProjectFile)}))
+current_project = os.path.normcase(os.path.abspath(unreal.Paths.get_project_file_path()))
+if current_project != expected_project:
+    raise RuntimeError('当前连接的 UE 不是面部补充使用的目标工程')
+
+face_animation = unreal.load_asset(${JSON.stringify(packagePath(request.faceAnimationAssetPath))})
+if not face_animation or face_animation.get_class().get_name() != 'AnimSequence':
+    raise RuntimeError('Face 动作不存在或类型不正确')
+face_mesh = unreal.load_asset(${JSON.stringify(packagePath(request.faceSkeletalMeshAssetPath))})
+if not face_mesh or face_mesh.get_class().get_name() != 'SkeletalMesh':
+    raise RuntimeError('Face Skeletal Mesh 不存在或类型不正确')
+face_skeleton = unreal.load_asset(${JSON.stringify(packagePath(request.faceSkeletonAssetPath))})
+if not face_skeleton or face_skeleton.get_class().get_name() != 'Skeleton':
+    raise RuntimeError('Face Skeleton 不存在或类型不正确')
+
+animation_skeleton = face_animation.get_editor_property('skeleton')
+mesh_skeleton = face_mesh.get_editor_property('skeleton')
+if object_path(animation_skeleton) != object_path(face_skeleton):
+    raise RuntimeError('Face 动作与审核时的 Face Skeleton 不一致')
+if object_path(mesh_skeleton) != object_path(face_skeleton):
+    raise RuntimeError('Face Mesh 与审核时的 Face Skeleton 不一致')
+
+unreal.AssetToolsHelpers.get_asset_tools().open_editor_for_assets([face_animation])
+_result = {
+    'face_animation_asset_path': face_animation.get_path_name(),
+    'face_skeletal_mesh_asset_path': face_mesh.get_path_name(),
+}
+`;
+    const raw = (await invokePythonJson(
+      connection,
+      script,
+      "无法打开 Face 动作预览",
+    )) as Record<string, unknown>;
+    return {
+      faceAnimationAssetPath: String(
+        raw.face_animation_asset_path ?? "",
+      ),
+      faceSkeletalMeshAssetPath: String(
+        raw.face_skeletal_mesh_asset_path ?? "",
+      ),
+    };
+  } finally {
+    connection.close();
+  }
+}
+
+export async function openNpcMontagePreview(
+  rawRequest: unknown,
+  connectionFactory: () => UnrealInvoker = () => new UnrealMcpConnection(),
+): Promise<NpcMontagePreviewResult> {
+  const request = MontagePreviewRequestSchema.parse(rawRequest);
+  const connection = connectionFactory();
+  await connectUnreal(connection);
+  try {
+    const script = `
+import os
+
+def object_path(value):
+    return value.get_path_name() if value else ''
+
+expected_project = os.path.normcase(os.path.abspath(${JSON.stringify(request.targetProjectFile)}))
+current_project = os.path.normcase(os.path.abspath(unreal.Paths.get_project_file_path()))
+if current_project != expected_project:
+    raise RuntimeError('当前连接的 UE 不是动作补充使用的目标工程')
+
+montage = unreal.load_asset(${JSON.stringify(packagePath(request.montageAssetPath))})
+if not montage or montage.get_class().get_name() != 'AnimMontage':
+    raise RuntimeError('Montage 不存在或类型不正确')
+body_skeleton = unreal.load_asset(${JSON.stringify(packagePath(request.bodySkeletonAssetPath))})
+if not body_skeleton or body_skeleton.get_class().get_name() != 'Skeleton':
+    raise RuntimeError('Body Skeleton 不存在或类型不正确')
+
+montage_skeleton = montage.get_editor_property('skeleton')
+if object_path(montage_skeleton) != object_path(body_skeleton):
+    raise RuntimeError('Montage 与审核时的 Body Skeleton 不一致')
+
+unreal.AssetToolsHelpers.get_asset_tools().open_editor_for_assets([montage])
+_result = {
+    'montage_asset_path': montage.get_path_name(),
+    'body_skeleton_asset_path': body_skeleton.get_path_name(),
+}
+`;
+    const raw = (await invokePythonJson(
+      connection,
+      script,
+      "无法打开 Montage 预览",
+    )) as Record<string, unknown>;
+    return {
+      montageAssetPath: String(raw.montage_asset_path ?? ""),
+      bodySkeletonAssetPath: String(
+        raw.body_skeleton_asset_path ?? "",
+      ),
+    };
+  } finally {
+    connection.close();
+  }
+}
+
 async function applyNpcFaceSupplement(
   plan: NpcSupplementPlan,
   selectedItems: readonly FaceSupplementApplyItem[],
   connection: UnrealInvoker,
 ): Promise<NpcSupplementApplyResult> {
+  const faceRuntime = plan.target.faceRuntime;
+  if (!faceRuntime || faceRuntime.animationBlueprintState === "blocked") {
+    throw new Error("Face 运行时配置未通过审核");
+  }
+  if (faceRuntime.animationBlueprintState === "ready") {
+    const faceBlueprint = await connection.invoke(
+      "bp.get_blueprint_by_path",
+      { AssetPath: faceRuntime.animationBlueprintAssetPath },
+    );
+    const basicInfo = faceBlueprint
+      ? await connection.invoke("bp.get_blueprint_basic_info", {
+          Bp: faceBlueprint,
+        }) as { ParentClass?: unknown }
+      : null;
+    if (
+      String(basicInfo?.ParentClass ?? "") !==
+      "/Script/Seria.SeriaFaceAnimInstance"
+    ) {
+      throw new Error("Face 动画蓝图不再继承 SeriaFaceAnimInstance，请重新审核");
+    }
+  }
   const source = await readFile(faceSupplementScriptPath(), "utf8");
   const payload = {
     target_project_file: plan.target.targetProjectFile,
@@ -620,6 +996,17 @@ async function applyNpcFaceSupplement(
     face_skeletal_mesh_asset_path:
       plan.target.faceSkeletalMeshAssetPath,
     face_skeleton_asset_path: plan.target.faceSkeletonAssetPath,
+    face_runtime: {
+      animation_blueprint_asset_path:
+        faceRuntime.animationBlueprintAssetPath,
+      animation_blueprint_state: faceRuntime.animationBlueprintState,
+      bindings: faceRuntime.bindings.map((binding) => ({
+        blueprint_asset_path: binding.blueprintAssetPath,
+        component_name: binding.componentName,
+        current_anim_class_path: binding.currentAnimClassPath,
+        state: binding.state,
+      })),
+    },
     remove_prefix: plan.npcPrefix,
     items: selectedItems.map((item) => ({
       source_file: item.sourceFile,
@@ -661,6 +1048,37 @@ async function applyNpcFaceSupplement(
   const unverifiedMontageSlotPaths = array(
     "unverified_montage_slot_paths",
   );
+  const faceAnimationBlueprintAssetPath = String(
+    raw.face_animation_blueprint_asset_path ?? "",
+  );
+  const createdFaceAnimationBlueprint =
+    raw.created_face_animation_blueprint === true;
+  const configuredFaceBlueprintAssetPaths = array(
+    "configured_face_blueprint_asset_paths",
+  );
+  for (const assetPath of [
+    faceAnimationBlueprintAssetPath,
+    ...configuredFaceBlueprintAssetPaths,
+  ]) {
+    const blueprint = await connection.invoke("bp.get_blueprint_by_path", {
+      AssetPath: packagePath(assetPath),
+    });
+    if (!blueprint) {
+      throw new Error(`无法回读 Face 运行时蓝图：${assetPath}`);
+    }
+    const compileResult = await connection.invoke("bp.compile_blueprint", {
+      Bp: blueprint,
+    });
+    if (compileResult === false) {
+      throw new Error(`Face 运行时蓝图编译失败：${assetPath}`);
+    }
+    const saveResult = await connection.invoke("asset.save_asset", {
+      Asset: blueprint,
+    });
+    if (saveResult === false) {
+      throw new Error(`Face 运行时蓝图保存失败：${assetPath}`);
+    }
+  }
   const expectedCurveCount = selectedItems.filter(
     (item) => item.copyFaceCurves,
   ).length;
@@ -688,6 +1106,13 @@ async function applyNpcFaceSupplement(
   ) {
     throw new Error("Face Montage 处理数量与审核清单不一致");
   }
+  if (
+    packagePath(faceAnimationBlueprintAssetPath).toLowerCase() !==
+      packagePath(faceRuntime.animationBlueprintAssetPath).toLowerCase() ||
+    configuredFaceBlueprintAssetPaths.length !== faceRuntime.bindings.length
+  ) {
+    throw new Error("Face AnimClass 配置回读与审核清单不一致");
+  }
   return {
     status: "configured",
     kind: "face",
@@ -698,15 +1123,18 @@ async function applyNpcFaceSupplement(
     lockedRootAssetPaths,
     curveCopiedBodyAssetPaths,
     processedBodyAssetPaths,
+    faceAnimationBlueprintAssetPath,
+    createdFaceAnimationBlueprint,
+    configuredFaceBlueprintAssetPaths,
     manualChecks: [
+      "使用动作行的预览按钮抽查 Face AnimSequence 的 Morph Target 表情",
       "抽查 Body 动作中的 Morph Target 曲线与 Face 动作是否一致",
-      "抽查新建或复用 Montage 的动作内容与播放结果",
       ...(unverifiedMontageSlotPaths.length > 0
         ? [
             `UE4 Python 未开放 Montage 轨道读取；请在 UE 中复核 ${unverifiedMontageSlotPaths.length} 个新建 Montage 的 Slot`,
           ]
         : []),
-      "打开 NPC BP 验证面部动作，并保存相关 BP",
+      "在对话编辑器中播放 Montage，确认 Body 与 Face 组件联动",
     ],
   };
 }
@@ -1045,9 +1473,12 @@ _result = {
       lockedRootAssetPaths: [],
       curveCopiedBodyAssetPaths: [],
       processedBodyAssetPaths: [],
+      faceAnimationBlueprintAssetPath: "",
+      createdFaceAnimationBlueprint: false,
+      configuredFaceBlueprintAssetPaths: [],
       manualChecks: [
         "抽查新增或更新动作的 Skeleton、帧率和 Root Motion",
-        "检查新建 Montage 的源动作与 IdleSlot 或 TurnSlot",
+        "使用动作行的预览按钮抽查新建或复用 Montage 的内容、Slot 和播放结果",
         "保存并编译引用这些动作的 NPC BP / ABP",
         ...montageFailures.map(
           (failure) =>
@@ -1089,8 +1520,15 @@ _result = {
       curveCopiedBodyAssetPaths:
         faceResult.curveCopiedBodyAssetPaths,
       processedBodyAssetPaths: faceResult.processedBodyAssetPaths,
+      faceAnimationBlueprintAssetPath:
+        faceResult.faceAnimationBlueprintAssetPath,
+      createdFaceAnimationBlueprint:
+        faceResult.createdFaceAnimationBlueprint,
+      configuredFaceBlueprintAssetPaths:
+        faceResult.configuredFaceBlueprintAssetPaths,
       manualChecks: [
         ...bodyResult.manualChecks,
+        ...faceResult.manualChecks,
         "抽查自动配对 Face 动作的根骨锁定、Morph Target 曲线和播放结果",
       ],
     };

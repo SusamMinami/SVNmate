@@ -3,6 +3,7 @@ import type { BlueprintMontageAction } from "../types";
 import {
   matchingMontageActions,
   montageActionWindow,
+  npcCodeFromBlueprintClassPath,
   scrollTopForRevealedMenu,
 } from "./CharacterActionEditor";
 
@@ -57,5 +58,28 @@ describe("scrollTopForRevealedMenu", () => {
 
   it("clamps the adjustment to the available scroll range", () => {
     expect(scrollTopForRevealedMenu(190, 200, 560, 500)).toBe(200);
+  });
+});
+
+describe("npcCodeFromBlueprintClassPath", () => {
+  it("keeps only the N-prefixed role code from an NPC Blueprint path", () => {
+    expect(
+      npcCodeFromBlueprintClassPath(
+        "/Game/Seria/NPC/N106/BP_N106_Yim.BP_N106_Yim_C",
+      ),
+    ).toBe("n106");
+    expect(
+      npcCodeFromBlueprintClassPath(
+        "/Game/Seria/NPC/N113_Ratking/BP_N113_Ratking_withWheelchair.BP_N113_Ratking_withWheelchair_C",
+      ),
+    ).toBe("n113");
+  });
+
+  it("does not expose a non-N character Blueprint name", () => {
+    expect(
+      npcCodeFromBlueprintClassPath(
+        "/Game/Seria/Player/BP_Player.BP_Player_C",
+      ),
+    ).toBe("");
   });
 });

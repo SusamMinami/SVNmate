@@ -11,7 +11,6 @@ import {
   Database,
   FileSearch,
   Link2,
-  LoaderCircle,
   MapPinned,
   MonitorUp,
   PackagePlus,
@@ -22,6 +21,9 @@ import {
   X,
 } from "lucide-react";
 import { type FormEvent, useMemo, useRef, useState } from "react";
+import { useOperationFeedback } from "../app/useOperationFeedback";
+import { OverlayScrollArea } from "./OverlayScrollArea";
+import { OperationIcon, TaskNotice } from "./TaskMotion";
 import { DialogNpcRegistrationModal } from "./DialogNpcRegistrationModal";
 import { MissionTargetDialoguePreview } from "./MissionTargetDialoguePreview";
 import { NpcRegistrationModal } from "./NpcRegistrationModal";
@@ -75,8 +77,18 @@ interface MissionTargetModalProps {
 interface MapLoadDecision {
   plan: MissionTargetPreviewPlan;
   currentMapAssetPath: string;
-  phase: "choose" | "manual" | "auto";
+  phase: "choose" | "manual" | "auto" | "verify";
   error: string;
+}
+
+function isMapLoadStillInProgress(message: string): boolean {
+  return /(?:正在加载|暂时无法读取关卡状态|尚未完成.*地图切换|加载期间通信暂时不可用|['"]?this['"]?\s+pointer is invalid)/i.test(
+    message,
+  );
+}
+
+function mapLoadProgressMessage(mapName: string): string {
+  return `UE 已发起 ${mapName} 的地图切换。大型关卡加载期间可能暂时无法响应；加载完成后选择“检查并加载”。`;
 }
 
 interface UeTargetSelectionReview {
@@ -233,13 +245,11 @@ export function MissionTargetModal({
     useState("");
   const [mapLoadDecision, setMapLoadDecision] =
     useState<MapLoadDecision | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [status, setStatus] = useState("");
+  const { busy, setBusy, setError, setStatus, beginTask, setTaskLabel, feedback, activeOperation } = useOperationFeedback();
   const lastTaskSearchIdRef = useRef("");
-  const selectedCount =
+  const selectedCount = useMemo(() =>
     plan?.targets.filter((target) => selectedTargetIds.has(target.targetId))
-      .length ?? 0;
+      .length ?? 0, [plan, selectedTargetIds]);
   const blueprintDialoguePreviewPlan =
     blueprintInspection?.dialoguePreviewPlan ?? null;
   const hasDialoguePositionPreview =
@@ -287,6 +297,18 @@ export function MissionTargetModal({
     dialoguePreviewRequest?.timeline;
   const isDialogueRegistration =
     blueprintInspection?.blueprintState === "populated";
+  const {
+    existingTargetIds, targetRows, selectableTargetRows, selectedTargetRowCount,
+    allSelected, selectedAssetTargets, blueprintCreationTargets, selectedAppendTargets,
+    blueprintRegistrationSlots, blueprintModelSlots, maximumBlueprintModelIndex,
+    blueprintSync, isBlueprintSync, selectedSyncMappings, canUpdateBlueprint,
+    canUpdateTargets, targetOverrideItems, selectableBackgroundItems,
+    selectedBackgroundCount, selectedDialogueNpcCount, allBackgroundItemsSelected,
+    backgroundDialogueSetupReasons, backgroundAutoConfigurationRequired,
+    backgroundBlockingReasons, activeUeTargetSelectionReview, ueSelectedTargetIds,
+    dialogNpcRegistrationSlots, targetsById, matchesByActorRef,
+    appendSlotsByTargetId, slotsByTargetId, creationIndexByTargetId, appendIndexByTargetId,
+  } = useMemo(() => {
   const existingTargetIds = new Set(
     blueprintInspection?.sync?.mappings.map((mapping) => mapping.targetId) ??
       [],
@@ -414,6 +436,34 @@ export function MissionTargetModal({
             (slot.targetId === null || selectedTargetIds.has(slot.targetId)),
         )
   ).filter((slot) => slot.status === "unmapped");
+  // Keep Array.find's first-match semantics even for incomplete inspection data.
+  function indexFirst<T, K>(items: readonly T[], key: (item: T) => K) {
+    const result = new Map<K, T>();
+    for (const item of items) {
+      const id = key(item);
+      if (!result.has(id)) result.set(id, item);
+    }
+    return result;
+  }
+  return {
+    existingTargetIds, targetRows, selectableTargetRows, selectedTargetRowCount,
+    allSelected, selectedAssetTargets, blueprintCreationTargets, selectedAppendTargets,
+    blueprintRegistrationSlots, blueprintModelSlots, maximumBlueprintModelIndex,
+    blueprintSync, isBlueprintSync, selectedSyncMappings, canUpdateBlueprint,
+    canUpdateTargets, targetOverrideItems, selectableBackgroundItems,
+    selectedBackgroundCount, selectedDialogueNpcCount, allBackgroundItemsSelected,
+    backgroundDialogueSetupReasons, backgroundAutoConfigurationRequired,
+    backgroundBlockingReasons, activeUeTargetSelectionReview, ueSelectedTargetIds,
+    dialogNpcRegistrationSlots,
+    targetsById: indexFirst(plan?.targets ?? [], (target) => target.targetId),
+    matchesByActorRef: indexFirst(activeUeTargetSelectionReview?.classification.matches ?? [], (match) => match.actorRef),
+    appendSlotsByTargetId: indexFirst(blueprintInspection?.appendSlots ?? [], (slot) => slot.targetId),
+    slotsByTargetId: indexFirst(blueprintRegistrationSlots, (slot) => slot.targetId),
+    creationIndexByTargetId: new Map(blueprintCreationTargets.map((target, index) => [target.targetId, index])),
+    appendIndexByTargetId: new Map(selectedAppendTargets.map((target, index) => [target.targetId, index])),
+  };
+  }, [plan, blueprintInspection, selectedTargetIds, database, isDialogueRegistration,
+    targetOverrides, backgroundPropPreview, selectedBackgroundActorRefs, ueTargetSelectionReview]);
 
   function applyBlueprintInspection(
     inspection: MissionTargetBlueprintInspection,
@@ -469,7 +519,7 @@ export function MissionTargetModal({
     if (slots.length === 0) {
       return;
     }
-    setBusy(true);
+    beginTask("正在读取 Character BP 与补登记审核");
     setError("");
     setStatus("");
     setDialogNpcRegistrationError("");
@@ -486,6 +536,7 @@ export function MissionTargetModal({
         return;
       }
       setDialogNpcReview(review);
+      setStatus("补登记审核已就绪，请核对 Camera BP");
     } catch (registrationError) {
       setError(
         registrationError instanceof Error
@@ -513,12 +564,16 @@ export function MissionTargetModal({
       return;
     }
     setDialogNpcRegistrationBusy(true);
+    beginTask("正在登记并保存 DialogNPCTable");
     setDialogNpcRegistrationError("");
+    let saved = false;
     try {
       const result = await applyDialogNpcTableRegistration(
         dialogNpcReview.reviewToken,
         rows,
       );
+      saved = true;
+      setTaskLabel("DialogNPCTable 已保存，正在刷新 BP 检查");
       const inspection = await inspectMissionTargetBlueprint(
         blueprintName.trim(),
         plan ?? undefined,
@@ -531,15 +586,19 @@ export function MissionTargetModal({
       setDialogNpcReview(null);
       setStatus(
         `已登记并保存 DialogNPCTable：${result.registeredRowNames.join("、")}；请继续原 BP 注册操作`,
+        "success",
       );
     } catch (registrationError) {
-      setDialogNpcRegistrationError(
-        registrationError instanceof Error
-          ? registrationError.message
-          : "DialogNPCTable 登记失败",
-      );
+      const message = registrationError instanceof Error ? registrationError.message : "DialogNPCTable 登记失败";
+      if (saved) {
+        setDialogNpcReview(null);
+        setStatus(`DialogNPCTable 已保存，BP 检查刷新失败：${message}。请重新检查 BP。`, "warning");
+      } else {
+        setDialogNpcRegistrationError(`${message}；请核对 UE 资产状态后重新检查，勿立即重复写入。`);
+      }
     } finally {
       setDialogNpcRegistrationBusy(false);
+      setBusy(false);
     }
   }
 
@@ -552,7 +611,7 @@ export function MissionTargetModal({
     setError("");
     setStatus("");
     setUeTargetSelectionReview(null);
-    setBusy(shouldRefresh || Boolean(blueprintName.trim()));
+    beginTask(shouldRefresh ? "正在刷新配置并解析任务目标物" : "正在解析任务与 BP 配置", "search");
     try {
       const nextPlan = shouldRefresh
         ? await refreshMissionTargetPlan(normalizedTaskId)
@@ -597,7 +656,7 @@ export function MissionTargetModal({
     selectedPlan: MissionTargetPreviewPlan,
     mapMode: "require-current" | "auto",
   ) {
-    setBusy(true);
+    beginTask(mapMode === "auto" ? "正在等待 UE 切图并加载预览" : "正在检查当前关卡并加载预览");
     setError("");
     setStatus("");
     setBackgroundPropError("");
@@ -609,7 +668,7 @@ export function MissionTargetModal({
     try {
       const result = await loadMissionTargetPreview(selectedPlan, mapMode);
       setMapLoadDecision(null);
-      setStatus(loadSummary(selectedPlan, result));
+      setStatus(loadSummary(selectedPlan, result), "success");
     } catch (previewError) {
       const message =
         previewError instanceof Error
@@ -617,20 +676,19 @@ export function MissionTargetModal({
           : "目标物预览加载失败";
       if (mapLoadDecision) {
         const canContinueAfterMapLoad =
-          mapMode === "auto" &&
-          /(?:正在加载|暂时无法读取关卡状态|尚未完成.*地图切换|加载期间通信暂时不可用)/.test(
-            message,
-          );
+          mapMode === "auto" && isMapLoadStillInProgress(message);
         setMapLoadDecision((current) =>
           current
             ? {
                 ...current,
                 phase: canContinueAfterMapLoad
-                  ? "manual"
+                  ? "verify"
                   : mapMode === "auto"
                     ? "choose"
                     : current.phase,
-                error: message,
+                error: canContinueAfterMapLoad
+                  ? mapLoadProgressMessage(selectedPlan.mapName)
+                  : message,
               }
             : current,
         );
@@ -702,9 +760,10 @@ export function MissionTargetModal({
           "\n\n对话资产将保存，是否继续？",
       )
     ) {
+      setStatus("已取消补齐对话配置", "cancelled");
       return;
     }
-    setBusy(true);
+    beginTask("正在补齐对话空间配置");
     setBackgroundPropError("");
     setError("");
     setStatus("");
@@ -717,7 +776,7 @@ export function MissionTargetModal({
           "Formation 已补齐，但无法确定 BP 的世界位置。请把该 BP 放入当前地图，或输入任务节点后重试。",
         );
       } else {
-        setStatus("已补齐对话空间配置，并重新读取 UE 当前选择");
+        setStatus("已补齐对话空间配置，并重新读取 UE 当前选择", "success");
       }
     } catch (configurationError) {
       setBackgroundPropError(
@@ -738,7 +797,7 @@ export function MissionTargetModal({
     ) {
       return;
     }
-    setBusy(true);
+    beginTask(plan ? "正在检查目标地图" : blueprintDialoguePreviewPlan ? "正在加载节点站位到 UE" : "正在读取 BP 并计算节点站位");
     setError("");
     setStatus("");
     try {
@@ -786,18 +845,19 @@ export function MissionTargetModal({
           selectedPlan,
           "current",
         );
-        setStatus(loadSummary(selectedPlan, result, true));
+        setStatus(loadSummary(selectedPlan, result, true), "success");
         return;
       }
       const mapStatus = await inspectMissionTargetMap(
         selectedPlan.mapAssetPath,
       );
       if (mapStatus.matches) {
+        setTaskLabel("正在加载目标物到 UE");
         const result = await loadMissionTargetPreview(
           selectedPlan,
           "require-current",
         );
-        setStatus(loadSummary(selectedPlan, result));
+        setStatus(loadSummary(selectedPlan, result), "success");
       } else {
         setMapLoadDecision({
           plan: selectedPlan,
@@ -821,7 +881,7 @@ export function MissionTargetModal({
     if (!mapLoadDecision) {
       return;
     }
-    setBusy(true);
+    beginTask("正在检查 UE 当前地图");
     setMapLoadDecision((current) =>
       current ? { ...current, error: "" } : current,
     );
@@ -841,12 +901,13 @@ export function MissionTargetModal({
         );
         return;
       }
+      setTaskLabel("正在加载目标物到 UE");
       const result = await loadMissionTargetPreview(
         mapLoadDecision.plan,
         "require-current",
       );
       setMapLoadDecision(null);
-      setStatus(loadSummary(mapLoadDecision.plan, result));
+      setStatus(loadSummary(mapLoadDecision.plan, result), "success");
     } catch (previewError) {
       setMapLoadDecision((current) =>
         current
@@ -865,7 +926,7 @@ export function MissionTargetModal({
   }
 
   async function clearPreview() {
-    setBusy(true);
+    beginTask("正在清除并核对目标物预览");
     setError("");
     setBackgroundPropError("");
     try {
@@ -874,12 +935,14 @@ export function MissionTargetModal({
         result.clearedCount > 0
           ? `已清除 ${result.clearedCount} 个目标物预览对象`
           : "当前没有需要清除的目标物预览",
+        result.clearedCount > 0 ? "success" : "ready",
       );
     } catch (clearError) {
       setError(
-        clearError instanceof Error
+        (clearError instanceof Error
           ? clearError.message
-          : "目标物预览清理失败",
+          : "目标物预览清理失败") + "；请在 UE 核对预览对象是否仍有残留。",
+        "uncertain",
       );
     } finally {
       setBusy(false);
@@ -890,7 +953,7 @@ export function MissionTargetModal({
     if (!blueprintName.trim() && !taskId.trim()) {
       return;
     }
-    setBusy(true);
+    beginTask("正在读取 UE 选择并匹配目标物", "read");
     setError("");
     setStatus("");
     setBackgroundPropError("");
@@ -970,6 +1033,7 @@ export function MissionTargetModal({
       }
       const reviewedActorRefs =
         matchedTargetIds.length > 0 ? unmatchedActorRefs : undefined;
+      setTaskLabel("正在检查 UE 选择写入 BP 的差异");
       const preview = await inspectBackgroundPropImport(
         blueprintName.trim(),
         reviewedActorRefs,
@@ -977,6 +1041,12 @@ export function MissionTargetModal({
         taskId.trim() || undefined,
       );
       setBackgroundPropPreview(preview);
+      setStatus(
+        preview.blockedReasons.length || preview.items.some((item) => item.action === "blocked")
+          ? "审核存在待处理项，请核对下列原因"
+          : "UE 选择审核已就绪，尚未写入 BP",
+        preview.blockedReasons.length || preview.items.some((item) => item.action === "blocked") ? "warning" : "ready",
+      );
       setBackgroundMatchedTargetIds(matchedTargetIds);
       setSelectedBackgroundActorRefs(
         new Set(
@@ -1056,9 +1126,10 @@ export function MissionTargetModal({
           `\n\n${dialogueNpcCount > 0 ? "BP 与对话资产" : "BP"}将保存，是否继续？`,
       )
     ) {
+      setStatus("已取消 UE 选择写入 BP", "cancelled");
       return;
     }
-    setBusy(true);
+    beginTask(backgroundAutoConfigurationRequired ? "正在补齐对话配置并准备写入 BP" : "正在写入 BP 与对话配置", "background-write");
     setError("");
     let dialogueConfigurationCompleted = false;
     try {
@@ -1078,6 +1149,7 @@ export function MissionTargetModal({
           throw new Error(activePreview.blockedReasons.join("；"));
         }
       }
+      setTaskLabel("正在写入并核对 BP 内容");
       const result = await applyBackgroundPropImport(
         blueprintName.trim(),
         activePreview.reviewToken,
@@ -1102,6 +1174,7 @@ export function MissionTargetModal({
                 ? `；DialogModels 已注册 ${result.dialogueRegistration.registeredCount} 个角色`
                 : ""
             }`),
+        result.status === "unchanged" ? "ready" : "success",
       );
     } catch (importError) {
       setBackgroundPropError(
@@ -1111,7 +1184,7 @@ export function MissionTargetModal({
             : "背景资产写入 BP 失败"
         }${
           dialogueConfigurationCompleted
-            ? "；对话空间配置已补齐，但 BP 尚未写入"
+            ? "；对话空间配置已补齐，BP 写入结果需核对"
             : ""
         }`,
       );
@@ -1124,7 +1197,7 @@ export function MissionTargetModal({
     if (!blueprintName.trim()) {
       return;
     }
-    setBusy(true);
+    beginTask("正在检查 BP、对话模型与位置映射", "check");
     setError("");
     setStatus("");
     try {
@@ -1171,9 +1244,10 @@ export function MissionTargetModal({
     const selectedAssetTargetIds = blueprintCreationTargets.map(
       (target) => target.targetId,
     );
-    setBusy(true);
+    beginTask("正在检查 BP 创建范围");
     setError("");
     setStatus("");
+    let writeRequested = false;
     try {
       const compatibility = await checkMissionTargetBlueprint(
         blueprintName.trim(),
@@ -1187,9 +1261,11 @@ export function MissionTargetModal({
           `${compatibility.message}\n\n创建 BP 将同步更新对话 Formation 和 DialogModels，是否继续？`,
         )
       ) {
-        setStatus("已取消创建 BP");
+        setStatus("已取消创建 BP", "cancelled");
         return;
       }
+      setTaskLabel("正在创建 BP 内容并注册对话");
+      writeRequested = true;
       const result = await createMissionTargetBlueprint(
         blueprintName.trim(),
         plan,
@@ -1213,6 +1289,7 @@ export function MissionTargetModal({
             ? `，${registration.emptyCount} 个所选模型未登记`
             : ""
         }${spatialMessage}`,
+        registration?.spatialStatus === "not_configured" || registration?.emptyCount ? "warning" : "success",
       );
       try {
         const inspection = await inspectMissionTargetBlueprint(
@@ -1226,12 +1303,14 @@ export function MissionTargetModal({
         applyBlueprintInspection(inspection, false);
       } catch {
         setBlueprintInspection(null);
+        setStatus(`BP 已创建并保存，但列表刷新失败；请重新检查 ${result.blueprintAssetPath}。`, "warning");
       }
     } catch (createError) {
       setError(
-        createError instanceof Error
+        (createError instanceof Error
           ? createError.message
-          : "创建 BP 内容失败",
+          : "创建 BP 内容失败") + (writeRequested ? "；请先核对 UE 资产与未保存内容，再重新检查。" : ""),
+        writeRequested ? "uncertain" : "failed",
       );
     } finally {
       setBusy(false);
@@ -1263,10 +1342,10 @@ export function MissionTargetModal({
           "\n\n新增组件会写入 BP，并将全部 BP 数字槽位注册到对应 DialogModels。BP 与对话资产将保存，是否继续？",
       )
     ) {
-      setStatus("已取消追加目标物");
+      setStatus("已取消追加目标物", "cancelled");
       return;
     }
-    setBusy(true);
+    beginTask("正在追加 BP 槽位并注册对话");
     setError("");
     setStatus("");
     try {
@@ -1282,6 +1361,7 @@ export function MissionTargetModal({
         : "";
       setStatus(
         `已追加 BP 槽位 ${result.addedModelIndexes.join("、")}，并注册 ${registration.characterCount} 个对话角色${unresolved}`,
+        registration.unresolvedIndexes.length || registration.spatialStatus === "not_configured" ? "warning" : "success",
       );
       const inspection = await inspectMissionTargetBlueprint(
         blueprintName.trim(),
@@ -1294,9 +1374,10 @@ export function MissionTargetModal({
       applyBlueprintInspection(inspection, false);
     } catch (appendError) {
       setError(
-        appendError instanceof Error
+        (appendError instanceof Error
           ? appendError.message
-          : "追加目标物到 BP 失败",
+          : "追加目标物到 BP 失败") + "；请先核对 UE 资产与未保存内容，再重新检查。",
+        "uncertain",
       );
     } finally {
       setBusy(false);
@@ -1317,7 +1398,7 @@ export function MissionTargetModal({
       await openDialogNpcRegistration(missingSlots);
       return;
     }
-    setBusy(true);
+    beginTask("正在按 BP 槽位注册对话并核对配置");
     setError("");
     setStatus("");
     try {
@@ -1350,6 +1431,8 @@ export function MissionTargetModal({
             : "";
       setStatus(
         `${result.status === "unchanged" ? "对话模型无需变更" : `已按 BP 槽位注册到对话 ${result.dialogueId}`}：角色 ${result.characterCount ?? result.registeredCount + 1} 个（含 0 号玩家），None ${result.emptyCount} 个${unresolved}${spatialMessage}`,
+        result.spatialStatus === "not_configured" || result.unresolvedIndexes.length || result.emptyCount
+          ? "warning" : result.status === "unchanged" ? "ready" : "success",
       );
       const inspection = await inspectMissionTargetBlueprint(
         blueprintName.trim(),
@@ -1362,9 +1445,10 @@ export function MissionTargetModal({
       applyBlueprintInspection(inspection, false);
     } catch (registrationError) {
       setError(
-        registrationError instanceof Error
+        (registrationError instanceof Error
           ? registrationError.message
-          : "注册 DialogModels 失败",
+          : "注册 DialogModels 失败") + "；请先核对 UE 资产与未保存内容，再重新检查。",
+        "uncertain",
       );
     } finally {
       setBusy(false);
@@ -1393,10 +1477,10 @@ export function MissionTargetModal({
           }\n\nBP 与对话资产将保存，是否继续？`,
       )
     ) {
-      setStatus("已取消修改 BP 位置");
+      setStatus("已取消修改 BP 位置", "cancelled");
       return;
     }
-    setBusy(true);
+    beginTask("正在把目标物位置写入 BP 并核对");
     setError("");
     setStatus("");
     try {
@@ -1420,12 +1504,14 @@ export function MissionTargetModal({
         result.status === "unchanged"
           ? "BP 位置与对话空间配置已是最新"
           : `已更新 BP 槽位 ${result.updatedModelIndexes.join("、") || "无坐标变化"}；对话空间配置已同步`,
+        result.status === "unchanged" ? "ready" : "success",
       );
     } catch (updateError) {
       setError(
-        updateError instanceof Error
+        (updateError instanceof Error
           ? updateError.message
-          : "修改 BP 位置失败",
+          : "修改 BP 位置失败") + "；请先核对 UE 资产与未保存内容，再重新检查。",
+        "uncertain",
       );
     } finally {
       setBusy(false);
@@ -1452,10 +1538,10 @@ export function MissionTargetModal({
           }\n\n是否继续？`,
       )
     ) {
-      setStatus("已取消从 BP 更新目标物");
+      setStatus("已取消从 BP 更新目标物", "cancelled");
       return;
     }
-    setBusy(true);
+    beginTask("正在把 BP 位置写入目标物 · Excel 将保持未保存");
     setError("");
     setStatus("");
     try {
@@ -1512,12 +1598,14 @@ export function MissionTargetModal({
         result.updatedTargets.length > 0
           ? `已将 BP 位置写入 ${result.updatedTargets.length} 个目标物（Excel 未保存）`
           : "BP 与目标物位置已经一致",
+        result.updatedTargets.length > 0 ? "success" : "ready",
       );
     } catch (updateError) {
       setError(
-        updateError instanceof Error
+        (updateError instanceof Error
           ? updateError.message
-          : "从 BP 更新目标物失败",
+          : "从 BP 更新目标物失败") + "；请先核对 Excel 未保存内容，勿立即重复写入。",
+        "uncertain",
       );
     } finally {
       setBusy(false);
@@ -1628,7 +1716,7 @@ export function MissionTargetModal({
         : current,
     );
     setUeTargetSelectionReview(null);
-    setStatus(`已修改 ${items.length} 个目标物的位置或旋转（Excel 未保存）`);
+    setStatus(`已修改 ${items.length} 个目标物的位置或旋转（Excel 未保存）`, "success");
   }
 
   if (editRequest) {
@@ -1654,6 +1742,9 @@ export function MissionTargetModal({
       {embedded ? <ArrowLeft size={17} /> : <X size={17} />}
     </button>
   );
+  const taskNotice = feedback.message ? (
+    <TaskNotice {...feedback} className="mission-target-message">{feedback.message}</TaskNotice>
+  ) : null;
   const readUeSelectionButton = (
     <button
       className={embedded ? "button workspace-floating-command" : "button"}
@@ -1681,11 +1772,7 @@ export function MissionTargetModal({
                 : "请先输入任务节点或填写 BP 文件名"
       }
     >
-      {busy ? (
-        <LoaderCircle className="spin" size={16} />
-      ) : (
-        <RefreshCw size={16} />
-      )}
+      <OperationIcon kind="read" busy={activeOperation === "read"}><RefreshCw size={16} /></OperationIcon>
       读取 UE 选择
     </button>
   );
@@ -1760,11 +1847,7 @@ export function MissionTargetModal({
                 !dialogueNodeInputValid
               }
             >
-              {busy ? (
-                <LoaderCircle className="spin" size={18} />
-              ) : (
-                <Search size={18} />
-              )}
+              <OperationIcon kind="search" busy={activeOperation === "search"}><Search size={18} /></OperationIcon>
             </button>
           </div>
           <label htmlFor="mission-blueprint-name">BP 文件名</label>
@@ -1812,11 +1895,7 @@ export function MissionTargetModal({
                       : "检查 BP 与对话模型"
                 }
               >
-                {busy ? (
-                  <LoaderCircle className="spin" size={18} />
-                ) : (
-                  <FileSearch size={18} />
-                )}
+                <OperationIcon kind="search" busy={activeOperation === "check"}><FileSearch size={18} /></OperationIcon>
               </button>
             </div>
             <button
@@ -1866,20 +1945,8 @@ export function MissionTargetModal({
           </div>
         </form>
 
-        {error && (
-          <div className="mission-target-message is-error" role="alert">
-            <AlertTriangle size={16} />
-            <span>{error}</span>
-          </div>
-        )}
-        {status && (
-          <div className="mission-target-message is-success" role="status">
-            <CheckCircle2 size={16} />
-            <span>{status}</span>
-          </div>
-        )}
-
-        <div className="mission-target-body">
+        <OverlayScrollArea className="mission-target-body">
+          {!backgroundPropPreview && !mapLoadDecision && !dialogNpcReview && taskNotice}
           {blueprintInspection && dialogNpcRegistrationSlots.length > 0 && (
             <section className="mission-target-dialog-npc-warning">
               <span>
@@ -2110,16 +2177,9 @@ export function MissionTargetModal({
                     ) : (
                       activeUeTargetSelectionReview.selection.actors.map(
                         (actor) => {
-                          const match =
-                            activeUeTargetSelectionReview.classification.matches.find(
-                              (candidate) =>
-                                candidate.actorRef === actor.actorRef,
-                            );
+                          const match = matchesByActorRef.get(actor.actorRef);
                           const target = match
-                            ? plan.targets.find(
-                                (candidate) =>
-                                  candidate.targetId === match.targetId,
-                              )
+                            ? targetsById.get(match.targetId)
                             : null;
                           return (
                             <div
@@ -2264,15 +2324,10 @@ export function MissionTargetModal({
                      </thead>
                      <tbody>
                        {targetRows.map((target) => {
-                         const appendSlot =
-                           blueprintInspection?.appendSlots?.find(
-                             (item) => item.targetId === target.targetId,
-                           );
+                         const appendSlot = appendSlotsByTargetId.get(target.targetId);
                          const slot = isDialogueRegistration
                            ? appendSlot
-                           : blueprintInspection?.slots.find(
-                               (item) => item.targetId === target.targetId,
-                             );
+                           : slotsByTargetId.get(target.targetId);
                          const selected =
                            selectedTargetIds.has(target.targetId);
                          const appendable =
@@ -2281,16 +2336,10 @@ export function MissionTargetModal({
                          const selectedBlueprintIndex = isDialogueRegistration
                            ? selected
                              ? maximumBlueprintModelIndex +
-                               selectedAppendTargets.findIndex(
-                                 (item) =>
-                                   item.targetId === target.targetId,
-                               ) +
+                               (appendIndexByTargetId.get(target.targetId) ?? -1) +
                                1
                              : undefined
-                           : blueprintCreationTargets.findIndex(
-                                 (item) =>
-                                   item.targetId === target.targetId,
-                               ) + 1;
+                           : (creationIndexByTargetId.get(target.targetId) ?? -1) + 1;
                          const label = isDialogueRegistration
                            ? !appendable
                              ? {
@@ -2457,7 +2506,7 @@ export function MissionTargetModal({
               </small>
             </div>
           ) : null}
-        </div>
+        </OverlayScrollArea>
 
         <footer>
           <span>
@@ -2550,14 +2599,8 @@ export function MissionTargetModal({
                       : "读取 BP 和对话调度并生成指定节点站位俯视图"
                 }
               >
-                {busy ? (
-                  <LoaderCircle className="spin" size={16} />
-                ) : (
-                  <MapPinned size={16} />
-                )}
-                {busy
-                  ? "正在处理..."
-                  : plan
+                <MapPinned size={16} />
+                {plan
                     ? "加载到 UE"
                     : hasDialoguePositionPreview
                       ? "写入到 UE"
@@ -2595,17 +2638,13 @@ export function MissionTargetModal({
                     : "向空 PositionMode BP 写入所选资产并注册 DialogModels"
                 }
               >
-                {busy ? (
-                  <LoaderCircle className="spin" size={16} />
-                ) : selectedAppendTargets.length > 0 ||
+                {selectedAppendTargets.length > 0 ||
                   !isDialogueRegistration ? (
                   <PackagePlus size={16} />
                 ) : (
                   <Link2 size={16} />
                 )}
-                {busy
-                  ? "正在处理..."
-                  : isDialogueRegistration
+                {isDialogueRegistration
                     ? selectedAppendTargets.length > 0
                       ? "添加到 BP 并注册"
                       : "按 BP 注册到对话"
@@ -2619,6 +2658,7 @@ export function MissionTargetModal({
           <DialogNpcRegistrationModal
             review={dialogNpcReview}
             busy={dialogNpcRegistrationBusy}
+            feedback={feedback}
             error={dialogNpcRegistrationError}
             onClose={() => {
               setDialogNpcReview(null);
@@ -2654,6 +2694,7 @@ export function MissionTargetModal({
                     setSelectedBackgroundActorRefs(new Set());
                     setBackgroundMatchedTargetIds([]);
                     setBackgroundPropError("");
+                    setStatus("已取消 UE 选择写入 BP", "cancelled");
                   }}
                   disabled={busy}
                 >
@@ -2692,12 +2733,11 @@ export function MissionTargetModal({
                   </span>
                 </div>
               )}
-              {backgroundPropError && (
-                <div className="mission-map-choice__error" role="alert">
-                  <AlertTriangle size={15} />
-                  <span>{backgroundPropError}</span>
-                </div>
-              )}
+              {backgroundPropError && !busy
+                ? <TaskNotice phase="uncertain" runId={feedback.runId} className="mission-target-message">
+                    {backgroundPropError}；请先核对 UE 资产状态，再重新检查。
+                  </TaskNotice>
+                : taskNotice}
               <div className="background-prop-table-wrap">
                 <table className="mission-target-table background-prop-table">
                   <thead>
@@ -2714,6 +2754,7 @@ export function MissionTargetModal({
                             }
                           }}
                           onChange={toggleAllBackgroundProps}
+                          disabled={busy}
                           aria-label="选择全部 UE Actor"
                         />
                       </th>
@@ -2781,7 +2822,7 @@ export function MissionTargetModal({
                               checked={selectedBackgroundActorRefs.has(
                                 item.actorRef,
                               )}
-                              disabled={blocked}
+                              disabled={blocked || busy}
                               onChange={() =>
                                 toggleBackgroundProp(item.actorRef)
                               }
@@ -2920,6 +2961,7 @@ export function MissionTargetModal({
                       setSelectedBackgroundActorRefs(new Set());
                       setBackgroundMatchedTargetIds([]);
                       setBackgroundPropError("");
+                      setStatus("已取消 UE 选择写入 BP", "cancelled");
                     }}
                     disabled={busy}
                   >
@@ -2935,11 +2977,7 @@ export function MissionTargetModal({
                       backgroundBlockingReasons.length > 0
                     }
                   >
-                    {busy ? (
-                      <LoaderCircle className="spin" size={15} />
-                    ) : (
-                      <PackagePlus size={15} />
-                    )}
+                    <OperationIcon kind="write" busy={activeOperation === "background-write"}><PencilLine size={15} /></OperationIcon>
                     {busy
                       ? "正在写入..."
                       : backgroundAutoConfigurationRequired
@@ -2974,6 +3012,8 @@ export function MissionTargetModal({
                   <h3 id="mission-map-choice-title">
                     {mapLoadDecision.phase === "auto"
                       ? "正在等待 UE 加载地图"
+                      : mapLoadDecision.phase === "verify"
+                        ? "等待 UE 完成地图加载"
                       : mapLoadDecision.phase === "manual"
                         ? "等待手动切换地图"
                         : "选择地图加载方式"}
@@ -2984,13 +3024,17 @@ export function MissionTargetModal({
                   type="button"
                   title="取消"
                   aria-label="取消地图加载"
-                  onClick={() => setMapLoadDecision(null)}
+                  onClick={() => {
+                    setMapLoadDecision(null);
+                    setStatus("已取消地图加载", "cancelled");
+                  }}
                   disabled={busy}
                 >
                   <X size={17} />
                 </button>
               </header>
 
+              {busy && taskNotice}
               <div className="mission-map-choice__body">
                 <dl>
                   <div>
@@ -3017,9 +3061,25 @@ export function MissionTargetModal({
                     UE 正在打开目标地图。大型关卡可能需要数十秒，加载完成后会继续生成预览对象。
                   </p>
                 )}
+                {mapLoadDecision.phase === "verify" && (
+                  <p>
+                    地图切换请求已经送达 UE；等待关卡稳定后再检查并加载目标物。
+                  </p>
+                )}
                 {mapLoadDecision.error && (
-                  <div className="mission-map-choice__error" role="alert">
-                    <AlertTriangle size={15} />
+                  <div
+                    className={`mission-map-choice__error ${
+                      mapLoadDecision.phase === "verify" ? "is-pending" : ""
+                    }`}
+                    role={
+                      mapLoadDecision.phase === "verify" ? "status" : "alert"
+                    }
+                  >
+                    {mapLoadDecision.phase === "verify" ? (
+                      <MapPinned size={15} />
+                    ) : (
+                      <AlertTriangle size={15} />
+                    )}
                     <span>{mapLoadDecision.error}</span>
                   </div>
                 )}
@@ -3032,7 +3092,7 @@ export function MissionTargetModal({
                     type="button"
                     disabled
                   >
-                    <LoaderCircle className="spin" size={15} />
+                    <MapPinned size={15} />
                     正在等待 UE 加载
                   </button>
                 ) : mapLoadDecision.phase === "choose" ? (
@@ -3063,11 +3123,7 @@ export function MissionTargetModal({
                       }
                       disabled={busy}
                     >
-                      {busy ? (
-                        <LoaderCircle className="spin" size={15} />
-                      ) : (
-                        <MapPinned size={15} />
-                      )}
+                      <MapPinned size={15} />
                       软件自动切换
                     </button>
                   </>
@@ -3094,11 +3150,7 @@ export function MissionTargetModal({
                       onClick={() => void verifyManualMapAndLoad()}
                       disabled={busy}
                     >
-                      {busy ? (
-                        <LoaderCircle className="spin" size={15} />
-                      ) : (
-                        <CheckCircle2 size={15} />
-                      )}
+                      <CheckCircle2 size={15} />
                       检查并加载
                     </button>
                   </>

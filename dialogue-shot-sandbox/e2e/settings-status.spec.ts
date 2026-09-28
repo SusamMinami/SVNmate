@@ -164,7 +164,7 @@ test("keyboard interaction skips the intro and exposes status without color", as
     .toHaveAttribute("data-status-intro", "false");
 });
 
-test("respects reduced motion and desktop scaling", async ({ browser }, testInfo) => {
+test("defaults reduced motion off, persists the switch and keeps desktop scaling", async ({ browser }, testInfo) => {
   const context = await browser.newContext({
     baseURL: testInfo.project.use.baseURL,
     viewport: { width: 1280, height: 800 },
@@ -174,10 +174,33 @@ test("respects reduced motion and desktop scaling", async ({ browser }, testInfo
   const page = await context.newPage();
   try {
     await openSettings(page, { slowModel: true });
+    const toggle = page.getByRole("checkbox", {
+      name: "减少动态效果",
+    });
+    await expect(toggle).not.toBeChecked();
+    await expect(page.locator("html")).toHaveAttribute(
+      "data-reduced-motion",
+      "false",
+    );
+    await expect(
+      page.locator(".setup-status-icon__result").first(),
+    ).not.toHaveCSS("animation-name", "none");
+    await toggle.check();
     await expect(page.getByRole("region", { name: "环境检查" }))
       .toHaveAttribute("data-status-intro", "false");
+    await expect(page.locator("html")).toHaveAttribute(
+      "data-reduced-motion",
+      "true",
+    );
     await expect(page.locator(".setup-status-icon__result").first()).toHaveCSS("animation-name", "none");
     await expect(page.locator(".setup-status-icon .spin")).toHaveCSS("animation-name", "none");
+    await page.reload();
+    await expect(toggle).toBeChecked();
+    await toggle.uncheck();
+    await expect(page.locator("html")).toHaveAttribute(
+      "data-reduced-motion",
+      "false",
+    );
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.getByRole("dialog").screenshot({ path: testInfo.outputPath("settings-150-percent.png") });
   } finally {

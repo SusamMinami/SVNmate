@@ -127,16 +127,266 @@ def _set_new_montage_slot(montage, slot_name):
     return True
 
 
+def _blueprint_generated_class(blueprint):
+    asset_path = blueprint.get_outermost().get_path_name()
+    try:
+        return unreal.EditorAssetLibrary.load_blueprint_class(asset_path)
+    except Exception:
+        return None
+
+
+def _face_component_templates(blueprint, face_mesh):
+    generated_class = _blueprint_generated_class(blueprint)
+    if not generated_class:
+        raise RuntimeError(
+            "Cannot load Blueprint GeneratedClass: "
+            + blueprint.get_path_name()
+        )
+    prefix = generated_class.get_path_name() + ":"
+    components = []
+    for component in unreal.ObjectIterator(unreal.SkeletalMeshComponent):
+        if not component.get_path_name().startswith(prefix):
+            continue
+        try:
+            component_mesh = component.get_editor_property("skeletal_mesh")
+        except Exception:
+            component_mesh = None
+        if _object_path(component_mesh) == _object_path(face_mesh):
+            components.append(component)
+    return components
+
+
+def _prepare_face_runtime(request, face_mesh, face_skeleton, dirty_packages):
+    runtime = request["face_runtime"]
+    face_abp_path = _package_path(runtime["animation_blueprint_asset_path"])
+    face_abp_name = face_abp_path.rsplit("/", 1)[-1]
+    expected_class_path = face_abp_path + "." + face_abp_name + "_C"
+    state = runtime["animation_blueprint_state"]
+    face_abp_exists = unreal.EditorAssetLibrary.does_asset_exist(face_abp_path)
+    if state == "create" and face_abp_exists:
+        raise RuntimeError(
+            "Face Anim Blueprint appeared after review: " + face_abp_path
+        )
+    if state == "ready" and not face_abp_exists:
+        raise RuntimeError(
+            "Face Anim Blueprint disappeared after review: " + face_abp_path
+        )
+    if state not in ["create", "ready"]:
+        raise RuntimeError("Face runtime configuration is blocked")
+    if face_abp_path.lower() in dirty_packages:
+        raise RuntimeError(
+            "Face Anim Blueprint has unsaved changes: " + face_abp_path
+        )
+    existing_face_abp = unreal.load_asset(face_abp_path) if face_abp_exists else None
+    if existing_face_abp:
+        if existing_face_abp.get_class().get_name() != "AnimBlueprint":
+            raise RuntimeError(
+                "Face Anim Blueprint has unexpected class: " + face_abp_path
+            )
+        actual_skeleton = existing_face_abp.get_editor_property("target_skeleton")
+        if _object_path(actual_skeleton) != _object_path(face_skeleton):
+            raise RuntimeError(
+                "Face Anim Blueprint Skeleton changed after review: "
+                + face_abp_path
+            )
+
+    prepared_bindings = []
+    for binding in runtime["bindings"]:
+        blueprint_path = _package_path(binding["blueprint_asset_path"])
+        if blueprint_path.lower() in dirty_packages:
+            raise RuntimeError(
+                "NPC Blueprint has unsaved changes: " + blueprint_path
+            )
+        blueprint = _require_asset(blueprint_path, "Blueprint", "NPC Blueprint")
+        components = _face_component_templates(blueprint, face_mesh)
+        named_components = [
+            component
+            for component in components
+            if component.get_name().replace("_GEN_VARIABLE", "")
+            == binding["component_name"]
+        ]
+        if len(named_components) != 1:
+            raise RuntimeError(
+                "Reviewed Face component cannot be resolved: " + blueprint_path
+            )
+        component = named_components[0]
+        current_class = component.get_editor_property("anim_class")
+        current_class_path = _object_path(current_class)
+        if current_class_path != binding["current_anim_class_path"]:
+            raise RuntimeError(
+                "Face AnimClass changed after review: " + blueprint_path
+            )
+        if binding["state"] == "ready":
+            if current_class_path != expected_class_path:
+                raise RuntimeError(
+                    "Reviewed Face AnimClass mismatch: " + blueprint_path
+                )
+        elif binding["state"] == "configure":
+            if current_class:
+                raise RuntimeError(
+                    "Face AnimClass is no longer empty: " + blueprint_path
+                )
+        else:
+            raise RuntimeError(
+                "Face component binding is blocked: " + blueprint_path
+            )
+        prepared_bindings.append(
+            {
+                "blueprint": blueprint,
+                "blueprint_path": blueprint_path,
+                "component_name": binding["component_name"],
+                "old_anim_class": current_class,
+                "old_animation_mode": component.get_editor_property(
+                    "animation_mode"
+                ),
+                "state": binding["state"],
+            }
+        )
+    if not prepared_bindings:
+        raise RuntimeError("No reviewed NPC Blueprint Face bindings")
+    return {
+        "animation_blueprint_path": face_abp_path,
+        "animation_blueprint_name": face_abp_name,
+        "animation_blueprint_state": state,
+        "expected_class_path": expected_class_path,
+        "existing_face_abp": existing_face_abp,
+        "bindings": prepared_bindings,
+    }
+
+
+def _configure_face_runtime(prepared, face_mesh, face_skeleton):
+    asset_library = unreal.EditorAssetLibrary
+    asset_tools = unreal.AssetToolsHelpers.get_asset_tools()
+    created_face_abp = False
+    changed_bindings = []
+    face_abp = prepared["existing_face_abp"]
+    try:
+        if prepared["animation_blueprint_state"] == "create":
+            parent_class = getattr(unreal, "SeriaFaceAnimInstance", None)
+            if not parent_class:
+                raise RuntimeError("SeriaFaceAnimInstance is unavailable")
+            factory = unreal.AnimBlueprintFactory()
+            factory.set_editor_property("target_skeleton", face_skeleton)
+            factory.set_editor_property("parent_class", parent_class)
+            face_abp = asset_tools.create_asset(
+                prepared["animation_blueprint_name"],
+                prepared["animation_blueprint_path"].rsplit("/", 1)[0],
+                unreal.AnimBlueprint,
+                factory,
+            )
+            if not face_abp:
+                raise RuntimeError("Failed to create Face Anim Blueprint")
+            created_face_abp = True
+        face_abp.set_editor_property("target_skeleton", face_skeleton)
+        face_abp_class = _blueprint_generated_class(face_abp)
+        if (
+            not face_abp_class
+            or face_abp_class.get_path_name()
+            != prepared["expected_class_path"]
+        ):
+            raise RuntimeError("Face Anim Blueprint GeneratedClass mismatch")
+
+        for binding in prepared["bindings"]:
+            if binding["state"] == "ready":
+                continue
+            components = _face_component_templates(binding["blueprint"], face_mesh)
+            matches = [
+                component
+                for component in components
+                if component.get_name().replace("_GEN_VARIABLE", "")
+                == binding["component_name"]
+            ]
+            if len(matches) != 1:
+                raise RuntimeError(
+                    "Face component changed before configuration: "
+                    + binding["blueprint_path"]
+                )
+            component = matches[0]
+            component.set_editor_property(
+                "animation_mode", unreal.AnimationMode.ANIMATION_BLUEPRINT
+            )
+            component.set_editor_property("anim_class", face_abp_class)
+            changed_bindings.append(binding)
+
+        _save_asset(face_abp, "Face Anim Blueprint")
+        for binding in changed_bindings:
+            _save_asset(binding["blueprint"], "NPC Blueprint")
+
+        for binding in prepared["bindings"]:
+            components = _face_component_templates(binding["blueprint"], face_mesh)
+            matches = [
+                component
+                for component in components
+                if component.get_name().replace("_GEN_VARIABLE", "")
+                == binding["component_name"]
+            ]
+            if len(matches) != 1:
+                raise RuntimeError(
+                    "Face component readback failed: " + binding["blueprint_path"]
+                )
+            actual_class = matches[0].get_editor_property("anim_class")
+            if _object_path(actual_class) != prepared["expected_class_path"]:
+                raise RuntimeError(
+                    "Face AnimClass readback mismatch: "
+                    + binding["blueprint_path"]
+                )
+        return {
+            "face_animation_blueprint_asset_path": face_abp.get_path_name(),
+            "created_face_animation_blueprint": created_face_abp,
+            "configured_face_blueprint_asset_paths": [
+                binding["blueprint"].get_path_name()
+                for binding in prepared["bindings"]
+            ],
+        }
+    except Exception:
+        for binding in changed_bindings:
+            try:
+                components = _face_component_templates(
+                    binding["blueprint"], face_mesh
+                )
+                matches = [
+                    component
+                    for component in components
+                    if component.get_name().replace("_GEN_VARIABLE", "")
+                    == binding["component_name"]
+                ]
+                if len(matches) == 1:
+                    matches[0].set_editor_property(
+                        "animation_mode", binding["old_animation_mode"]
+                    )
+                    matches[0].set_editor_property(
+                        "anim_class", binding["old_anim_class"]
+                    )
+                    asset_library.save_loaded_asset(binding["blueprint"])
+            except Exception:
+                pass
+        if created_face_abp:
+            try:
+                asset_library.delete_asset(
+                    prepared["animation_blueprint_path"]
+                )
+            except Exception:
+                pass
+        raise
+
+
 def _validate_request(request):
     required = [
         "target_project_file",
         "animation_package_path",
         "face_skeletal_mesh_asset_path",
         "face_skeleton_asset_path",
+        "face_runtime",
         "remove_prefix",
         "items",
     ]
-    missing = [name for name in required if not request.get(name)]
+    missing = [
+        name
+        for name in required
+        if name not in request
+        or request[name] is None
+        or (name != "items" and not request[name])
+    ]
     if missing:
         raise RuntimeError(
             "Face supplement request is missing: " + ", ".join(missing)
@@ -167,7 +417,9 @@ def run_face_supplement(request):
         raise RuntimeError(
             "SeriaAssetHelperBlueprintFunctionLibrary is not exposed to Python"
         )
-    required_functions = ["get_face_anim_sequence"]
+    required_functions = []
+    if request["items"]:
+        required_functions.append("get_face_anim_sequence")
     if any(item.get("copy_face_curves") for item in request["items"]):
         required_functions.append("copy_face_anim_sequence_morph_targets_curve")
     if any(item.get("make_montage") for item in request["items"]):
@@ -197,6 +449,9 @@ def run_face_supplement(request):
         _package_path(package.get_path_name()).lower()
         for package in unreal.EditorLoadingAndSavingUtils.get_dirty_content_packages()
     }
+    prepared_face_runtime = _prepare_face_runtime(
+        request, face_mesh, face_skeleton, dirty_packages
+    )
 
     for item in request["items"]:
         target_path = _package_path(item["target_asset_path"])
@@ -239,6 +494,14 @@ def run_face_supplement(request):
             "face_skeletal_mesh_asset_path": face_mesh.get_path_name(),
             "face_skeleton_asset_path": face_skeleton.get_path_name(),
             "native_functions": required_functions,
+            "face_animation_blueprint_asset_path":
+                prepared_face_runtime["animation_blueprint_path"],
+            "face_animation_blueprint_state":
+                prepared_face_runtime["animation_blueprint_state"],
+            "validated_face_blueprint_asset_paths": [
+                binding["blueprint_path"]
+                for binding in prepared_face_runtime["bindings"]
+            ],
         }
 
     montage_slot_snapshots = _capture_reviewed_montage_slots(
@@ -355,6 +618,9 @@ def run_face_supplement(request):
     restored_montage_slot_paths = _restore_reviewed_montage_slots(
         montage_slot_snapshots
     )
+    face_runtime_result = _configure_face_runtime(
+        prepared_face_runtime, face_mesh, face_skeleton
+    )
     return {
         "imported_asset_paths": imported_paths,
         "locked_root_asset_paths": locked_paths,
@@ -365,6 +631,7 @@ def run_face_supplement(request):
         "restored_montage_slot_paths": restored_montage_slot_paths,
         "unverified_montage_slot_paths": unverified_montage_slot_paths,
         "pair_readback": pair_readback,
+        **face_runtime_result,
     }
 
 

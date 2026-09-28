@@ -8,14 +8,15 @@ import {
   SquareTerminal,
   X,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { createSelectionActivity, type SelectionActivity } from "../app/selectionActivity";
 import { useStatusPopover } from "../app/useStatusPopover";
 import type { DirectorMode } from "../director/contracts";
 import type { LarkStatus } from "../lark/client";
 import type { TraeCollaborationStatus } from "../trae/client";
 
 export interface ConfigurationDataStatus {
-  state: "syncing" | "listening" | "configuration" | "offline";
+  state: "syncing" | "listening" | "configuration" | "offline" | "paused";
   label: string;
   activity: "idle" | "read" | "write";
 }
@@ -36,8 +37,11 @@ interface WorkspaceStatusHubProps {
   onDeletePendingTask: (requestId: string) => Promise<void>;
   onCancelTask: (requestId: string) => Promise<void>;
   configurationDataStatus?: ConfigurationDataStatus;
+  selectionActivity?: SelectionActivity;
   disabled?: boolean;
 }
+
+const idleSelectionActivity = createSelectionActivity();
 
 function larkConnectionLabel(
   loading: boolean,
@@ -78,8 +82,21 @@ export function WorkspaceStatusHub({
   onDeletePendingTask,
   onCancelTask,
   configurationDataStatus,
+  selectionActivity = idleSelectionActivity,
   disabled = false,
 }: WorkspaceStatusHubProps) {
+  const selection = useSyncExternalStore(selectionActivity.subscribe, selectionActivity.getSnapshot);
+  const configurationState = configurationDataStatus?.state;
+  const configurationPolling = selection.polling && configurationState !== "paused";
+  const dataStatus = configurationDataStatus && {
+    ...configurationDataStatus,
+    state: configurationState === "listening" && configurationPolling ? "syncing" : configurationState,
+    label: configurationState === "listening"
+      ? configurationPolling ? "同步中" : `监听中 · ${selection.intervalMs / 1000}s`
+      : configurationDataStatus.label,
+    activity: configurationDataStatus.activity === "idle" && configurationPolling
+      ? "read" as const : configurationDataStatus.activity,
+  };
   const popover = useStatusPopover(disabled || Boolean(configurationDataStatus));
   const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);
   const [queueBusy, setQueueBusy] = useState(false);
@@ -144,9 +161,11 @@ export function WorkspaceStatusHub({
           ? "连接中断"
           : configurationDataStatus?.state === "configuration"
             ? "配置节点已识别"
-            : "等待下一次同步";
+            : configurationDataStatus?.state === "paused"
+              ? "回到对话编辑器后重新核对节点"
+              : "等待下一次同步";
   const configurationStatusLabel = configurationDataStatus
-    ? `UE 数据链路 · ${configurationDataStatus.label} · ${configurationActivityLabel}`
+    ? `UE 数据链路 · ${dataStatus?.label} · ${configurationActivityLabel}`
     : "";
 
   useEffect(() => {
@@ -154,7 +173,7 @@ export function WorkspaceStatusHub({
       globalThis.clearTimeout(activityReleaseTimerRef.current);
       activityReleaseTimerRef.current = null;
     }
-    const nextActivity = configurationDataStatus?.activity ?? "idle";
+    const nextActivity = dataStatus?.activity ?? "idle";
     if (nextActivity !== "idle") {
       setDisplayedActivity(nextActivity);
       return;
@@ -169,7 +188,7 @@ export function WorkspaceStatusHub({
         activityReleaseTimerRef.current = null;
       }
     };
-  }, [configurationDataStatus?.activity]);
+  }, [dataStatus?.activity]);
 
   async function movePendingTask(targetRequestId: string) {
     if (
@@ -240,7 +259,7 @@ export function WorkspaceStatusHub({
       {configurationDataStatus ? (
         <div
           className="workspace-status-icon workspace-status-icon--data"
-          data-state={configurationDataStatus.state}
+          data-state={dataStatus?.state}
           data-activity={displayedActivity}
           role="status"
           tabIndex={0}

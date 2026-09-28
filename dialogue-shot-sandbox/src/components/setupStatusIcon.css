@@ -81,19 +81,46 @@
   to { opacity: 1; clip-path: inset(0); }
 }
 
+:root[data-reduced-motion="true"]
+  .setup-status-list[data-status-intro]
+  .setup-status-icon
+  .setup-status-icon__pending {
+  animation: none;
+  opacity: 0;
+}
+
+:root[data-reduced-motion="true"]
+  .setup-status-list[data-status-intro]
+  .setup-status-icon
+  .setup-status-icon__result {
+  animation: none;
+  opacity: 1;
+  clip-path: none;
+}
+
+:root[data-reduced-motion="true"] .setup-status-icon .spin {
+  animation: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .setup-status-list[data-status-intro] .setup-status-icon .setup-status-icon__pending {
+  :root:not([data-reduced-motion])
+    .setup-status-list[data-status-intro]
+    .setup-status-icon
+    .setup-status-icon__pending {
     animation: none;
     opacity: 0;
   }
 
-  .setup-status-list[data-status-intro] .setup-status-icon .setup-status-icon__result {
+  :root:not([data-reduced-motion])
+    .setup-status-list[data-status-intro]
+    .setup-status-icon
+    .setup-status-icon__result {
     animation: none;
     opacity: 1;
     clip-path: none;
   }
 
-  .setup-status-icon .spin {
+  :root:not([data-reduced-motion]) .setup-status-icon .spin {
     animation: none;
   }
 }

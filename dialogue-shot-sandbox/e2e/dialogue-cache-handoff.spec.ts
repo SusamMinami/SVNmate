@@ -14,7 +14,7 @@ async function handoffFixture(page: Page) {
   await page.route("**/api/**", (route) =>
     route.fulfill({ status: 503, json: { ok: false } }),
   );
-  await page.route("**/api/ue/dialogue/selection", (route) => {
+  await page.route("**/api/ue/dialogue/selection*", (route) => {
     state.selectionReads++;
     return route.fulfill({ json: { ok: true, data: {
       status: "selected", dialogueNodeId: state.node, selectedNodeCount: 1,
@@ -46,7 +46,12 @@ async function handoffFixture(page: Page) {
       catalogs: request.includeCatalogs ? [{
         modelIndex: 0, blueprintClassPath: "/Game/Test/Player.Player_C",
         characterLabel: "Player", status: "loaded", message: "",
-        actions: [{ name: "AM_Idle", assetPath: "/Game/Test/AM_Idle.AM_Idle" }],
+        actions: [
+          { name: "AM_Idle", assetPath: "/Game/Test/AM_Idle.AM_Idle" },
+          { name: "AM_TurnLeft90", assetPath: "/Game/Test/AM_TurnLeft90.AM_TurnLeft90" },
+          { name: "AM_TurnRight90", assetPath: "/Game/Test/AM_TurnRight90.AM_TurnRight90" },
+          { name: "AM_Wave", assetPath: "/Game/Test/AM_Wave.AM_Wave" },
+        ],
       }] : [],
       tracks: state.emptyNodes ? [] : request.dialogueIds.map((dialogueId: string) => ({
         dialogueId, modelIndex: 0, preservedComplexActionCount: 0,
@@ -176,7 +181,7 @@ test("unlocks compact existing actions for delay edits and drag ordering", async
   const state = await handoffFixture(page);
   await page.setViewportSize({ width: 310, height: 900 });
   await page.getByRole("tab", { name: "UE", exact: true }).click();
-  await expect(page.getByText("已读取 1 个 BP、1 个动作")).toBeVisible();
+  await expect(page.getByText("已读取 1 个 BP、4 个动作")).toBeVisible();
 
   const actionTrack = page.locator(".character-action-track").first();
   const lockedRows = actionTrack.locator(".character-action-existing-row");
@@ -194,24 +199,36 @@ test("unlocks compact existing actions for delay edits and drag ordering", async
       ".character-action-section--actions > .character-action-section__toggle",
     ),
   ).toContainText("3 动作");
-  const idleRow = editableRows.filter({ hasText: "AM_Idle" });
-  const turnRow = editableRows.filter({ hasText: "AM_TurnRight90" });
+  const idleRow = editableRows.nth(0);
+  const turnRow = editableRows.nth(1);
+  const montageInput = idleRow.getByRole("combobox", {
+    name: /玩家 现有动作 1/,
+  });
+  await expect(montageInput).toBeEnabled();
+  await expect(turnRow.getByRole("combobox")).toHaveCount(0);
   await expect(
     idleRow.getByRole("spinbutton", { name: /AM_Idle.*延迟/ }),
   ).toBeEnabled();
-  await expect(
-    turnRow.getByRole("spinbutton", { name: /AM_TurnRight90.*延迟/ }),
-  ).toBeDisabled();
+  await expect(turnRow.getByRole("spinbutton")).toHaveCount(0);
   await idleRow
     .getByRole("spinbutton", { name: /AM_Idle.*延迟/ })
     .fill("0.8");
+  await montageInput.fill("AM_TurnLeft90");
+  await expect(montageInput).toHaveValue("AM_TurnLeft90");
+  await montageInput.press("Escape");
+  const editableRowHeights = await editableRows.evaluateAll((rows) =>
+    rows.map((row) => row.getBoundingClientRect().height),
+  );
+  expect(editableRowHeights[0]).toBeLessThanOrEqual(40);
+  expect(editableRowHeights[1]).toBeLessThanOrEqual(30);
+  expect(editableRowHeights[0]).toBeGreaterThan(editableRowHeights[1]);
   await idleRow.dragTo(turnRow);
   await expect(
     editableRows.nth(0).locator(".character-action-row__name"),
   ).toHaveText("AM_TurnRight90");
   await expect(
-    editableRows.nth(1).locator(".character-action-row__name"),
-  ).toHaveText("AM_Idle");
+    editableRows.nth(1).getByRole("combobox"),
+  ).toHaveValue("AM_TurnLeft90");
 
   await page.screenshot({
     path: testInfo.outputPath("compact-existing-action-edit.png"),
@@ -233,7 +250,7 @@ test("unlocks compact existing actions for delay edits and drag ordering", async
           sourceIndex: 2,
         },
         {
-          montageName: "AM_Idle",
+          montageName: "AM_TurnLeft90",
           delaySeconds: 0.8,
           sourceIndex: 0,
         },
@@ -250,18 +267,23 @@ test("unlocks compact existing actions for delay edits and drag ordering", async
   await expect(
     actionTrack.locator(".character-action-existing-row").first(),
   ).toContainText("AM_TurnRight90");
+  await expect(
+    actionTrack
+      .locator(".character-action-existing-row")
+      .filter({ hasText: "AM_TurnLeft90" }),
+  ).toContainText("旋转");
 });
 
 test("reuses compact node snapshots when expanding to the storyboard", async ({ page }, testInfo) => {
   const state = await handoffFixture(page);
   await page.getByRole("tab", { name: "UE", exact: true }).click();
-  await expect(page.getByText("已读取 1 个 BP、1 个动作")).toBeVisible();
+  await expect(page.getByText("已读取 1 个 BP、4 个动作")).toBeVisible();
   expect(state.actionReads[0].dialogueIds).toEqual(["204801"]);
   await page.getByRole("button", { name: "返回完整窗口" }).click();
   await expect.poll(() => state.actionReads.length).toBe(2);
   expect(state.actionReads[1].dialogueIds).not.toContain("204801");
   expect(state.actionReads[1].includeCatalogs).toBe(false);
-  await expect(page.getByText("已读取 1 个 BP、1 个动作")).toBeVisible();
+  await expect(page.getByText("已读取 1 个 BP、4 个动作")).toBeVisible();
   await expect(page.locator(".character-action-editor")).toContainText("AM_Idle");
   const selectionReads = state.selectionReads;
   await page.waitForTimeout(1_500);
@@ -269,7 +291,7 @@ test("reuses compact node snapshots when expanding to the storyboard", async ({ 
   await page.screenshot({ path: testInfo.outputPath("storyboard-handoff.png") });
   await page.getByRole("button", { name: "进入配置小窗" }).click();
   await expect(page.locator(".inspector-header")).toContainText("UE NODE 204801");
-  await expect(page.getByText("已读取 1 个 BP、1 个动作")).toBeVisible();
+  await expect(page.getByText("已读取 1 个 BP、4 个动作")).toBeVisible();
   expect(state.actionReads).toHaveLength(2);
   await page.getByRole("tab", { name: "镜头", exact: true }).click();
   await expect(page.getByRole("button", { name: "修改当前镜头" })).toBeEnabled();
@@ -280,21 +302,21 @@ test("keeps empty nodes cached and refreshes only on an explicit request", async
   const state = await handoffFixture(page);
   state.emptyNodes = true;
   await page.getByRole("tab", { name: "UE", exact: true }).click();
-  await expect(page.getByText("已读取 1 个 BP、1 个动作")).toBeVisible();
+  await expect(page.getByText("已读取 1 个 BP、4 个动作")).toBeVisible();
   state.node = "204802";
   await expect(page.locator(".inspector-header")).toContainText("UE NODE 204802");
   await expect.poll(() => state.actionReads.length).toBe(2);
-  await expect(page.getByText("已读取 1 个 BP、1 个动作")).toBeVisible();
+  await expect(page.getByText("已读取 1 个 BP、4 个动作")).toBeVisible();
   state.node = "204801";
   await expect(page.locator(".inspector-header")).toContainText("UE NODE 204801");
-  await expect(page.getByText("已读取 1 个 BP、1 个动作")).toBeVisible();
+  await expect(page.getByText("已读取 1 个 BP、4 个动作")).toBeVisible();
   expect(state.actionReads).toHaveLength(2);
   await page.getByRole("button", { name: "返回完整窗口" }).click();
   await expect.poll(() => state.actionReads.length).toBe(3);
   expect(state.actionReads[2].dialogueIds).toEqual([
     "204803", "204804", "204805", "204806", "204807",
   ]);
-  await expect(page.getByText("已读取 1 个 BP、1 个动作")).toBeVisible();
+  await expect(page.getByText("已读取 1 个 BP、4 个动作")).toBeVisible();
   await page.getByRole("button", { name: "重新读取角色动作" }).click();
   await expect.poll(() => state.actionReads.length).toBe(4);
   expect(state.actionReads[3].includeCatalogs).toBe(true);
@@ -304,7 +326,7 @@ test("keeps empty nodes cached and refreshes only on an explicit request", async
 test("keeps cached actions visible while loading the remaining nodes", async ({ page }) => {
   const state = await handoffFixture(page);
   await page.getByRole("tab", { name: "UE", exact: true }).click();
-  await expect(page.getByText("已读取 1 个 BP、1 个动作")).toBeVisible();
+  await expect(page.getByText("已读取 1 个 BP、4 个动作")).toBeVisible();
   let release!: () => void;
   state.gate = new Promise<void>((resolve) => { release = resolve; });
   try {
@@ -319,7 +341,7 @@ test("keeps cached actions visible while loading the remaining nodes", async ({ 
   } finally {
     release();
   }
-  await expect(page.getByText("已读取 1 个 BP、1 个动作")).toBeVisible();
+  await expect(page.getByText("已读取 1 个 BP、4 个动作")).toBeVisible();
 });
 
 test("prefers configured character names over Blueprint labels in compact mode", async ({
@@ -359,7 +381,7 @@ test("prefers configured character names over Blueprint labels in compact mode",
       missionPositionText: "", mapConfigText: "", mapResourceText: "",
     } } }),
   );
-  await page.route("**/api/ue/dialogue/selection", (route) =>
+  await page.route("**/api/ue/dialogue/selection*", (route) =>
     route.fulfill({ json: { ok: true, data: {
       status: "selected", dialogueNodeId: "735001", selectedNodeCount: 1,
       nodes: [{ nodeClass: "SeriaEdDialogGraphNode", dialogueNodeId: "735001", nodeTitle: "735001", nodeComment: "" }],
@@ -462,8 +484,16 @@ test("prefers configured character names over Blueprint labels in compact mode",
   const rolePicker = page.getByRole("combobox", {
     name: "节点 735001 添加角色",
   });
-  await expect(rolePicker).toContainText("1 商会安保");
+  await expect(rolePicker).toContainText("1 商会安保 · n36");
   await expect(rolePicker).not.toContainText("BP_N36_Commerce_Guard");
+  await rolePicker.selectOption("1");
+  await page.getByRole("button", { name: "添加角色" }).click();
+  await expect(
+    page
+      .locator(".character-action-track")
+      .filter({ hasText: "商会安保" })
+      .locator(".character-action-track__identity"),
+  ).toContainText("n36");
   await page.getByRole("tab", { name: "镜头", exact: true }).click();
   await page.getByRole("button", { name: "修改当前镜头" }).click();
   await expect(page.getByLabel("预设机位角色")).toContainText(

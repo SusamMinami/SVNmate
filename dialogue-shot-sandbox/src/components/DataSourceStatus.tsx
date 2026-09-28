@@ -23,6 +23,7 @@ interface DataSourceStatusProps {
   onRefreshLark: () => void;
   onAuthorize: () => void;
   onCollectRevisionCasesChange: (enabled: boolean) => void;
+  automaticPause?: { enabled: boolean; paused: boolean; onToggle: () => void };
   disabled?: boolean;
 }
 
@@ -39,9 +40,10 @@ export function DataSourceStatus({
   onRefreshLark,
   onAuthorize,
   onCollectRevisionCasesChange,
+  automaticPause,
   disabled = false,
 }: DataSourceStatusProps) {
-  const popover = useStatusPopover(disabled);
+  const popover = useStatusPopover(disabled || Boolean(automaticPause));
   const directoryReady = setupStatus?.defaultDataReady ?? true;
   const baseMissingScopes =
     larkStatus?.baseMissingScopes ?? larkStatus?.missingScopes ?? [];
@@ -92,18 +94,29 @@ export function DataSourceStatus({
     <div className="data-source-status" ref={popover.rootRef}>
       <button
         className="workspace-status-icon"
-        data-state={dataState}
+        data-state={automaticPause ? automaticPause.paused ? "paused" : "listening" : dataState}
         type="button"
-        aria-label="数据源状态"
-        aria-haspopup="dialog"
-        {...popover.triggerProps}
+        aria-label={automaticPause ? "自动暂停 UE 监听" : "数据源状态"}
+        {...(automaticPause ? {
+          "aria-pressed": automaticPause.enabled,
+          onClick: automaticPause.onToggle,
+        } : {
+          "aria-haspopup": "dialog" as const,
+          ...popover.triggerProps,
+        })}
         disabled={disabled}
       >
         <Database size={17} />
-        <span className="workspace-status-tooltip">{statusLabel}</span>
+        <span className="workspace-status-tooltip">
+          {automaticPause
+            ? automaticPause.enabled
+              ? `${automaticPause.paused ? "自动读取已暂停" : "自动暂停已开启"}；点击改为手动监听`
+              : "手动监听中；点击开启自动暂停"
+            : statusLabel}
+        </span>
       </button>
 
-      {!disabled && (
+      {!disabled && !automaticPause && (
         <section
           className="workspace-status-popover data-source-status__popover"
           {...popover.panelProps}

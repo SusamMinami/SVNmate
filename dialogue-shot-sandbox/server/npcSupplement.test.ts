@@ -6,6 +6,8 @@ import type { NpcSupplementTarget } from "../src/types";
 import {
   applyNpcSupplement,
   inspectNpcSupplementPlan,
+  openNpcFaceAnimationPreview,
+  openNpcMontagePreview,
   scanNpcSupplementTarget,
 } from "./npcSupplement";
 import type { UnrealInvoker } from "./ue/transport";
@@ -34,6 +36,12 @@ class FakeSupplementConnection implements UnrealInvoker {
     args: Record<string, unknown>,
   ): Promise<unknown> {
     this.calls.push({ action, args });
+    if (action === "bp.get_blueprint_by_path") {
+      return "AnimBlueprint_Face";
+    }
+    if (action === "bp.get_blueprint_basic_info") {
+      return { ParentClass: "/Script/Seria.SeriaFaceAnimInstance" };
+    }
     if (action === "script.eval_python_expression") {
       const payload =
         this.payloads[
@@ -88,6 +96,21 @@ function target(
       "/Game/Seria/NPC/N28/SK_N28_Face.SK_N28_Face",
     faceSkeletonAssetPath:
       "/Game/Seria/NPC/N28/SKEL_N28_Face.SKEL_N28_Face",
+    faceRuntime: {
+      animationBlueprintAssetPath:
+        "/Game/Seria/NPC/N28/ABP_N28_Face",
+      animationBlueprintState: "ready",
+      bindings: [
+        {
+          blueprintAssetPath: "/Game/Seria/NPC/N28/BP_N28",
+          componentName: "face",
+          currentAnimClassPath:
+            "/Game/Seria/NPC/N28/ABP_N28_Face.ABP_N28_Face_C",
+          state: "ready",
+        },
+      ],
+      blockedReasons: [],
+    },
     targetPackagePath: "/Game/Seria/NPC/N28",
     animationPackagePath: "/Game/Seria/NPC/N28/Animation",
     montagePackagePath: "/Game/Seria/NPC/N28/Animation",
@@ -198,6 +221,35 @@ describe("NPC supplement server workflow", () => {
         "/Game/Seria/NPC/N113_Ratking/SK_N113_Ratking_Face.SK_N113_Ratking_Face",
       face_skeleton_asset_path:
         "/Game/Seria/NPC/N113_Ratking/SKEL_N113_Ratking_Face.SKEL_N113_Ratking_Face",
+      face_runtime: {
+        animation_blueprint_asset_path:
+          "/Game/Seria/NPC/N113_Ratking/ABP_N113_Ratking_Face",
+        animation_blueprint_state: "create",
+        bindings: [
+          {
+            blueprint_asset_path:
+              "/Game/Seria/NPC/N113_Ratking/BP_N113_Ratking",
+            component_name: "face",
+            current_anim_class_path: "",
+            state: "configure",
+          },
+          {
+            blueprint_asset_path:
+              "/Game/Seria/NPC/N113_Ratking/BP_N113_Ratking_sitting",
+            component_name: "face",
+            current_anim_class_path: "",
+            state: "configure",
+          },
+          {
+            blueprint_asset_path:
+              "/Game/Seria/NPC/N113_Ratking/BP_N113_Ratking_withWheelchair",
+            component_name: "face",
+            current_anim_class_path: "",
+            state: "configure",
+          },
+        ],
+        blocked_reasons: [],
+      },
       target_package_path: "/Game/Seria/NPC/N113_Ratking",
       animation_package_path:
         "/Game/Seria/NPC/N113_Ratking/Animation",
@@ -217,6 +269,28 @@ describe("NPC supplement server workflow", () => {
         "/Game/Seria/NPC/N113_Ratking/Animation",
       faceSkeletalMeshAssetPath:
         "/Game/Seria/NPC/N113_Ratking/SK_N113_Ratking_Face.SK_N113_Ratking_Face",
+      faceRuntime: {
+        animationBlueprintAssetPath:
+          "/Game/Seria/NPC/N113_Ratking/ABP_N113_Ratking_Face",
+        animationBlueprintState: "create",
+        bindings: [
+          expect.objectContaining({
+            blueprintAssetPath:
+              "/Game/Seria/NPC/N113_Ratking/BP_N113_Ratking",
+            state: "configure",
+          }),
+          expect.objectContaining({
+            blueprintAssetPath:
+              "/Game/Seria/NPC/N113_Ratking/BP_N113_Ratking_sitting",
+            state: "configure",
+          }),
+          expect.objectContaining({
+            blueprintAssetPath:
+              "/Game/Seria/NPC/N113_Ratking/BP_N113_Ratking_withWheelchair",
+            state: "configure",
+          }),
+        ],
+      },
     });
     const expression = String(connection.calls[0].args.Expression);
     expect(expression).toContain("def npc_package_root");
@@ -310,6 +384,12 @@ describe("NPC supplement server workflow", () => {
       processed_body_asset_paths: [
         "/Game/Seria/NPC/N28/Animation/A_N28_Talk.A_N28_Talk",
       ],
+      face_animation_blueprint_asset_path:
+        "/Game/Seria/NPC/N28/ABP_N28_Face.ABP_N28_Face",
+      created_face_animation_blueprint: false,
+      configured_face_blueprint_asset_paths: [
+        "/Game/Seria/NPC/N28/BP_N28.BP_N28",
+      ],
     });
 
     const result = await applyNpcSupplement(
@@ -322,11 +402,20 @@ describe("NPC supplement server workflow", () => {
       curveCopiedBodyAssetPaths: [
         "/Game/Seria/NPC/N28/Animation/A_N28_Talk.A_N28_Talk",
       ],
+      faceAnimationBlueprintAssetPath:
+        "/Game/Seria/NPC/N28/ABP_N28_Face.ABP_N28_Face",
+      configuredFaceBlueprintAssetPaths: [
+        "/Game/Seria/NPC/N28/BP_N28.BP_N28",
+      ],
     });
     expect(result.manualChecks.join("\n")).toContain(
       "UE4 Python 未开放 Montage 轨道读取",
     );
-    const expression = String(connection.calls[0].args.Expression);
+    const expression = String(
+      connection.calls.find(
+        (call) => call.action === "script.eval_python_expression",
+      )?.args.Expression,
+    );
     expect(expression).toContain("force_root_lock");
     expect(expression).toContain(
       "copy_face_anim_sequence_morph_targets_curve",
@@ -339,10 +428,87 @@ describe("NPC supplement server workflow", () => {
     expect(expression).toContain(
       "failed to find property 'slot_anim_tracks'",
     );
+    expect(expression).toContain("SeriaFaceAnimInstance");
+    expect(expression).toContain("AnimBlueprintFactory");
+    expect(expression).toContain("Face AnimClass changed after review");
     expect(expression).not.toContain("open_editor_for_assets");
     expect(expression).not.toContain(
       "/Game/Seria/Editor/BP_FaceConfigHelper",
     );
+    expect(connection.closed).toBe(true);
+    expect(
+      connection.calls.filter(
+        (call) => call.action === "bp.compile_blueprint",
+      ),
+    ).toHaveLength(2);
+  });
+
+  it("opens a reviewed Face AnimSequence without saving UE assets", async () => {
+    const connection = new FakeSupplementConnection({
+      face_animation_asset_path:
+        "/Game/Seria/NPC/N28/Animation/Face/A_N28_Talk_Face.A_N28_Talk_Face",
+      face_skeletal_mesh_asset_path:
+        "/Game/Seria/NPC/N28/SK_N28_Face.SK_N28_Face",
+    });
+
+    await expect(
+      openNpcFaceAnimationPreview(
+        {
+          targetProjectFile: "D:/Seria/res/res.uproject",
+          faceAnimationAssetPath:
+            "/Game/Seria/NPC/N28/Animation/Face/A_N28_Talk_Face",
+          faceSkeletalMeshAssetPath:
+            "/Game/Seria/NPC/N28/SK_N28_Face.SK_N28_Face",
+          faceSkeletonAssetPath:
+            "/Game/Seria/NPC/N28/SKEL_N28_Face.SKEL_N28_Face",
+        },
+        () => connection,
+      ),
+    ).resolves.toMatchObject({
+      faceAnimationAssetPath:
+        "/Game/Seria/NPC/N28/Animation/Face/A_N28_Talk_Face.A_N28_Talk_Face",
+    });
+
+    const expression = String(connection.calls[0].args.Expression);
+    expect(expression).toContain(
+      "open_editor_for_assets([face_animation])",
+    );
+    expect(expression).not.toContain("save_loaded_asset");
+    expect(expression).not.toContain("set_editor_property");
+    expect(connection.closed).toBe(true);
+  });
+
+  it("opens the reviewed Montage instead of its source AnimSequence", async () => {
+    const connection = new FakeSupplementConnection({
+      montage_asset_path:
+        "/Game/Seria/NPC/N28/Animation/AM_Talk.AM_Talk",
+      body_skeleton_asset_path:
+        "/Game/Seria/NPC/N28/SKEL_N28.SKEL_N28",
+    });
+
+    await expect(
+      openNpcMontagePreview(
+        {
+          targetProjectFile: "D:/Seria/res/res.uproject",
+          montageAssetPath:
+            "/Game/Seria/NPC/N28/Animation/AM_Talk",
+          bodySkeletonAssetPath:
+            "/Game/Seria/NPC/N28/SKEL_N28.SKEL_N28",
+        },
+        () => connection,
+      ),
+    ).resolves.toMatchObject({
+      montageAssetPath:
+        "/Game/Seria/NPC/N28/Animation/AM_Talk.AM_Talk",
+    });
+
+    const expression = String(connection.calls[0].args.Expression);
+    expect(expression).toContain(
+      "open_editor_for_assets([montage])",
+    );
+    expect(expression).not.toContain("AnimSequence");
+    expect(expression).not.toContain("save_loaded_asset");
+    expect(expression).not.toContain("set_editor_property");
     expect(connection.closed).toBe(true);
   });
 
@@ -398,6 +564,12 @@ describe("NPC supplement server workflow", () => {
         processed_body_asset_paths: [
           "/Game/Seria/NPC/N28/Animation/A_N28_Wave.A_N28_Wave",
         ],
+        face_animation_blueprint_asset_path:
+          "/Game/Seria/NPC/N28/ABP_N28_Face.ABP_N28_Face",
+        created_face_animation_blueprint: false,
+        configured_face_blueprint_asset_paths: [
+          "/Game/Seria/NPC/N28/BP_N28.BP_N28",
+        ],
       },
     ]);
 
@@ -421,35 +593,43 @@ describe("NPC supplement server workflow", () => {
       ],
       montageFailures: [],
     });
-    expect(connection.calls).toHaveLength(2);
-    expect(String(connection.calls[1].args.Expression)).toContain(
+    const pythonCalls = connection.calls.filter(
+      (call) => call.action === "script.eval_python_expression",
+    );
+    expect(pythonCalls).toHaveLength(2);
+    expect(
+      connection.calls.filter(
+        (call) => call.action === "bp.compile_blueprint",
+      ),
+    ).toHaveLength(2);
+    expect(String(pythonCalls[1].args.Expression)).toContain(
       "FACE_SUPPLEMENT_REQUEST",
     );
-    expect(String(connection.calls[1].args.Expression)).toMatch(
+    expect(String(pythonCalls[1].args.Expression)).toMatch(
       /make_montage.{0,10}false/,
     );
-    expect(String(connection.calls[0].args.Expression)).toMatch(
+    expect(String(pythonCalls[0].args.Expression)).toMatch(
       /montage_slot_name.{0,10}IdleSlot/,
     );
-    expect(String(connection.calls[0].args.Expression)).toContain(
+    expect(String(pythonCalls[0].args.Expression)).toContain(
       "make_npc_montage_by_anim_sequence",
     );
-    expect(String(connection.calls[0].args.Expression)).toContain(
+    expect(String(pythonCalls[0].args.Expression)).toContain(
       "Montage 插槽回读不一致",
     );
-    expect(String(connection.calls[0].args.Expression)).toContain(
+    expect(String(pythonCalls[0].args.Expression)).toContain(
       "anim_track_type = unreal_type('AnimTrack')",
     );
-    expect(String(connection.calls[0].args.Expression)).not.toContain(
+    expect(String(pythonCalls[0].args.Expression)).not.toContain(
       "hasattr(unreal, 'AnimTrack')",
     );
-    expect(String(connection.calls[0].args.Expression)).toContain(
+    expect(String(pythonCalls[0].args.Expression)).toContain(
       "montage_failures.append",
     );
-    expect(String(connection.calls[0].args.Expression)).toContain(
+    expect(String(pythonCalls[0].args.Expression)).toContain(
       "asset_library.delete_asset",
     );
-    const actionExpression = String(connection.calls[0].args.Expression);
+    const actionExpression = String(pythonCalls[0].args.Expression);
     expect(
       actionExpression.indexOf(
         "created_montages.append(montage.get_path_name())",

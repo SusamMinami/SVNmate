@@ -9,10 +9,11 @@ import {
   LogIn,
   PlugZap,
   RefreshCw,
-  Trash2,
+  Waves,
   X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { useReducedMotionPreference } from "../app/useReducedMotionPreference";
 import type { SoundEffectCatalogSnapshot } from "../data/soundEffectCatalog";
 import type { MusicCatalogSnapshot } from "../data/musicCatalog";
 import type { LarkStatus } from "../lark/client";
@@ -145,6 +146,8 @@ export function DesktopSetupModal({
   onSyncMusicCatalog,
 }: DesktopSetupModalProps) {
   const desktop = window.shotSandboxDesktop;
+  const { reducedMotion, setReducedMotion } =
+    useReducedMotionPreference();
   const { intro, finishIntro } = useSetupStatusIntro();
   const [status, setStatus] = useState(initialStatus);
   const [update, setUpdate] = useState<DesktopUpdateSnapshot>({
@@ -162,8 +165,6 @@ export function DesktopSetupModal({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [uePort, setUePort] = useState(String(initialStatus.ueMcpPort));
-  const [selectedNpcAnimationDirectory, setSelectedNpcAnimationDirectory] =
-    useState(initialStatus.npcAnimationDirectories?.[0] ?? "");
   const [soundEffectCatalog, setSoundEffectCatalog] = useState(
     initialSoundEffectCatalog,
   );
@@ -183,10 +184,6 @@ export function DesktopSetupModal({
   const docsReady =
     Boolean(larkStatus?.authorized) && docsMissingScopes.length === 0;
   const npcAnimationDirectories = status.npcAnimationDirectories ?? [];
-  const activeNpcAnimationDirectory =
-    npcAnimationDirectories.includes(selectedNpcAnimationDirectory)
-      ? selectedNpcAnimationDirectory
-      : npcAnimationDirectories[0] ?? "";
 
   useEffect(() => {
     if (!desktop) {
@@ -377,54 +374,23 @@ export function DesktopSetupModal({
     }
   }
 
-  async function addNpcAnimationDirectory() {
-    if (!desktop?.addNpcAnimationDirectory) {
+  async function chooseNpcAnimationDirectories() {
+    if (!desktop?.chooseNpcAnimationDirectories) {
       setError("当前桌面版不支持 NPC 动作库设置");
       return;
     }
     setBusy(true);
     setError("");
     try {
-      const nextStatus = await desktop.addNpcAnimationDirectory();
+      const nextStatus = await desktop.chooseNpcAnimationDirectories();
       if (nextStatus) {
-        const previousDirectories = new Set(npcAnimationDirectories);
-        const addedDirectory = nextStatus.npcAnimationDirectories.find(
-          (directory) => !previousDirectories.has(directory),
-        );
         setStatus(nextStatus);
-        setSelectedNpcAnimationDirectory(
-          addedDirectory ?? activeNpcAnimationDirectory,
-        );
       }
     } catch (directoryError) {
       setError(
         directoryError instanceof Error
           ? directoryError.message
-          : "无法添加 NPC 动作库目录",
-      );
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function removeNpcAnimationDirectory(directoryPath: string) {
-    if (!desktop?.removeNpcAnimationDirectory) {
-      return;
-    }
-    setBusy(true);
-    setError("");
-    try {
-      const nextStatus =
-        await desktop.removeNpcAnimationDirectory(directoryPath);
-      setStatus(nextStatus);
-      setSelectedNpcAnimationDirectory(
-        nextStatus.npcAnimationDirectories[0] ?? "",
-      );
-    } catch (directoryError) {
-      setError(
-        directoryError instanceof Error
-          ? directoryError.message
-          : "无法移除 NPC 动作库目录",
+          : "无法设置 NPC 动作库目录",
       );
     } finally {
       setBusy(false);
@@ -484,48 +450,19 @@ export function DesktopSetupModal({
               />
               <div className="setup-status-copy">
                 <strong>NPC 动作库</strong>
-                {npcAnimationDirectories.length > 0 ? (
-                  <select
-                    className="setup-directory-select"
-                    aria-label="NPC 动作库目录"
-                    value={activeNpcAnimationDirectory}
-                    title={activeNpcAnimationDirectory}
-                    onChange={(event) =>
-                      setSelectedNpcAnimationDirectory(event.target.value)
-                    }
-                  >
-                    {npcAnimationDirectories.map((directory) => (
-                      <option key={directory} value={directory}>
-                        {directory}
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <small>添加根目录后自动匹配 NPC 动作</small>
-                )}
+                <small title={npcAnimationDirectories.join("\n")}>
+                  {npcAnimationDirectories.length > 1
+                    ? `${npcAnimationDirectories.length} 个根目录 · ${npcAnimationDirectories[0]}`
+                    : npcAnimationDirectories[0] || "选择根目录后自动匹配 NPC 动作"}
+                </small>
               </div>
               <div className="setup-directory-actions">
-                {activeNpcAnimationDirectory && (
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() =>
-                      void removeNpcAnimationDirectory(
-                        activeNpcAnimationDirectory,
-                      )
-                    }
-                    title={`移除 ${activeNpcAnimationDirectory}`}
-                    aria-label="移除当前 NPC 动作库目录"
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                )}
                 <button
                   type="button"
                   disabled={busy}
-                  onClick={() => void addNpcAnimationDirectory()}
-                  title="添加 NPC 动作库根目录"
-                  aria-label="添加 NPC 动作库根目录"
+                  onClick={() => void chooseNpcAnimationDirectories()}
+                  title="选择 NPC 动作库根目录（可多选）"
+                  aria-label="选择 NPC 动作库根目录"
                 >
                   {busy ? (
                     <LoaderCircle className="spin" size={14} />
@@ -911,6 +848,26 @@ export function DesktopSetupModal({
                   检测
                 </button>
               </div>
+            </div>
+            <div className="setup-motion-preference">
+              <Waves size={18} aria-hidden="true" />
+              <label htmlFor="setup-reduced-motion">
+              <span>
+                <strong>减少动态效果</strong>
+                <small>
+                  {reducedMotion ? "已开启 · 保留静态状态与结果" : "已关闭 · 显示操作与切换动效"}
+                </small>
+              </span>
+              </label>
+              <input
+                id="setup-reduced-motion"
+                type="checkbox"
+                aria-label="减少动态效果"
+                checked={reducedMotion}
+                onChange={(event) =>
+                  setReducedMotion(event.target.checked)
+                }
+              />
             </div>
           </section>
 

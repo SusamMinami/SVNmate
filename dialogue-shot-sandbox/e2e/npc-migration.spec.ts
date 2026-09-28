@@ -321,6 +321,21 @@ test("opens the face supplement review flow", async ({ page }, testInfo) => {
       "/Game/Seria/NPC/N28/SK_N28_Face.SK_N28_Face",
     faceSkeletonAssetPath:
       "/Game/Seria/NPC/N28/SKEL_N28_Face.SKEL_N28_Face",
+    faceRuntime: {
+      animationBlueprintAssetPath:
+        "/Game/Seria/NPC/N28/ABP_N28_Face",
+      animationBlueprintState: "ready",
+      bindings: [
+        {
+          blueprintAssetPath: "/Game/Seria/NPC/N28/BP_N28",
+          componentName: "face",
+          currentAnimClassPath:
+            "/Game/Seria/NPC/N28/ABP_N28_Face.ABP_N28_Face_C",
+          state: "ready",
+        },
+      ],
+      blockedReasons: [],
+    },
     targetPackagePath: "/Game/Seria/NPC/N28",
     animationPackagePath: "/Game/Seria/NPC/N28/Animation",
     existingAssetPaths: [
@@ -384,6 +399,63 @@ test("opens the face supplement review flow", async ({ page }, testInfo) => {
       }),
     }),
   );
+  await page.route("**/api/ue/npc-migration/supplement-apply", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          status: "configured",
+          kind: "face",
+          importedAssetPaths: [
+            "/Game/Seria/NPC/N28/Animation/Face/A_N28_Talk_Face.A_N28_Talk_Face",
+          ],
+          createdMontageAssetPaths: [
+            "/Game/Seria/NPC/N28/Animation/AM_Talk.AM_Talk",
+          ],
+          reusedMontageAssetPaths: [],
+          montageFailures: [],
+          lockedRootAssetPaths: [
+            "/Game/Seria/NPC/N28/Animation/Face/A_N28_Talk_Face.A_N28_Talk_Face",
+          ],
+          curveCopiedBodyAssetPaths: [
+            "/Game/Seria/NPC/N28/Animation/A_N28_Talk.A_N28_Talk",
+          ],
+          processedBodyAssetPaths: [
+            "/Game/Seria/NPC/N28/Animation/A_N28_Talk.A_N28_Talk",
+          ],
+          faceAnimationBlueprintAssetPath:
+            "/Game/Seria/NPC/N28/ABP_N28_Face.ABP_N28_Face",
+          createdFaceAnimationBlueprint: false,
+          configuredFaceBlueprintAssetPaths: [
+            "/Game/Seria/NPC/N28/BP_N28.BP_N28",
+          ],
+          manualChecks: [
+            "使用动作行的预览按钮抽查 Face AnimSequence 的 Morph Target 表情",
+            "在对话编辑器中播放 Montage，确认 Body 与 Face 组件联动",
+          ],
+        },
+      }),
+    }),
+  );
+  let previewRequest: Record<string, unknown> | null = null;
+  await page.route("**/api/ue/npc-migration/face-preview", async (route) => {
+    previewRequest = route.request().postDataJSON();
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          faceAnimationAssetPath:
+            "/Game/Seria/NPC/N28/Animation/Face/A_N28_Talk_Face.A_N28_Talk_Face",
+          faceSkeletalMeshAssetPath:
+            "/Game/Seria/NPC/N28/SK_N28_Face.SK_N28_Face",
+        },
+      }),
+    });
+  });
   await page.addInitScript(() => {
     window.sessionStorage.setItem("shot-sandbox.launch-screen-seen", "1");
   });
@@ -423,6 +495,29 @@ test("opens the face supplement review flow", async ({ page }, testInfo) => {
   await page.screenshot({
     path: testInfo.outputPath("npc-face-supplement.png"),
     fullPage: true,
+  });
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "执行面部补充" }).click();
+  const previewButton = page.getByRole("button", {
+    name: "在 UE 中预览 Talk 的面部动作",
+  });
+  await expect(previewButton).toBeVisible();
+  await page.screenshot({
+    path: testInfo.outputPath("npc-face-supplement-preview-ready.png"),
+    fullPage: true,
+  });
+  await previewButton.click();
+  await expect(
+    page.getByText("已在 UE 打开 Talk 的 Face 动作预览", {
+      exact: false,
+    }),
+  ).toBeVisible();
+  expect(previewRequest).toMatchObject({
+    targetProjectFile: "D:/Seria/res/res.uproject",
+    faceAnimationAssetPath:
+      "/Game/Seria/NPC/N28/Animation/Face/A_N28_Talk_Face",
+    faceSkeletalMeshAssetPath:
+      "/Game/Seria/NPC/N28/SK_N28_Face.SK_N28_Face",
   });
 });
 
@@ -495,8 +590,8 @@ test("sorts action supplements by source modification time", async ({
                 montageName: "AM_Idle1",
                 montageAssetPath:
                   "/Game/Seria/NPC/N28/Animation/AM_Idle1",
-                montageState: "create",
-                montageSlotName: "IdleSlot",
+                montageState: "reuse",
+                montageSlotName: "",
                 copyFaceCurves: false,
                 makeMontage: true,
                 state: "new",
@@ -584,6 +679,26 @@ test("sorts action supplements by source modification time", async ({
         }),
       }),
   );
+  let montagePreviewRequest: Record<string, unknown> | null = null;
+  await page.route(
+    "**/api/ue/npc-migration/montage-preview",
+    async (route) => {
+      montagePreviewRequest = route.request().postDataJSON();
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          data: {
+            montageAssetPath:
+              "/Game/Seria/NPC/N28/Animation/AM_Idle1.AM_Idle1",
+            bodySkeletonAssetPath:
+              "/Game/Seria/NPC/N28/SKEL_N28.SKEL_N28",
+          },
+        }),
+      });
+    },
+  );
   await page.addInitScript(() => {
     window.sessionStorage.setItem("shot-sandbox.launch-screen-seen", "1");
   });
@@ -639,6 +754,23 @@ test("sorts action supplements by source modification time", async ({
   await expect(
     page.getByText("AM_Wave · IdleSlot", { exact: true }),
   ).toBeVisible();
+  const montagePreviewButton = page.getByRole("button", {
+    name: "在 UE 中预览 Idle 的动画 Montage",
+  });
+  await expect(montagePreviewButton).toBeVisible();
+  await montagePreviewButton.click();
+  await expect(
+    page.getByText("已在 UE 打开 Idle 的 Montage 预览", {
+      exact: false,
+    }),
+  ).toBeVisible();
+  expect(montagePreviewRequest).toMatchObject({
+    targetProjectFile: "D:/Seria/res/res.uproject",
+    montageAssetPath:
+      "/Game/Seria/NPC/N28/Animation/AM_Idle1",
+    bodySkeletonAssetPath:
+      "/Game/Seria/NPC/N28/SKEL_N28.SKEL_N28",
+  });
   await sortControl.selectOption("modified-asc");
   await expect(actionNames).toHaveText(["Idle", "Wave"]);
 

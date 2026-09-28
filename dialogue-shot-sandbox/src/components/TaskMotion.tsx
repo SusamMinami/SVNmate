@@ -1,30 +1,56 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { isReducedMotionEnabled, useReducedMotionPreference } from "../app/useReducedMotionPreference";
 import type { TaskPhase } from "../taskFeedback";
 import "./taskMotion.css";
 
 const MotionContext = createContext(true);
 const settleTiming = { duration: 200, easing: "cubic-bezier(0.23, 1, 0.32, 1)" };
 
+/** Animate the action's own icon; no extra spinner or animation-driven completion. */
+export function OperationIcon({ kind, busy, children }: {
+  kind: "search" | "read" | "write"; busy: boolean; children: ReactNode;
+}) {
+  const active = useContext(MotionContext);
+  const { reducedMotion } = useReducedMotionPreference();
+  const ref = useRef<HTMLSpanElement>(null);
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    if (!busy || !active || reducedMotion) { setVisible(false); return; }
+    let intersecting = false;
+    const update = () => setVisible(intersecting && !document.hidden);
+    const observer = new IntersectionObserver(([entry]) => {
+      intersecting = entry.isIntersecting;
+      update();
+    });
+    if (ref.current) observer.observe(ref.current);
+    document.addEventListener("visibilitychange", update);
+    return () => {
+      observer.disconnect();
+      document.removeEventListener("visibilitychange", update);
+    };
+  }, [busy, active, reducedMotion]);
+  return <span ref={ref} className="operation-icon" data-kind={kind}
+    data-busy={busy} data-running={busy && active && visible && !reducedMotion} aria-hidden="true">
+    {children}
+  </span>;
+}
+
 /** One document listener per workspace. Hidden workspaces retain data, not animation. */
 export function TaskMotionScope({ active, children }: { active: boolean; children: ReactNode }) {
   const [visible, setVisible] = useState(() => !document.hidden);
-  const [reduced, setReduced] = useState(() => matchMedia("(prefers-reduced-motion: reduce)").matches);
+  const { reducedMotion } = useReducedMotionPreference();
   useEffect(() => {
-    const media = matchMedia("(prefers-reduced-motion: reduce)");
     const visibility = () => setVisible(!document.hidden);
-    const preference = () => setReduced(media.matches);
     document.addEventListener("visibilitychange", visibility);
-    media.addEventListener("change", preference);
     return () => {
       document.removeEventListener("visibilitychange", visibility);
-      media.removeEventListener("change", preference);
     };
   }, []);
-  return <MotionContext.Provider value={active && visible && !reduced}>{children}</MotionContext.Provider>;
+  return <MotionContext.Provider value={active && visible && !reducedMotion}>{children}</MotionContext.Provider>;
 }
 
 function canSettle(element: HTMLElement) {
-  return !document.hidden && !matchMedia("(prefers-reduced-motion: reduce)").matches
+  return !document.hidden && !isReducedMotionEnabled()
     && !element.closest('[data-navigation-input="keyboard"]');
 }
 
@@ -83,12 +109,12 @@ export function TaskGlyph({ phase, runId, variant = "frame", active = true }: {
 }
 
 /** Stable feedback location: only this glyph animates during a workspace operation. */
-export function TaskNotice({ phase, runId, children }: {
-  phase: TaskPhase; runId: string | number; children: ReactNode;
+export function TaskNotice({ phase, runId, children, className = "npc-migration-message", animate = true }: {
+  phase: TaskPhase; runId: string | number; children: ReactNode; className?: string; animate?: boolean;
 }) {
-  return <div className={`npc-migration-message task-notice`}
+  return <div className={`${className} task-notice`}
     data-phase={phase} role={phase === "failed" || phase === "uncertain" ? "alert" : "status"}>
-    <TaskGlyph phase={phase} runId={runId} />
+    <TaskGlyph phase={phase} runId={runId} active={animate} />
     <span>{children}</span>
   </div>;
 }

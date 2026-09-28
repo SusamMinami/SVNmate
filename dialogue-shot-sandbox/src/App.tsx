@@ -52,6 +52,7 @@ import { useRuleAdvisorSession } from "./app/useRuleAdvisorSession";
 import { useShotRefinement } from "./app/useShotRefinement";
 import { ShotRefinementPanel } from "./components/ShotRefinementPanel";
 import { useUeDialogueSelection } from "./app/useUeDialogueSelection";
+import { useConfigurationActivity } from "./app/useConfigurationActivity";
 import { useWorkspaceNavigation } from "./app/useWorkspaceNavigation";
 import { useNavigationFeedback } from "./app/useNavigationFeedback";
 import { useStatusTooltips } from "./app/useStatusTooltips";
@@ -60,22 +61,15 @@ import type {
   FormationSelectionId,
 } from "./components/BlueprintFormationModal";
 import type { DialogueTextEditorItem } from "./components/DialogueTextEditorModal";
-import { AudioLibraryBrowser } from "./components/AudioLibraryBrowser";
-import { CharacterActionEditor } from "./components/CharacterActionEditor";
 import { DataSourceStatus } from "./components/DataSourceStatus";
 import { DirectorControl } from "./components/DirectorControl";
-import { TaskGlyph, TaskMotionScope } from "./components/TaskMotion";
+import { OperationIcon, TaskGlyph, TaskMotionScope } from "./components/TaskMotion";
 import { ExistingAudioConfiguration } from "./components/ExistingAudioConfiguration";
 import { LaunchScreen } from "./components/LaunchScreen";
 import { MissingNpcModelModal } from "./components/MissingNpcModelModal";
 import type { NpcMigrationMode } from "./components/NpcMigrationWorkspace";
-import {
-  NodeCameraQuickActions,
-  type NodeCameraQuickActionHandle,
-  type NodeCameraQuickActionSelection,
-} from "./components/NodeCameraQuickActions";
+import type { NodeCameraQuickActionHandle, NodeCameraQuickActionSelection } from "./components/NodeCameraQuickActions";
 import { OverlayScrollArea } from "./components/OverlayScrollArea";
-import { PreviewSchoolEditor } from "./components/PreviewSchoolEditor";
 import { MusicRecommendations } from "./components/MusicRecommendations";
 import { SoundEffectRecommendations } from "./components/SoundEffectRecommendations";
 import { SceneReferencePanel } from "./components/SceneReferencePanel";
@@ -127,12 +121,7 @@ import type {
 } from "./director/contracts";
 import { createDirectorInput } from "./director/contracts";
 import { recordDirectorPreference } from "./director/preferenceClient";
-import {
-  createSharedPlanPreview,
-  designShots,
-  type DirectorRunResult,
-  type RuleAdvisorRunSummary,
-} from "./director/orchestrator";
+import type { DirectorRunResult, RuleAdvisorRunSummary } from "./director/orchestrator";
 import { releaseIdleRuleAdvisorResources, requestRuleMusicAdvice } from "./director/ruleAdvisor";
 import type { RuleAdvisorProgress } from "./director/ruleAdvisorContracts";
 import { participantFacingYawDegrees } from "./director/actorActionPlanner";
@@ -180,6 +169,10 @@ import type {
   ShotSize,
 } from "./types";
 
+const AudioLibraryBrowser = lazy(() => import("./components/AudioLibraryBrowser").then((module) => ({ default: module.AudioLibraryBrowser })));
+const CharacterActionEditor = lazy(() => import("./components/CharacterActionEditor").then((module) => ({ default: module.CharacterActionEditor })));
+const NodeCameraQuickActions = lazy(() => import("./components/NodeCameraQuickActions").then((module) => ({ default: module.NodeCameraQuickActions })));
+const PreviewSchoolEditor = lazy(() => import("./components/PreviewSchoolEditor").then((module) => ({ default: module.PreviewSchoolEditor })));
 const LazyStageView = lazy(() =>
   import("./components/StageView").then((module) => ({
     default: module.StageView,
@@ -385,6 +378,7 @@ type InspectorTab = "direction" | "shot" | "audio" | "ue";
 type ConfigurationSyncState =
   | "syncing"
   | "listening"
+  | "paused"
   | "configuration"
   | "offline";
 
@@ -1885,13 +1879,7 @@ function ShotInspector({
               }
             }}
           >
-            {nodeWriteBusy ? (
-              <LoaderCircle className="spin" size={16} />
-            ) : tab !== "audio" && tab !== "ue" ? (
-              <Camera size={16} />
-            ) : (
-              <Upload size={16} />
-            )}
+            <OperationIcon kind="write" busy={nodeWriteBusy}><Pencil size={16} /></OperationIcon>
             写入节点
           </button>
         </footer>
@@ -2191,14 +2179,15 @@ export default function App() {
   soundEffectCatalogRef.current = soundEffectCatalog;
   musicCatalogRef.current = musicCatalog;
 
+  const configurationActivity = useConfigurationActivity(configurationMode && activeWorkspace === "storyboard");
   const {
     selection: ueDialogueSelection,
     refreshing: ueDialogueSelectionRefreshing,
-    polling: ueDialogueSelectionPolling,
-    pollIntervalMs: ueDialogueSelectionPollIntervalMs,
+    activity: ueSelectionActivity,
+    suspended: configurationSelectionSuspended,
   } = useUeDialogueSelection(
     configurationMode && activeWorkspace === "storyboard",
-    configurationMapSwitching,
+    configurationMapSwitching || configurationActivity.paused,
   );
   const selectedUeDialogueNodeId =
     ueDialogueSelection?.status === "selected"
@@ -2269,26 +2258,24 @@ export default function App() {
   const configurationSelectionReady =
     Boolean(configurationDialogueRow);
   const configurationSyncState: ConfigurationSyncState =
-    ueDialogueSelection?.status === "offline"
+    configurationActivity.paused
+      ? "paused"
+      : ueDialogueSelection?.status === "offline"
       ? "offline"
       : ueDialogueSelection?.status === "configuration"
         ? "configuration"
-        : ueDialogueSelectionPolling
-          ? "syncing"
-          : "listening";
+        : "listening";
   const configurationSyncStatus =
-    configurationSyncState === "offline"
+    configurationSyncState === "paused"
+      ? "自动读取已暂停"
+      : configurationSyncState === "offline"
       ? "UE 离线"
       : configurationSyncState === "configuration"
         ? "00 配置节点"
-        : configurationSyncState === "syncing"
-          ? "同步中"
-          : `监听中 · ${
-              ueDialogueSelectionPollIntervalMs % 1_000 === 0
-                ? ueDialogueSelectionPollIntervalMs / 1_000
-                : (ueDialogueSelectionPollIntervalMs / 1_000).toFixed(1)
-            }s`;
-  const configurationSelectionMessage = !ueDialogueSelection
+        : "监听中";
+  const configurationSelectionMessage = configurationActivity.paused
+    ? configurationActivity.message
+    : !ueDialogueSelection
     ? "正在读取 UE 当前节点"
     : ueDialogueSelection.status !== "selected"
       ? ueDialogueSelection.message
@@ -2378,6 +2365,7 @@ export default function App() {
       return;
     }
     if (
+      configurationSelectionSuspended ||
       !configurationSelectionReady ||
       !selectedUeDialogueNodeId ||
       !configurationNodeTabActive
@@ -2442,6 +2430,7 @@ export default function App() {
     };
   }, [
     configurationMode,
+    configurationSelectionSuspended,
     configurationNodeReadRevision,
     configurationSelectionReady,
     configurationNodeTabActive,
@@ -2471,7 +2460,7 @@ export default function App() {
       activeWorkspace === "storyboard" &&
       inspectorTab === "ue" &&
       (configurationMode
-        ? configurationSelectionReady
+        ? configurationSelectionReady && !configurationSelectionSuspended
         : sequence.rows.length > 0 && Boolean(selectedDialogueId)),
     releaseWhenDisabled: activeWorkspace !== "storyboard",
   });
@@ -2499,7 +2488,6 @@ export default function App() {
     configurationCameraActivity === "write"
       ? "write"
       : configurationCameraActivity === "read" ||
-          ueDialogueSelectionPolling ||
           configurationNodeReading ||
           characterActionEditor.loading
         ? "read"
@@ -3222,6 +3210,8 @@ export default function App() {
       activeTraeAbortRef.current = traeAbortController;
     }
     try {
+      const { designShots, createSharedPlanPreview } = await import("./director/orchestrator");
+      if (runId !== directorRunRef.current || ruleRun?.signal.aborted || traeAbortController?.signal.aborted) return;
       const result = await designShots(nextSequence, requestedMode, {
         useRuleAdvisor: options.useRuleAdvisor,
         preserveInputPositions,
@@ -5363,6 +5353,7 @@ export default function App() {
               onReorderPendingTasks={reorderPendingTasks}
               onDeletePendingTask={deletePendingTask}
               onCancelTask={cancelTraeTaskFromStatus}
+              selectionActivity={configurationMode ? ueSelectionActivity : undefined}
               configurationDataStatus={
                 configurationMode
                   ? {
@@ -5387,7 +5378,12 @@ export default function App() {
             onRefreshLark={() => void refreshLarkConnection(true)}
             onAuthorize={() => void beginAuthorization()}
             onCollectRevisionCasesChange={changeCaseCollection}
-            disabled={configurationMode || configurationModeBusy}
+            disabled={configurationModeBusy || (configurationMode && !configurationActivity.supported)}
+            automaticPause={configurationMode && configurationActivity.supported ? {
+              enabled: configurationActivity.automatic,
+              paused: configurationActivity.paused,
+              onToggle: () => configurationActivity.setAutomatic((current) => !current),
+            } : undefined}
             onOpenSettings={
               window.shotSandboxDesktop
                 ? () => void openDesktopSetup()
@@ -5402,6 +5398,15 @@ export default function App() {
         {...navigationFeedback}
         {...workspaceProps("storyboard")}
       >
+        {configurationMode && configurationSelectionSuspended && ueDialogueSelection && (
+          <div className="configuration-pause-notice" role="status">
+            {configurationActivity.paused
+              ? configurationActivity.message
+              : configurationMapSwitching
+                ? "切图期间已暂停自动读取"
+                : "正在重新核对 UE 当前节点"}
+          </div>
+        )}
         {!configurationMode && (
           <aside className="left-panel">
           <section className="panel-section query-section">
@@ -5443,11 +5448,7 @@ export default function App() {
                     query.trim().length === 0
                   }
                 >
-                  {directorLoading || formationChecking ? (
-                    <LoaderCircle className="spin" size={18} />
-                  ) : (
-                    <Search size={18} />
-                  )}
+                  <OperationIcon kind="search" busy={loading}><Search size={18} /></OperationIcon>
                   <span>{queryIsDialogueId ? "加载" : "搜索"}</span>
                 </button>
               </div>
@@ -5484,11 +5485,7 @@ export default function App() {
                       <strong>
                         {formationChecking ? "正在读取 BP" : activeFormationName}
                       </strong>
-                      {formationChecking ? (
-                        <LoaderCircle className="spin" size={13} />
-                      ) : (
-                        <RefreshCw size={13} />
-                      )}
+                      <OperationIcon kind="read" busy={formationChecking}><RefreshCw size={13} /></OperationIcon>
                     </button>
                   ) : (
                     <strong>
@@ -6202,7 +6199,8 @@ export default function App() {
           </section>
         )}
 
-        <aside className="right-panel">
+        <aside className="right-panel" inert={configurationMode && configurationSelectionSuspended}>
+          <Suspense fallback={<ToolWorkspaceLoading />}>
           {configurationMode && selectedUeConfigurationNodeId ? (
             <PreviewSchoolEditor
               dialogueNodeId={selectedUeConfigurationNodeId}
@@ -6444,6 +6442,7 @@ export default function App() {
               )}
             </>
           )}
+          </Suspense>
         </aside>
       </div>
 
@@ -6456,10 +6455,12 @@ export default function App() {
         aria-label="NPC 注册工作区"
       >
           <Suspense fallback={<ToolWorkspaceLoading />}>
+            <TaskMotionScope active={activeWorkspace === "npc"}>
             <LazyNpcRegistrationModal
               embedded
               onClose={closeToolWorkspace}
             />
+            </TaskMotionScope>
           </Suspense>
         </section>
       )}
@@ -6492,11 +6493,13 @@ export default function App() {
         aria-label="任务目标物工作区"
       >
           <Suspense fallback={<ToolWorkspaceLoading />}>
+            <TaskMotionScope active={activeWorkspace === "targets"}>
             <LazyMissionTargetModal
               embedded
               database={database}
               onClose={closeToolWorkspace}
             />
+            </TaskMotionScope>
           </Suspense>
         </section>
       )}

@@ -1215,6 +1215,20 @@ export interface NpcMigrationTargetResult {
 
 export type NpcSupplementKind = "actions" | "face";
 
+export interface NpcSupplementFaceBlueprintBinding {
+  blueprintAssetPath: string;
+  componentName: string;
+  currentAnimClassPath: string;
+  state: "ready" | "configure" | "blocked";
+}
+
+export interface NpcSupplementFaceRuntime {
+  animationBlueprintAssetPath: string;
+  animationBlueprintState: "ready" | "create" | "blocked";
+  bindings: NpcSupplementFaceBlueprintBinding[];
+  blockedReasons: string[];
+}
+
 export interface NpcSupplementTarget {
   targetProjectFile: string;
   targetContentDirectory: string;
@@ -1226,6 +1240,7 @@ export interface NpcSupplementTarget {
   skeletonAssetPath: string;
   faceSkeletalMeshAssetPath: string;
   faceSkeletonAssetPath: string;
+  faceRuntime: NpcSupplementFaceRuntime | null;
   targetPackagePath: string;
   animationPackagePath: string;
   montagePackagePath: string;
@@ -1306,7 +1321,33 @@ export interface NpcSupplementApplyResult {
   lockedRootAssetPaths: string[];
   curveCopiedBodyAssetPaths: string[];
   processedBodyAssetPaths: string[];
+  faceAnimationBlueprintAssetPath: string;
+  createdFaceAnimationBlueprint: boolean;
+  configuredFaceBlueprintAssetPaths: string[];
   manualChecks: string[];
+}
+
+export interface NpcFaceAnimationPreviewRequest {
+  targetProjectFile: string;
+  faceAnimationAssetPath: string;
+  faceSkeletalMeshAssetPath: string;
+  faceSkeletonAssetPath: string;
+}
+
+export interface NpcFaceAnimationPreviewResult {
+  faceAnimationAssetPath: string;
+  faceSkeletalMeshAssetPath: string;
+}
+
+export interface NpcMontagePreviewRequest {
+  targetProjectFile: string;
+  montageAssetPath: string;
+  bodySkeletonAssetPath: string;
+}
+
+export interface NpcMontagePreviewResult {
+  montageAssetPath: string;
+  bodySkeletonAssetPath: string;
 }
 
 export type MissionTargetTransform = Pick<

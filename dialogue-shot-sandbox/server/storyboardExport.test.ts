@@ -1445,6 +1445,41 @@ describe("dialogue storyboard export", () => {
     ]);
   });
 
+  it("renames an existing action and updates its behaviour type", () => {
+    expect(
+      appendCharacterActions(
+        [{
+          CharacterBehaviourItems: [{
+            StartTime: 0.1,
+            MontageName: "AM_Idle",
+            CharacterBehaviourType: "ENone",
+            ExistingBlend: "preserved",
+          }],
+        }],
+        [{
+          modelIndex: 0,
+          editMode: "replace_editable",
+          actions: [{
+            montageName: "AM_TurnLeft90",
+            delaySeconds: 0.5,
+            sourceIndex: 0,
+          }],
+        }],
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        CharacterBehaviourItems: [
+          expect.objectContaining({
+            MontageName: "AM_TurnLeft90",
+            StartTime: 0.5,
+            CharacterBehaviourType: "ERotate",
+            ExistingBlend: "preserved",
+          }),
+        ],
+      }),
+    ]);
+  });
+
   it("rejects stale editable action indexes before replacing a track", () => {
     expect(() =>
       appendCharacterActions(
@@ -1459,9 +1494,9 @@ describe("dialogue storyboard export", () => {
           modelIndex: 0,
           editMode: "replace_editable",
           actions: [{
-            montageName: "AM_Changed",
+            montageName: "AM_Old",
             delaySeconds: 0.2,
-            sourceIndex: 0,
+            sourceIndex: 1,
           }],
         }],
       ),

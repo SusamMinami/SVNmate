@@ -1055,6 +1055,24 @@ describe("mission target UE preview", () => {
     ).rejects.toThrow("加载期间通信暂时不可用");
   });
 
+  it("treats invalidated UE objects during open-level as an in-progress map switch", async () => {
+    const connection = new FakeUnrealConnection({
+      currentMaps: ["/Game/Seria/Maps/Old/Old"],
+      openLevelError: new Error(
+        "'this' pointer is invalid. 'this' pointer is invalid.",
+      ),
+    });
+
+    await expect(
+      loadMissionTargetPreview(
+        { plan: previewPlan(), mapMode: "auto" },
+        () => connection,
+      ),
+    ).rejects.toThrow(
+      "UE 已发起 上城区 的地图切换，加载期间通信暂时不可用",
+    );
+  });
+
   it("removes rediscovered previews before loading replacements", async () => {
     const expectedMap =
       "/Game/Seria/Maps/08_01_UrbanArea/08_01_UrbanArea";

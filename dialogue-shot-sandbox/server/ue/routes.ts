@@ -91,7 +91,7 @@ export async function routeUeRequest(
     if (url.pathname === "/api/ue/dialogue/selection") {
       sendJson(response, 200, {
         ok: true,
-        data: await services.readSelectedDialogueNode(),
+        data: await services.readSelectedDialogueNode(url.searchParams.get("fresh") === "1"),
       });
       return true;
     }
@@ -208,6 +208,20 @@ export async function routeUeRequest(
       sendJson(response, 200, {
         ok: true,
         data: await services.applyNpcSupplement(body),
+      });
+      return true;
+    }
+    if (url.pathname === "/api/ue/npc-migration/face-preview") {
+      sendJson(response, 200, {
+        ok: true,
+        data: await services.openNpcFaceAnimationPreview(body),
+      });
+      return true;
+    }
+    if (url.pathname === "/api/ue/npc-migration/montage-preview") {
+      sendJson(response, 200, {
+        ok: true,
+        data: await services.openNpcMontagePreview(body),
       });
       return true;
     }

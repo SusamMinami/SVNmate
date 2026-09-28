@@ -1,5 +1,6 @@
 import { Clapperboard, LoaderCircle } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+import { useReducedMotionPreference } from "../app/useReducedMotionPreference";
 
 interface LaunchScreenProps {
   sourceName: string;
@@ -12,18 +13,16 @@ export function LaunchScreen({
   version,
   onComplete,
 }: LaunchScreenProps) {
+  const { reducedMotion } = useReducedMotionPreference();
   const [leaving, setLeaving] = useState(false);
   const beginExit = useCallback(() => {
     setLeaving(true);
   }, []);
 
   useEffect(() => {
-    const reducedMotion = window.matchMedia(
-      "(prefers-reduced-motion: reduce)",
-    ).matches;
     const timer = window.setTimeout(beginExit, reducedMotion ? 80 : 1350);
     return () => window.clearTimeout(timer);
-  }, [beginExit]);
+  }, [beginExit, reducedMotion]);
 
   useEffect(() => {
     if (!leaving) {

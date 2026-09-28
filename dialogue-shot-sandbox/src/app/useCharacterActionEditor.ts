@@ -7,6 +7,7 @@ import {
   type SetStateAction,
 } from "react";
 import {
+  behaviourTypeForMontageName,
   dialogueCharacterActionTracks,
   mergeDialogueCharacterActionTracks,
   turnDegreesFromMontageName,
@@ -537,7 +538,19 @@ export function useCharacterActionEditor({
       updateTrack(dialogueId, modelIndex, (track) => ({
         ...track,
         actions: track.actions.map((action) =>
-          action.id === actionId ? { ...action, ...update } : action,
+          action.id === actionId
+            ? {
+                ...action,
+                ...update,
+                ...(update.montageName === undefined
+                  ? {}
+                  : {
+                      behaviourType: behaviourTypeForMontageName(
+                        update.montageName,
+                      ),
+                    }),
+              }
+            : action,
         ),
       }));
     },
@@ -787,11 +800,13 @@ export function useCharacterActionEditor({
                       existingSourceIndexes.length
                   : existingRawActionCount + index,
               behaviourType:
-                sourceAction?.behaviourType ??
-                action.behaviourType ??
-                (turnDegreesFromMontageName(action.montageName) === null
-                  ? "ENone"
-                  : "ERotate"),
+                sourceAction?.montageName === action.montageName
+                  ? sourceAction.behaviourType ??
+                    action.behaviourType ??
+                    (turnDegreesFromMontageName(action.montageName) === null
+                      ? "ENone"
+                      : "ERotate")
+                  : behaviourTypeForMontageName(action.montageName),
             };
           });
           if (existing) {

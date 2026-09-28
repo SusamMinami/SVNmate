@@ -418,12 +418,12 @@ export class PersistentDialogueSelectionReader {
       LEGACY_DEEP_READ_INTERVAL_MS,
   ) {}
 
-  read(): Promise<SelectedDialogueNodeResult> {
+  read(fresh = false): Promise<SelectedDialogueNodeResult> {
     this.clearIdleTimer();
     this.pendingReads += 1;
     const operation = this.operationQueue.then(
-      () => this.readOnce(),
-      () => this.readOnce(),
+      () => this.readOnce(fresh),
+      () => this.readOnce(fresh),
     );
     this.operationQueue = operation.then(() => undefined, () => undefined);
     const finishRead = () => {
@@ -441,7 +441,12 @@ export class PersistentDialogueSelectionReader {
     this.releaseConnection();
   }
 
-  private async readOnce(): Promise<SelectedDialogueNodeResult> {
+  private async readOnce(fresh: boolean): Promise<SelectedDialogueNodeResult> {
+    if (fresh) {
+      // Resuming must not unlock an old legacy node. Preserve the deep-read rate limit.
+      this.lastSelectionFingerprint = null;
+      this.lastSelectionResult = null;
+    }
     let connection = this.connection;
     if (!connection) {
       try {
@@ -493,17 +498,17 @@ export class PersistentDialogueSelectionReader {
           const legacyDeepReadAgeMs =
             Date.now() - this.lastLegacyDeepReadAt;
           if (
-            this.lastSelectionResult &&
-            (lightweightDurationMs > LEGACY_DEEP_READ_BUSY_THRESHOLD_MS ||
-              legacyDeepReadAgeMs < this.legacyDeepReadIntervalMs)
+            lightweightDurationMs > LEGACY_DEEP_READ_BUSY_THRESHOLD_MS ||
+              (this.lastLegacyDeepReadAt > 0 && legacyDeepReadAgeMs < this.legacyDeepReadIntervalMs)
           ) {
-            return this.lastSelectionResult;
+            return (fingerprint === this.lastSelectionFingerprint ? this.lastSelectionResult : null) ??
+              selectedDialogueNodeResult([], true);
           }
           this.lastLegacyDeepReadAt = Date.now();
           const reflectedDialogueId =
             await selectedDialogueIdFromNodeData(connection).catch(() => null);
           if (!reflectedDialogueId) {
-            return this.lastSelectionResult ??
+            return (fingerprint === this.lastSelectionFingerprint ? this.lastSelectionResult : null) ??
               selectedDialogueNodeResult([], true);
           }
           result = selectedDialogueNodeResult(
@@ -535,6 +540,7 @@ export class PersistentDialogueSelectionReader {
         this.connection = null;
       }
       connection.close();
+      this.clearSelectionCache();
       return offlineSelectionResult(error);
     }
   }
@@ -574,6 +580,6 @@ export class PersistentDialogueSelectionReader {
 const persistentDialogueSelectionReader =
   new PersistentDialogueSelectionReader();
 
-export function readSelectedDialogueNodePersistent(): Promise<SelectedDialogueNodeResult> {
-  return persistentDialogueSelectionReader.read();
+export function readSelectedDialogueNodePersistent(fresh = false): Promise<SelectedDialogueNodeResult> {
+  return persistentDialogueSelectionReader.read(fresh);
 }

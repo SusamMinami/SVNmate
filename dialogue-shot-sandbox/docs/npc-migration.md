@@ -45,7 +45,9 @@ Skeletal Mesh 自带的 Skeleton。动作库命中当前 NPC 时，会导入对�
    按“新增”审核；符合规则的可播放动作会创建 Montage。若同一来源
    目录树内存在严格同名加 `_Face` 后缀的 FBX，则自动配对并在 Body 导入后使用
    Face Skeleton 连续导入、锁根和复制曲线，不再要求分两次执行。选择 Skeleton
-   时只在唯一匹配到引用它的非 Face Skeletal Mesh 后继续。
+   时只在唯一匹配到引用它的非 Face Skeletal Mesh 后继续。已有或创建成功的
+   Montage 在动作行显示播放按钮，点击后直接打开最终 Montage 预览；仅用于状态机
+   或混合空间的 AnimSequence、以及创建失败的 Montage 不显示该入口。
 3. **面部补充**：读取已有 NPC、Body Skeleton、Face Skeletal Mesh 与
    Face Skeleton，只处理以 `_Face` 结尾且能找到同名 Body 动作的 FBX。
 
@@ -57,8 +59,9 @@ Skeletal Mesh 自带的 Skeleton。动作库命中当前 NPC 时，会导入对�
 等子目录时，工具会沿包路径向上定位与 NPC 名称相同的目录，不把网格体分类目录
 误当作 NPC 根目录；若路径中没有同名目录，才回退到 Body Mesh 的直接父目录。
 
-动作和面部增补不再执行美术 UE 依赖扫描、跨工程文件复制、NPC BP/ABP 创建、
-胶囊体和状态机配置。清单勾选变化后由工具自动刷新审核令牌，无需再次点击生成
+动作和面部增补不再执行美术 UE 依赖扫描、跨工程文件复制、Body ABP 创建、
+胶囊体和状态机配置；面部补充会按需创建专用 Face ABP 并绑定已有 Face 组件。
+清单勾选变化后由工具自动刷新审核令牌，无需再次点击生成
 清单；同步完成前写入按钮保持禁用。清单首列表头的三态复选框负责全选和全部
 取消，部分选择时显示中间态，阻断项不计入可选数量。名称/时间排序直接位于
 “动作 / 修改时间”表头，不再额外占用一行清单标题栏。
@@ -70,7 +73,8 @@ Skeletal Mesh 自带的 Skeleton。动作库命中当前 NPC 时，会导入对�
 1. 在策划 UE 内容浏览器中选择已有 NPC BP、Body Skeletal Mesh 或 Body
    Skeleton。
 2. 工具从 Body Mesh 推导 NPC 名称与 `Animation` 目录，并在 NPC 资产目录中
-   唯一匹配 `SK_<NPC>_Face` 及其 Face Skeleton。
+   唯一匹配 `SK_<NPC>_Face` 及其 Face Skeleton；同时查找使用该 Body / Face
+   Mesh 的 NPC BP，审核每个 `face` 组件的 AnimClass。
 3. 扫描用户选择的 FBX 目录，只保留
    `A_<NPC>_<Action>_Face.fbx`；去掉 `_Face` 后必须存在同名 Body AnimSequence。
 4. 用户可临时取消不需要处理的动作。重新审核后，工具使用 Face Skeleton
@@ -83,11 +87,18 @@ Skeletal Mesh 自带的 Skeleton。动作库命中当前 NPC 时，会导入对�
 6. 工具逐项调用 Seria 原生 Python 接口：
    `copy_face_anim_sequence_morph_targets_curve` 复制 Morph Target 曲线；
    `make_npc_montage_by_anim_sequence` 生成需要的 Montage。
-7. 写入后重新使用 `get_face_anim_sequence` 校验 Body / Face 配对，并保存
+7. 若 NPC 尚无 Face 动画蓝图，创建 `ABP_<NPC>_Face`，绑定 Face Skeleton，
+   父类设为 `SeriaFaceAnimInstance`，并把它写入所有使用同一 Body / Face Mesh
+   且当前 AnimClass 为空的 NPC BP。已有其他 AnimClass 时阻断，不静默覆盖。
+8. 写入后重新使用 `get_face_anim_sequence` 校验 Body / Face 配对，并保存
    Body AnimSequence、Face AnimSequence 和新建 Montage。既有 Montage 不调用
    创建接口，因此保留人工 Slot；新建 Montage 由 Seria 原生接口设置 Slot。
    支持轨道属性的引擎版本继续回读 Slot；UE4 Python 未暴露
    `SlotAnimTracks` 时跳过二次改写并提示在 UE 中复核，不因此中断 Face 导入。
+9. 写入完成后，动作行显示面部预览按钮，显式点击会在 UE 动画编辑器中打开对应
+   `_Face` AnimSequence，只读核对 Morph Target 表情。Body Montage 与 Face
+   使用不同 Skeleton，Montage 资产编辑器本身不会合成独立 Face Mesh；最终联动
+   应在已绑定 Face Anim Blueprint 的 NPC BP 或对话运行预览中检查。
 
 `BP_FaceConfigHelper` 本身不再参与独立面部补充。运行时反射确认
 `SeriaAssetHelperBlueprintFunctionLibrary` 及以上三个逐资产函数均可由
@@ -104,7 +115,7 @@ C++ 代码。原来的 MakeTable 由镜头沙盒审核清单替代，Out 由逐�
 | 创建 `BP_XXX` 并指定 Mesh | NPC BP 配置 | 自动 |
 | 调整胶囊体和 Mesh 方向 | 胶囊体估算 | 自动按包围盒写入半径、半高和 Mesh Z 偏移，人工复核 |
 | 配置转头曲线 | 行为配置 | 自动定位 `NpcBehaviourComponent` 的唯一曲线属性并写入 |
-| 添加 Face 组件 | Face 配置 | 人工确认 Mesh 和 Socket |
+| 添加 Face 组件 | Face 配置 | 人工确认 Mesh 和 Socket；工具为既有组件创建或复用 Face Anim Blueprint 并绑定 AnimClass |
 | 锁定 Face 动作根骨骼 | Face 动作导入 | 自动 |
 | 执行 `BP_FaceConfigHelper` | 原生 Seria 面部处理 | 面部补充自动，逐项审核后写入并回读 |
 | 创建 `ABP_XXX` | 动画蓝图配置 | 自动继承所选标准模板并绑定当前 Mesh 的 Skeleton |
@@ -171,6 +182,9 @@ Interact 替换为当前 NPC 资产。这样不依赖编辑器剪贴板，并能
   不可用时阻断。
 - 动作增补中的 Montage 逐项隔离处理；单项失败不撤销已导入动作，也不阻断后续
   Montage，结果中明确列出待补项并清理该次产生的不完整 Montage。
+- 面部补充必须找到至少一个使用目标 Body / Face Mesh 的 NPC BP。已有 Face
+  AnimClass 与计划不一致、Face 组件缺失/重复、Face ABP 父类或 Skeleton
+  不匹配、相关 BP 存在未保存修改时阻断，不覆盖人工配置。
 - 启用标准 ABP 时，缺少 LookD、LookF、LookU、IdleStand、Impact 或 Interact
   任一动作都会阻断。
 - 男性或女性模板不存在、模板引用资产不完整、BlendSpace 或 ABP 覆盖接口不可用

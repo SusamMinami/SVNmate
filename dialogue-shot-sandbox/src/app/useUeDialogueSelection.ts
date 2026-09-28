@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { SelectedDialogueNodeResult } from "../types";
 import { readSelectedDialogueNode } from "../ue/client";
+import { createSelectionActivity, type SelectionActivity } from "./selectionActivity";
 
 export const SELECTION_POLL_MIN_INTERVAL_MS = 1_200;
 export const SELECTION_POLL_MAX_INTERVAL_MS = 5_000;
@@ -62,28 +63,30 @@ export function useUeDialogueSelection(
 ): {
   selection: SelectedDialogueNodeResult | null;
   refreshing: boolean;
-  polling: boolean;
-  pollIntervalMs: number;
+  activity: SelectionActivity;
+  suspended: boolean;
 } {
   const [selection, setSelection] =
     useState<SelectedDialogueNodeResult | null>(null);
+  const selectionRef = useRef<SelectedDialogueNodeResult | null>(null);
   const [refreshing, setRefreshing] = useState(false);
-  const [polling, setPolling] = useState(false);
-  const [pollIntervalMs, setPollIntervalMs] = useState(
-    SELECTION_POLL_MIN_INTERVAL_MS,
-  );
+  const [activity] = useState(createSelectionActivity);
+  const inFlight = useRef<Promise<SelectedDialogueNodeResult> | null>(null);
+  const [verified, setVerified] = useState(false);
 
   useEffect(() => {
     if (!enabled) {
+      selectionRef.current = null;
       setSelection(null);
+      setVerified(false);
       setRefreshing(false);
-      setPolling(false);
-      setPollIntervalMs(SELECTION_POLL_MIN_INTERVAL_MS);
+      activity.update({ polling: false, intervalMs: SELECTION_POLL_MIN_INTERVAL_MS });
       return;
     }
     if (paused) {
+      setVerified(false);
       setRefreshing(false);
-      setPolling(false);
+      activity.update({ ...activity.getSnapshot(), polling: false });
       return;
     }
 
@@ -93,18 +96,26 @@ export function useUeDialogueSelection(
     let lastSelection: SelectedDialogueNodeResult | null = null;
     let pollIntervalMs = SELECTION_POLL_MIN_INTERVAL_MS;
     const poll = async () => {
+      // Pausing cannot cancel a request already executing in UE. Drain it before
+      // resuming, discard its result and then revalidate the current selection.
+      if (inFlight.current) await inFlight.current.catch(() => {});
+      if (cancelled) return;
       const pollStartedAt = Date.now();
-      setPolling(true);
+      activity.update({ polling: true, intervalMs: pollIntervalMs });
       if (initialReadPending) {
         setRefreshing(true);
       }
       let next: SelectedDialogueNodeResult;
+      const request = readSelectedDialogueNode(initialReadPending);
+      inFlight.current = request;
       try {
-        next = await readSelectedDialogueNode();
+        next = await request;
         if (!cancelled) {
-          setSelection((current) =>
-            sameSelection(current, next) ? current : next,
-          );
+          if (initialReadPending) setVerified(true);
+          if (!sameSelection(selectionRef.current, next)) {
+            selectionRef.current = next;
+            setSelection(next);
+          }
         }
       } catch (error) {
         next = {
@@ -118,11 +129,14 @@ export function useUeDialogueSelection(
               : "无法读取 UE 当前节点",
         };
         if (!cancelled) {
-          setSelection((current) =>
-            sameSelection(current, next) ? current : next,
-          );
+          if (initialReadPending) setVerified(true);
+          if (!sameSelection(selectionRef.current, next)) {
+            selectionRef.current = next;
+            setSelection(next);
+          }
         }
       } finally {
+        if (inFlight.current === request) inFlight.current = null;
         if (!cancelled) {
           pollIntervalMs = nextSelectionPollInterval(
             lastSelection,
@@ -134,8 +148,7 @@ export function useUeDialogueSelection(
             pollIntervalMs,
             pollDurationMs,
           );
-          setPollIntervalMs(pollIntervalMs);
-          setPolling(false);
+          activity.update({ polling: false, intervalMs: pollIntervalMs });
           lastSelection = next!;
           if (initialReadPending) {
             initialReadPending = false;
@@ -156,7 +169,14 @@ export function useUeDialogueSelection(
         globalThis.clearTimeout(timer);
       }
     };
-  }, [enabled, paused]);
+  }, [enabled, paused, activity]);
 
-  return { selection, refreshing, polling, pollIntervalMs };
+  return {
+    // Retain the rendered editor/drafts while suspended; callers must lock controls
+    // and automatic reads until a fresh response verifies the selection.
+    selection: enabled ? selection : null,
+    suspended: !enabled || paused || !verified,
+    refreshing: enabled && !paused && refreshing,
+    activity,
+  };
 }

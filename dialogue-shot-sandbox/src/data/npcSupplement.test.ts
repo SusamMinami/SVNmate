@@ -21,6 +21,21 @@ function target(
       "/Game/Seria/NPC/N28/SK_N28_Face.SK_N28_Face",
     faceSkeletonAssetPath:
       "/Game/Seria/NPC/N28/SKEL_N28_Face.SKEL_N28_Face",
+    faceRuntime: {
+      animationBlueprintAssetPath:
+        "/Game/Seria/NPC/N28/ABP_N28_Face",
+      animationBlueprintState: "ready",
+      bindings: [
+        {
+          blueprintAssetPath: "/Game/Seria/NPC/N28/BP_N28",
+          componentName: "face",
+          currentAnimClassPath:
+            "/Game/Seria/NPC/N28/ABP_N28_Face.ABP_N28_Face_C",
+          state: "ready",
+        },
+      ],
+      blockedReasons: [],
+    },
     targetPackagePath: "/Game/Seria/NPC/N28",
     animationPackagePath: "/Game/Seria/NPC/N28/Animation",
     montagePackagePath: "/Game/Seria/NPC/N28/Animation",
@@ -162,6 +177,52 @@ describe("NPC supplement planning", () => {
     expect(plan.blockedReasons).toEqual([
       "未找到 NPC 的 Face Skeletal Mesh 或 Face Skeleton",
     ]);
+  });
+
+  it("blocks face preparation when no runtime Face Anim Blueprint can be configured", () => {
+    const plan = buildNpcSupplementPlan(
+      request("face", {
+        target: target({ faceRuntime: null }),
+      }),
+      ["D:/FBX/N28/Animation/Face/A_N28_Talk_Face.fbx"],
+    );
+
+    expect(plan.canApply).toBe(false);
+    expect(plan.blockedReasons).toContain(
+      "未找到可审核的 Face 运行时配置",
+    );
+  });
+
+  it("reviews creation and binding of a missing Face Anim Blueprint", () => {
+    const plan = buildNpcSupplementPlan(
+      request("face", {
+        target: target({
+          faceRuntime: {
+            animationBlueprintAssetPath:
+              "/Game/Seria/NPC/N28/ABP_N28_Face",
+            animationBlueprintState: "create",
+            bindings: [
+              {
+                blueprintAssetPath: "/Game/Seria/NPC/N28/BP_N28",
+                componentName: "face",
+                currentAnimClassPath: "",
+                state: "configure",
+              },
+            ],
+            blockedReasons: [],
+          },
+        }),
+      }),
+      ["D:/FBX/N28/Animation/Face/A_N28_Talk_Face.fbx"],
+    );
+
+    expect(plan.canApply).toBe(true);
+    expect(plan.warnings).toContain(
+      "将创建 Face 动画蓝图 /Game/Seria/NPC/N28/ABP_N28_Face",
+    );
+    expect(plan.warnings).toContain(
+      "将为 1 个 NPC BP 补齐 Face AnimClass",
+    );
   });
 
   it("uses the helper table defaults for curve and montage decisions", () => {
