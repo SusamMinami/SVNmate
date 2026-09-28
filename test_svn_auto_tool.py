@@ -51,7 +51,7 @@ class ReleaseConfigTests(unittest.TestCase):
     def test_release_asset_name_is_stable_and_url_safe(self) -> None:
         self.assertEqual(RELEASE_ASSET_NAME, "SVNmate.zip")
         asset_url = RELEASE_DOWNLOAD_URL.format(tag=APP_VERSION, asset=RELEASE_ASSET_NAME)
-        self.assertTrue(asset_url.endswith("/v1.4.6/SVNmate.zip"))
+        self.assertTrue(asset_url.endswith("/v1.4.7/SVNmate.zip"))
 
 
 class LayoutAndSummaryTests(unittest.TestCase):
@@ -1160,7 +1160,9 @@ class TaskPipelineTests(unittest.TestCase):
         self.assertEqual(call.args[1], bat_wc)
         self.assertEqual(call.args[2], bat_root)
 
-    def test_task_groups_use_at_most_two_parallel_update_workers(self) -> None:
+    def test_one_task_group_runs_three_distinct_wc_roots_in_parallel(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory(prefix="SVNmate groups ") as temp_dir:
             root = Path(temp_dir)
             folders = [root / name for name in ("one", "two", "three")]
@@ -1207,10 +1209,10 @@ class TaskPipelineTests(unittest.TestCase):
             tool._run_command = fake_run_command
             tool._run_all_tasks(
                 "test",
-                [[str(folder)] for folder in folders],
+                [[str(folder) for folder in folders]],
             )
 
-        self.assertEqual(max_active, 2)
+        self.assertEqual(max_active, 3)
         self.assertEqual(tool._run_cleanup_and_build.call_count, 3)
 
     def test_separate_groups_serialize_when_they_share_a_wc_root(self) -> None:

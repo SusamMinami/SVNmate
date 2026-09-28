@@ -186,7 +186,9 @@ class WorkspaceUpdateServiceTests(unittest.TestCase):
         self.assertEqual(payload["executed_by"], "core")
         self.assertEqual(payload["status"], "completed")
 
-    def test_batch_runs_different_working_copies_with_max_two_workers(self) -> None:
+    def test_batch_runs_three_different_working_copies_in_parallel(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             folders = [root / name for name in ("one", "two", "three")]
@@ -197,13 +199,12 @@ class WorkspaceUpdateServiceTests(unittest.TestCase):
                 executor=executor,
                 update_command=lambda _folder: ["svn", "update"],
                 cleanup_command=lambda _folder: ["svn", "cleanup"],
-                max_parallel_working_copies=2,
             )
 
             result = service.update_folders(folders)
 
         self.assertTrue(result.success)
-        self.assertEqual(executor.max_active, 2)
+        self.assertEqual(executor.max_active, 3)
         self.assertEqual(
             [item.folder for item in result.folders],
             [str(folder) for folder in folders],

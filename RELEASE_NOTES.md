@@ -1,3 +1,17 @@
+# 一键更新SVN v1.4.7
+
+本版本修复同一任务组中的不同 Working Copy Root 仍被串行执行的问题。
+
+- 所有启用路径先按最近的 Working Copy Root 拆分为执行通道，不再由任务组边界
+  决定并发。
+- `bin`、`doc`、`res` 分属独立工作副本时最多三路同时更新；同一 Root 仍共享
+  互斥锁，禁止并发写入同一个 `.svn\wc.db`。
+- 无法识别 Root 的路径继续进入保守串行通道。
+- 主界面任务和共享 `svnmate_core` 统一使用三路 WC 并发上限；Update 失败后的
+  Cleanup/重试、`Update.bat` Root 锁及最终 Cleanup/Build 顺序保持不变。
+
+---
+
 # MigrationGuard v1.0.5
 
 - 固定表入口改为按路线选择最近有效页签；当最新页签仅含纯海外任务时，“合海外

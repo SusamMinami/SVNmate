@@ -8,7 +8,8 @@ AI 开发从 [AGENTS.md](AGENTS.md) 开始；全部文档见 [索引](docs/READM
 
 ## 功能与使用
 
-- 两栏目录按勾选顺序 update，失败 cleanup 后只重试一次。
+- 两栏任务按 Working Copy Root 最多三路并发 update；同一 Root 串行，失败
+  cleanup 后只重试一次。
 - 支持每日 `Update.bat`、cleanup 后 `Build.bat` 和自定义脚本路径。
 - 每日定时、实时日志与成功/失败/跳过摘要，脚本失败窗口保留 5 秒。
 - Windows 单实例、托盘、Per-Monitor DPI 与自动昼夜主题。

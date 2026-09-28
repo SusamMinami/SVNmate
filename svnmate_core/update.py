@@ -17,7 +17,7 @@ CommandFactory = Callable[[Path], list[str]]
 EventSink = Callable[["UpdateEvent"], None]
 OutputSink = Callable[[str], None]
 WorkingCopyResolver = Callable[[Path], Path]
-MAX_PARALLEL_WORKING_COPIES = 2
+MAX_PARALLEL_WORKING_COPIES = 3
 
 
 def _utc_now() -> str:

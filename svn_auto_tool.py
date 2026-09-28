@@ -21,6 +21,7 @@ from module_updates import ModuleManifest, ModuleUpdateError, download_archive
 from svnmate_theme import configure_svnmate_styles
 from svnmate_core import (
     CommandExecution,
+    MAX_PARALLEL_WORKING_COPIES,
     UpdateEvent,
     WorkspaceUpdateService,
     find_working_copy_root,
@@ -117,7 +118,7 @@ CONFIG_PATH = APP_DIR / "svn_auto_tool_config.json"
 LOG_DIR = APP_DIR / "logs"
 LOG_RETENTION_DAYS = 7
 MUSIC_EXTENSIONS = (".mp3", ".wav")
-APP_VERSION = "v1.4.6"
+APP_VERSION = "v1.4.7"
 LATEST_RELEASE_URL = "https://github.com/SusamMinami/SVNmate/releases/latest"
 RELEASE_DOWNLOAD_URL = "https://github.com/SusamMinami/SVNmate/releases/download/{tag}/{asset}"
 RELEASE_ASSET_NAME = "SVNmate.zip"
@@ -139,7 +140,6 @@ DPI_VISIBLE_POLL_MS = 1000
 DPI_HIDDEN_POLL_MS = 10000
 IPC_REQUEST_TIMEOUT_SECONDS = 6 * 60 * 60
 MAX_PENDING_IPC_UPDATES = 16
-MAX_PARALLEL_UPDATE_GROUPS = 2
 FOLDER_DRAG_THRESHOLD = 6
 ICON_MUSIC_ON = "\ue767"
 ICON_MUSIC_OFF = "\ue74f"
@@ -3325,14 +3325,31 @@ class SvnAutoTool:
                             custom_update.parent
                         )
                         root_locks.setdefault(root_key, threading.Lock())
+            root_lanes: dict[
+                str,
+                list[tuple[int, Path, Path]],
+            ] = {}
+            for group_index, folders in enumerate(valid_groups):
+                for folder in folders:
+                    root_key, working_copy_root = (
+                        working_copy_lock_identity(folder)
+                    )
+                    root_lanes.setdefault(root_key, []).append(
+                        (
+                            group_index,
+                            folder,
+                            working_copy_root,
+                        )
+                    )
             worker_count = min(
-                MAX_PARALLEL_UPDATE_GROUPS,
-                len(valid_groups),
+                MAX_PARALLEL_WORKING_COPIES,
+                len(root_lanes),
             )
             if valid_groups:
                 self._log(
                     f"[调度] {len(valid_groups)} 个任务组，"
-                    f"最多 {worker_count} 组并行；同一 WC 自动排队"
+                    f"{len(root_lanes)} 个 WC 通道，"
+                    f"最多 {worker_count} 个 WC 并行"
                 )
 
             with ThreadPoolExecutor(
@@ -3341,28 +3358,31 @@ class SvnAutoTool:
             ) as bat_executor:
                 with ThreadPoolExecutor(
                     max_workers=max(1, worker_count),
-                    thread_name_prefix="svnmate-update-group",
-                ) as group_executor:
-                    group_futures = [
-                        group_executor.submit(
-                            self._run_update_group,
-                            group_index,
-                            folders,
+                    thread_name_prefix="svnmate-update-wc",
+                ) as update_executor:
+                    lane_futures = [
+                        update_executor.submit(
+                            self._run_working_copy_lane,
+                            lane_index,
+                            root_key,
+                            tasks,
                             run_daily_bin_update,
                             bat_executor,
                             root_locks,
                             custom_update_bat_path,
                         )
-                        for group_index, folders in enumerate(valid_groups)
+                        for lane_index, (root_key, tasks) in enumerate(
+                            root_lanes.items()
+                        )
                     ]
-                    for group_index, future in enumerate(group_futures):
+                    for lane_index, future in enumerate(lane_futures):
                         try:
                             attempted, success, queued = future.result()
                         except Exception as exc:
                             bin_update_all_success = False
                             self._record(
                                 "",
-                                f"任务组 {group_index + 1}",
+                                f"WC 通道 {lane_index + 1}",
                                 "失败",
                                 f"任务异常：{exc}",
                             )
@@ -3405,10 +3425,11 @@ class SvnAutoTool:
         finally:
             self.log_queue.put(("done", self._make_run_summary(trigger)))
 
-    def _run_update_group(
+    def _run_working_copy_lane(
         self,
-        group_index: int,
-        folders: list[Path],
+        lane_index: int,
+        root_key: str,
+        tasks: list[tuple[int, Path, Path]],
         run_daily_bin_update: bool,
         bat_executor: ThreadPoolExecutor,
         root_locks: dict[str, object],
@@ -3417,15 +3438,18 @@ class SvnAutoTool:
         bin_update_attempted = False
         bin_update_success = True
         queued_updates: list[tuple[Path, Future[bool]]] = []
+        working_copy_root = tasks[0][2]
         self._log(
-            f"[任务组 {group_index + 1}] 开始，"
-            f"包含 {len(folders)} 个文件夹"
+            f"[WC 通道 {lane_index + 1}] 开始："
+            f"{working_copy_root}，包含 {len(tasks)} 个路径"
         )
-        for folder in folders:
+        root_lock = root_locks[root_key]
+        for group_index, folder, working_copy_root in tasks:
             if getattr(self, "invalid_handle_restart_pending", False):
                 break
-            root_key, working_copy_root = working_copy_lock_identity(folder)
-            root_lock = root_locks[root_key]
+            self._log(
+                f"[任务组 {group_index + 1}] 更新 {folder}"
+            )
             if root_lock.locked():
                 self._log(
                     f"[等待] {folder} | 同一 WC 正在更新："

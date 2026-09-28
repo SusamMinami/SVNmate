@@ -1,6 +1,7 @@
 from .update import (
     BatchUpdateResult,
     CommandExecution,
+    MAX_PARALLEL_WORKING_COPIES,
     StreamingCommandExecutor,
     UpdateEvent,
     UpdateStepResult,
@@ -17,6 +18,7 @@ from .update import (
 __all__ = [
     "BatchUpdateResult",
     "CommandExecution",
+    "MAX_PARALLEL_WORKING_COPIES",
     "StreamingCommandExecutor",
     "UpdateEvent",
     "UpdateStepResult",
