@@ -12420,11 +12420,13 @@ textarea:focus-visible {
 }
 
 .app-shell[data-configuration-mode="true"] > .app-header {
-  display: flex;
+  display: grid;
   grid-row: 1;
   grid-column: 1;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
   min-height: 54px;
-  justify-content: flex-end;
   padding: 0 16px;
 }
 
@@ -12453,30 +12455,56 @@ textarea:focus-visible {
 }
 
 .configuration-pause-notice {
-  grid-row: 1;
-  padding: 12px;
-  color: var(--text);
-  background: var(--paper);
-  border-bottom: 1px solid var(--border);
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-muted);
   font-size: 11px;
-  line-height: 1.5;
+  font-weight: 600;
+  line-height: 1;
   pointer-events: none;
+}
+
+.configuration-pause-notice > svg {
+  flex: 0 0 auto;
+}
+
+.configuration-pause-notice > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.configuration-pause-notice[data-state="checking"] {
+  color: var(--warning-strong);
 }
 
 .app-shell[data-configuration-mode="true"] .right-panel[inert] {
   opacity: 0.5;
 }
 
-.app-shell[data-configuration-mode="true"] > .workspace:has(> .configuration-pause-notice) {
-  grid-template-rows: auto minmax(0, 1fr);
+.workspace-status-icon[data-state="paused"] {
+  color: var(--text-muted);
+  background: var(--surface-muted);
+  border-color: var(--border);
 }
 
-.app-shell[data-configuration-mode="true"] > .workspace:has(> .configuration-pause-notice) > .right-panel {
-  grid-row: 2;
+.workspace-status-icon[data-state="paused"] > svg {
+  opacity: 0.46;
 }
 
 .workspace-status-icon[data-state="paused"]::after {
+  opacity: 0.42;
   background: var(--text-muted);
+}
+
+.workspace-status-icon[data-state="paused"]:hover:not(:disabled),
+.workspace-status-icon[data-state="paused"]:focus-visible {
+  color: var(--text-muted);
+  background: var(--paper);
+  border-color: var(--border-strong);
 }
 
 .app-shell[data-configuration-mode="true"] .right-panel {

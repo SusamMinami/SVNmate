@@ -1,8 +1,9 @@
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import { mkdir, readFile, rm, stat } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, posix, relative, win32 } from "node:path";
 import { promisify } from "node:util";
 import type { Plugin, ViteDevServer, PreviewServer } from "vite";
 import { SOUND_EFFECT_CATALOG_SOURCE } from "../src/data/soundEffectCatalog";
@@ -129,20 +130,52 @@ const state: {
   activeMiraRequest: null,
 };
 
-function larkCliEntry(): string {
-  const appData = process.env.APPDATA;
+interface LarkCliRuntime {
+  platform: NodeJS.Platform;
+  appData: string | undefined;
+  execPath: string;
+}
+
+export function larkCliInvocation(
+  args: string[],
+  runtime: LarkCliRuntime = {
+    platform: process.platform,
+    appData: process.env.APPDATA,
+    execPath: process.execPath,
+  },
+): { file: string; args: string[] } {
+  const appData = runtime.appData;
   if (!appData) {
     throw new Error("当前环境缺少 APPDATA，无法定位 lark-cli");
   }
-  return join(
+  const joinRuntimePath =
+    runtime.platform === "win32" ? win32.join : posix.join;
+  const packageRoot = joinRuntimePath(
     appData,
     "npm",
     "node_modules",
     "@larksuite",
     "cli",
-    "scripts",
-    "run.js",
   );
+  return runtime.platform === "win32"
+    ? {
+        file: joinRuntimePath(packageRoot, "bin", "lark-cli.exe"),
+        args,
+      }
+    : {
+        file: runtime.execPath,
+        args: [joinRuntimePath(packageRoot, "scripts", "run.js"), ...args],
+      };
+}
+
+function installedLarkCliInvocation(args: string[]) {
+  const invocation = larkCliInvocation(args);
+  if (process.platform === "win32" && !existsSync(invocation.file)) {
+    throw new Error(
+      "未找到 lark-cli 原生程序，请在设置中重新安装飞书命令行工具",
+    );
+  }
+  return invocation;
 }
 
 function larkEnvironment(): NodeJS.ProcessEnv {
@@ -177,7 +210,8 @@ export async function runLark(
   cwd = process.cwd(),
 ): Promise<LarkCommandEnvelope> {
   try {
-    const result = await execFileAsync(process.execPath, [larkCliEntry(), ...args], {
+    const invocation = installedLarkCliInvocation(args);
+    const result = await execFileAsync(invocation.file, invocation.args, {
       windowsHide: true,
       timeout,
       maxBuffer: 4 * 1024 * 1024,
@@ -209,18 +243,18 @@ async function generateQrDataUrl(verificationUrl: string): Promise<string> {
   const absolutePath = join(process.cwd(), relativePath);
   await mkdir(join(process.cwd(), directory), { recursive: true });
   try {
+    const invocation = installedLarkCliInvocation([
+      "auth",
+      "qrcode",
+      verificationUrl,
+      "--output",
+      relativePath,
+      "--size",
+      "260",
+    ]);
     await execFileAsync(
-      process.execPath,
-      [
-        larkCliEntry(),
-        "auth",
-        "qrcode",
-        verificationUrl,
-        "--output",
-        relativePath,
-        "--size",
-        "260",
-      ],
+      invocation.file,
+      invocation.args,
       {
         windowsHide: true,
         timeout: COMMAND_TIMEOUT_MS,

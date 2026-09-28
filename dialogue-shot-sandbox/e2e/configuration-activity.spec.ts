@@ -119,6 +119,7 @@ test("compact activity pauses all automatic UE reads and preserves the editor dr
   await page.waitForTimeout(3_800);
   const activeReads = selectionCount() - beforeActive;
   expect(activeReads).toBeGreaterThanOrEqual(3);
+  const activePanelBounds = await page.locator(".right-panel").boundingBox();
   await activity(page, "other");
   await expect(page.locator(".right-panel")).toHaveAttribute("inert", "");
   const beforePause = requests.length;
@@ -127,12 +128,30 @@ test("compact activity pauses all automatic UE reads and preserves the editor dr
   expect(pausedReads).toBe(0);
   // inert keeps the actual editor in the DOM, including unsaved input.
   expect(await draft.inputValue()).toBe("trans_keep_draft");
-  const noticeBounds = await page.locator(".configuration-pause-notice").boundingBox();
-  const panelBounds = await page.locator(".right-panel").boundingBox();
-  expect(panelBounds!.y).toBeGreaterThanOrEqual(noticeBounds!.y + noticeBounds!.height);
+  const pauseNotice = page.locator(
+    ".app-header > .configuration-pause-notice",
+  );
+  await expect(pauseNotice).toHaveText("自动读取已暂停");
+  const pausedPanelBounds = await page.locator(".right-panel").boundingBox();
+  expect(Math.round(pausedPanelBounds!.y)).toBe(
+    Math.round(activePanelBounds!.y),
+  );
+  expect(Math.round(pausedPanelBounds!.height)).toBe(
+    Math.round(activePanelBounds!.height),
+  );
+  const pausedStatusIcons = page.locator(
+    '.app-header__status .workspace-status-icon[data-state="paused"]',
+  );
+  await expect(pausedStatusIcons).toHaveCount(2);
+  const pauseToggleGlyphOpacity = await page
+    .getByRole("button", { name: "自动暂停 UE 监听" })
+    .locator("svg")
+    .evaluate((element) => Number.parseFloat(getComputedStyle(element).opacity));
+  expect(pauseToggleGlyphOpacity).toBeLessThan(0.7);
   await page.screenshot({ path: info.outputPath("compact-paused-draft.png") });
   await activity(page, "dialogue");
   await expect(page.locator(".right-panel")).not.toHaveAttribute("inert");
+  await expect(pauseNotice).toHaveCount(0);
   expect(await draft.inputValue()).toBe("trans_keep_draft");
   expect(new URL(requests.filter((url) => url.includes("/dialogue/selection")).at(-1)!).searchParams.get("fresh")).toBe("1");
 

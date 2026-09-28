@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyLarkScopes } from "./larkBridge";
+import { classifyLarkScopes, larkCliInvocation } from "./larkBridge";
 
 describe("classifyLarkScopes", () => {
   it("separates Mira, Base and Docs authorization requirements", () => {
@@ -40,5 +40,40 @@ describe("classifyLarkScopes", () => {
       ...result.baseMissingScopes,
       ...result.docsMissingScopes,
     ]);
+  });
+});
+
+describe("larkCliInvocation", () => {
+  it("runs the native Windows binary directly so windowsHide reaches it", () => {
+    const invocation = larkCliInvocation(
+      ["auth", "status", "--json", "--verify"],
+      {
+        platform: "win32",
+        appData: "C:\\Users\\Test\\AppData\\Roaming",
+        execPath: "C:\\Program Files\\Shot Sandbox\\镜头沙盘.exe",
+      },
+    );
+
+    expect(invocation).toEqual({
+      file: "C:\\Users\\Test\\AppData\\Roaming\\npm\\node_modules\\@larksuite\\cli\\bin\\lark-cli.exe",
+      args: ["auth", "status", "--json", "--verify"],
+    });
+  });
+
+  it("keeps the JavaScript launcher on non-Windows platforms", () => {
+    const invocation = larkCliInvocation(["auth", "status"], {
+      platform: "linux",
+      appData: "/home/test/.config",
+      execPath: "/usr/bin/node",
+    });
+
+    expect(invocation).toEqual({
+      file: "/usr/bin/node",
+      args: [
+        "/home/test/.config/npm/node_modules/@larksuite/cli/scripts/run.js",
+        "auth",
+        "status",
+      ],
+    });
   });
 });

@@ -2288,6 +2288,28 @@ export default function App() {
         : selectedUeShotIndex < 0
           ? `已同步 UE 节点 ${selectedUeDialogueNodeId}`
           : ueDialogueSelection.message;
+  const configurationReadNotice =
+    configurationMode &&
+    configurationSelectionSuspended &&
+    ueDialogueSelection
+      ? configurationActivity.paused
+        ? {
+            state: "paused" as const,
+            label: "自动读取已暂停",
+            detail: configurationActivity.message,
+          }
+        : configurationMapSwitching
+          ? {
+              state: "paused" as const,
+              label: "切图中，读取已暂停",
+              detail: "切图期间已暂停自动读取",
+            }
+          : {
+              state: "checking" as const,
+              label: "正在重新核对节点",
+              detail: "正在重新核对 UE 当前节点",
+            }
+      : null;
 
   useEffect(() => {
     if (!configurationMode) {
@@ -5311,6 +5333,27 @@ export default function App() {
           </div>
         </div>
 
+        {configurationReadNotice && (
+          <div
+            className="configuration-pause-notice"
+            data-state={configurationReadNotice.state}
+            role="status"
+            aria-label={configurationReadNotice.detail}
+            title={configurationReadNotice.detail}
+          >
+            {configurationReadNotice.state === "paused" ? (
+              <Pause size={13} aria-hidden="true" />
+            ) : (
+              <LoaderCircle
+                className="spin"
+                size={13}
+                aria-hidden="true"
+              />
+            )}
+            <span>{configurationReadNotice.label}</span>
+          </div>
+        )}
+
         <div className="app-header__status" ref={statusTooltipsRef}>
           {activeWorkspace === "storyboard" && (
             <button
@@ -5398,15 +5441,6 @@ export default function App() {
         {...navigationFeedback}
         {...workspaceProps("storyboard")}
       >
-        {configurationMode && configurationSelectionSuspended && ueDialogueSelection && (
-          <div className="configuration-pause-notice" role="status">
-            {configurationActivity.paused
-              ? configurationActivity.message
-              : configurationMapSwitching
-                ? "切图期间已暂停自动读取"
-                : "正在重新核对 UE 当前节点"}
-          </div>
-        )}
         {!configurationMode && (
           <aside className="left-panel">
           <section className="panel-section query-section">
