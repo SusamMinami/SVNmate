@@ -5,7 +5,19 @@ export const REDUCED_MOTION_STORAGE_KEY =
 const REDUCED_MOTION_EVENT = "shot-sandbox:reduced-motion";
 let volatilePreference: boolean | null = null;
 
+function browserPreviewPreference(): boolean | null {
+  if (window.shotSandboxDesktop) {
+    return null;
+  }
+  const value = new URLSearchParams(window.location.search).get("motion");
+  return value === "full" ? false : value === "reduced" ? true : null;
+}
+
 function storedPreference(): boolean | null {
+  const previewPreference = browserPreviewPreference();
+  if (previewPreference !== null) {
+    return previewPreference;
+  }
   try {
     const value = window.localStorage.getItem(REDUCED_MOTION_STORAGE_KEY);
     return value === "true"

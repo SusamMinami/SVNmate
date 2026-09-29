@@ -791,8 +791,12 @@ textarea:focus-visible {
 }
 
 .workspace {
+  --workspace-left-column: 310px;
+  --workspace-right-column: 310px;
   display: grid;
-  grid-template-columns: 310px minmax(480px, 1fr) 310px;
+  grid-template-columns:
+    var(--workspace-left-column) minmax(480px, 1fr)
+    var(--workspace-right-column);
   min-height: 0;
 }
 
@@ -6999,7 +7003,7 @@ textarea:focus-visible {
 .background-prop-choice {
   display: flex;
   flex-direction: column;
-  width: min(980px, 100%);
+  width: min(1120px, calc(100% - 32px));
   max-height: min(680px, 92vh);
 }
 
@@ -7048,7 +7052,7 @@ textarea:focus-visible {
 }
 
 .background-prop-table {
-  min-width: 880px;
+  min-width: 1020px;
 }
 
 .background-prop-table td:nth-child(2) {
@@ -7072,6 +7076,39 @@ textarea:focus-visible {
   color: var(--text-muted);
   font-size: 9px;
   white-space: nowrap;
+}
+
+.background-prop-table th:nth-child(4),
+.background-prop-table td:nth-child(4) {
+  width: 220px;
+  min-width: 220px;
+}
+
+.background-prop-slot-select {
+  width: 100%;
+  min-width: 138px;
+  height: 26px;
+  padding: 0 26px 0 7px;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  font-family: var(--font-data);
+  font-size: var(--type-data);
+}
+
+.background-prop-slot-select:hover:not(:disabled) {
+  border-color: var(--border-strong);
+}
+
+.background-prop-slot-select:focus-visible {
+  outline: 2px solid var(--signal);
+  outline-offset: 1px;
+}
+
+.background-prop-slot-select:disabled {
+  color: var(--text-muted);
+  background: var(--surface-muted);
 }
 
 .background-prop-table td:last-child small {
@@ -7987,7 +8024,11 @@ textarea:focus-visible {
 
 @media (max-width: 1180px) {
   .workspace {
-    grid-template-columns: 280px minmax(460px, 1fr) 280px;
+    --workspace-left-column: 280px;
+    --workspace-right-column: 280px;
+    grid-template-columns:
+      var(--workspace-left-column) minmax(460px, 1fr)
+      var(--workspace-right-column);
   }
 
   .top-view {
@@ -8018,6 +8059,10 @@ textarea:focus-visible {
     grid-template-areas:
       "left viewport"
       "right right";
+  }
+
+  .workspace-frame-reveal {
+    display: none;
   }
 
   .left-panel {
@@ -10768,7 +10813,7 @@ textarea:focus-visible {
     max-content minmax(140px, 0.7fr)
     max-content minmax(280px, 1.3fr);
   align-items: center;
-  padding: 10px 220px 10px 18px;
+  padding: 10px 204px 10px 18px;
 }
 
 .tool-workspace__embedded .mission-target-query > .input-row {
@@ -10785,13 +10830,14 @@ textarea:focus-visible {
 }
 
 .workspace-floating-actions {
+  --workspace-floating-control-size: 32px;
   position: absolute;
   z-index: 8;
   top: 12px;
-  right: 18px;
+  right: 16px;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
 .npc-migration-workspace:has(> .npc-migration-message)
@@ -10801,7 +10847,23 @@ textarea:focus-visible {
 
 .workspace-floating-command,
 .workspace-floating-back {
-  box-shadow: 0 5px 16px rgba(25, 25, 25, 0.12);
+  height: var(--workspace-floating-control-size);
+  min-height: var(--workspace-floating-control-size);
+  color: var(--surface);
+  background: var(--control-hover);
+  border-color: var(--control-hover);
+  box-shadow: 0 4px 12px rgba(25, 25, 25, 0.14);
+}
+
+.workspace-floating-command {
+  gap: 6px;
+  padding-inline: 10px;
+  font-size: 11px;
+}
+
+.workspace-floating-back {
+  flex-basis: var(--workspace-floating-control-size);
+  width: var(--workspace-floating-control-size);
 }
 
 .workspace-subview-title {
@@ -12347,13 +12409,14 @@ textarea:focus-visible {
   }
 
   .app-shell[data-ark-theme="endfield"]
-    .button.workspace-floating-command:not(.button--primary):not(
+    .workspace-floating-actions
+    :is(.workspace-floating-command, .workspace-floating-back):not(
       :disabled
     ):hover {
     color: #ffffff;
-    background-color: var(--control-hover);
-    border-color: var(--control-hover);
-    box-shadow: 0 5px 16px rgba(25, 25, 25, 0.12);
+    background-color: var(--ink);
+    border-color: var(--ink);
+    box-shadow: 0 4px 12px rgba(25, 25, 25, 0.14);
   }
 
   .app-shell[data-ark-theme="endfield"] .button--primary:hover::before {

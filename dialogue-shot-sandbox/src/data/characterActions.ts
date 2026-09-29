@@ -10,6 +10,10 @@ import type {
   UnrealTransform,
   Vec3,
 } from "../types";
+import {
+  isEricPlayerClassPath,
+  isPlayerModelName,
+} from "./playerIdentity";
 import { participantFacingYawDegrees } from "../director/actorActionPlanner";
 import { modelResourceMatchesClassPath } from "./blueprintFormation";
 
@@ -435,22 +439,11 @@ export function dialogueParticipantsByModelIndex(
     participants.map((participant) => [participant.id, participant]),
   );
   const player = participantByNpcId.get(1);
-  const playerCatalog = catalogs.find((catalog) => {
-    const values = [
-      catalog.characterLabel ?? "",
-      catalog.blueprintClassPath
-        .replaceAll("\\", "/")
-        .split("/")
-        .at(-1)
-        ?.split(".")
-        .at(-1) ?? "",
-    ];
-    return values.some((value) =>
-      ["player", "bp_player", "bp_eric", "bp_eric_c"].includes(
-        value.trim().toLowerCase(),
-      ),
-    );
-  });
+  const playerCatalog = catalogs.find(
+    (catalog) =>
+      isPlayerModelName(catalog.characterLabel) ||
+      isEricPlayerClassPath(catalog.blueprintClassPath),
+  );
   const implicitPlayerModelIndex =
     playerCatalog?.modelIndex ?? (catalogs.length === 0 ? 0 : null);
   if (

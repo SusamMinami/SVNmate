@@ -14,6 +14,10 @@ import {
 } from "../types";
 import { PARTICIPANT_COLORS } from "./dialogueRepository";
 import { CharacterBodyProfileSchema, DEFAULT_CHARACTER_BODY } from "../director/characterGeometry";
+import {
+  isEricPlayerClassPath,
+  isPlayerModelName,
+} from "./playerIdentity";
 
 export interface AppliedBlueprintFormation {
   sequence: DialogueSequence;
@@ -37,6 +41,113 @@ function normalizedAssetPath(value: string): string {
     : normalized;
   const [packagePath] = withoutClass.split(".");
   return packagePath;
+}
+
+interface PlayerSlotResolution {
+  slot: BlueprintFormationSnapshot["slots"][number];
+  warnings: string[];
+}
+
+function resolvePlayerSlot(
+  slots: BlueprintFormationSnapshot["slots"],
+  modelNames: readonly string[],
+): PlayerSlotResolution {
+  const ericSlots = slots.filter((slot) =>
+    isEricPlayerClassPath(slot.modelClassPath),
+  );
+  const registeredPlayerSlots = slots.filter((slot) =>
+    isPlayerModelName(modelNames[slot.modelIndex]),
+  );
+
+  if (ericSlots.length === 1) {
+    const slot = ericSlots[0];
+    const conflictingIndexes = registeredPlayerSlots
+      .filter((candidate) => candidate.modelIndex !== slot.modelIndex)
+      .map((candidate) => candidate.modelIndex);
+    return {
+      slot,
+      warnings:
+        conflictingIndexes.length > 0
+          ? [
+              `DialogModels 将 player 登记在 ${conflictingIndexes.join("、")} 号槽，但 Eric 玩家 BP 位于 ${slot.modelIndex} 号槽；已以 BP 模型为准`,
+            ]
+          : [],
+    };
+  }
+
+  if (ericSlots.length > 1) {
+    const registeredEricSlots = ericSlots.filter((slot) =>
+      isPlayerModelName(modelNames[slot.modelIndex]),
+    );
+    if (registeredEricSlots.length === 1) {
+      return {
+        slot: registeredEricSlots[0],
+        warnings: [
+          `BP 中存在多个 Eric 模型，已按 DialogModels 的 player 登记使用 ${registeredEricSlots[0].modelIndex} 号槽`,
+        ],
+      };
+    }
+    throw new Error(
+      `Formation BP 中存在多个 Eric 玩家模型槽（${ericSlots
+        .map((slot) => slot.modelIndex)
+        .join("、")}），无法确认玩家实例`,
+    );
+  }
+
+  if (registeredPlayerSlots.length === 1) {
+    return {
+      slot: registeredPlayerSlots[0],
+      warnings: [
+        `BP 未识别到 Eric 玩家模型，已按 DialogModels 的 player 登记使用 ${registeredPlayerSlots[0].modelIndex} 号槽`,
+      ],
+    };
+  }
+  if (registeredPlayerSlots.length > 1) {
+    throw new Error(
+      `DialogModels 中存在多个 player 槽（${registeredPlayerSlots
+        .map((slot) => slot.modelIndex)
+        .join("、")}），无法确认玩家实例`,
+    );
+  }
+
+  const legacySlot = slots.find((slot) => slot.modelIndex === 0);
+  if (!legacySlot) {
+    throw new Error(
+      "Formation BP 未识别到 Eric 玩家模型、DialogModels player 或兼容 0 号槽",
+    );
+  }
+  return {
+    slot: legacySlot,
+    warnings: [
+      "BP 未识别到 Eric 玩家模型或 DialogModels player，已按旧规则使用 0 号槽",
+    ],
+  };
+}
+
+function activeFormationSlots(
+  snapshot: BlueprintFormationSnapshot,
+  modelNames: readonly string[],
+): {
+  slots: BlueprintFormationSnapshot["slots"];
+  player: PlayerSlotResolution;
+} {
+  const sortedSlots = snapshot.slots
+    .slice()
+    .sort((left, right) => left.modelIndex - right.modelIndex);
+  const player = resolvePlayerSlot(sortedSlots, modelNames);
+  return {
+    slots: sortedSlots.filter((slot) => {
+      if (
+        modelNames.length === 0 ||
+        slot.modelIndex === player.slot.modelIndex
+      ) {
+        return true;
+      }
+      const modelName = (modelNames[slot.modelIndex] ?? "").toLowerCase();
+      return !["", "none", "null"].includes(modelName);
+    }),
+    player,
+  };
 }
 
 export function modelResourceMatchesClassPath(
@@ -79,16 +190,10 @@ function profileCandidates(
   database: DialogueDatabase,
   sequence: DialogueSequence,
   modelIndex: number,
-  modelName: string,
   modelClassPath: string,
+  playerModelIndex: number,
 ): NpcProfile[] {
-  if (
-    modelIndex === 0 ||
-    modelName.trim().toLowerCase() === "player" ||
-    normalizedAssetPath(modelClassPath).endsWith(
-      "/seria/characters/eric/bp_eric",
-    )
-  ) {
+  if (modelIndex === playerModelIndex) {
     return [
       sequence.participants.find((participant) => participant.id === 1) ??
         database.npcs.get(1) ?? {
@@ -184,9 +289,10 @@ function profileMatchesSlot(
   database: DialogueDatabase,
   profile: NpcProfile,
   slot: BlueprintFormationSnapshot["slots"][number],
+  playerModelIndex: number,
 ): boolean {
   if (profile.id === 1) {
-    return slot.modelIndex === 0;
+    return slot.modelIndex === playerModelIndex;
   }
   return modelResourceMatchesClassPath(
     slot.modelClassPath,
@@ -205,13 +311,10 @@ export function findMissingBlueprintNpcModels(
     snapshot.dialogueModels && snapshot.dialogueModels.length > 0
       ? snapshot.dialogueModels
       : sequence.formation?.modelNames ?? [];
-  const activeSlots = snapshot.slots.filter((slot) => {
-    if (modelNames.length === 0 || slot.modelIndex === 0) {
-      return true;
-    }
-    const modelName = (modelNames[slot.modelIndex] ?? "").toLowerCase();
-    return !["", "none", "null"].includes(modelName);
-  });
+  const { slots: activeSlots, player } = activeFormationSlots(
+    snapshot,
+    modelNames,
+  );
   const rowsByNpcId = new Map<number, string[]>();
   for (const row of sequence.rows) {
     if (row.npcId === null || row.npcId === 1) {
@@ -262,7 +365,12 @@ export function findMissingBlueprintNpcModels(
       );
       if (
         explicitSlot &&
-        !profileMatchesSlot(database, profile, explicitSlot)
+        !profileMatchesSlot(
+          database,
+          profile,
+          explicitSlot,
+          player.slot.modelIndex,
+        )
       ) {
         return issue(
           `AM_Talk 指向 BP 槽位 ${modelIndex}，但该槽模型与 NPC 不一致`,
@@ -271,7 +379,12 @@ export function findMissingBlueprintNpcModels(
     }
     if (
       activeSlots.some((slot) =>
-        profileMatchesSlot(database, profile, slot),
+        profileMatchesSlot(
+          database,
+          profile,
+          slot,
+          player.slot.modelIndex,
+        ),
       )
     ) {
       return null;
@@ -348,20 +461,16 @@ export function applyBlueprintFormation(
   const speakingNpcIds = new Set(
     sequence.participants.map((participant) => participant.id),
   );
-  const warnings = [...sequence.warnings, ...snapshot.warnings];
-  const activeSlots = snapshot.slots
-    .filter((slot) => {
-      if (modelNames.length === 0 || slot.modelIndex === 0) {
-        return true;
-      }
-      const modelName = (modelNames[slot.modelIndex] ?? "").toLowerCase();
-      return !["", "none", "null"].includes(modelName);
-    })
-    .sort((left, right) => left.modelIndex - right.modelIndex);
-  const playerSlot = activeSlots.find((slot) => slot.modelIndex === 0);
-  if (!playerSlot) {
-    throw new Error("Formation BP 缺少固定的 0 号玩家槽位");
-  }
+  const { slots: activeSlots, player } = activeFormationSlots(
+    snapshot,
+    modelNames,
+  );
+  const playerSlot = player.slot;
+  const warnings = [
+    ...sequence.warnings,
+    ...snapshot.warnings,
+    ...player.warnings,
+  ];
   const activeSlotByIndex = new Map(
     activeSlots.map((slot) => [slot.modelIndex, slot]),
   );
@@ -385,20 +494,25 @@ export function applyBlueprintFormation(
 
   const requiredProfileByModelIndex = new Map<number, NpcProfile>();
   requiredProfileByModelIndex.set(
-    0,
+    playerSlot.modelIndex,
     npcProfile(database, sequence, 1) ??
       profileCandidates(
         database,
         sequence,
-        0,
-        modelNames[0] ?? "",
+        playerSlot.modelIndex,
         playerSlot.modelClassPath,
+        playerSlot.modelIndex,
       )[0],
   );
   for (const [modelIndex, npcIds] of explicitNpcIds) {
     const requiredNpcIds = Array.from(npcIds).filter(
-      (npcId) => !ignoredNpcIds.has(npcId),
+      (npcId) => npcId !== 1 && !ignoredNpcIds.has(npcId),
     );
+    if (npcIds.has(1) && modelIndex !== playerSlot.modelIndex) {
+      warnings.push(
+        `玩家台词的 AM_Talk 指向 ${modelIndex} 号槽，但 Eric 玩家 BP 位于 ${playerSlot.modelIndex} 号槽；已以 BP 模型为准`,
+      );
+    }
     if (requiredNpcIds.length === 0) {
       continue;
     }
@@ -416,7 +530,15 @@ export function applyBlueprintFormation(
       );
       continue;
     }
-    if (!profile || !profileMatchesSlot(database, profile, slot)) {
+    if (
+      !profile ||
+      !profileMatchesSlot(
+        database,
+        profile,
+        slot,
+        playerSlot.modelIndex,
+      )
+    ) {
       throw new Error(
         `对话 NPC ${profile?.name ?? npcId}（${npcId}）与 AM_Talk 指向的 BP 槽位 ${modelIndex} 模型不一致`,
       );
@@ -435,7 +557,12 @@ export function applyBlueprintFormation(
     const matchingSlots = activeSlots.filter(
       (slot) =>
         !requiredProfileByModelIndex.has(slot.modelIndex) &&
-        profileMatchesSlot(database, profile, slot),
+        profileMatchesSlot(
+          database,
+          profile,
+          slot,
+          playerSlot.modelIndex,
+        ),
     );
     if (matchingSlots.length === 0) {
       throw new Error(
@@ -446,7 +573,12 @@ export function applyBlueprintFormation(
       (candidate) =>
         candidate.id !== profile.id &&
         matchingSlots.some((slot) =>
-          profileMatchesSlot(database, candidate, slot),
+          profileMatchesSlot(
+            database,
+            candidate,
+            slot,
+            playerSlot.modelIndex,
+          ),
         ) &&
         !Array.from(requiredProfileByModelIndex.values()).some(
           (assigned) => assigned.id === candidate.id,
@@ -485,7 +617,12 @@ export function applyBlueprintFormation(
   }
 
   const resolvedSlots = activeSlots.map((slot): ResolvedFormationSlot => {
-    const modelName = modelNames[slot.modelIndex] ?? "";
+    const registeredModelName = modelNames[slot.modelIndex] ?? "";
+    const modelName =
+      slot.modelIndex !== playerSlot.modelIndex &&
+      isPlayerModelName(registeredModelName)
+        ? ""
+        : registeredModelName;
     const requiredProfile = requiredProfileByModelIndex.get(slot.modelIndex);
     const backgroundCandidates = requiredProfile
       ? []
@@ -493,8 +630,8 @@ export function applyBlueprintFormation(
           database,
           sequence,
           slot.modelIndex,
-          modelName,
           slot.modelClassPath,
+          playerSlot.modelIndex,
         ).filter((candidate) => !speakingNpcIds.has(candidate.id));
     const profile =
       requiredProfile ??

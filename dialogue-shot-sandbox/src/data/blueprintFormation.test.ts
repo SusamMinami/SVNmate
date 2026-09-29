@@ -59,6 +59,142 @@ function slot(
 }
 
 describe("applyBlueprintFormation", () => {
+  it("uses the Eric Blueprint slot as the player when it is not slot zero", () => {
+    const database = parseDialogueDatabase(
+      [
+        "##&Dialog.id,Dialog.NPCID,Dialog.Content,Dialog.NextID,Dialog.End,Dialog.CharacterBehaviourString",
+        "##对话ID,人物,内容,下一ID,结束,动作",
+        "740000,,,740001,false,",
+        '740001,101968,守卫说话,740002,false,"0.000000,AM_Talk,0,0,0,0,0,0,0,0;;"',
+        '740002,1,玩家说话,,true,";;0.000000,AM_Talk,0,0,0,0,0,0,0,0"',
+      ].join("\n"),
+      [
+        "##&DialogStart.id,DialogStart.Outline,DialogStart.Formation,DialogStart.Model",
+        "##对话ID,剧情梗概,模板,模型",
+        "740000,玩家非首槽,/Game/Test/BP_740000.BP_740000_C,M63_Cityguard;None;player",
+      ].join("\n"),
+      npcs,
+      "test",
+      models,
+    );
+    const sequence = findDialogueSequence(database, "7400");
+    const snapshot: BlueprintFormationSnapshot = {
+      dialogueId: "7400",
+      blueprintAssetPath: "/Game/Test/BP_740000.BP_740000",
+      blueprintClassPath: "/Game/Test/BP_740000.BP_740000_C",
+      slots: [
+        slot(
+          0,
+          "/Game/Seria/NPC/M63_Cityguard/BP_M63_Cityguard_NPC.BP_M63_Cityguard_NPC_C",
+          0,
+          -100,
+          0,
+        ),
+        slot(
+          2,
+          "/Game/Seria/Characters/Eric/BP_Eric_Claymore.BP_Eric_Claymore_C",
+          0,
+          100,
+          180,
+        ),
+      ],
+      dialogueModels: ["M63_Cityguard", "None", "player"],
+      warnings: [],
+    };
+
+    const applied = applyBlueprintFormation(database, sequence, snapshot);
+    expect(
+      applied.sequence.participants.map((participant) => [
+        participant.id,
+        participant.modelIndex,
+      ]),
+    ).toEqual([
+      [101968, 0],
+      [1, 2],
+    ]);
+    expect(
+      applied.sequence.rows.map((row) => [row.npcId, row.speakerSlot]),
+    ).toEqual([
+      [101968, "A"],
+      [1, "B"],
+    ]);
+
+    const preview = createShotPreview(applied.sequence, {
+      preserveInputPositions: true,
+      lockPlayerPosition: false,
+    });
+    expect(preview.sequence.participants[0].position).toEqual(
+      applied.sequence.participants[0].position,
+    );
+    expect(preview.sequence.participants[1].position).not.toEqual(
+      applied.sequence.participants[1].position,
+    );
+  });
+
+  it("prefers the Eric Blueprint slot over stale DialogModels player indexing", () => {
+    const database = parseDialogueDatabase(
+      dialogues,
+      starts,
+      npcs,
+      "test",
+      models,
+    );
+    const sourceSequence = findDialogueSequence(database, "7350");
+    const sequence = {
+      ...sourceSequence,
+      rows: sourceSequence.rows.map((row) => ({
+        ...row,
+        speakerModelIndex: null,
+      })),
+    };
+    const snapshot: BlueprintFormationSnapshot = {
+      dialogueId: "7350",
+      blueprintAssetPath: "/Game/Test/BP_735000.BP_735000",
+      blueprintClassPath: "/Game/Test/BP_735000.BP_735000_C",
+      slots: [
+        slot(
+          0,
+          "/Game/Seria/NPC/Unused/BP_Unused.BP_Unused_C",
+          0,
+          -100,
+          0,
+        ),
+        slot(
+          2,
+          "/Game/Seria/Characters/Eric/BP_Eric.BP_Eric_C",
+          0,
+          100,
+          180,
+        ),
+        slot(
+          3,
+          "/Game/Seria/NPC/N115_Finance_Female/BP_N115_Finance_Female.BP_N115_Finance_Female_C",
+          100,
+          100,
+          0,
+        ),
+        slot(
+          4,
+          "/Game/Seria/NPC/M63_Cityguard/BP_M63_Cityguard_NPC.BP_M63_Cityguard_NPC_C",
+          -100,
+          100,
+          0,
+        ),
+      ],
+      dialogueModels: ["player", "None", "None", "N115", "M63"],
+      warnings: [],
+    };
+
+    const applied = applyBlueprintFormation(database, sequence, snapshot);
+    expect(
+      applied.sequence.participants.find((participant) => participant.id === 1)
+        ?.modelIndex,
+    ).toBe(2);
+    expect(applied.sequence.warnings).toContain(
+      "DialogModels 将 player 登记在 0 号槽，但 Eric 玩家 BP 位于 2 号槽；已以 BP 模型为准",
+    );
+  });
+
   it("maps BP model slots to NPC identities without collapsing duplicate actors", () => {
     const database = parseDialogueDatabase(
       dialogues,

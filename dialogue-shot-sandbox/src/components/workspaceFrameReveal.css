@@ -1,0 +1,231 @@
+.workspace-frame-reveal {
+  position: absolute;
+  z-index: 20;
+  inset: 0;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+  contain: strict;
+}
+
+.workspace-frame-reveal__line {
+  position: absolute;
+  display: block;
+  color: var(--ark-cyan);
+  background: color-mix(in srgb, currentColor 72%, transparent);
+}
+
+.workspace-frame-reveal__line::after {
+  position: absolute;
+  width: 5px;
+  height: 5px;
+  background: currentColor;
+  box-shadow: 0 1px 4px color-mix(in srgb, currentColor 28%, transparent);
+  content: "";
+}
+
+.workspace-frame-reveal__line[data-line="top"],
+.workspace-frame-reveal__line[data-line="bottom"],
+.workspace-frame-reveal__line[data-line="viewport-toolbar"] {
+  height: 1px;
+  transform: scaleX(1);
+}
+
+.workspace-frame-reveal__line[data-line="top"] {
+  top: 0;
+  right: 0;
+  left: 0;
+  transform-origin: left;
+}
+
+.workspace-frame-reveal__line[data-line="bottom"] {
+  right: 0;
+  bottom: 0;
+  left: 0;
+  transform-origin: right;
+}
+
+.workspace-frame-reveal__line[data-line="viewport-toolbar"] {
+  top: 42px;
+  right: var(--workspace-right-column);
+  left: var(--workspace-left-column);
+  transform-origin: left;
+}
+
+.workspace-frame-reveal__line[data-line="top"]::after,
+.workspace-frame-reveal__line[data-line="viewport-toolbar"]::after {
+  top: -2px;
+  right: -2px;
+}
+
+.workspace-frame-reveal__line[data-line="bottom"]::after {
+  top: -2px;
+  left: -2px;
+}
+
+.workspace-frame-reveal__line[data-line="left-panel"],
+.workspace-frame-reveal__line[data-line="right-panel"] {
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  transform: scaleY(1);
+}
+
+.workspace-frame-reveal__line[data-line="left-panel"] {
+  left: var(--workspace-left-column);
+  transform-origin: top;
+}
+
+.workspace-frame-reveal__line[data-line="right-panel"] {
+  right: var(--workspace-right-column);
+  transform-origin: bottom;
+}
+
+.workspace-frame-reveal__line[data-line="left-panel"]::after {
+  right: -2px;
+  bottom: -2px;
+}
+
+.workspace-frame-reveal__line[data-line="right-panel"]::after {
+  top: -2px;
+  right: -2px;
+}
+
+.workspace-frame-reveal[data-active="true"] {
+  animation: workspace-frame-overlay 900ms linear backwards;
+}
+
+.workspace-frame-reveal[data-active="true"]
+  .workspace-frame-reveal__line[data-line="top"] {
+  animation: workspace-frame-horizontal 280ms
+    cubic-bezier(0.16, 1, 0.3, 1) 20ms backwards;
+}
+
+.workspace-frame-reveal[data-active="true"]
+  .workspace-frame-reveal__line[data-line="left-panel"] {
+  animation: workspace-frame-vertical 360ms
+    cubic-bezier(0.16, 1, 0.3, 1) 120ms backwards;
+}
+
+.workspace-frame-reveal[data-active="true"]
+  .workspace-frame-reveal__line[data-line="right-panel"] {
+  animation: workspace-frame-vertical 360ms
+    cubic-bezier(0.16, 1, 0.3, 1) 180ms backwards;
+}
+
+.workspace-frame-reveal[data-active="true"]
+  .workspace-frame-reveal__line[data-line="viewport-toolbar"] {
+  animation: workspace-frame-horizontal 300ms
+    cubic-bezier(0.16, 1, 0.3, 1) 360ms backwards;
+}
+
+.workspace-frame-reveal[data-active="true"]
+  .workspace-frame-reveal__line[data-line="bottom"] {
+  animation: workspace-frame-horizontal 320ms
+    cubic-bezier(0.16, 1, 0.3, 1) 460ms backwards;
+}
+
+.workspace:has(> .workspace-frame-reveal[data-active="true"]) :is(
+  .panel-section,
+  .inspector-header,
+  .inspector-tabs,
+  .inspector-section
+) {
+  position: relative;
+}
+
+.workspace:has(> .workspace-frame-reveal[data-active="true"]) :is(
+  .panel-section,
+  .inspector-header,
+  .inspector-tabs,
+  .inspector-section
+)::after {
+  position: absolute;
+  z-index: 4;
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  height: 1px;
+  background: color-mix(in srgb, var(--ark-cyan) 58%, transparent);
+  opacity: 0;
+  transform: scaleX(1);
+  transform-origin: left;
+  animation: workspace-rule-resolve 460ms
+    cubic-bezier(0.16, 1, 0.3, 1) var(--workspace-rule-delay, 300ms)
+    backwards;
+  pointer-events: none;
+  content: "";
+}
+
+.workspace:has(> .workspace-frame-reveal[data-active="true"])
+  .inspector-header {
+  --workspace-rule-delay: 340ms;
+}
+
+.workspace:has(> .workspace-frame-reveal[data-active="true"])
+  .inspector-tabs {
+  --workspace-rule-delay: 400ms;
+}
+
+.workspace:has(> .workspace-frame-reveal[data-active="true"])
+  .inspector-section {
+  --workspace-rule-delay: 440ms;
+}
+
+@keyframes workspace-frame-horizontal {
+  from {
+    transform: scaleX(0);
+  }
+}
+
+@keyframes workspace-frame-vertical {
+  from {
+    transform: scaleY(0);
+  }
+}
+
+@keyframes workspace-frame-overlay {
+  0%,
+  76% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes workspace-rule-resolve {
+  0% {
+    opacity: 1;
+    transform: scaleX(0);
+  }
+
+  64% {
+    opacity: 1;
+    transform: scaleX(1);
+  }
+
+  100% {
+    opacity: 0;
+    transform: scaleX(1);
+  }
+}
+
+:root[data-reduced-motion="true"] .workspace-frame-reveal,
+:root[data-reduced-motion="true"] .workspace-frame-reveal *,
+:root[data-reduced-motion="true"]
+  .workspace:has(> .workspace-frame-reveal[data-active="true"])
+  :is(.panel-section, .inspector-header, .inspector-tabs, .inspector-section)::after {
+  animation: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-reduced-motion]) .workspace-frame-reveal,
+  :root:not([data-reduced-motion]) .workspace-frame-reveal *,
+  :root:not([data-reduced-motion])
+    .workspace:has(> .workspace-frame-reveal[data-active="true"])
+    :is(.panel-section, .inspector-header, .inspector-tabs, .inspector-section)::after {
+    animation: none !important;
+  }
+}

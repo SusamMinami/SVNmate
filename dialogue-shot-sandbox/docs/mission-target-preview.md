@@ -215,13 +215,14 @@ BP 输入框右侧的检查按钮会读取 BP、对应数字槽位、同名 Dial
   唯一匹配；仍有多个候选时保持未登记，不进行模糊猜测。
 - 已有非空对话槽显示“已注册”，可映射空槽显示“待注册”，无映射槽显示
   “未登记”。
-- 全部数字角色位都会显示和计数。0 号位固定勾选并写为 `player`；其余模型槽
-  也固定保留，并按 BP 原槽位序号写入。
+- 全部数字角色位都会显示和计数。已有 BP 中唯一的 Eric 模型槽固定勾选并写为
+  `player`；其余模型槽也固定保留，并按 BP 原槽位序号写入。
 - 找不到 `DialogNPCTable` 映射的已选模型在检查结果标为未登记；
   写入必须先走补登记审核，不得静默把 `None` 写回。
 
-所有改写 `DialogModels` 的服务端入口在公共写入层再次验证 `0 = BP_Eric`，
-不能只依赖界面校验。仅明确保留现有模型、只补空间配置的流程可跳过该验证。
+所有改写 `DialogModels` 的服务端入口在公共写入层再次验证 BP 数字槽中存在
+唯一 Eric 玩家模型，并把 `player` 写入该模型的实际索引，不能只依赖界面校验。
+仅明确保留现有模型、只补空间配置的流程可跳过该验证。
 
 当检查结果包含“未登记”槽位时，任务目标物工作区会在 BP 创建、追加或
 `DialogModels` 写入前打开补登记审核：
@@ -242,8 +243,8 @@ BP 输入框右侧的检查按钮会读取 BP、对应数字槽位、同名 Dial
 主按钮切换为“添加到 BP 并注册”；新增组件保持任务顺序，从现有最大槽位号后
 连续命名，原有组件不会重命名或删除。没有勾选候选项时仍只注册现有 BP。
 写入通过 OmniMcpCore 的对象属性与资产保存接口完成，不直接修改 `.uasset`
-二进制；写后回读整个数组，完全一致才执行保存。界面中的角色总数包含 0 号
-玩家，不再以“非玩家模型数”代替完整角色数。
+二进制；写后回读整个数组，完全一致才执行保存。界面中的角色总数包含玩家，
+不再以“非玩家模型数”代替完整角色数。
 
 注册已有 BP 时还会检查对话空间配置。`Virtual=true`、主角初始坐标和
 `PreviewLevel` 均已配置时保持原值，不扫描关卡。如果存在缺失项：
@@ -321,19 +322,26 @@ UE 选择审核会区分 SceneObject NPC 与普通背景资源，不新增目标
 - Blueprint Actor 写为 `ChildActorComponent` 和对应 Generated Class。
 - 关卡图生成的 `SceneObject` NPC 从 `child_preview_class` 或已生成 Child
   Preview Actor 解析实际 NPC Generated Class，使用包装 Actor 的世界 Transform。
-  匹配任务目标物时沿用原流程；未匹配时从 BP 当前最大数字槽后按 UE 选择顺序
-  追加，并通过 `DialogNPCTable` 同步 `DialogModels`。
+  匹配任务目标物时沿用原流程；未匹配时按 Character BP 完整类路径列出全部同模型
+  数字槽与旧式 `ChildActor*` 组件。唯一同模型组件默认更新其 Transform；多个候选
+  无法按现有位置唯一确认时默认新增。审核行允许显式切换“新增数字槽”或指定
+  “更新槽位/组件”，同一组件不能被多个所选 Actor 重复使用。类路径必须完全一致，
+  `_Injure`、`_Injured` 等变体不会视为基础模型。
   两种类解析都失败时报告单项根因，不回退 `BP_Npc_Preview` 背景组件。
 - 空 `PositionModeBase` BP 首次写入对话 NPC 时，会在同一审核事务中自动补建
   `0 = BP_Eric` 和 `c1 = CameraComponent`，NPC 从 `1` 开始编号。玩家与摄像机
-  作为固定勾选项和 NPC 一起显示。若 BP 已有其他数字槽却缺少 `0`，或保留名
-  组件类型错误，则停止写入并要求先修复布局。
+  与 NPC 一起显示。BP 没有 Eric 且 0 号槽空闲时，“补建 0 号玩家”默认勾选，
+  用户可取消；取消后只写 BP 角色槽，不修改 `DialogModels`。0 号槽已被占用时
+  不能自动补建玩家，但仍可继续仅写 BP。已有 Eric 位于任意数字槽时保持该槽的
+  模型、编号和 Transform 不变；存在多个 Eric 模型时停止写入并要求先确认玩家。
 - SkeletalMeshActor 写为 `SkeletalMeshComponent` 和实际 Skeletal Mesh。
 - StaticMeshActor 写为 `StaticMeshComponent` 和实际 Static Mesh。
 - Cascade Emitter 写为 `ParticleSystemComponent` 和实际 Particle System。
 - Niagara Actor 写为 `NiagaraComponent` 和实际 Niagara System。
 - `SceneObject` NPC 与直接 `SeriaNPC` Actor 均走数字槽管线；真正的普通背景资源
   才以资产名创建非数字组件，不修改 `DialogModels`。不支持的 Actor 不参与写入。
+- 更新旧式非数字 `ChildActor*` 组件时只修改该组件的 Transform，不重命名组件，
+  也不把它加入 `DialogModels`；切换为“新增数字槽”后才进入对话模型注册流程。
 - 任务节点与对话节点都为空时，工具按 BP 父类分流。`TaskActorBase` 不要求
   BP 文件名包含对话数字 ID，优先使用 UE 当前选择中的目标 BP Actor 作为
   坐标原点；未选中目标 BP 时，可回退到当前关卡中的唯一同类 BP 实例。无法
@@ -342,10 +350,9 @@ UE 选择审核会区分 SceneObject NPC 与普通背景资源，不新增目标
 
 普通背景组件名直接使用资产名，例如 `SK_Banner` 或 `BP_BackgroundNpc`。BP 中
 已有同名同资产组件时更新 Transform；已有同名不同资产或一次选择中存在多个
-同名资产时停止该项，不自动重命名。SceneObject NPC 使用数字槽名，因此允许
-同一 NPC Blueprint 在不同位置出现多次。若检测到旧版已用资产名写入同一 NPC
-和 Transform，会显示目标数字槽，要求先将旧组件手动重命名到该槽（或删除）
-后重新读取，避免生成重复角色。
+同名资产时停止该项，不自动重命名。SceneObject NPC 新增时使用数字槽名，因此
+允许同一 NPC Blueprint 在不同位置出现多次；已有同模型的旧式命名组件则作为
+独立的位置更新候选保留。
 
 `PositionModeBase` 使用 `PlayerInitPosition` 和 `PlayerForward` 把所选 Actor
 的世界 Transform 转换为 BP 局部 Transform，并校验当前地图与

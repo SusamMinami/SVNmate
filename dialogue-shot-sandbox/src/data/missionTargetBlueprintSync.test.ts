@@ -53,6 +53,30 @@ function slot(
 }
 
 describe("mission target and Blueprint position mapping", () => {
+  it("excludes the Eric player by model path instead of reserving slot zero", () => {
+    const sync = buildMissionTargetBlueprintSync(
+      [target("500001", "/Game/Test/BP_A.BP_A_C", 100, 200, 300)],
+      [
+        slot(0, "/Game/Test/BP_A.BP_A_C"),
+        slot(
+          2,
+          "/Game/Seria/Characters/Eric/BP_Eric_Claymore.BP_Eric_Claymore_C",
+        ),
+      ],
+      {
+        explicit: true,
+        transform: {
+          location: { x: 0, y: 0, z: 0 },
+          rotation: { pitch: 0, yaw: 0, roll: 0 },
+        },
+      },
+      "test",
+    );
+
+    expect(sync.mappings.map((mapping) => mapping.modelIndex)).toEqual([0]);
+    expect(sync.unmatchedModelIndexes).toEqual([]);
+  });
+
   it("maps reordered models by class instead of task order", () => {
     const sync = buildMissionTargetBlueprintSync(
       [

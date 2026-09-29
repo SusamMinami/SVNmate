@@ -1073,7 +1073,7 @@ test("loads existing UE cameras without starting a director", async ({
 
 test("keeps rail icons fixed and slides between workspace levels", async ({
   page,
-}) => {
+}, testInfo) => {
   await page.goto("/");
 
   const hoveredShot = page.locator(".shot-row").nth(1);
@@ -1112,6 +1112,39 @@ test("keeps rail icons fixed and slides between workspace levels", async ({
   await expect(
     page.locator(".tool-workspace:not([hidden]) .workspace-floating-actions button"),
   ).toHaveCount(2);
+  const floatingActions = page.locator(
+    ".tool-workspace:not([hidden]) .workspace-floating-actions",
+  );
+  const backButton = floatingActions.getByRole("button", {
+    name: "返回分镜工作台",
+  });
+  const headerStatusIcon = page
+    .locator(".app-header__status .workspace-status-icon")
+    .last();
+  const [headerIconBox, refreshBox, backBox] = await Promise.all([
+    headerStatusIcon.boundingBox(),
+    floatingActions.locator(".workspace-floating-command").boundingBox(),
+    backButton.boundingBox(),
+  ]);
+  expect(headerIconBox && refreshBox && backBox).toBeTruthy();
+  expect([headerIconBox!.width, headerIconBox!.height]).toEqual([32, 32]);
+  expect([backBox!.width, backBox!.height]).toEqual([32, 32]);
+  expect(refreshBox!.height).toBe(32);
+  expect(
+    Math.round(backBox!.x + backBox!.width),
+  ).toBe(Math.round(headerIconBox!.x + headerIconBox!.width));
+  const [headerColor, refreshColor, backColor] = await Promise.all([
+    headerStatusIcon.evaluate((element) => getComputedStyle(element).backgroundColor),
+    floatingActions
+      .locator(".workspace-floating-command")
+      .evaluate((element) => getComputedStyle(element).backgroundColor),
+    backButton.evaluate((element) => getComputedStyle(element).backgroundColor),
+  ]);
+  expect(refreshColor).toBe(backColor);
+  expect(refreshColor).not.toBe(headerColor);
+  await page.screenshot({
+    path: testInfo.outputPath("workspace-action-alignment.png"),
+  });
   await expect(page.locator(".app-shell")).toHaveAttribute(
     "data-workspace-direction",
     "up",
@@ -1127,7 +1160,7 @@ test("keeps rail icons fixed and slides between workspace levels", async ({
   );
   await refreshButton.hover();
   await page.waitForTimeout(220);
-  await expect(refreshButton).toHaveCSS("background-color", "rgb(56, 56, 56)");
+  await expect(refreshButton).toHaveCSS("background-color", "rgb(25, 25, 25)");
   expect(await refreshButton.evaluate(
     (element) => getComputedStyle(element).boxShadow,
   )).not.toContain("rgb(255, 250, 0)");
@@ -6583,11 +6616,11 @@ test("offers the detected Blueprint formation before designing shots", async ({
   );
   await expect(dialog.getByText(/背景 NPC 只参与构图/)).toBeVisible();
   const playerPositionLock = dialog.getByRole("checkbox", {
-    name: /固定 0 号玩家位置/,
+    name: /固定玩家（BP 槽 0）位置/,
   });
   await expect(playerPositionLock).not.toBeChecked();
   await expect(
-    dialog.getByText(/取消后仅允许导演调整 0 号位/),
+    dialog.getByText(/取消后仅允许导演调整玩家/),
   ).toBeVisible();
   await expect(
     dialog.locator(".actor-label").filter({ hasText: "玩家" }).first(),
@@ -6677,7 +6710,7 @@ test("offers the detected Blueprint formation before designing shots", async ({
     name: "TRAE 自主占位",
   });
   const traePlayerPositionLock = traeStrategyDialog.getByRole("checkbox", {
-    name: /固定 0 号玩家位置/,
+    name: /固定玩家（BP 槽 0）位置/,
   });
   await expect(traeAutonomousPlacement).toBeVisible();
   await traeAutonomousPlacement.click();
@@ -8909,7 +8942,7 @@ test("locks and registers every existing numeric Blueprint slot", async ({
     targetOverrides: [],
   });
   await expect(
-    workspace.getByText(/角色 4 个（含 0 号玩家）/),
+    workspace.getByText(/角色 4 个（含玩家）/),
   ).toBeVisible();
 });
 
@@ -9271,7 +9304,7 @@ test("separates four-digit registration from six-digit node positioning", async 
   expect(mapStatusRequests).toBe(0);
 });
 
-test("lists the automatic player slot when importing an NPC into an empty BP", async ({
+test("chooses player bootstrap and an existing NPC slot before writing", async ({
   page,
 }, testInfo) => {
   let applyRequest: Record<string, unknown> | null = null;
@@ -9323,6 +9356,8 @@ test("lists the automatic player slot when importing an NPC into an empty BP", a
               location: { x: 100, y: 200, z: 200 },
               rotation: { pitch: 0, yaw: 0, roll: 0 },
             },
+            playerModelIndex: null,
+            canCreatePlayerSlot: true,
             willCreatePlayerSlot: true,
             willCreateCameraSlot: true,
             items: [
@@ -9334,6 +9369,13 @@ test("lists the automatic player slot when importing an NPC into an empty BP", a
                 assetPath: "/Game/Test/BP_Added.BP_Added",
                 componentName: "1",
                 modelIndex: 1,
+                matchingModelComponents: [
+                  {
+                    componentName: "1",
+                    modelIndex: 1,
+                    transformMatches: false,
+                  },
+                ],
                 dialogueModelName: "Added",
                 componentClass: "/Script/Engine.ChildActorComponent",
                 assetPropertyName: "ChildActorClass",
@@ -9347,8 +9389,8 @@ test("lists the automatic player slot when importing an NPC into an empty BP", a
                   rotation: { pitch: 0, yaw: 30, roll: 0 },
                   scale: { x: 1, y: 1, z: 1 },
                 },
-                action: "create",
-                message: "新增对话角色槽 1；DialogModels=Added",
+                action: "update",
+                message: "更新已有对话角色槽 1 Transform；DialogModels=Added",
               },
             ],
             blockedReasons:
@@ -9434,12 +9476,8 @@ test("lists the automatic player slot when importing an NPC into an empty BP", a
             status: "updated",
             blueprintAssetPath:
               "/Game/Seria/Task/Mod/Test/BP_735200.BP_735200",
-            createdComponentNames: ["0", "1", "c1"],
-            updatedComponentNames: [],
-            dialogueRegistration: {
-              status: "registered",
-              registeredCount: 1,
-            },
+            createdComponentNames: [],
+            updatedComponentNames: ["1"],
             saved: true,
           },
         }),
@@ -9465,18 +9503,27 @@ test("lists the automatic player slot when importing an NPC into an empty BP", a
   await expect(playerRow).toContainText("DialogModels：player");
   await expect(playerRow).toContainText("100.0, 200.0, 300.0");
   await expect(playerRow).toContainText("新增");
-  await expect(review.getByLabel("固定补建 0 号玩家")).toBeChecked();
-  await expect(review.getByLabel("固定补建 0 号玩家")).toBeDisabled();
+  const createPlayerSlot = review.getByLabel("补建 0 号玩家");
+  await expect(createPlayerSlot).toBeChecked();
+  await expect(createPlayerSlot).toBeEnabled();
+  await createPlayerSlot.uncheck();
+  await expect(playerRow).toContainText("不新建");
+  const npcRow = review
+    .locator(".background-prop-table tbody tr")
+    .filter({ hasText: "BP_Added" });
+  const npcWriteMode = review.getByLabel("BP_Added 的 BP 写入方式");
+  await expect(npcWriteMode).toHaveValue("1");
+  await npcWriteMode.selectOption("__new__");
+  await expect(npcRow.getByText("新增", { exact: true })).toBeVisible();
+  await npcWriteMode.selectOption("1");
+  await expect(npcRow.getByText("更新", { exact: true })).toBeVisible();
   const cameraRow = review
     .locator(".background-prop-table tbody tr")
     .filter({ hasText: "CameraComponent" });
-  await expect(cameraRow).toContainText("c1");
-  await expect(cameraRow).toContainText("100.0, 200.0, 299.0");
-  await expect(review.getByLabel("固定补建 c1 摄像机")).toBeChecked();
-  await expect(review.getByLabel("固定补建 c1 摄像机")).toBeDisabled();
+  await expect(cameraRow).toHaveCount(0);
   await expect(
     review.locator(".background-prop-table tbody tr"),
-  ).toHaveCount(3);
+  ).toHaveCount(2);
   await expect(
     review.getByText(/写入时将自动补齐对话配置/),
   ).toBeVisible();
@@ -9491,6 +9538,7 @@ test("lists the automatic player slot when importing an NPC into an empty BP", a
   });
   page.once("dialog", async (confirmation) => {
     expect(confirmation.message()).toContain("1 个对话 NPC");
+    expect(confirmation.message()).toContain("未补建玩家");
     expect(confirmation.message()).toContain("先自动补齐对话 Formation");
     await confirmation.accept();
   });
@@ -9498,7 +9546,9 @@ test("lists the automatic player slot when importing an NPC into an empty BP", a
     .getByRole("button", { name: "补齐并写入 BP 与对话" })
     .click();
 
-  await expect(workspace.getByText(/已写入 BP：新增 3 个/)).toBeVisible();
+  await expect(
+    workspace.getByText(/已写入 BP：新增 0 个，更新 1 个/),
+  ).toBeVisible();
   expect(dialogueSetupRequest).toEqual({
     blueprintName: "BP_735200",
     selectedModelIndexes: [],
@@ -9511,6 +9561,252 @@ test("lists the automatic player slot when importing an NPC into an empty BP", a
     reviewToken: "c".repeat(64),
     selectedActorRefs: [actorRef],
     reviewedActorRefs: [actorRef],
+    createPlayerSlot: false,
+    dialogueNpcSlotAssignments: [
+      {
+        actorRef,
+        targetComponentName: "1",
+      },
+    ],
+  });
+});
+
+test("offers legacy component updates only for exact NPC model matches", async ({
+  page,
+}, testInfo) => {
+  let applyRequest: Record<string, unknown> | null = null;
+  const dorothyRef = "PersistentLevel.BP_N87_Dorothy_C_2";
+  const citizenRef = "PersistentLevel.BP_N28_Citizen_Male_C02_C_2";
+  await page.route("**/api/ue/selection/read", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          mapAssetPath: "/Game/Test/Maps/PlacedMap",
+          actors: [
+            {
+              actorRef: dorothyRef,
+              label: "BP_N87_Dorothy",
+              classPath:
+                "/Game/Seria/NPC/N87_Dorothy/BP_N87_Dorothy.BP_N87_Dorothy_C",
+              parentClassPath: "/Script/Seria.SeriaNPC",
+              assetKind: "blueprint_actor",
+              assetPath:
+                "/Game/Seria/NPC/N87_Dorothy/BP_N87_Dorothy",
+              transform: {
+                location: { x: 140, y: 250, z: 300 },
+                rotation: { pitch: 0, yaw: 30, roll: 0 },
+                scale: { x: 1, y: 1, z: 1 },
+              },
+            },
+            {
+              actorRef: citizenRef,
+              label: "BP_N28_Citizen_Male_C02",
+              classPath:
+                "/Game/Seria/NPC/N28_Citizen_Male_C02/BP_N28_Citizen_Male_C02.BP_N28_Citizen_Male_C02_C",
+              parentClassPath: "/Script/Seria.SeriaNPC",
+              assetKind: "blueprint_actor",
+              assetPath:
+                "/Game/Seria/NPC/N28_Citizen_Male_C02/BP_N28_Citizen_Male_C02",
+              transform: {
+                location: { x: 160, y: 280, z: 310 },
+                rotation: { pitch: 0, yaw: -25, roll: 0 },
+                scale: { x: 1, y: 1, z: 1 },
+              },
+            },
+          ],
+        },
+      }),
+    });
+  });
+  await page.route(
+    "**/api/ue/mission-targets/background-props/inspect",
+    async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          data: {
+            reviewToken: "d".repeat(64),
+            blueprintAssetPath:
+              "/Game/Seria/Task/Mod/Tutorial/3311/BP_526900.BP_526900",
+            mapAssetPath: "/Game/Test/Maps/PlacedMap",
+            rootTransform: {
+              location: { x: 100, y: 200, z: 200 },
+              rotation: { pitch: 0, yaw: 0, roll: 0 },
+            },
+            playerModelIndex: null,
+            canCreatePlayerSlot: true,
+            willCreatePlayerSlot: true,
+            willCreateCameraSlot: false,
+            items: [
+              {
+                actorRef: dorothyRef,
+                actorLabel: "BP_N87_Dorothy",
+                importMode: "dialogue_npc",
+                assetKind: "blueprint_actor",
+                assetPath:
+                  "/Game/Seria/NPC/N87_Dorothy/BP_N87_Dorothy",
+                componentName: "ChildActor",
+                matchingModelComponents: [
+                  {
+                    componentName: "ChildActor",
+                    transformMatches: false,
+                  },
+                ],
+                dialogueModelName: "Dorothy",
+                componentClass: "/Script/Engine.ChildActorComponent",
+                assetPropertyName: "ChildActorClass",
+                worldTransform: {
+                  location: { x: 140, y: 250, z: 300 },
+                  rotation: { pitch: 0, yaw: 30, roll: 0 },
+                  scale: { x: 1, y: 1, z: 1 },
+                },
+                relativeTransform: {
+                  location: { x: 40, y: 50, z: 100 },
+                  rotation: { pitch: 0, yaw: 30, roll: 0 },
+                  scale: { x: 1, y: 1, z: 1 },
+                },
+                action: "update",
+                message:
+                  "更新已有角色组件 ChildActor Transform；不修改 DialogModels",
+              },
+              {
+                actorRef: citizenRef,
+                actorLabel: "BP_N28_Citizen_Male_C02",
+                importMode: "dialogue_npc",
+                assetKind: "blueprint_actor",
+                assetPath:
+                  "/Game/Seria/NPC/N28_Citizen_Male_C02/BP_N28_Citizen_Male_C02",
+                componentName: "1",
+                modelIndex: 1,
+                matchingModelComponents: [],
+                dialogueModelName: "Citizen",
+                componentClass: "/Script/Engine.ChildActorComponent",
+                assetPropertyName: "ChildActorClass",
+                worldTransform: {
+                  location: { x: 160, y: 280, z: 310 },
+                  rotation: { pitch: 0, yaw: -25, roll: 0 },
+                  scale: { x: 1, y: 1, z: 1 },
+                },
+                relativeTransform: {
+                  location: { x: 60, y: 80, z: 110 },
+                  rotation: { pitch: 0, yaw: -25, roll: 0 },
+                  scale: { x: 1, y: 1, z: 1 },
+                },
+                action: "create",
+                message: "新增对话角色槽 1；DialogModels=Citizen",
+              },
+            ],
+            blockedReasons: [],
+          },
+        }),
+      });
+    },
+  );
+  await page.route(
+    "**/api/ue/mission-targets/background-props/apply",
+    async (route) => {
+      applyRequest = route.request().postDataJSON();
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          data: {
+            status: "updated",
+            blueprintAssetPath:
+              "/Game/Seria/Task/Mod/Tutorial/3311/BP_526900.BP_526900",
+            createdComponentNames: ["1"],
+            updatedComponentNames: ["ChildActor"],
+            saved: true,
+          },
+        }),
+      });
+    },
+  );
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "任务目标物" }).click();
+  const workspace = page.getByRole("region", {
+    name: "任务目标物",
+    exact: true,
+  });
+  await workspace.getByLabel("BP 文件名").fill("5269");
+  await workspace.getByRole("button", { name: "读取 UE 选择" }).click();
+
+  const review = workspace.getByRole("dialog", {
+    name: "UE 选择写入 BP",
+  });
+  const dorothyRow = review
+    .locator(".background-prop-table tbody tr")
+    .filter({ hasText: "BP_N87_Dorothy" });
+  const dorothyMode = review.getByLabel(
+    "BP_N87_Dorothy 的 BP 写入方式",
+  );
+  await expect(dorothyMode).toHaveValue("ChildActor");
+  await expect(
+    dorothyMode.locator("option", {
+      hasText: "更新组件 ChildActor 位置",
+    }),
+  ).toHaveCount(1);
+  await expect(dorothyRow).toContainText("DialogModels：不修改");
+  await expect(
+    dorothyRow.getByText("更新", { exact: true }),
+  ).toBeVisible();
+  await dorothyMode.selectOption("__new__");
+  await expect(
+    dorothyRow.getByText("新增", { exact: true }),
+  ).toBeVisible();
+  await dorothyMode.selectOption("ChildActor");
+
+  const citizenMode = review.getByLabel(
+    "BP_N28_Citizen_Male_C02 的 BP 写入方式",
+  );
+  await expect(citizenMode).toHaveValue("__new__");
+  await expect(citizenMode.locator("option")).toHaveCount(1);
+  await expect(citizenMode).not.toContainText("ChildActor4");
+  await review.getByLabel("补建 0 号玩家").uncheck();
+  await expect(
+    review.getByRole("button", { name: "写入 BP", exact: true }),
+  ).toBeEnabled();
+  await review.screenshot({
+    path: testInfo.outputPath("legacy-child-actor-write-choice.png"),
+  });
+
+  page.once("dialog", async (confirmation) => {
+    expect(confirmation.message()).toContain(
+      "新增数字槽或更新同模型组件",
+    );
+    expect(confirmation.message()).toContain("不会修改 DialogModels");
+    await confirmation.accept();
+  });
+  await review
+    .getByRole("button", { name: "写入 BP", exact: true })
+    .click();
+
+  await expect(
+    workspace.getByText(/已写入 BP：新增 1 个，更新 1 个/),
+  ).toBeVisible();
+  expect(applyRequest).toEqual({
+    blueprintName: "5269",
+    reviewToken: "d".repeat(64),
+    selectedActorRefs: [dorothyRef, citizenRef],
+    reviewedActorRefs: [dorothyRef, citizenRef],
+    createPlayerSlot: false,
+    dialogueNpcSlotAssignments: [
+      {
+        actorRef: dorothyRef,
+        targetComponentName: "ChildActor",
+      },
+      {
+        actorRef: citizenRef,
+        targetComponentName: null,
+      },
+    ],
   });
 });
 
@@ -10160,6 +10456,7 @@ test("offers bidirectional position sync for a registered Blueprint", async ({
     selectedActorRefs: ["PersistentLevel.SkeletalMeshActor_1"],
     reviewedActorRefs: ["PersistentLevel.SkeletalMeshActor_1"],
     taskId: "900001",
+    dialogueNpcSlotAssignments: [],
   });
 
   await dialog.screenshot({

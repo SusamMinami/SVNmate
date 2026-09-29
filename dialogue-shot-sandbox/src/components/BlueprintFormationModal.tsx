@@ -106,6 +106,13 @@ export function BlueprintFormationModal({
     return null;
   }
 
+  const playerModelIndex = (blueprint ?? option).sequence.participants.find(
+    (participant) => participant.id === 1,
+  )?.modelIndex;
+  const playerSlotLabel =
+    playerModelIndex === null || playerModelIndex === undefined
+      ? "玩家"
+      : `玩家（BP 槽 ${playerModelIndex}）`;
   const isAiReview = mode === "ai-review";
   const isDirectorRequest = mode === "director-request";
   const usesBlueprintStrategy =
@@ -301,10 +308,10 @@ export function BlueprintFormationModal({
                 }
               />
               <span>
-                <strong>固定 0 号玩家位置</strong>
+                <strong>固定{playerSlotLabel}位置</strong>
                 <small>
                   {usesBlueprintStrategy
-                    ? "取消后仅允许导演调整 0 号位，其他 BP 角色保持原位"
+                    ? "取消后仅允许导演调整玩家，其他 BP 角色保持原位"
                     : "TRAE 自主占位时会重新设计全部角色位置"}
                 </small>
               </span>
@@ -329,16 +336,16 @@ export function BlueprintFormationModal({
               ? currentUsesBlueprint
                 ? playerPositionLocked
                   ? "保留当前 BP 全部位置与朝向，仅重新规划镜头"
-                  : "保留其他 BP 角色，允许导演调整 0 号玩家位置"
+                  : "保留其他 BP 角色，允许导演调整玩家位置"
                 : "保留当前角色占位，由 AI 重新规划镜头"
               : selected === "blueprint"
               ? blueprintHasFallbackActors
                 ? playerPositionLocked
-                  ? "保留可用 BP 角色位置；缺失模型角色使用规则临时占位，0 号玩家固定"
-                  : "保留可用 BP 角色位置；缺失模型角色使用规则临时占位，0 号玩家可调整"
+                  ? "保留可用 BP 角色位置；缺失模型角色使用规则临时占位，玩家固定"
+                  : "保留可用 BP 角色位置；缺失模型角色使用规则临时占位，玩家可调整"
                 : playerPositionLocked
-                  ? "保留全部 UE 角色位置，0 号玩家也保持固定；背景 NPC 只参与构图"
-                  : "保留其他 UE 角色，0 号玩家可按导演需要调整；背景 NPC 只参与构图"
+                  ? "保留全部 UE 角色位置，玩家也保持固定；背景 NPC 只参与构图"
+                  : "保留其他 UE 角色，玩家可按导演需要调整；背景 NPC 只参与构图"
               : selected === "ai"
                 ? isDirectorRequest
                   ? "由 TRAE 一次完成角色占位、朝向关系与分镜"
@@ -374,7 +381,7 @@ export function BlueprintFormationModal({
                 ? usesBlueprintStrategy
                   ? playerPositionLocked
                     ? "TRAE 将沿用完整 BP 站位，一次生成最终方案。"
-                    : "TRAE 将沿用其他 BP 角色，只调整 0 号玩家并一次生成最终方案。"
+                    : "TRAE 将沿用其他 BP 角色，只调整玩家并一次生成最终方案。"
                   : "TRAE 将自主规划全部角色占位并一次生成最终方案。"
               : mode === "initial"
               ? blueprintHasFallbackActors && selected === "blueprint"

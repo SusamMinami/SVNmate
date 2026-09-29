@@ -33,8 +33,9 @@
 ## 待接入方案与能力证据
 
 - [UE 图编辑建议](ue-graph-editing-support.md)：受控节点创建/连线的接口需求。
-- [通用资产 Patch 需求](ue-editor-asset-patch-api-requirements.md)：建议的
-  Snapshot/Patch 协议，不表示 UE 已实现所有接口；不能替代动画语音当前 Python 链路。
+- [统一 UE 制作接口需求](ue-editor-asset-patch-api-requirements.md)：任务图、对话图、
+  LevelSequence/Director、Ability 与 AnimGraph 共用的 Snapshot/Patch/Result 协议、
+  Handler 边界及在线证据；不表示所有接口已部署，不能替代动画语音当前 Python 链路。
 - [本地插件可行性](local-dialog-plugin-feasibility.md)：探测证据、原型与构建限制。
 - [本地插件原型说明](../tools/local-dialogue-probe/README.md)：只在该原型任务中读取。
 

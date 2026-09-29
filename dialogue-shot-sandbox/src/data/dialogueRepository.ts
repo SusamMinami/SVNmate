@@ -261,7 +261,7 @@ function buildDialogueSequence(
 
   const selectedIds = participantIds;
   if (!speakingParticipantIds.includes(1)) {
-    warnings.push("对话表没有玩家台词，已按固定 0 号角色补充玩家");
+    warnings.push("对话表没有玩家台词，已补充玩家角色");
   }
   if (requireTwoParticipants && selectedIds.length < 2) {
     throw new Error(`对话 ${prefix} 至少需要两位可识别的对话参与者`);

@@ -37,7 +37,20 @@ describe("buildDirectorPrompt", () => {
   });
 
   it("allows only the BP player slot to move when it is unlocked", () => {
-    const sequence = findDialogueSequence(demoDatabase, "2048");
+    const sourceSequence = findDialogueSequence(demoDatabase, "2048");
+    const sequence = {
+      ...sourceSequence,
+      participants: sourceSequence.participants.map((participant) =>
+        participant.id === 1
+          ? {
+              ...participant,
+              modelIndex: 2,
+              modelClassPath:
+                "/Game/Seria/Characters/Eric/BP_Eric_Claymore.BP_Eric_Claymore_C",
+            }
+          : { ...participant, modelIndex: 0 },
+      ),
+    };
     const input = createDirectorInput(sequence, "flexible-player-request", {
       preserveInputFormation: true,
       lockPlayerPosition: false,
@@ -48,9 +61,9 @@ describe("buildDirectorPrompt", () => {
       preserve_input_formation: true,
       lock_player_position: false,
     });
-    expect(prompt).toContain("model_index=0 的 0 号玩家");
+    expect(prompt).toContain("model_index=2 的玩家");
     expect(prompt).toContain("其他角色必须保留");
-    expect(prompt).toContain("0 号玩家可以根据剧情和构图需要");
+    expect(prompt).toContain("玩家可以根据剧情和构图需要");
   });
 
   it("separates silent scene actors from dialogue subjects", () => {

@@ -894,6 +894,17 @@ test("keeps NPC migration breadcrumbs and workspace actions aligned", async ({
     expect(workspaceBox && contentBox && readBox && backBox).toBeTruthy();
     expect(Math.abs(contentBox!.y - workspaceBox!.y)).toBeLessThanOrEqual(1);
     expect(Math.abs(readBox!.y - backBox!.y)).toBeLessThanOrEqual(1);
+    expect(readBox!.height).toBe(32);
+    expect([backBox!.width, backBox!.height]).toEqual([32, 32]);
+    const [readColor, backColor] = await Promise.all([
+      readButton.evaluate(
+        (element) => getComputedStyle(element).backgroundColor,
+      ),
+      backButton.evaluate(
+        (element) => getComputedStyle(element).backgroundColor,
+      ),
+    ]);
+    expect(readColor).toBe(backColor);
     expect(
       workspaceBox!.x + workspaceBox!.width - (backBox!.x + backBox!.width),
     ).toBeLessThanOrEqual(20);

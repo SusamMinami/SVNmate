@@ -1523,7 +1523,7 @@ describe("dialogue model registration", () => {
     });
     expect(() =>
       buildDialogueModelsForRegistration(slots.slice(1), new Set([1])),
-    ).toThrow("DialogModels 写入要求 0 号位为玩家 BP_Eric");
+    ).toThrow("DialogModels 写入要求 BP 包含唯一的 Eric 玩家模型槽");
     expect(() =>
       buildDialogueModelsForRegistration(
         [
@@ -1535,7 +1535,43 @@ describe("dialogue model registration", () => {
         ],
         new Set([1]),
       ),
-    ).toThrow("DialogModels 写入要求 0 号位为玩家 BP_Eric");
+    ).toThrow("DialogModels 写入要求 BP 包含唯一的 Eric 玩家模型槽");
+  });
+
+  it("registers player at the numeric slot that contains an Eric Blueprint", () => {
+    const slots = buildDialogueModelRegistrationSlots(
+      [
+        {
+          modelIndex: 0,
+          targetId: "500001",
+          modelClassPath: "/Game/Test/BP_One.BP_One_C",
+        },
+        {
+          modelIndex: 2,
+          targetId: null,
+          modelClassPath:
+            "/Game/Seria/Characters/Eric/BP_Eric_Claymore.BP_Eric_Claymore_C",
+        },
+      ],
+      ["One", "None", "player"],
+      [
+        {
+          name: "One",
+          characterClassPath: "/Game/Test/BP_One.BP_One_C",
+        },
+      ],
+    );
+
+    expect(slots.map((slot) => slot.status)).toEqual([
+      "registered",
+      "registered",
+    ]);
+    expect(
+      buildDialogueModelsForRegistration(slots, new Set([0])),
+    ).toEqual({
+      dialogueModels: ["One", "None", "player"],
+      unresolvedIndexes: [],
+    });
   });
 
   it("maps an _Npc Blueprint to its unique base DialogNPCTable row name", () => {

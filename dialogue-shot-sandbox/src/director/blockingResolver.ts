@@ -3,6 +3,7 @@ import type {
   ParticipantSlot,
   Vec3,
 } from "../types";
+import { isEricPlayerClassPath } from "../data/playerIdentity";
 import {
   directorDialogueParticipants,
   type DirectorBlocking,
@@ -177,7 +178,10 @@ export function defaultEntryDialogueId(
 }
 
 function isPlayerParticipant(participant: DialogueParticipant): boolean {
-  return participant.modelIndex === 0 || participant.id === 1;
+  return (
+    participant.id === 1 ||
+    isEricPlayerClassPath(participant.modelClassPath)
+  );
 }
 
 function preservesParticipantPosition(

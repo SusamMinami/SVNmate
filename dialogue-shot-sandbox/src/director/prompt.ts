@@ -4,6 +4,7 @@ import {
   type DirectorInput,
   type ReadyDirectorResponse,
 } from "./contracts";
+import { isEricPlayerClassPath } from "../data/playerIdentity";
 
 interface DirectorProjectionRevision {
   previousPlan: ReadyDirectorResponse;
@@ -28,10 +29,19 @@ function formationInstruction(input: DirectorInput): string {
   if (!input.constraints.preserve_input_formation) {
     return "角色初始坐标由软件根据 blocking.position 的语义站位确定；可以调整全部角色站位，但位置必须唯一。";
   }
+  const player = input.participants.find(
+    (participant) =>
+      participant.npc_id === 1 ||
+      isEricPlayerClassPath(participant.model_class_path),
+  );
+  const playerReference =
+    player?.model_index === null || player?.model_index === undefined
+      ? "玩家角色"
+      : `model_index=${player.model_index} 的玩家`;
   if (input.constraints.lock_player_position === false) {
-    return "输入角色来自 UE Blueprint。除 model_index=0 的 0 号玩家外，其他角色必须保留 initial_position 与 initial_yaw_degrees，不得假设 blocking.position 会改变其实际坐标；0 号玩家可以根据剧情和构图需要通过 blocking.position 调整位置与朝向，但必须避开其他角色。";
+    return `输入角色来自 UE Blueprint。除 ${playerReference} 外，其他角色必须保留 initial_position 与 initial_yaw_degrees，不得假设 blocking.position 会改变其实际坐标；玩家可以根据剧情和构图需要通过 blocking.position 调整位置与朝向，但必须避开其他角色。`;
   }
-  return "输入角色包含从 UE Blueprint 读取的 initial_position、initial_facing_target 和 initial_yaw_degrees。必须以这些现有站位与朝向分析遮挡、关系轴和镜头，不得假设 blocking.position 会改变实际坐标。0 号玩家位置也已固定。";
+  return "输入角色包含从 UE Blueprint 读取的 initial_position、initial_facing_target 和 initial_yaw_degrees。必须以这些现有站位与朝向分析遮挡、关系轴和镜头，不得假设 blocking.position 会改变实际坐标。玩家位置也已固定。";
 }
 
 export function buildDirectorPrompt(

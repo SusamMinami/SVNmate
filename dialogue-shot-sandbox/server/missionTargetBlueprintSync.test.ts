@@ -757,6 +757,40 @@ describe("mission target Blueprint synchronization", () => {
     ]);
   });
 
+  it("inspects a camera-only BP without Eric as recoverable but keeps registration strict", async () => {
+    const connection = new EmptyPositionModeBackgroundPropConnection();
+    connection.backgroundComponents.set("c1", {
+      componentClass: "/Script/Engine.CameraComponent",
+      assetPath: "",
+      location: { X: 0, Y: 0, Z: 99 },
+      rotation: { Pitch: 0, Yaw: -90, Roll: 0 },
+      scale: { X: 1, Y: 1, Z: 1 },
+    });
+
+    const inspection = await inspectMissionTargetBlueprint(
+      { blueprintName: "BP_735200" },
+      () => connection,
+    );
+
+    expect(inspection).toMatchObject({
+      blueprintState: "populated",
+      slots: [],
+    });
+    expect(inspection.message).toContain(
+      "未找到 Eric 玩家模型；读取 UE 选择时可补建 0 号玩家",
+    );
+
+    await expect(
+      registerBlueprintDialogueModels(
+        {
+          blueprintName: "BP_735200",
+          selectedModelIndexes: [],
+        },
+        () => connection,
+      ),
+    ).rejects.toThrow("BP 数字槽中未找到 Eric 玩家模型");
+  });
+
   it("appends selected targets after existing slots and registers all models", async () => {
     const connection = new AppendBlueprintConnection();
 
@@ -1492,7 +1526,7 @@ describe("background prop import", () => {
     });
   });
 
-  it("does not auto-repair a populated BP that is missing the player slot", async () => {
+  it("offers an optional player slot when a populated BP has slot zero available", async () => {
     await writeConfigFixture();
     const connection = new EmptyPositionModeBackgroundPropConnection();
     connection.commonProperties[0].CurrentBool = true;
@@ -1523,13 +1557,370 @@ describe("background prop import", () => {
       () => connection,
     );
 
-    expect(preview.willCreatePlayerSlot).toBe(false);
-    expect(preview.blockedReasons).toContain(
-      "BP 已有数字角色槽但缺少 0 号玩家 BP_Eric，请先修复槽位结构",
+    expect(preview).toMatchObject({
+      playerModelIndex: null,
+      canCreatePlayerSlot: true,
+      willCreatePlayerSlot: true,
+      willCreateCameraSlot: false,
+      blockedReasons: [],
+    });
+
+    const result = await applyBackgroundPropImport(
+      {
+        blueprintName: "BP_735200",
+        reviewToken: preview.reviewToken,
+        selectedActorRefs: ["PersistentLevel.BP_Added_C_2"],
+        createPlayerSlot: false,
+        dialogueNpcSlotAssignments: [
+          {
+            actorRef: "PersistentLevel.BP_Added_C_2",
+            targetComponentName: null,
+          },
+        ],
+      },
+      () => connection,
     );
+
+    expect(result).toMatchObject({
+      status: "updated",
+      createdComponentNames: ["2"],
+      updatedComponentNames: [],
+      saved: true,
+    });
+    expect(result.dialogueRegistration).toBeUndefined();
+    expect(connection.backgroundComponents.has("0")).toBe(false);
+  });
+
+  it("updates or duplicates a selected NPC when its model already exists", async () => {
+    await writeConfigFixture();
+    const connection = new BackgroundPropConnection();
+    connection.commonProperties[0].CurrentBool = true;
+    connection.specialProperties[0].CurrentBool = true;
+    connection.previewLevel = "/Game/Test/Maps/PlacedMap.PlacedMap";
+    connection.selectedPlacementActors = [
+      {
+        actor_ref: "PersistentLevel.BP_Guard_C_2",
+        label: "BP_Guard",
+        class_path: "/Game/Test/BP_Guard.BP_Guard_C",
+        parent_class_path: "/Script/Seria.SeriaNPC",
+        child_preview_class_path: "",
+        location: [140, 250, 300],
+        rotation: [0, 30, 0],
+        scale: [1, 1, 1],
+      },
+    ];
+    const actorRef = "PersistentLevel.BP_Guard_C_2";
+
+    const updatePreview = await inspectBackgroundPropImport(
+      { blueprintName: "BP_735200", actorRefs: [actorRef] },
+      () => connection,
+    );
+
+    expect(updatePreview).toMatchObject({
+      playerModelIndex: 0,
+      canCreatePlayerSlot: false,
+      willCreatePlayerSlot: false,
+      items: [
+        {
+          actorRef,
+          componentName: "1",
+          modelIndex: 1,
+          matchingModelComponents: [
+            {
+              componentName: "1",
+              modelIndex: 1,
+              transformMatches: false,
+            },
+          ],
+          action: "update",
+        },
+      ],
+    });
+
+    const updateResult = await applyBackgroundPropImport(
+      {
+        blueprintName: "BP_735200",
+        reviewToken: updatePreview.reviewToken,
+        selectedActorRefs: [actorRef],
+        dialogueNpcSlotAssignments: [
+          { actorRef, targetComponentName: "1" },
+        ],
+      },
+      () => connection,
+    );
+
+    expect(updateResult).toMatchObject({
+      status: "updated",
+      createdComponentNames: [],
+      updatedComponentNames: ["1"],
+      saved: true,
+    });
+    expect(connection.componentLocation).toEqual({ X: 40, Y: 50, Z: 100 });
+
+    connection.componentLocation = { X: 0, Y: 0, Z: 100 };
+    const createPreview = await inspectBackgroundPropImport(
+      { blueprintName: "BP_735200", actorRefs: [actorRef] },
+      () => connection,
+    );
+    const createResult = await applyBackgroundPropImport(
+      {
+        blueprintName: "BP_735200",
+        reviewToken: createPreview.reviewToken,
+        selectedActorRefs: [actorRef],
+        dialogueNpcSlotAssignments: [
+          { actorRef, targetComponentName: null },
+        ],
+      },
+      () => connection,
+    );
+
+    expect(createResult).toMatchObject({
+      status: "updated",
+      createdComponentNames: ["2"],
+      updatedComponentNames: [],
+      saved: true,
+    });
+    expect(connection.backgroundComponents.get("2")).toMatchObject({
+      assetPath: "/Game/Test/BP_Guard.BP_Guard_C",
+      location: { X: 40, Y: 50, Z: 100 },
+    });
+  });
+
+  it("updates an exact-match legacy ChildActor component or creates a numeric slot", async () => {
+    await writeConfigFixture();
+    const connection = new EmptyPositionModeBackgroundPropConnection();
+    connection.commonProperties[0].CurrentBool = true;
+    connection.specialProperties[0].CurrentBool = true;
+    connection.previewLevel = "/Game/Test/Maps/PlacedMap.PlacedMap";
+    connection.dialogNpcNames = ["Dorothy"];
+    connection.dialogNpcPaths = [
+      "/Game/Seria/NPC/N87_Dorothy/BP_N87_Dorothy.BP_N87_Dorothy_C",
+    ];
+    connection.backgroundComponents.set("ChildActor", {
+      componentClass: "/Script/Engine.ChildActorComponent",
+      assetPath:
+        "/Game/Seria/NPC/N87_Dorothy/BP_N87_Dorothy.BP_N87_Dorothy_C",
+      location: { X: 0, Y: 0, Z: 100 },
+      rotation: { Pitch: 0, Yaw: 0, Roll: 0 },
+      scale: { X: 1, Y: 1, Z: 1 },
+    });
+    const actorRef = "PersistentLevel.BP_N87_Dorothy_C_2";
+    connection.selectedPlacementActors = [
+      {
+        actor_ref: actorRef,
+        label: "BP_N87_Dorothy",
+        class_path:
+          "/Game/Seria/NPC/N87_Dorothy/BP_N87_Dorothy.BP_N87_Dorothy_C",
+        parent_class_path: "/Script/Seria.SeriaNPC",
+        child_preview_class_path: "",
+        location: [140, 250, 300],
+        rotation: [0, 30, 0],
+        scale: [1, 1, 1],
+      },
+    ];
+
+    const updatePreview = await inspectBackgroundPropImport(
+      { blueprintName: "BP_735200", actorRefs: [actorRef] },
+      () => connection,
+    );
+
+    expect(updatePreview).toMatchObject({
+      playerModelIndex: null,
+      canCreatePlayerSlot: true,
+      willCreatePlayerSlot: false,
+      items: [
+        {
+          actorRef,
+          componentName: "ChildActor",
+          matchingModelComponents: [
+            {
+              componentName: "ChildActor",
+              transformMatches: false,
+            },
+          ],
+          action: "update",
+        },
+      ],
+    });
+    expect(updatePreview.items[0].modelIndex).toBeUndefined();
+
+    const updateResult = await applyBackgroundPropImport(
+      {
+        blueprintName: "BP_735200",
+        reviewToken: updatePreview.reviewToken,
+        selectedActorRefs: [actorRef],
+        createPlayerSlot: false,
+        dialogueNpcSlotAssignments: [
+          { actorRef, targetComponentName: "ChildActor" },
+        ],
+      },
+      () => connection,
+    );
+
+    expect(updateResult).toMatchObject({
+      status: "updated",
+      createdComponentNames: [],
+      updatedComponentNames: ["ChildActor"],
+      saved: true,
+    });
+    expect(updateResult.dialogueRegistration).toBeUndefined();
+    expect(connection.backgroundComponents.get("ChildActor")).toMatchObject({
+      assetPath:
+        "/Game/Seria/NPC/N87_Dorothy/BP_N87_Dorothy.BP_N87_Dorothy_C",
+      location: { X: 40, Y: 50, Z: 100 },
+      rotation: { Pitch: 0, Yaw: 30, Roll: 0 },
+    });
+
+    const createPreview = await inspectBackgroundPropImport(
+      { blueprintName: "BP_735200", actorRefs: [actorRef] },
+      () => connection,
+    );
+    const createResult = await applyBackgroundPropImport(
+      {
+        blueprintName: "BP_735200",
+        reviewToken: createPreview.reviewToken,
+        selectedActorRefs: [actorRef],
+        createPlayerSlot: false,
+        dialogueNpcSlotAssignments: [
+          { actorRef, targetComponentName: null },
+        ],
+      },
+      () => connection,
+    );
+
+    expect(createResult).toMatchObject({
+      status: "updated",
+      createdComponentNames: ["1"],
+      updatedComponentNames: [],
+      saved: true,
+    });
+    expect(createResult.dialogueRegistration).toBeUndefined();
+  });
+
+  it("does not offer an injured legacy component for a base-model actor", async () => {
+    await writeConfigFixture();
+    const connection = new EmptyPositionModeBackgroundPropConnection();
+    connection.commonProperties[0].CurrentBool = true;
+    connection.specialProperties[0].CurrentBool = true;
+    connection.previewLevel = "/Game/Test/Maps/PlacedMap.PlacedMap";
+    connection.backgroundComponents.set("ChildActor4", {
+      componentClass: "/Script/Engine.ChildActorComponent",
+      assetPath:
+        "/Game/Seria/NPC/N28_Citizen_Male_C02/BP_N28_Citizen_Male_C02_Injured.BP_N28_Citizen_Male_C02_Injured_C",
+      location: { X: 0, Y: 0, Z: 100 },
+      rotation: { Pitch: 0, Yaw: 0, Roll: 0 },
+      scale: { X: 1, Y: 1, Z: 1 },
+    });
+    const actorRef = "PersistentLevel.BP_N28_Citizen_Male_C02_C_2";
+    connection.selectedPlacementActors = [
+      {
+        actor_ref: actorRef,
+        label: "BP_N28_Citizen_Male_C02",
+        class_path:
+          "/Game/Seria/NPC/N28_Citizen_Male_C02/BP_N28_Citizen_Male_C02.BP_N28_Citizen_Male_C02_C",
+        parent_class_path: "/Script/Seria.SeriaNPC",
+        child_preview_class_path: "",
+        location: [140, 250, 300],
+        rotation: [0, 30, 0],
+        scale: [1, 1, 1],
+      },
+    ];
+
+    const preview = await inspectBackgroundPropImport(
+      { blueprintName: "BP_735200", actorRefs: [actorRef] },
+      () => connection,
+    );
+
+    expect(preview.items[0]).toMatchObject({
+      actorRef,
+      componentName: "1",
+      modelIndex: 1,
+      matchingModelComponents: [],
+      action: "create",
+    });
     expect(
-      connection.calls.some((call) => call.action === "bp.add_component"),
+      preview.items[0].matchingModelComponents?.some(
+        (candidate) => candidate.componentName === "ChildActor4",
+      ),
     ).toBe(false);
+  });
+
+  it("keeps an existing non-zero Eric player slot unchanged", async () => {
+    await writeConfigFixture();
+    const connection = new EmptyPositionModeBackgroundPropConnection();
+    connection.commonProperties[0].CurrentBool = true;
+    connection.specialProperties[0].CurrentBool = true;
+    connection.previewLevel = "/Game/Test/Maps/PlacedMap.PlacedMap";
+    connection.dialogueModels = ["Guard", "None", "player"];
+    connection.dialogNpcNames = ["Guard", "Added"];
+    connection.dialogNpcPaths = [
+      "/Game/Test/BP_Guard.BP_Guard_C",
+      "/Game/Test/BP_Added.BP_Added_C",
+    ];
+    connection.backgroundComponents.set("0", {
+      componentClass: "/Script/Engine.ChildActorComponent",
+      assetPath: "/Game/Test/BP_Guard.BP_Guard_C",
+      location: { X: 0, Y: 0, Z: 100 },
+      rotation: { Pitch: 0, Yaw: 0, Roll: 0 },
+      scale: { X: 1, Y: 1, Z: 1 },
+    });
+    connection.backgroundComponents.set("2", {
+      componentClass: "/Script/Engine.ChildActorComponent",
+      assetPath:
+        "/Game/Seria/Characters/Eric/BP_Eric_Claymore.BP_Eric_Claymore_C",
+      location: { X: 25, Y: 50, Z: 100 },
+      rotation: { Pitch: 0, Yaw: 45, Roll: 0 },
+      scale: { X: 1, Y: 1, Z: 1 },
+    });
+    connection.selectedPlacementActors = [
+      {
+        actor_ref: "PersistentLevel.BP_Added_C_2",
+        label: "BP_Added",
+        class_path: "/Game/Test/BP_Added.BP_Added_C",
+        parent_class_path: "/Script/Seria.SeriaNPC",
+        child_preview_class_path: "",
+        location: [140, 250, 300],
+        rotation: [0, 30, 0],
+        scale: [1, 1, 1],
+      },
+    ];
+    const actorRef = "PersistentLevel.BP_Added_C_2";
+
+    const preview = await inspectBackgroundPropImport(
+      { blueprintName: "BP_735200", actorRefs: [actorRef] },
+      () => connection,
+    );
+
+    expect(preview).toMatchObject({
+      playerModelIndex: 2,
+      canCreatePlayerSlot: false,
+      willCreatePlayerSlot: false,
+      blockedReasons: [],
+    });
+    const playerBefore = structuredClone(
+      connection.backgroundComponents.get("2"),
+    );
+
+    await applyBackgroundPropImport(
+      {
+        blueprintName: "BP_735200",
+        reviewToken: preview.reviewToken,
+        selectedActorRefs: [actorRef],
+        createPlayerSlot: false,
+        dialogueNpcSlotAssignments: [
+          { actorRef, targetComponentName: null },
+        ],
+      },
+      () => connection,
+    );
+
+    expect(connection.backgroundComponents.get("2")).toEqual(playerBefore);
+    expect(connection.dialogueModels).toEqual([
+      "Guard",
+      "None",
+      "player",
+      "Added",
+    ]);
   });
 
   it("appends SceneObject NPCs as ordered numeric slots and registers DialogModels", async () => {
@@ -1812,7 +2203,7 @@ describe("background prop import", () => {
     });
   });
 
-  it("blocks SceneObject NPCs that were previously written as named background components", async () => {
+  it("recognizes SceneObject NPCs previously written as named components", async () => {
     await writeConfigFixture();
     const connection = new BackgroundPropConnection();
     connection.commonProperties[0].CurrentBool = true;
@@ -1852,11 +2243,15 @@ describe("background prop import", () => {
 
     expect(preview.items[0]).toMatchObject({
       importMode: "dialogue_npc",
-      componentName: "2",
-      action: "blocked",
-      message: expect.stringContaining(
-        "已有旧版非数字组件 BP_Added",
-      ),
+      componentName: "BP_Added",
+      matchingModelComponents: [
+        {
+          componentName: "BP_Added",
+          transformMatches: true,
+        },
+      ],
+      action: "unchanged",
+      message: expect.stringContaining("不修改 DialogModels"),
     });
   });
 

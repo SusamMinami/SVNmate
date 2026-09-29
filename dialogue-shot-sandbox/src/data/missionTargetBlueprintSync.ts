@@ -4,6 +4,7 @@ import type {
   MissionTargetTransform,
   UnrealTransform,
 } from "../types";
+import { isEricPlayerClassPath } from "./playerIdentity";
 
 export interface MissionTargetBlueprintSlot {
   modelIndex: number;
@@ -179,7 +180,9 @@ export function buildMissionTargetBlueprintSync(
     .filter(({ target }) => Boolean(target.modelClassPath));
   const modelSlots = slots
     .filter(
-      (slot) => slot.modelIndex > 0 && Boolean(slot.modelClassPath),
+      (slot) =>
+        !isEricPlayerClassPath(slot.modelClassPath) &&
+        Boolean(slot.modelClassPath),
     )
     .sort((left, right) => left.modelIndex - right.modelIndex);
   const assignedTargets = new Set<string>();

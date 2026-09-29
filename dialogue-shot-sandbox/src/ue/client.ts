@@ -1,6 +1,7 @@
 import type {
   BackgroundPropImportPreview,
   BackgroundPropImportResult,
+  BackgroundPropNpcSlotAssignment,
   BlueprintFormationSnapshot,
   DialogueCharacterActionSnapshot,
   DialogueCameraQuickActionPreview,
@@ -325,6 +326,8 @@ export function applyBackgroundPropImport(
   reviewedActorRefs?: string[],
   dialogueId?: string,
   taskId?: string,
+  createPlayerSlot?: boolean,
+  dialogueNpcSlotAssignments?: BackgroundPropNpcSlotAssignment[],
 ): Promise<BackgroundPropImportResult> {
   return postUe(
     "/api/ue/mission-targets/background-props/apply",
@@ -335,6 +338,8 @@ export function applyBackgroundPropImport(
       reviewedActorRefs,
       dialogueId,
       taskId,
+      createPlayerSlot,
+      dialogueNpcSlotAssignments,
     },
     false,
   );

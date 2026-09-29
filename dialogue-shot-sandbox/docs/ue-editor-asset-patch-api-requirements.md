@@ -1,26 +1,31 @@
-# UE 编辑器资产 Patch 接口需求
+# UE 编辑器统一制作接口需求
 
 > 状态：待接入的 UE 接口需求，不是现行 API 文档。
-> 覆盖范围：对话图节点自动创建与连接、LevelSequence 字幕与跳过配置。
+> 覆盖范围：任务图、对话图、LevelSequence/Director、GameplayAbility 与
+> AnimGraph 的受控读取、节点创建、连接和属性配置。
 > 原则：最小化 UE 修改，复用现有 OmniMcpCore，不新增通信协议和端口
 >
 > 当前动画语音已使用受控 Python 链路，范围见
 > [动画语音](animation-voice-workspace.md)；图编辑原型/限制见
-> [插件可行性](local-dialog-plugin-feasibility.md)。下文建议接口不能直接当作已部署能力。
+> [插件可行性](local-dialog-plugin-feasibility.md)。2026-09-29 的在线能力证据见
+> [第 23 节](#23-2026-09-29-在线核对)，下文建议接口不能直接当作已部署能力。
 
 ## 1. 背景
 
-本方案提出统一的资产修改服务，用于动画语音与对话图结构编辑。沙盒负责：
+本方案提出统一的资产修改服务，供镜头沙盘、任务工具和角色创建工具复用。
+调用方负责：
 
+- 生成任务节点、任务关系和动态属性。
 - 生成待创建的对话节点、连接关系和节点属性。
 - 生成动画字幕 ID、字幕时间段和跳过配置。
+- 生成技能 Ability/AnimGraph 的模板派生与白名单参数。
 - 展示 dry-run 差异并由用户确认。
 - 处理 Excel 配表、AI 分析和交互界面。
 
 UE 只负责按照编辑器原生规则安全修改资产。不能让沙盒直接修改 `.uasset`，也
 不能依赖鼠标坐标、剪贴板或 UI 自动化完成正式写入。
 
-当前 OmniMcpCore 已支持反射调用 UFUNCTION。因此 UE 侧只需提供两个
+当前 OmniMcpCore 已支持反射调用 UFUNCTION。因此 UE 侧只需提供三个
 Editor-only UFUNCTION，由沙盒通过现有 `reflect.execute_unreal_function`
 调用，不需要修改 TCP 传输层。
 
@@ -48,6 +53,22 @@ Editor-only UFUNCTION，由沙盒通过现有 `reflect.execute_unreal_function`
   - `Show SkipButton`、`HideSkipButton` 调用节点。
   - 名为 `skip` 的 Marked Frame。
 - 对已有完整配置保持幂等，不产生重复轨道、Section、事件或标记。
+
+### 2.3 任务图
+
+- 读取 `SeriaTaskGraph`、`SeriaEdTaskGraph`、节点、Pin、边和动态属性定义。
+- 按任务编辑器当前配置创建开始、结束、普通、分线和组任务节点。
+- 区分节点类型 ID、节点 GUID 与 `Mission.id`，维护 `IDToNodeArray`。
+- 通过任务 Schema 创建连接，并重建任务顺序、子任务和分线关系。
+- 执行节点检查、任务图检查与导出前一致性检查。
+
+### 2.4 Ability 与 AnimGraph
+
+- 读取指定 GameplayAbility、Montage、Notify 中实际引用的 Skilldamage、
+  Skill 和 Buff ID，并返回引用来源。
+- 从批准的模板派生 Ability/Animation Blueprint，设置白名单默认参数。
+- 对普通 K2/AnimGraph 节点执行白名单创建、Pin 配置、连接、编译和回读。
+- 第一阶段不开放任意节点、任意函数或任意图导入。
 
 ## 3. 非目标
 
@@ -77,25 +98,42 @@ bool ApplyEditorAssetPatch(
     bool bDryRun,
     FString& OutResultJson,
     FString& OutError);
+
+UFUNCTION(BlueprintCallable, Category = "Seria|EditorPatch")
+bool GetEditorAssetPatchResult(
+    const FString& RequestId,
+    FString& OutResultJson,
+    FString& OutError);
 ```
 
 支持的 `AssetKind`：
 
 ```text
+task_graph
 dialog_graph
 level_sequence
+ability_blueprint
+animation_blueprint
 ```
 
-如果模块依赖关系不允许提供统一入口，也可以暴露四个函数：
+如果模块依赖关系不允许提供统一入口，也可以按 Handler 暴露独立函数，
+但请求信封、结果格式、事务、版本校验、幂等和错误码必须共用。
 
 ```text
+GetTaskGraphSnapshot
+ApplyTaskGraphPatch
 GetDialogGraphSnapshot
 ApplyDialogGraphPatch
 GetLevelSequenceSnapshot
 ApplyLevelSequencePatch
+GetAbilityBlueprintSnapshot
+ApplyAbilityBlueprintPatch
+GetAnimationBlueprintSnapshot
+ApplyAnimationBlueprintPatch
 ```
 
-但请求信封、结果格式、事务、版本校验和错误码应共用。
+`GetEditorAssetPatchResult` 不得省略。网络超时后必须先查询执行结果，
+不能以同一或新的 request ID 盲目重放节点创建。
 
 ## 5. 公共请求信封
 
@@ -573,11 +611,13 @@ UE 原生 MovieScene Event Endpoint 工具生成。调用方不得猜测。
 | `REVISION_CONFLICT` | 快照后资产发生变化 |
 | `REQUEST_ID_CONFLICT` | 幂等键被不同内容复用 |
 | `UNSUPPORTED_OPERATION` | Operation 不在白名单 |
-| `NODE_ID_CONFLICT` | 对话业务 ID 冲突 |
+| `NODE_ID_CONFLICT` | 对话或任务业务 ID 冲突 |
 | `CONNECTION_REJECTED` | Graph Schema 拒绝连接 |
+| `TASK_CONFIG_CHANGED` | 任务图内嵌配置与当前节点定义不兼容 |
 | `DIRECTOR_PARENT_MISMATCH` | 已有 Director 父类不符合要求 |
 | `EVENT_ENDPOINT_FAILED` | MovieScene Event Endpoint 创建或绑定失败 |
 | `TIME_RANGE_INVALID` | Section 或事件时间无效 |
+| `REFERENCE_NOT_FOUND` | Ability/Montage/Notify 中要求的引用不存在 |
 | `COMPILE_FAILED` | Blueprint 编译失败 |
 | `READBACK_MISMATCH` | 写后回读不一致 |
 | `APPLY_FAILED` | 应用失败且已恢复 |
@@ -654,8 +694,12 @@ EditorAssetPatch
 ├── EditorAssetPatchSubsystem
 ├── EditorAssetPatchTypes
 ├── EditorAssetPatchRevision
+├── EditorAssetPatchRequestStore
+├── TaskGraphPatchHandler
 ├── DialogGraphPatchHandler
-└── LevelSequencePatchHandler
+├── LevelSequencePatchHandler
+├── AbilityBlueprintPatchHandler
+└── AnimationBlueprintPatchHandler
 ```
 
 公共层负责：
@@ -664,12 +708,207 @@ EditorAssetPatch
 - revision
 - dry-run
 - request_id 幂等
+- request_id 结果查询
 - 事务与恢复
 - 差异和错误格式
 
 Handler 负责：
 
+- TaskGraph 的节点定义、工厂、动态属性、Schema、内部索引和导出校验。
 - DialogGraph 的节点工厂、Schema 和内部索引。
 - LevelSequence 的 MovieScene、Director Blueprint 和 Event Endpoint。
+- Ability Blueprint 的模板、项目引用语义、K2 白名单和编译。
+- Animation Blueprint 的 Skeleton、AnimGraph 节点与编译。
 
-这能复用大部分可靠性基础设施，同时保持两套编辑器对象模型的正确边界。
+这能复用大部分可靠性基础设施，同时保持各编辑器对象模型的正确边界。
+
+## 23. 2026-09-29 在线核对
+
+本轮启动当前 Seria 策划工程（`<res>/Seria.uproject`），连接本机
+OmniMcpCore `127.0.0.1:12031`。
+在线返回 UE `4.27.2-0+++UE4+Seria-4.27`，工程路径正确，PIE 为 false；
+探测前后 dirty content 与 dirty map 均为空。
+
+### 23.1 已实际写入并回读
+
+| 探针 | 结果 |
+| --- | --- |
+| 隔离 LevelSequence | 创建临时资产，写入 `MovieSceneDialogueTrack`、字幕 Section、`DialogueID=9032023`、1.1–2.4 秒范围及 8 秒 `skip` 标记，回读一致 |
+| Sequence 保存 | 保存后重新扫描，轨道、Section、字幕 ID 和标记仍存在 |
+| Sequence 失败恢复 | 注入非法 skip 值，返回 `APPLY_FAILED (restored, not saved)`；字幕 ID、范围和标记恢复 |
+| 隔离普通 Blueprint | 创建临时 Actor Blueprint 和 `K2Node_IfThenElse`，回读 Pin `execute/Condition/then/else`，编译成功 |
+| 清理 | 两类临时资产均经 UE 删除并回读不存在；最终 dirty content/map 为空 |
+
+LevelSequence 首次目录删除被源控迁出提示拦截，后续按已加载资产删除成功。
+普通 Blueprint 在创建调用栈仍持有节点引用时不能同请求删除，下一请求释放引用后成功。
+因此测试工具和正式 Handler 都必须把“应用”“保存”“删除/清理”拆开报告，并为
+长耗时删除保留 request ID 查询，不能以客户端超时判断失败。
+
+### 23.2 已部署但范围有限
+
+- `SeriaDialogEditorSubsystem`：可读取当前唯一选中节点，可对当前节点顶层
+  NodeData 属性应用 UE ExportText；没有创建节点、连接、图快照接口。
+- `SeriaTaskEditorSubsystem`：只有属性包装和输出 Pin 数量帮助函数；
+  `SeriaTaskEditorSubsystemPythonHelper` 只有节点检查，不提供创建或连接。
+- `BlueprintModificationHelper`：具备普通 Blueprint 节点创建、连接、Pin 值、
+  子图导入、编译等工具；本轮已实测 Branch 创建和编译。
+- `SeriaSequenceEditorLibrary`：具备 Sequence BP/ABP 资产创建、
+  AnimGraph 节点创建、`LinkGraphNode` 与编译；没有内嵌 Sequence Director
+  或 MovieScene Event Endpoint 创建接口。
+- `SeriaAbilityHelperSubsystem`：当前是 Ability 配置查看/选择帮助器，
+  没有 GameplayAbility 图制作或效果引用快照接口。
+
+当前定制 UE 安装含运行二进制和 UBT，但缺少本机编译所需的完整 Engine Source
+头文件及 `UE4Editor-UnrealEd.lib`。本机可以验证已部署接口，不能在这套安装上
+编译新增 Editor 插件；程序需在匹配 Seria 4.27 的开发环境实现并提供 DLL。
+
+## 24. TaskGraph Handler 需求
+
+### 24.1 已核实结构
+
+只读导出 `/Game/Seria/LevelGraph/LevelTaskGraph/999904.999904`：
+
+- 资产为 `SeriaTaskGraph`，内含 `SeriaEdTaskGraph` 和 `GraphGuid`。
+- 节点为 `SeriaEdTaskGraphNode`，含 `NodeGuid`、位置、`TaskNodeType`、
+  `TaskGraphNodeData` 和 Pin/LinkedTo。
+- `TaskNodeID="14"` 表示节点定义“收副本消息”，不是业务任务 ID。
+- 业务 ID 位于 `CommonTaskGraphProperties` 的 `Mission.id`，
+  样本为 `99990400/01/02`。
+- 图内维护 `IDToNodeArray`；任务属性由图内 `OldSeriaTaskGraphConfig`
+  与当前 `taskgraphconfig.xml` 共同约束。
+- Pin 名可能为空；必须用 `category + direction + 同类序号` 形成稳定键。
+
+### 24.2 Snapshot
+
+`task_graph` 的 `data` 至少返回：
+
+```json
+{
+  "graph_guid": "...",
+  "root_task_id": 99990400,
+  "config_revision": "sha256:...",
+  "nodes": [{
+    "mission_id": 99990401,
+    "node_guid": "...",
+    "definition_id": 14,
+    "node_type": "action",
+    "position": {"x": 144, "y": 0},
+    "properties": {"Mission.Name": "...", "Mission.Parameter0": "..."},
+    "pins": [{"key": "exec_in:0", "pin_id": "..."}]
+  }],
+  "edges": []
+}
+```
+
+不能把属性数组压成只按显示名索引的字典；同名字段、Common/Special 映射和动态
+参数必须保留原始索引与 alias。
+
+### 24.3 Patch
+
+首版白名单：
+
+```text
+task.create_node
+task.set_properties
+task.move_node
+task.connect
+task.disconnect
+```
+
+创建必须复用任务编辑器右键菜单使用的 Schema Action/工厂，按
+`definition_id` 从当前任务配置生成 NodeData、默认 Pin、Server/Client 标志。
+连接必须调用 `SeriaTaskGraphSchema::TryCreateConnection` 或项目等效入口，
+并维护 `IDToNodeArray`、任务顺序、子任务/分线字段、图通知和导出校验。
+禁止 `NewObject<USeriaEdTaskGraphNode>` 后直接加入 `Nodes`。
+
+业务 ID 由请求显式给出或 UE 按任务线规则分配；预检需同时检查主任务表、
+副本任务表、任务顺序表和当前图内占用。配置 revision 变化后旧审核令牌失效。
+
+## 25. Blueprint Handler 复用边界
+
+### 25.1 Sequence Director
+
+现有普通 K2 工具可以创建函数调用节点并连接命名 Pin，但不能创建
+LevelSequence 内嵌 Director，也不能生成 MovieScene Event Endpoint 的
+FunctionEntry、WeakEndpoint 和 FieldPath。`sequence.ensure_skip_configuration`
+必须调用 LevelSequenceEditor/MovieSceneTools 原生接口完成：
+
+1. 以 `CommonSequenceDirector` 为父类创建内嵌 Director。
+2. 创建 Show/Hide Endpoint 及其 K2 调用节点。
+3. 由 MovieScene 原生工具绑定事件键，不由调用方拼 FieldPath。
+4. 编译 Director，回读 Endpoint、父类和 Event Key。
+
+Director 创建完成后，允许内部复用 K2 节点/Pin 帮助函数，但不能把
+`bp.create_blueprint` 的独立资产当作 Director。
+
+### 25.2 GameplayAbility
+
+第一阶段新增两个受控能力：
+
+```text
+ability.inspect_effect_references
+ability.create_from_template
+```
+
+`inspect_effect_references` 返回 Ability CDO、Montage、Notify 中实际发现的
+Skilldamage/Skill/Buff 引用、对象路径、属性或 Notify 来源；找不到时明确返回空证据，
+不按同号猜测。`create_from_template` 只允许批准模板和目标目录，复制后设置
+Skill ID、伤害入口等白名单默认值，编译并回读。
+
+第二阶段才开放：
+
+```text
+blueprint.create_node
+blueprint.set_pin
+blueprint.connect
+blueprint.disconnect
+```
+
+节点类、函数、属性和图名必须按 GameplayAbility 模板白名单；调用现有
+`BlueprintModificationHelper` 的底层实现时仍要包入 revision、dry-run、事务、
+编译回读和 request ID 幂等。禁止将 `import_subgraph` 直接暴露给业务 UI。
+
+### 25.3 Animation Blueprint
+
+已有 `SeriaSequenceEditorLibrary.AddAnimGraphNodeByClass/Object` 和
+`LinkGraphNode` 可作为实现基础。Handler 还必须校验目标 ABP、Skeleton、
+节点类、资产类型、目标 AnimGraph、编译结果和写后连接。NPC 模板复制继续沿用
+现有迁移流程；只有确需结构变化时才使用节点 Patch。
+
+## 26. 程序交付顺序
+
+| 阶段 | 交付 | 复用与新增 |
+| --- | --- | --- |
+| P0 | 公共 Snapshot/Patch/Result、capabilities、revision、幂等、busy、事务/恢复 | 复用 OmniMcpCore transport；新增项目 Editor-only Subsystem |
+| P1 | `task_graph` 与 `dialog_graph` | 分别新增原生工厂/Schema Handler，共用公共层 |
+| P1 | `level_sequence.ensure_skip_configuration` | 复用现有轨道/字幕/标记；新增 Director 与 Endpoint |
+| P1 | `ability.inspect_effect_references`、模板派生 | 复用 BP 编译/属性工具；新增项目语义白名单 |
+| P2 | 受控 K2/AnimGraph Patch | 复用现有 K2/Sequence 帮助器；补完整审核与回读 |
+
+每个阶段先交 capabilities 与 dry-run，再开放 apply。调用方在 capability 为 false
+时保持只读，不根据类名或版本号猜测能力。
+
+## 27. 新增验收用例
+
+### 27.1 任务图
+
+1. 隔离任务图创建 Start、Action、End，`Mission.id` 唯一且与 definition ID 分离。
+2. 创建普通、分线和组任务节点，空名 Pin 仍能通过稳定键准确连接。
+3. 插入节点只替换明确的旧边；`IDToNodeArray`、顺序与导出数据一致。
+4. 配置 XML 或图内配置变化后返回 `TASK_CONFIG_CHANGED`。
+5. 节点检查、保存重开和任务 CSV 导出结果一致；一个 Undo 撤销整批。
+
+### 27.2 Ability/AnimGraph
+
+1. 从批准模板派生测试 Ability，白名单默认值、父类和编译状态正确。
+2. 能从已知样本返回真实伤害/Buff 引用及来源，不用同号补全。
+3. 非白名单函数、节点、目录、属性和 Skeleton 被拒绝且资产不变。
+4. AnimGraph 创建节点并连接后编译、保存重开一致。
+5. 重复 request ID 不重复创建节点或资产。
+
+### 27.3 清理与超时
+
+1. 临时资产删除超过客户端超时时，可按 request ID 查询最终成功结果。
+2. 删除前释放返回结构、编辑器页签和调用栈引用；清理后注册表与磁盘均不存在。
+3. 源控迁出失败、保存回调阻断和删除失败分别返回结构化状态，不把它们合并成
+   普通 `APPLY_FAILED`。

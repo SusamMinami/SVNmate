@@ -124,7 +124,7 @@ describe("findDialogueSequence", () => {
     ).size,
     ).toBe(5);
     expect(result.warnings).toContain(
-      "对话表没有玩家台词，已按固定 0 号角色补充玩家",
+      "对话表没有玩家台词，已补充玩家角色",
     );
   });
 

@@ -33,12 +33,14 @@ import {
   resolveMissionTargets,
   sortMissionTargetsByDialogueFrequency,
 } from "../data/missionTargetResolver";
+import { isEricPlayerClassPath } from "../data/playerIdentity";
 import {
   classifyMissionTargetSelection,
   type MissionTargetSelectionClassification,
 } from "../data/missionTargetSelection";
 import type {
   BackgroundPropImportPreview,
+  BackgroundPropNpcSlotAssignment,
   DialogNpcTableRegistrationDraft,
   DialogNpcTableRegistrationReview,
   DialogueModelRegistrationSlot,
@@ -198,6 +200,30 @@ function backgroundPropActionLabel(
   return "已阻断";
 }
 
+const NEW_BACKGROUND_NPC_COMPONENT = "__new__";
+
+type BackgroundNpcComponentChoice = string;
+
+function defaultBackgroundNpcComponentChoices(
+  preview: BackgroundPropImportPreview,
+): Map<string, BackgroundNpcComponentChoice> {
+  return new Map(
+    preview.items.flatMap((item) =>
+      item.importMode === "dialogue_npc" &&
+      item.action !== "blocked"
+        ? [
+            [
+              item.actorRef,
+              item.action === "create"
+                ? NEW_BACKGROUND_NPC_COMPONENT
+                : item.componentName,
+            ] as const,
+          ]
+        : [],
+    ),
+  );
+}
+
 export function MissionTargetModal({
   database,
   onClose,
@@ -222,6 +248,10 @@ export function MissionTargetModal({
     useState<BackgroundPropImportPreview | null>(null);
   const [selectedBackgroundActorRefs, setSelectedBackgroundActorRefs] =
     useState<Set<string>>(new Set());
+  const [backgroundNpcComponentChoices, setBackgroundNpcComponentChoices] =
+    useState<Map<string, BackgroundNpcComponentChoice>>(new Map());
+  const [createMissingPlayerSlot, setCreateMissingPlayerSlot] =
+    useState(true);
   const [backgroundMatchedTargetIds, setBackgroundMatchedTargetIds] = useState<
     string[]
   >([]);
@@ -296,8 +326,8 @@ export function MissionTargetModal({
     blueprintSync, isBlueprintSync, selectedSyncMappings, canUpdateBlueprint,
     canUpdateTargets, targetOverrideItems, selectableBackgroundItems,
     selectedBackgroundCount, selectedDialogueNpcCount, allBackgroundItemsSelected,
-    backgroundDialogueSetupReasons, backgroundAutoConfigurationRequired,
-    backgroundBlockingReasons, activeUeTargetSelectionReview, ueSelectedTargetIds,
+    backgroundDialogueSetupReasons, activeUeTargetSelectionReview,
+    ueSelectedTargetIds,
     dialogNpcRegistrationSlots, targetsById, matchesByActorRef,
     appendSlotsByTargetId, slotsByTargetId, creationIndexByTargetId, appendIndexByTargetId,
   } = useMemo(() => {
@@ -348,7 +378,7 @@ export function MissionTargetModal({
       : [];
   const blueprintRegistrationSlots = blueprintInspection?.slots ?? [];
   const blueprintModelSlots = blueprintRegistrationSlots.filter(
-    (slot) => slot.modelIndex > 0,
+    (slot) => !isEricPlayerClassPath(slot.modelClassPath),
   );
   const maximumBlueprintModelIndex = Math.max(
     0,
@@ -391,15 +421,6 @@ export function MissionTargetModal({
         reason.startsWith("对话尚未配置") ||
         reason.startsWith("对话尚未启用虚拟场景"),
     ) ?? [];
-  const backgroundAutoConfigurationRequired =
-    selectedDialogueNpcCount > 0 &&
-    backgroundDialogueSetupReasons.length > 0;
-  const backgroundBlockingReasons =
-    backgroundPropPreview?.blockedReasons.filter(
-      (reason) =>
-        !backgroundAutoConfigurationRequired ||
-        !backgroundDialogueSetupReasons.includes(reason),
-    ) ?? [];
   const activeUeTargetSelectionReview =
     plan && ueTargetSelectionReview?.taskId === plan.taskId
       ? ueTargetSelectionReview
@@ -424,7 +445,7 @@ export function MissionTargetModal({
         ]
       : blueprintRegistrationSlots.filter(
           (slot) =>
-            slot.modelIndex > 0 &&
+            !isEricPlayerClassPath(slot.modelClassPath) &&
             (slot.targetId === null || selectedTargetIds.has(slot.targetId)),
         )
   ).filter((slot) => slot.status === "unmapped");
@@ -444,8 +465,8 @@ export function MissionTargetModal({
     blueprintSync, isBlueprintSync, selectedSyncMappings, canUpdateBlueprint,
     canUpdateTargets, targetOverrideItems, selectableBackgroundItems,
     selectedBackgroundCount, selectedDialogueNpcCount, allBackgroundItemsSelected,
-    backgroundDialogueSetupReasons, backgroundAutoConfigurationRequired,
-    backgroundBlockingReasons, activeUeTargetSelectionReview, ueSelectedTargetIds,
+    backgroundDialogueSetupReasons, activeUeTargetSelectionReview,
+    ueSelectedTargetIds,
     dialogNpcRegistrationSlots,
     targetsById: indexFirst(plan?.targets ?? [], (target) => target.targetId),
     matchesByActorRef: indexFirst(activeUeTargetSelectionReview?.classification.matches ?? [], (match) => match.actorRef),
@@ -456,6 +477,51 @@ export function MissionTargetModal({
   };
   }, [plan, blueprintInspection, selectedTargetIds, database, isDialogueRegistration,
     targetOverrides, backgroundPropPreview, selectedBackgroundActorRefs, ueTargetSelectionReview]);
+  const backgroundPlayerModelIndex =
+    backgroundPropPreview?.playerModelIndex;
+  const backgroundPlayerMissing =
+    backgroundPropPreview !== null &&
+    (backgroundPlayerModelIndex === null ||
+      (backgroundPlayerModelIndex === undefined &&
+        backgroundPropPreview.willCreatePlayerSlot));
+  const canCreateMissingPlayerSlot =
+    backgroundPropPreview?.canCreatePlayerSlot ??
+    backgroundPropPreview?.willCreatePlayerSlot ??
+    false;
+  const selectedDialogueNpcRegistrationCount =
+    backgroundPropPreview?.items.filter((item) => {
+      if (
+        item.importMode !== "dialogue_npc" ||
+        !selectedBackgroundActorRefs.has(item.actorRef)
+      ) {
+        return false;
+      }
+      const choice =
+        backgroundNpcComponentChoices.get(item.actorRef) ??
+        (item.action === "create"
+          ? NEW_BACKGROUND_NPC_COMPONENT
+          : item.componentName);
+      if (choice === NEW_BACKGROUND_NPC_COMPONENT) {
+        return true;
+      }
+      return item.matchingModelComponents?.some(
+        (candidate) =>
+          candidate.componentName === choice &&
+          candidate.modelIndex !== undefined,
+      );
+    }).length ?? 0;
+  const willRegisterBackgroundDialogue =
+    selectedDialogueNpcRegistrationCount > 0 &&
+    (!backgroundPlayerMissing || createMissingPlayerSlot);
+  const backgroundAutoConfigurationRequired =
+    selectedDialogueNpcCount > 0 &&
+    backgroundDialogueSetupReasons.length > 0;
+  const backgroundBlockingReasons =
+    backgroundPropPreview?.blockedReasons.filter(
+      (reason) =>
+        !backgroundAutoConfigurationRequired ||
+        !backgroundDialogueSetupReasons.includes(reason),
+    ) ?? [];
 
   function applyBlueprintInspection(
     inspection: MissionTargetBlueprintInspection,
@@ -727,6 +793,23 @@ export function MissionTargetModal({
       taskId.trim() || undefined,
     );
     setBackgroundPropPreview(preview);
+    setBackgroundNpcComponentChoices((current) => {
+      const defaults = defaultBackgroundNpcComponentChoices(preview);
+      for (const [actorRef, choice] of current) {
+        const item = preview.items.find(
+          (candidate) => candidate.actorRef === actorRef,
+        );
+        if (
+          item?.matchingModelComponents?.some(
+            (candidate) => candidate.componentName === choice,
+          ) ||
+          choice === NEW_BACKGROUND_NPC_COMPONENT
+        ) {
+          defaults.set(actorRef, choice);
+        }
+      }
+      return defaults;
+    });
     setSelectedBackgroundActorRefs((current) =>
       new Set(
         preview.items
@@ -1033,6 +1116,10 @@ export function MissionTargetModal({
         taskId.trim() || undefined,
       );
       setBackgroundPropPreview(preview);
+      setBackgroundNpcComponentChoices(
+        defaultBackgroundNpcComponentChoices(preview),
+      );
+      setCreateMissingPlayerSlot(preview.willCreatePlayerSlot);
       setStatus(
         preview.blockedReasons.length || preview.items.some((item) => item.action === "blocked")
           ? "审核存在待处理项，请核对下列原因"
@@ -1082,6 +1169,17 @@ export function MissionTargetModal({
     );
   }
 
+  function selectBackgroundNpcComponent(
+    actorRef: string,
+    choice: BackgroundNpcComponentChoice,
+  ) {
+    setBackgroundNpcComponentChoices((current) => {
+      const next = new Map(current);
+      next.set(actorRef, choice);
+      return next;
+    });
+  }
+
   async function importBackgroundProps() {
     if (
       !backgroundPropPreview ||
@@ -1100,12 +1198,44 @@ export function MissionTargetModal({
     const dialogueNpcCount = selectedItems.filter(
       (item) => item.importMode === "dialogue_npc",
     ).length;
+    const dialogueNpcSlotAssignments: BackgroundPropNpcSlotAssignment[] =
+      selectedItems.flatMap((item) => {
+        if (item.importMode !== "dialogue_npc") {
+          return [];
+        }
+        const choice =
+          backgroundNpcComponentChoices.get(item.actorRef) ??
+          (item.action === "create"
+            ? NEW_BACKGROUND_NPC_COMPONENT
+            : item.componentName);
+        return [{
+          actorRef: item.actorRef,
+          targetComponentName:
+            choice === NEW_BACKGROUND_NPC_COMPONENT
+              ? null
+              : choice,
+        }];
+      });
     const backgroundAssetCount = selectedItems.length - dialogueNpcCount;
     if (
       !window.confirm(
         `将向 ${backgroundPropPreview.blueprintAssetPath} 写入 ${selectedBackgroundCount} 个 UE Actor。` +
           (dialogueNpcCount > 0
-            ? `\n${dialogueNpcCount} 个对话 NPC 将按数字槽位顺序写入，并同步对应对话的 DialogModels。`
+            ? `\n${dialogueNpcCount} 个对话 NPC 将按审核选择新增数字槽或更新同模型组件。${
+                willRegisterBackgroundDialogue
+                  ? "同时同步对应对话的 DialogModels。"
+                  : "旧组件更新不参与 DialogModels；未补建玩家时也不会修改 DialogModels。"
+              }`
+            : "") +
+          (dialogueNpcCount > 0 &&
+          backgroundPlayerMissing &&
+          createMissingPlayerSlot
+            ? "\n将补建 0 号玩家 BP_Eric。"
+            : "") +
+          (dialogueNpcCount > 0 &&
+          backgroundPlayerModelIndex !== null &&
+          backgroundPlayerModelIndex !== undefined
+            ? `\n已有 ${backgroundPlayerModelIndex} 号玩家槽保持不变。`
             : "") +
           (backgroundAssetCount > 0
             ? `\n${backgroundAssetCount} 个背景资产使用资产原名写入。`
@@ -1115,7 +1245,7 @@ export function MissionTargetModal({
             : "") +
           "\n全部对象均保留位置、旋转和缩放。" +
           "\n不会写入 NPC 表或目标物表。" +
-          `\n\n${dialogueNpcCount > 0 ? "BP 与对话资产" : "BP"}将保存，是否继续？`,
+          `\n\n${willRegisterBackgroundDialogue || backgroundAutoConfigurationRequired ? "BP 与对话资产" : "BP"}将保存，是否继续？`,
       )
     ) {
       setStatus("已取消 UE 选择写入 BP", "cancelled");
@@ -1149,9 +1279,12 @@ export function MissionTargetModal({
         activePreview.items.map((item) => item.actorRef),
         configuredDialogueId,
         taskId.trim() || undefined,
+        createMissingPlayerSlot,
+        dialogueNpcSlotAssignments,
       );
       setBackgroundPropPreview(null);
       setSelectedBackgroundActorRefs(new Set());
+      setBackgroundNpcComponentChoices(new Map());
       const selectionPrefix =
         backgroundMatchedTargetIds.length > 0
           ? `已勾选 ${backgroundMatchedTargetIds.length} 个任务目标物；`
@@ -1225,7 +1358,7 @@ export function MissionTargetModal({
     }
     const missingSlots = blueprintInspection.slots.filter(
       (slot) =>
-        slot.modelIndex > 0 &&
+        !isEricPlayerClassPath(slot.modelClassPath) &&
         slot.status === "unmapped" &&
         (slot.targetId === null || selectedTargetIds.has(slot.targetId)),
     );
@@ -1422,7 +1555,7 @@ export function MissionTargetModal({
               ? "；未找到关卡中的对应 BP，空间配置仍不完整"
             : "";
       setStatus(
-        `${result.status === "unchanged" ? "对话模型无需变更" : `已按 BP 槽位注册到对话 ${result.dialogueId}`}：角色 ${result.characterCount ?? result.registeredCount + 1} 个（含 0 号玩家），None ${result.emptyCount} 个${unresolved}${spatialMessage}`,
+        `${result.status === "unchanged" ? "对话模型无需变更" : `已按 BP 槽位注册到对话 ${result.dialogueId}`}：角色 ${result.characterCount ?? result.registeredCount + 1} 个（含玩家），None ${result.emptyCount} 个${unresolved}${spatialMessage}`,
         result.spatialStatus === "not_configured" || result.unresolvedIndexes.length || result.emptyCount
           ? "warning" : result.status === "unchanged" ? "ready" : "success",
       );
@@ -2604,6 +2737,14 @@ export function MissionTargetModal({
                     {backgroundDialogueSetupReasons.join("、")}
                   </span>
                 )}
+                {backgroundPlayerModelIndex !== null &&
+                  backgroundPlayerModelIndex !== undefined && (
+                    <span className="background-prop-choice__routing">
+                      已识别玩家位于 BP 槽{" "}
+                      <code>{backgroundPlayerModelIndex}</code>
+                      ，本次保持其模型与 Transform 不变
+                    </span>
+                  )}
               </div>
               {backgroundBlockingReasons.length > 0 && (
                 <div
@@ -2650,16 +2791,23 @@ export function MissionTargetModal({
                     </tr>
                   </thead>
                   <tbody>
-                    {backgroundPropPreview.willCreatePlayerSlot &&
-                      selectedDialogueNpcCount > 0 && (
+                    {backgroundPlayerMissing &&
+                      selectedDialogueNpcRegistrationCount > 0 && (
                         <tr>
                           <td className="mission-target-select">
                             <input
                               type="checkbox"
-                              checked
-                              disabled
-                              readOnly
-                              aria-label="固定补建 0 号玩家"
+                              checked={
+                                canCreateMissingPlayerSlot &&
+                                createMissingPlayerSlot
+                              }
+                              disabled={!canCreateMissingPlayerSlot || busy}
+                              onChange={(event) =>
+                                setCreateMissingPlayerSlot(
+                                  event.target.checked,
+                                )
+                              }
+                              aria-label="补建 0 号玩家"
                             />
                           </td>
                           <td
@@ -2688,15 +2836,48 @@ export function MissionTargetModal({
                           <td>
                             <code>1.00, 1.00, 1.00</code>
                           </td>
-                          <td title="自动补建固定 0 号玩家 BP_Eric">
+                          <td
+                            title={
+                              canCreateMissingPlayerSlot
+                                ? "默认补建 0 号玩家 BP_Eric，可取消"
+                                : "0 号槽已被占用，无法补建玩家"
+                            }
+                          >
                             <span className="dialogue-model-status dialogue-model-status--pending">
-                              新增
+                              {canCreateMissingPlayerSlot
+                                ? createMissingPlayerSlot
+                                  ? "新增"
+                                  : "不新建"
+                                : "不可新建"}
                             </span>
                           </td>
                         </tr>
                       )}
                     {backgroundPropPreview.items.map((item) => {
                       const blocked = item.action === "blocked";
+                      const componentChoice =
+                        backgroundNpcComponentChoices.get(item.actorRef) ??
+                        (item.action === "create"
+                          ? NEW_BACKGROUND_NPC_COMPONENT
+                          : item.componentName);
+                      const selectedMatchingComponent =
+                        componentChoice === NEW_BACKGROUND_NPC_COMPONENT
+                          ? undefined
+                          : item.matchingModelComponents?.find(
+                              (candidate) =>
+                                candidate.componentName === componentChoice,
+                            );
+                      const resolvedAction =
+                        blocked
+                          ? "blocked"
+                          : item.importMode === "dialogue_npc"
+                            ? componentChoice ===
+                              NEW_BACKGROUND_NPC_COMPONENT
+                              ? "create"
+                              : selectedMatchingComponent?.transformMatches
+                                ? "unchanged"
+                                : "update"
+                            : item.action;
                       return (
                         <tr key={item.actorRef}>
                           <td className="mission-target-select">
@@ -2724,11 +2905,63 @@ export function MissionTargetModal({
                               : backgroundPropKindLabel(item.assetKind)}
                           </td>
                           <td>
-                            <code>{item.componentName || "-"}</code>
+                            {item.importMode === "dialogue_npc" ? (
+                              <select
+                                className="background-prop-slot-select"
+                                value={componentChoice}
+                                disabled={blocked || busy}
+                                onChange={(event) =>
+                                  selectBackgroundNpcComponent(
+                                    item.actorRef,
+                                    event.target.value,
+                                  )
+                                }
+                                aria-label={`${item.actorLabel} 的 BP 写入方式`}
+                              >
+                                <option value={NEW_BACKGROUND_NPC_COMPONENT}>
+                                  新增数字槽
+                                </option>
+                                {item.matchingModelComponents?.map((candidate) => {
+                                  const usedByAnotherActor = Array.from(
+                                    backgroundNpcComponentChoices,
+                                  ).some(
+                                    ([actorRef, choice]) =>
+                                      actorRef !== item.actorRef &&
+                                      selectedBackgroundActorRefs.has(
+                                        actorRef,
+                                      ) &&
+                                      choice === candidate.componentName,
+                                  );
+                                  const matchingLabel =
+                                    candidate.modelIndex === undefined
+                                      ? `组件 ${candidate.componentName}`
+                                      : `槽 ${candidate.modelIndex}`;
+                                  return (
+                                    <option
+                                      key={candidate.componentName}
+                                      value={candidate.componentName}
+                                      disabled={usedByAnotherActor}
+                                    >
+                                      {candidate.transformMatches
+                                        ? `使用${matchingLabel}（位置一致）`
+                                        : candidate.modelIndex === undefined
+                                          ? `更新组件 ${candidate.componentName} 位置`
+                                          : `更新槽 ${candidate.modelIndex} 位置`}
+                                    </option>
+                                  );
+                                })}
+                              </select>
+                            ) : (
+                              <code>{item.componentName || "-"}</code>
+                            )}
                             {item.importMode === "dialogue_npc" && (
                               <small>
                                 DialogModels：
-                                {item.dialogueModelName ?? "None"}
+                                {selectedMatchingComponent &&
+                                selectedMatchingComponent.modelIndex ===
+                                  undefined
+                                  ? "不修改"
+                                  : item.dialogueModelName ?? "None"}
                               </small>
                             )}
                           </td>
@@ -2759,12 +2992,12 @@ export function MissionTargetModal({
                               className={`dialogue-model-status dialogue-model-status--${
                                 blocked
                                   ? "warning"
-                                  : item.action === "unchanged"
+                                  : resolvedAction === "unchanged"
                                     ? "registered"
                                     : "pending"
                               }`}
                             >
-                              {backgroundPropActionLabel(item.action)}
+                              {backgroundPropActionLabel(resolvedAction)}
                             </span>
                             {blocked && <small>{item.message}</small>}
                           </td>
@@ -2772,7 +3005,8 @@ export function MissionTargetModal({
                       );
                     })}
                     {backgroundPropPreview.willCreateCameraSlot &&
-                      selectedDialogueNpcCount > 0 && (
+                      createMissingPlayerSlot &&
+                      selectedDialogueNpcRegistrationCount > 0 && (
                         <tr>
                           <td className="mission-target-select">
                             <input
@@ -2865,7 +3099,7 @@ export function MissionTargetModal({
                       ? "正在写入..."
                       : backgroundAutoConfigurationRequired
                         ? "补齐并写入 BP 与对话"
-                        : selectedDialogueNpcCount > 0
+                        : willRegisterBackgroundDialogue
                           ? "写入 BP 与对话"
                           : "写入 BP"}
                   </button>

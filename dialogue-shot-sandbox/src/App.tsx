@@ -64,6 +64,7 @@ import type { DialogueTextEditorItem } from "./components/DialogueTextEditorModa
 import { DataSourceStatus } from "./components/DataSourceStatus";
 import { DirectorControl } from "./components/DirectorControl";
 import { OperationIcon, TaskGlyph, TaskMotionScope } from "./components/TaskMotion";
+import { WorkspaceFrameReveal } from "./components/WorkspaceFrameReveal";
 import { ExistingAudioConfiguration } from "./components/ExistingAudioConfiguration";
 import { LaunchScreen } from "./components/LaunchScreen";
 import { MissingNpcModelModal } from "./components/MissingNpcModelModal";
@@ -581,8 +582,8 @@ function blueprintFormationStatus(
   ignoredNpcCount = 0,
 ): string {
   const base = playerPositionLocked
-    ? "保留 UE Formation 的全部初始位置与朝向，0 号玩家固定"
-    : "保留 UE Formation 的其他角色位置，0 号玩家由导演调整";
+    ? "保留 UE Formation 的全部初始位置与朝向，玩家固定"
+    : "保留 UE Formation 的其他角色位置，玩家由导演调整";
   return ignoredNpcCount > 0
     ? `${base}；${ignoredNpcCount} 位缺失模型角色使用规则临时占位`
     : base;
@@ -1957,6 +1958,7 @@ export default function App() {
     () =>
       window.sessionStorage.getItem(LAUNCH_SCREEN_STORAGE_KEY) !== "1",
   );
+  const launchScreenInitiallyVisible = useRef(showLaunchScreen).current;
   const [database, setDatabase] = useState(demoDatabase);
   const [query, setQuery] = useState("2048");
   const [sequence, setSequence] = useState<DialogueSequence>(initial.sequence);
@@ -3625,7 +3627,7 @@ export default function App() {
             )
           : "使用规则导演自动安排的角色位置"
         : usesBlueprintFormation
-          ? `${directorLabel(result.appliedMode)} 分镜沿用 BP 占位，0 号玩家${
+          ? `${directorLabel(result.appliedMode)} 分镜沿用 BP 占位，玩家${
               playerPositionLocked ? "固定" : "可调整"
             }`
           : preservesInputFormation
@@ -5508,6 +5510,12 @@ export default function App() {
         {...navigationFeedback}
         {...workspaceProps("storyboard")}
       >
+        <WorkspaceFrameReveal
+          active={
+            activeWorkspace === "storyboard" && !showLaunchScreen
+          }
+          initialDelayMs={launchScreenInitiallyVisible ? 0 : 850}
+        />
         {!configurationMode && (
           <aside className="left-panel">
           <section className="panel-section query-section">

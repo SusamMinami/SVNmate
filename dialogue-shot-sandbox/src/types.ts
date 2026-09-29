@@ -941,6 +941,11 @@ export interface BackgroundPropPreviewItem {
   assetPropertyName: string;
   worldTransform: UnrealTransform;
   relativeTransform: UnrealTransform;
+  matchingModelComponents?: Array<{
+    componentName: string;
+    modelIndex?: number;
+    transformMatches: boolean;
+  }>;
   action: "create" | "update" | "unchanged" | "blocked";
   message: string;
 }
@@ -950,10 +955,17 @@ export interface BackgroundPropImportPreview {
   blueprintAssetPath: string;
   mapAssetPath: string;
   rootTransform: MissionTargetTransform;
+  playerModelIndex: number | null;
+  canCreatePlayerSlot: boolean;
   willCreatePlayerSlot: boolean;
   willCreateCameraSlot: boolean;
   items: BackgroundPropPreviewItem[];
   blockedReasons: string[];
+}
+
+export interface BackgroundPropNpcSlotAssignment {
+  actorRef: string;
+  targetComponentName: string | null;
 }
 
 export interface BackgroundPropImportResult {

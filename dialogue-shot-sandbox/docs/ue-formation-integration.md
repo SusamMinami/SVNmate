@@ -117,8 +117,12 @@ instanceId = bp:<BlueprintAssetPath>:<ModelIndex>
 这是必要约束。同一 NPC ID 或同一模型可以同时出现在多个 BP 槽位中，不能
 用 NPC ID 作为 React key、空间索引或 UE 回写目标。
 
-场内角色数量由有效数字 BP 槽决定，不由台词说话者数量决定。`0` 号槽必须
-映射为玩家；未发言 NPC 仍保留为场内背景角色，参与遮挡、画面重量、
+场内角色数量由有效数字 BP 槽决定，不由台词说话者数量决定。已有 BP 优先将
+`/Game/Seria/Characters/Eric/` 下资产名以 `BP_Eric` 开头的唯一角色模型槽
+识别为玩家，兼容职业变体；未识别到 Eric 时依次回退到
+`DialogModels=player` 的唯一槽和旧版 0 号槽。BP 与 DialogModels 冲突时以
+Eric 模型槽为准并显示警告；多个 Eric 槽无法唯一确认时停止映射。新建
+Formation 仍默认创建 `0 = BP_Eric`。未发言 NPC 仍保留为场内背景角色，参与遮挡、画面重量、
 前中后景和安全区域判断，但不作为镜头主体、注视对象或关系轴端点。
 关系轴和双人/群像叙事人数只按当前对话文件中实际发言的角色计算。
 身份依次使用节点显式模型槽、`DialogModels` 和模型类路径映射；无法映射 NPC
@@ -209,7 +213,7 @@ UE 服务通过现有 `server/ue/transport.ts` 连接 OmniMcpCore；默认端口
 - `src/components/BlueprintFormationModal.tsx`：BP/导演站位选择。
 - `src/components/MissionTargetModal.tsx`：目标物双向同步、空间配置与背景
   资产导入。
-- `src/director/blockingResolver.ts`：保留 BP 站位及单独解锁 0 号玩家的
+- `src/director/blockingResolver.ts`：保留 BP 站位及单独解锁已识别玩家的
   镜头求解模式。
 
 ## 后续阶段
