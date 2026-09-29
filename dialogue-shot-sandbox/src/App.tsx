@@ -5489,10 +5489,10 @@ export default function App() {
             onCollectRevisionCasesChange={changeCaseCollection}
             disabled={configurationModeBusy || (configurationMode && !configurationActivity.supported)}
             readPause={configurationMode && configurationActivity.supported ? {
-              manual: configurationActivity.manualPaused,
+              manualPaused: configurationActivity.manualPaused,
+              manualActive: configurationActivity.manualActive,
               paused: configurationActivity.paused,
-              onToggle: () =>
-                configurationActivity.setManualPaused((current) => !current),
+              onToggle: configurationActivity.toggleManualPause,
             } : undefined}
             onOpenSettings={
               window.shotSandboxDesktop

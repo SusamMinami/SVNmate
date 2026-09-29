@@ -154,7 +154,7 @@ test("compact activity pauses all automatic UE reads and preserves the editor dr
   await expect(page.locator(".inspector-header")).toContainText("UE NODE 204801");
   await expect(page.getByRole("button", { name: "修改当前镜头" })).toContainText("FOV 62");
   await expect(
-    page.getByRole("button", { name: "暂停 UE 自动读取" }),
+    page.getByRole("button", { name: "暂停 UE 读取" }),
   ).toHaveAttribute("aria-pressed", "false");
   await expectStatusIconsRightAligned(page);
   await page.getByRole("button", { name: "添加镜头曲线" }).click();
@@ -193,7 +193,7 @@ test("compact activity pauses all automatic UE reads and preserves the editor dr
   );
   await expect(pausedStatusIcons).toHaveCount(2);
   const pauseToggleGlyphOpacity = await page
-    .getByRole("button", { name: "保持暂停 UE 自动读取" })
+    .getByRole("button", { name: "手动恢复 UE 读取" })
     .locator("svg")
     .evaluate((element) => Number.parseFloat(getComputedStyle(element).opacity));
   expect(pauseToggleGlyphOpacity).toBeLessThan(0.7);
@@ -253,9 +253,9 @@ test("manual pause stays latched until the user resumes it", async ({ page }) =>
   const { errors, selectionCount } = await fixture(page);
   await activity(page, "dialogue");
   await expect(page.locator(".right-panel")).not.toHaveAttribute("inert");
-  const pause = page.getByRole("button", { name: "暂停 UE 自动读取" });
+  const pause = page.getByRole("button", { name: "暂停 UE 读取" });
   await pause.click();
-  const resume = page.getByRole("button", { name: "恢复 UE 自动读取" });
+  const resume = page.getByRole("button", { name: "恢复 UE 读取" });
   await expect(resume).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator(".right-panel")).toHaveAttribute("inert", "");
   const pauseNotice = page.locator(".configuration-pause-notice");
@@ -264,6 +264,7 @@ test("manual pause stays latched until the user resumes it", async ({ page }) =>
   const before = selectionCount();
   await activity(page, "other");
   await activity(page, "dialogue");
+  await activity(page, "other");
   await page.waitForTimeout(1_400);
   expect(selectionCount()).toBe(before);
   await expect(page.locator(".right-panel")).toHaveAttribute("inert", "");
@@ -271,10 +272,32 @@ test("manual pause stays latched until the user resumes it", async ({ page }) =>
   expect(await page.evaluate(() => (window as any).monitorEvents)).toEqual([true]);
   await resume.click();
   await expect(
-    page.getByRole("button", { name: "暂停 UE 自动读取" }),
+    page.getByRole("button", { name: "暂停 UE 读取" }),
   ).toHaveAttribute("aria-pressed", "false");
   await expect.poll(selectionCount).toBeGreaterThan(before);
   await expect(page.locator(".right-panel")).not.toHaveAttribute("inert");
   await expect(pauseNotice).toHaveCount(0);
+  await page.evaluate(() => {
+    Object.defineProperty(document, "hidden", {
+      configurable: true,
+      value: true,
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await expect(page.locator(".right-panel")).toHaveAttribute("inert", "");
+  await page.evaluate(() => {
+    Object.defineProperty(document, "hidden", {
+      configurable: true,
+      value: false,
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await expect(page.locator(".right-panel")).not.toHaveAttribute("inert");
+  await activity(page, "dialogue");
+  await activity(page, "other");
+  await expect(page.locator(".right-panel")).toHaveAttribute("inert", "");
+  await expect(
+    page.getByRole("button", { name: "手动恢复 UE 读取" }),
+  ).toHaveAttribute("aria-pressed", "true");
   expect(errors).toEqual([]);
 });

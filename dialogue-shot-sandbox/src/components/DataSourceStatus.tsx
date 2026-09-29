@@ -23,7 +23,12 @@ interface DataSourceStatusProps {
   onRefreshLark: () => void;
   onAuthorize: () => void;
   onCollectRevisionCasesChange: (enabled: boolean) => void;
-  readPause?: { manual: boolean; paused: boolean; onToggle: () => void };
+  readPause?: {
+    manualPaused: boolean;
+    manualActive: boolean;
+    paused: boolean;
+    onToggle: () => void;
+  };
   disabled?: boolean;
 }
 
@@ -90,18 +95,20 @@ export function DataSourceStatus({
         ? caseStatusLabel
         : "数据源已就绪";
   const readPauseActionLabel = readPause
-    ? readPause.manual
-      ? "恢复 UE 自动读取"
-      : readPause.paused
-        ? "保持暂停 UE 自动读取"
-        : "暂停 UE 自动读取"
+    ? readPause.paused
+      ? readPause.manualPaused
+        ? "恢复 UE 读取"
+        : "手动恢复 UE 读取"
+      : "暂停 UE 读取"
     : "";
   const readPauseTooltip = readPause
-    ? readPause.manual
-      ? "已手动暂停；点击恢复自动读取"
+    ? readPause.manualPaused
+      ? "已手动暂停；点击恢复读取"
+      : readPause.manualActive
+        ? "手动读取中；点击暂停"
       : readPause.paused
-        ? "已自动暂停；点击后保持暂停"
-        : "自动读取中；点击手动暂停"
+        ? "已自动暂停；点击手动恢复读取"
+        : "自动读取中；点击暂停"
     : "";
 
   return (
@@ -112,7 +119,7 @@ export function DataSourceStatus({
         type="button"
         aria-label={readPause ? readPauseActionLabel : "数据源状态"}
         {...(readPause ? {
-          "aria-pressed": readPause.manual,
+          "aria-pressed": readPause.paused,
           onClick: readPause.onToggle,
         } : {
           "aria-haspopup": "dialog" as const,
