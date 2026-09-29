@@ -5,7 +5,9 @@ import {
   Layers3,
   Music2,
   PersonStanding,
+  Pencil,
   RefreshCw,
+  Search,
   Upload,
   Volume2,
   X,
@@ -13,7 +15,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import type { StoryboardExportMode } from "../app/useStoryboardExport";
 import type { DialogueStoryboardExportPreview } from "../types";
-import { TaskGlyph, TaskMotionScope } from "./TaskMotion";
+import { OperationIcon, TaskGlyph, TaskMotionScope } from "./TaskMotion";
 
 interface StoryboardExportModalProps {
   preview: DialogueStoryboardExportPreview;
@@ -87,6 +89,7 @@ export function StoryboardExportModal({
   });
   const previousModeRef = useRef(mode);
   const reviewed = Boolean(preview.reviewToken);
+  const refreshing = busy && busyLabel === "刷新中";
   const previousReviewedRef = useRef(reviewed);
   const [confirmed, setConfirmed] = useState(false);
   const [selectedShotIndexes, setSelectedShotIndexes] = useState<number[]>(
@@ -1022,7 +1025,11 @@ export function StoryboardExportModal({
                 )
               }
             >
-              <TaskGlyph phase={busy ? "running" : error ? errorPhase : result ? "success" : blocked ? "warning" : "ready"} runId={runId} />
+              {!busy && (error || result || blocked)
+                ? <TaskGlyph phase={error ? errorPhase : result ? "success" : "warning"} runId={runId} />
+                : <OperationIcon kind={refreshing ? "read" : reviewed ? "write" : "search"} busy={busy}>
+                    {refreshing ? <RefreshCw size={16} /> : reviewed ? <Pencil size={16} /> : <Search size={16} />}
+                  </OperationIcon>}
               <span aria-live="polite">
               {busy
                 ? busyLabel || "处理中"

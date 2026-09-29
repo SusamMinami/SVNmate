@@ -46,6 +46,8 @@ async function openSettings(page: Page, options: {
         };
         window.shotSandboxDesktop = {
           getUpdateSnapshot: async () => ({state: "current"}),
+          chooseNpcAnimationDirectories: async () => window.directoryResult === null
+            ? null : ({ ...status, npcAnimationDirectories: window.directoryResult }),
           onUpdateState: () => () => {},
           getAdvisorModelStatus: () => ${options.slowModel ? "new Promise(() => {})" : "Promise.resolve(model)"},
           onAdvisorModelState: (callback) => { onModelState = callback; return () => {}; },
@@ -177,6 +179,9 @@ test("defaults reduced motion off, persists the switch and keeps desktop scaling
     const toggle = page.getByRole("checkbox", {
       name: "减少动态效果",
     });
+    const preferenceRow = page.locator(".setup-motion-preference");
+    const ueRow = page.getByRole("img", { name: "UE 编辑器：待连接", exact: true }).locator("..");
+    expect((await preferenceRow.boundingBox())!.y).toBe((await ueRow.boundingBox())!.y);
     await expect(toggle).not.toBeChecked();
     await expect(page.locator("html")).toHaveAttribute(
       "data-reduced-motion",
@@ -216,4 +221,24 @@ test("handles blocked storage and early close without replaying", async ({ page 
   await page.getByRole("button", { name: "Reopen" }).click();
   await expect(page.getByRole("region", { name: "环境检查" }))
     .toHaveAttribute("data-status-intro", "false");
+});
+
+test("NPC library uses a single folder action, replaces directories and preserves them on cancel", async ({ page }) => {
+  await openSettings(page);
+  const row = page.locator(".setup-directory-collection");
+  const folder = row.getByRole("button", { name: "选择 NPC 动作库根目录" });
+  await expect(row.getByRole("combobox")).toHaveCount(0);
+  await expect(row.getByRole("button")).toHaveCount(1);
+  await page.evaluate(() => { (window as any).directoryResult = ["Test/Animations/A", "Test/Animations/B"]; });
+  await folder.click();
+  await expect(row).toContainText("2 个根目录");
+  await expect(row.locator(".setup-status-copy small")).toHaveAttribute("title", "Test/Animations/A\nTest/Animations/B");
+  await page.evaluate(() => { (window as any).directoryResult = null; });
+  await folder.click();
+  await expect(row).toContainText("2 个根目录");
+  await page.evaluate(() => { (window as any).directoryResult = ["Test/Animations/C"]; });
+  await folder.click();
+  await expect(row).toContainText("Test/Animations/C");
+  await expect(row).not.toContainText("Test/Animations/A");
+  await expect(row.getByRole("img", { name: "NPC 动作库：已就绪", exact: true })).toHaveAttribute("data-state", "ready");
 });

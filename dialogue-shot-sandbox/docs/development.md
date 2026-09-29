@@ -112,6 +112,8 @@ npm run dist:win
 
 构建安装版和便携版到 `artifacts/`，同时生成 `latest.yml` 与 blockmap。
 该命令使用 `--publish never`，构建成功不代表远端已有附件。
+打包必须从项目自身的真实 `node_modules` 目录执行，不能用目录联接替代；
+命令结束前会检查 `app.asar` 中的主进程文件和关键运行时依赖，缺失时直接失败。
 版本源为 `package.json`；应用内更新摘要使用 `UPDATE_NOTES.md`，
 完整逐版本记录使用 `RELEASE_NOTES.md`，不要把两者当成现行规范。
 
@@ -125,10 +127,16 @@ powershell -ExecutionPolicy Bypass -File scripts/publish-update.ps1
 与校验和。已经完成本轮打包且核对版本后，可传 `-SkipBuild` 发布同一份已验证产物。
 版本同时更新 `package.json` 与 lockfile；上传后核对 GitHub 附件大小及 SHA-256，
 并检查 `latest.yml` 的版本、安装包路径与 SHA-512。发布附件不等于提交或推送源码。
+发布源码时只暂存本产品已核对的代码、测试与指南；本地调试记录、业务草稿和其他
+产品的未提交修改不随版本带入。先核对远端分支，再推送本轮提交。
 
 本机覆盖安装是另一步：先定位当前卸载注册项中的安装目录，退出旧客户端，运行
 新版本 Setup，保留 `%APPDATA%/Shot Sandbox` 的配置、任务与资料。完成后核对
 注册版本、EXE 版本及安装目录的 `resources/app.asar`，再启动客户端验证。
+静默覆盖使用 Setup 的 `/S` 参数；安装前保留本机设置/任务备份及上一版回退包，
+安装后将 `app.asar` 与本轮 `artifacts/win-unpacked/resources/app.asar` 比较 SHA-256。
+启动验收确认窗口正常、版本正确、无缺失模块错误；运行中的配置可能由客户端正常
+更新，不能将日志或时间戳变化误判为安装器丢失用户数据。
 使用 TRAE 新增工具时，重载集成工作区或重新启用 MCP。
 
 清理仅针对确认可重建的日志、测试产物和旧安装包；保留本轮验证证据与至少上一版

@@ -188,8 +188,10 @@ test("export has one waiting glyph and separates inspection failure, uncertain w
     return route;
   };
   const glyph = page.locator(".storyboard-export-modal footer .task-glyph");
+  const icon = page.locator(".storyboard-export-modal footer .operation-icon");
   await page.getByRole("button", { name: "检查所选内容" }).click();
-  await expect(glyph).toHaveAttribute("data-phase", "running");
+  await expect(icon).toHaveAttribute("data-running", "true");
+  await expect(icon).toHaveAttribute("data-kind", "search");
   await expect.poll(() => animations(page, ".storyboard-export-modal")).toBe(1);
   await (await take("inspect")).fulfill({ status: 400, json: { ok: false, error: { message: "UE 未连接" } } });
   await expect(glyph).toHaveAttribute("data-phase", "failed");
@@ -199,16 +201,17 @@ test("export has one waiting glyph and separates inspection failure, uncertain w
   await (await take("inspect")).fulfill({ json: { ok: true, data: {
     ...preview, reviewToken: "review-token", dialogueAssetPath: "/Game/Dialog_2048",
   } } });
-  await expect(glyph).toHaveAttribute("data-phase", "ready");
+  await expect(icon).toHaveAttribute("data-busy", "false");
   const confirm = page.getByRole("button", { name: "确认写入并保存" });
   await expect(confirm).toBeDisabled();
   await page.getByRole("checkbox", { name: /已核对/ }).check();
   await confirm.click();
-  await expect(glyph).toHaveAttribute("data-phase", "running");
+  await expect(icon).toHaveAttribute("data-running", "true");
+  await expect(icon).toHaveAttribute("data-kind", "write");
   await expect(page.getByRole("button", { name: "关闭导出预检" })).toBeDisabled();
   await page.screenshot({ path: info.outputPath("export-writing.png") });
   await hidden(page, true);
-  await expect(glyph).toHaveAttribute("data-running", "false");
+  await expect(icon).toHaveAttribute("data-running", "false");
   await hidden(page, false);
   await (await take("export")).fulfill({ status: 500, json: { ok: false, error: { message: "写入连接中断" } } });
   await expect(glyph).toHaveAttribute("data-phase", "uncertain");

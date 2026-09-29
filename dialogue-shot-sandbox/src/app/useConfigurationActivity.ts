@@ -7,8 +7,8 @@ const pending: ConfigurationActivity = {
 
 export function useConfigurationActivity(enabled: boolean) {
   const supported = Boolean(window.shotSandboxDesktop?.monitorConfigurationActivity);
-  const [automatic, setAutomatic] = useState(true);
-  const monitoring = enabled && automatic && supported;
+  const [manualPaused, setManualPaused] = useState(false);
+  const monitoring = enabled && supported;
   const [session, setSession] = useState({ monitoring: false, activity: pending });
   // A newly enabled monitor must not reuse the previous dialogue window before
   // the effect subscribes. This also covers re-entering compact mode.
@@ -41,9 +41,19 @@ export function useConfigurationActivity(enabled: boolean) {
       void desktop.monitorConfigurationActivity!(false).catch(() => {});
     };
   }, [monitoring]);
-  const paused = enabled && (!visible || (automatic && supported && activity.state !== "dialogue"));
+  const automaticPaused =
+    enabled && (!visible || (supported && activity.state !== "dialogue"));
+  const paused = enabled && (manualPaused || automaticPaused);
   return {
-    supported, automatic, setAutomatic, paused,
-    message: !visible ? "窗口已隐藏，已暂停 UE 自动读取" : activity.message,
+    supported,
+    manualPaused,
+    setManualPaused,
+    automaticPaused,
+    paused,
+    message: manualPaused
+      ? "已手动暂停 UE 自动读取"
+      : !visible
+        ? "窗口已隐藏，已暂停 UE 自动读取"
+        : activity.message,
   };
 }

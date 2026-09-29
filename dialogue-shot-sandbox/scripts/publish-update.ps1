@@ -29,6 +29,11 @@ if (-not $SkipBuild) {
   }
 }
 
+npm run verify:desktop-package
+if ($LASTEXITCODE -ne 0) {
+  throw "Desktop package verification failed."
+}
+
 $ErrorActionPreference = "Continue"
 gh release view $Tag --repo $Repository *> $null
 $releaseExists = $LASTEXITCODE -eq 0

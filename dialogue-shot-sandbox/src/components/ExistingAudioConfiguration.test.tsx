@@ -5,6 +5,7 @@ import { ExistingAudioConfiguration } from "./ExistingAudioConfiguration";
 
 const configuration: ExistingDialogueNodeConfiguration = {
   dialogueId: "735201",
+  isOption: null,
   cameraPosition: "",
   moveCameraCount: 0,
   cameraMoveTypes: [],

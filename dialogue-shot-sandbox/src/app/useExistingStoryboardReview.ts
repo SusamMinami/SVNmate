@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import type { DialogueSequence, ShotPlan } from "../types";
-import { reviewExistingStoryboard, type ExistingStoryboardReview } from "../director/existingStoryboardReview";
+import type { ExistingStoryboardReview } from "../director/existingStoryboardReview";
 
 export function useExistingStoryboardReview(sequence: DialogueSequence, shots: ShotPlan[], enabled: boolean) {
   const [report, setReport] = useState<ExistingStoryboardReview | null>(null);
@@ -37,6 +37,8 @@ export function useExistingStoryboardReview(sequence: DialogueSequence, shots: S
     setReport(null);
     setProgress("正在检查已有分镜");
     try {
+      const { reviewExistingStoryboard } = await import("../director/existingStoryboardReview");
+      if (!isCurrent()) return;
       const result = await reviewExistingStoryboard(sequence, shots, task.signal,
         (message) => { if (isCurrent()) setProgress(message); },
         (rules) => { if (isCurrent()) setReport(rules); });

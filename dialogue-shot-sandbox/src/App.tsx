@@ -109,6 +109,7 @@ import {
 } from "./data/musicCatalog";
 import {
   findDialogueSequence,
+  findDialogueTimeline,
   searchDialogueContent,
 } from "./data/dialogueRepository";
 import type {
@@ -785,6 +786,7 @@ interface ShotInspectorProps {
   configurationNodeConfiguration:
     | ExistingDialogueNodeConfiguration
     | undefined;
+  configurationPreviousOptionNodeId: string | null;
   configurationSelectionMessage: string;
   configurationSelectionReady: boolean;
   configurationSelectionRefreshing: boolean;
@@ -871,6 +873,7 @@ function ShotInspector({
   configurationMode,
   configurationDialogueNodeId,
   configurationNodeConfiguration,
+  configurationPreviousOptionNodeId,
   configurationSelectionMessage,
   configurationSelectionReady,
   configurationSelectionRefreshing,
@@ -1021,8 +1024,14 @@ function ShotInspector({
 
   return (
     <>
-      <section className="inspector-header">
-        <div>
+      <section
+        className={`inspector-header ${
+          configurationPreviousOptionNodeId
+            ? "inspector-header--option-warning"
+            : ""
+        }`.trim()}
+      >
+        <div className="inspector-header__identity">
           <small>
             {configurationMode ? (
               <>
@@ -1080,6 +1089,19 @@ function ShotInspector({
                     } · ${activeDialogueRow.content}`
                   : "对白已加载"}
           </h2>
+          {configurationMode && configurationPreviousOptionNodeId && (
+            <p
+              className="configuration-option-warning"
+              role="status"
+              aria-label="上一节点选项警示"
+            >
+              <AlertTriangle size={13} aria-hidden="true" />
+              <span>
+                上一节点 <code>{configurationPreviousOptionNodeId}</code>{" "}
+                已勾选“是否为选项”，本节点多数配置可能不会生效。
+              </span>
+            </p>
+          )}
         </div>
         {shot && !configurationMode && (
           <div className="shot-nav">
@@ -2237,24 +2259,68 @@ export default function App() {
       sequence,
     ],
   );
+  const selectedUeDialogueTimeline = useMemo(
+    () =>
+      selectedUeDialogueNodeId &&
+      selectedUeDialoguePrefix === sequence.prefix
+        ? findDialogueTimeline(database, sequence.startId)
+        : [],
+    [
+      database,
+      selectedUeDialogueNodeId,
+      selectedUeDialoguePrefix,
+      sequence.prefix,
+      sequence.startId,
+    ],
+  );
   const selectedUeDialogueRowIndex = selectedUeDialogueNodeId
-    ? sequence.rows.findIndex(
+    ? selectedUeDialogueTimeline.findIndex(
         (row) => row.id === selectedUeDialogueNodeId,
       )
     : -1;
   const previousSelectedUeDialogueNodeIds =
     selectedUeDialogueRowIndex > 0
-      ? sequence.rows
+      ? selectedUeDialogueTimeline
           .slice(0, selectedUeDialogueRowIndex)
+          .filter((row) => !row.id.endsWith("00"))
           .reverse()
           .map((row) => row.id)
       : [];
+  const selectedUePreviousDialogueNodeId =
+    previousSelectedUeDialogueNodeIds[0] ?? null;
+  const selectedConfigurationDialogueIds = useMemo(
+    () =>
+      selectedUeDialogueNodeId
+        ? [
+            ...(selectedUePreviousDialogueNodeId
+              ? [selectedUePreviousDialogueNodeId]
+              : []),
+            selectedUeDialogueNodeId,
+          ]
+        : [],
+    [
+      selectedUeDialogueNodeId,
+      selectedUePreviousDialogueNodeId,
+    ],
+  );
   const selectedUeNodeConfiguration = selectedUeDialogueNodeId
     ? existingNodeConfigurations.find(
         (configuration) =>
           configuration.dialogueId === selectedUeDialogueNodeId,
       )
     : undefined;
+  const selectedUePreviousNodeConfiguration =
+    selectedUePreviousDialogueNodeId
+      ? existingNodeConfigurations.find(
+          (configuration) =>
+            configuration.dialogueId ===
+            selectedUePreviousDialogueNodeId,
+        )
+      : undefined;
+  const configurationPreviousOptionNodeId =
+    selectedUePreviousNodeConfiguration?.isOption === true
+      ? selectedUePreviousDialogueNodeId
+      : null;
   const configurationSelectionReady =
     Boolean(configurationDialogueRow);
   const configurationSyncState: ConfigurationSyncState =
@@ -2295,7 +2361,9 @@ export default function App() {
       ? configurationActivity.paused
         ? {
             state: "paused" as const,
-            label: "自动读取已暂停",
+            label: configurationActivity.manualPaused
+              ? "读取已手动暂停"
+              : "自动读取已暂停",
             detail: configurationActivity.message,
           }
         : configurationMapSwitching
@@ -2372,9 +2440,6 @@ export default function App() {
     selectedUeShotIndex,
   ]);
 
-  const configurationNodeTabActive =
-    inspectorTab === "shot" || inspectorTab === "audio";
-
   useEffect(() => {
     if (activeWorkspace !== "storyboard") {
       configurationNodeReadKeysRef.current.clear();
@@ -2390,12 +2455,13 @@ export default function App() {
       configurationSelectionSuspended ||
       !configurationSelectionReady ||
       !selectedUeDialogueNodeId ||
-      !configurationNodeTabActive
+      selectedConfigurationDialogueIds.length === 0
     ) {
       setConfigurationNodeReading(false);
       return;
     }
-    const cacheKey = `${sequence.startId}:${selectedUeDialogueNodeId}`;
+    const cacheKey =
+      `${sequence.startId}:${selectedConfigurationDialogueIds.join(",")}`;
     if (configurationNodeReadKeysRef.current.has(cacheKey)) {
       return;
     }
@@ -2406,7 +2472,7 @@ export default function App() {
     void readExistingDialogueStoryboard({
       dialogueId: sequence.prefix,
       startId: sequence.startId,
-      dialogueIds: [selectedUeDialogueNodeId],
+      dialogueIds: selectedConfigurationDialogueIds,
       configurationOnly: true,
       participantModelIndexes: [],
     })
@@ -2414,18 +2480,24 @@ export default function App() {
         if (!active) {
           return;
         }
-        const configuration = snapshot.configurations.find(
+        const currentConfiguration = snapshot.configurations.find(
           (item) => item.dialogueId === selectedUeDialogueNodeId,
         );
-        if (!configuration) {
+        if (!currentConfiguration) {
           configurationNodeReadKeysRef.current.delete(cacheKey);
           return;
         }
+        const requestedDialogueIds = new Set(
+          selectedConfigurationDialogueIds,
+        );
+        const configurations = snapshot.configurations.filter(
+          (item) => requestedDialogueIds.has(item.dialogueId),
+        );
         setExistingNodeConfigurations((current) => [
           ...current.filter(
-            (item) => item.dialogueId !== configuration.dialogueId,
+            (item) => !requestedDialogueIds.has(item.dialogueId),
           ),
-          configuration,
+          ...configurations,
         ]);
       })
       .catch((configurationError) => {
@@ -2455,7 +2527,7 @@ export default function App() {
     configurationSelectionSuspended,
     configurationNodeReadRevision,
     configurationSelectionReady,
-    configurationNodeTabActive,
+    selectedConfigurationDialogueIds,
     selectedUeDialogueNodeId,
     sequence.prefix,
     sequence.startId,
@@ -4628,12 +4700,15 @@ export default function App() {
       return;
     }
     configurationNodeReadKeysRef.current.delete(
-      `${sequence.startId}:${selectedUeDialogueNodeId}`,
+      `${sequence.startId}:${selectedConfigurationDialogueIds.join(",")}`,
+    );
+    const refreshedDialogueIds = new Set(
+      selectedConfigurationDialogueIds,
     );
     setExistingNodeConfigurations((current) =>
       current.filter(
         (configuration) =>
-          configuration.dialogueId !== selectedUeDialogueNodeId,
+          !refreshedDialogueIds.has(configuration.dialogueId),
       ),
     );
     setConfigurationNodeReadRevision((current) => current + 1);
@@ -5341,15 +5416,6 @@ export default function App() {
             aria-label={configurationReadNotice.detail}
             title={configurationReadNotice.detail}
           >
-            {configurationReadNotice.state === "paused" ? (
-              <Pause size={13} aria-hidden="true" />
-            ) : (
-              <LoaderCircle
-                className="spin"
-                size={13}
-                aria-hidden="true"
-              />
-            )}
             <span>{configurationReadNotice.label}</span>
           </div>
         )}
@@ -5422,10 +5488,11 @@ export default function App() {
             onAuthorize={() => void beginAuthorization()}
             onCollectRevisionCasesChange={changeCaseCollection}
             disabled={configurationModeBusy || (configurationMode && !configurationActivity.supported)}
-            automaticPause={configurationMode && configurationActivity.supported ? {
-              enabled: configurationActivity.automatic,
+            readPause={configurationMode && configurationActivity.supported ? {
+              manual: configurationActivity.manualPaused,
               paused: configurationActivity.paused,
-              onToggle: () => configurationActivity.setAutomatic((current) => !current),
+              onToggle: () =>
+                configurationActivity.setManualPaused((current) => !current),
             } : undefined}
             onOpenSettings={
               window.shotSandboxDesktop
@@ -5565,13 +5632,9 @@ export default function App() {
                         });
                       }}
                     >
-                      {formationChecking ? (
-                        <LoaderCircle className="spin" size={13} />
-                      ) : loadedFormationSnapshot ? (
+                      <OperationIcon kind="read" busy={formationChecking}>
                         <RefreshCw size={13} />
-                      ) : (
-                        <Boxes size={13} />
-                      )}
+                      </OperationIcon>
                       <span>
                         {formationChecking
                           ? "正在读取"
@@ -6313,6 +6376,11 @@ export default function App() {
                   configurationMode
                     ? selectedUeNodeConfiguration
                     : activeNodeConfiguration
+                }
+                configurationPreviousOptionNodeId={
+                  configurationMode
+                    ? configurationPreviousOptionNodeId
+                    : null
                 }
                 configurationSelectionMessage={
                   configurationSelectionMessage

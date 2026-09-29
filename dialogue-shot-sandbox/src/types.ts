@@ -847,6 +847,7 @@ export interface ExistingDialogueCameraNode {
 
 export interface ExistingDialogueNodeConfiguration {
   dialogueId: string;
+  isOption: boolean | null;
   cameraPosition: string;
   moveCameraCount: number;
   cameraMoveTypes: string[];

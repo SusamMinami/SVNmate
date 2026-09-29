@@ -464,11 +464,7 @@ export function DesktopSetupModal({
                   title="选择 NPC 动作库根目录（可多选）"
                   aria-label="选择 NPC 动作库根目录"
                 >
-                  {busy ? (
-                    <LoaderCircle className="spin" size={14} />
-                  ) : (
-                    <FolderOpen size={14} />
-                  )}
+                  <FolderOpen size={14} />
                 </button>
               </div>
             </div>
@@ -808,9 +804,7 @@ export function DesktopSetupModal({
               </span>
             </div>
             <div
-              className={`setup-status-item--wide ${
-                status.ueConnected ? "" : "is-warning"
-              }`}
+              className={status.ueConnected ? "" : "is-warning"}
             >
               <SetupStatusIcon
                 name="UE 编辑器"

@@ -21,7 +21,7 @@ function commonProperties(
   dialogueId: string,
   cameraPosition = "",
   content = `对白 ${dialogueId}`,
-) {
+): Array<Record<string, unknown>> {
   return [
     {
       Alias: "id",
@@ -2805,6 +2805,44 @@ describe("existing dialogue storyboard", () => {
         (call) => call.action === "bp.get_blueprint_by_path",
       ),
     ).toBe(false);
+  });
+
+  it("reads explicit option-node aliases as a nullable boolean", async () => {
+    const connection = new FakeStoryboardExportConnection();
+    connection.commonByData.get("ActionData1")!.push({
+      Alias: "IsOption",
+      CurrentBool: true,
+    });
+    connection.commonByData.get("ActionData2")!.push({
+      Alias: "b_is_option",
+      CurrentUint32: 0,
+    });
+    connection.commonByData.get("ActionData3")!.push({
+      Alias: "Virtual",
+      CurrentBool: true,
+    });
+
+    const result = await readExistingDialogueStoryboard(
+      {
+        dialogueId: "7352",
+        startId: "735200",
+        dialogueIds: ["735201", "735202", "735203"],
+        participantModelIndexes: [],
+        configurationOnly: true,
+      },
+      () => connection,
+    );
+
+    expect(
+      result.configurations.map(({ dialogueId, isOption }) => ({
+        dialogueId,
+        isOption,
+      })),
+    ).toEqual([
+      { dialogueId: "735201", isOption: true },
+      { dialogueId: "735202", isOption: false },
+      { dialogueId: "735203", isOption: null },
+    ]);
   });
 
   it("reads and converts existing EPush camera data without writing", async () => {

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import type { TaskPhase } from "../taskFeedback";
 
 /** Presentation only: callers own requests, confirmations and their actual completion. */
@@ -21,13 +21,13 @@ export function useOperationFeedback(initialStatus = "") {
     setBusy(true);
   }
 
-  function setStatus(message: string, outcome: TaskPhase = "ready") {
+  const setStatus = useCallback((message: string, outcome: TaskPhase = "ready") => {
     storeStatus(message);
     if (message) {
       storeError("");
       setPhase(outcome);
     }
-  }
+  }, []);
 
   function setError(message: string, outcome: TaskPhase = "failed") {
     storeError(message);

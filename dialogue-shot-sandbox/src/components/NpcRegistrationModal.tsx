@@ -2,7 +2,6 @@ import {
   ArrowLeft,
   Check,
   Copy,
-  FilePenLine,
   FileSpreadsheet,
   ListChecks,
   PencilLine,
@@ -1201,7 +1200,7 @@ export function NpcRegistrationModal({
         )}
 
         {feedback.message && (
-          <TaskNotice {...feedback} className="npc-registration-message">
+          <TaskNotice {...feedback} animate={!activeOperation} className="npc-registration-message">
             {feedback.message}
           </TaskNotice>
         )}

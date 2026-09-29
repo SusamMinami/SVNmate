@@ -1490,6 +1490,7 @@ async function exportAssetText(
 
 interface ReflectedProperty {
   Alias?: unknown;
+  CurrentBool?: unknown;
   CurrentString?: unknown;
   CurrentUint32?: unknown;
   CurrentFloat?: unknown;
@@ -2606,6 +2607,66 @@ function commonProperty(
   );
 }
 
+const OPTION_PROPERTY_ALIASES = new Set([
+  "option",
+  "isoption",
+  "bisoption",
+  "optionnode",
+  "isoptionnode",
+  "bisoptionnode",
+]);
+
+function normalizedPropertyAlias(value: unknown): string {
+  return String(value ?? "")
+    .trim()
+    .toLocaleLowerCase()
+    .replace(/[\s_-]+/g, "");
+}
+
+function optionalUnrealBoolean(value: unknown): boolean | null {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return value === 1 ? true : value === 0 ? false : null;
+  }
+  const normalized = String(value ?? "").trim().toLocaleLowerCase();
+  if (["true", "1", "yes"].includes(normalized)) {
+    return true;
+  }
+  if (["false", "0", "no"].includes(normalized)) {
+    return false;
+  }
+  return null;
+}
+
+function optionNodeState(
+  node: StoryboardDialogueNodeContext,
+): boolean | null {
+  const property = node.commonProperties.find((candidate) =>
+    OPTION_PROPERTY_ALIASES.has(
+      normalizedPropertyAlias(candidate.Alias),
+    ),
+  );
+  if (!property) {
+    return null;
+  }
+  for (const key of [
+    "CurrentBool",
+    "CurrentBoolean",
+    "CurrentUint32",
+    "CurrentInt32",
+    "CurrentString",
+    "Value",
+  ]) {
+    const parsed = optionalUnrealBoolean(property[key]);
+    if (parsed !== null) {
+      return parsed;
+    }
+  }
+  return null;
+}
+
 function normalizedAssetPath(value: unknown): string {
   const path = unrealReferenceText(value).trim();
   return ["", "none", "null"].includes(path.toLocaleLowerCase())
@@ -2722,6 +2783,7 @@ async function existingNodeConfiguration(
   );
   return {
     dialogueId: node.dialogueId,
+    isOption: optionNodeState(node),
     cameraPosition: node.existingCameraPosition,
     moveCameraCount: node.existingMoveCameras.length,
     cameraMoveTypes: Array.from(

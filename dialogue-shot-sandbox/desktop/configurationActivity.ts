@@ -50,7 +50,7 @@ export class ConfigurationActivityMonitor {
     this.lastExternal = pending;
     this.publish(pending);
     if (process.platform !== "win32") {
-      this.publish({ state: "unknown", message: "当前系统不支持窗口识别，可关闭自动暂停后手动监听" });
+      this.publish({ state: "unknown", message: "当前系统不支持窗口识别，已暂停 UE 自动读取" });
       return;
     }
     const child = spawn("powershell.exe", [
@@ -83,7 +83,7 @@ export class ConfigurationActivityMonitor {
     const failed = () => {
       if (this.child !== child) return;
       this.stop();
-      this.publish({ state: "unknown", message: "窗口识别暂不可用，已暂停 UE 自动读取；可关闭自动暂停后手动监听" });
+      this.publish({ state: "unknown", message: "窗口识别暂不可用，已暂停 UE 自动读取" });
     };
     child.on("error", failed);
     child.on("exit", failed);

@@ -9,6 +9,7 @@ import {
   GitMerge,
   GripVertical,
   LoaderCircle,
+  Pencil,
   RefreshCw,
   Users,
   X,
@@ -23,6 +24,7 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
+import { OperationIcon } from "./TaskMotion";
 import type {
   DialogueCameraQuickActionMode,
   DialogueCameraQuickActionPreview,
@@ -1120,7 +1122,7 @@ export const NodeCameraQuickActions = forwardRef<
                 disabled={presetLoading || busy !== null}
                 onClick={() => void loadPresets()}
               >
-                {presetLoading ? <LoaderCircle size={14} className="spin" /> : <RefreshCw size={14} />}
+                <OperationIcon kind="read" busy={presetLoading}><RefreshCw size={14} /></OperationIcon>
               </button>
             </div>
             {presetLoading && <p role="status">正在读取预览角色机位...</p>}
@@ -1662,11 +1664,7 @@ export const NodeCameraQuickActions = forwardRef<
                   }
                   onClick={() => void apply()}
                 >
-                  {busy === "apply" ? (
-                    <LoaderCircle className="spin" size={14} />
-                  ) : (
-                    <Check size={14} />
-                  )}
+                  <OperationIcon kind="write" busy={busy === "apply"}><Pencil size={14} /></OperationIcon>
                   {busy === "apply"
                     ? "正在写入"
                     : preview.changed

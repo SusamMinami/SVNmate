@@ -23,7 +23,7 @@ interface DataSourceStatusProps {
   onRefreshLark: () => void;
   onAuthorize: () => void;
   onCollectRevisionCasesChange: (enabled: boolean) => void;
-  automaticPause?: { enabled: boolean; paused: boolean; onToggle: () => void };
+  readPause?: { manual: boolean; paused: boolean; onToggle: () => void };
   disabled?: boolean;
 }
 
@@ -40,10 +40,10 @@ export function DataSourceStatus({
   onRefreshLark,
   onAuthorize,
   onCollectRevisionCasesChange,
-  automaticPause,
+  readPause,
   disabled = false,
 }: DataSourceStatusProps) {
-  const popover = useStatusPopover(disabled || Boolean(automaticPause));
+  const popover = useStatusPopover(disabled || Boolean(readPause));
   const directoryReady = setupStatus?.defaultDataReady ?? true;
   const baseMissingScopes =
     larkStatus?.baseMissingScopes ?? larkStatus?.missingScopes ?? [];
@@ -89,17 +89,31 @@ export function DataSourceStatus({
       : collectRevisionCases && !caseLibraryAvailable
         ? caseStatusLabel
         : "数据源已就绪";
+  const readPauseActionLabel = readPause
+    ? readPause.manual
+      ? "恢复 UE 自动读取"
+      : readPause.paused
+        ? "保持暂停 UE 自动读取"
+        : "暂停 UE 自动读取"
+    : "";
+  const readPauseTooltip = readPause
+    ? readPause.manual
+      ? "已手动暂停；点击恢复自动读取"
+      : readPause.paused
+        ? "已自动暂停；点击后保持暂停"
+        : "自动读取中；点击手动暂停"
+    : "";
 
   return (
     <div className="data-source-status" ref={popover.rootRef}>
       <button
         className="workspace-status-icon"
-        data-state={automaticPause ? automaticPause.paused ? "paused" : "listening" : dataState}
+        data-state={readPause ? readPause.paused ? "paused" : "listening" : dataState}
         type="button"
-        aria-label={automaticPause ? "自动暂停 UE 监听" : "数据源状态"}
-        {...(automaticPause ? {
-          "aria-pressed": automaticPause.enabled,
-          onClick: automaticPause.onToggle,
+        aria-label={readPause ? readPauseActionLabel : "数据源状态"}
+        {...(readPause ? {
+          "aria-pressed": readPause.manual,
+          onClick: readPause.onToggle,
         } : {
           "aria-haspopup": "dialog" as const,
           ...popover.triggerProps,
@@ -108,15 +122,11 @@ export function DataSourceStatus({
       >
         <Database size={17} />
         <span className="workspace-status-tooltip">
-          {automaticPause
-            ? automaticPause.enabled
-              ? `${automaticPause.paused ? "自动读取已暂停" : "自动暂停已开启"}；点击改为手动监听`
-              : "手动监听中；点击开启自动暂停"
-            : statusLabel}
+          {readPause ? readPauseTooltip : statusLabel}
         </span>
       </button>
 
-      {!disabled && !automaticPause && (
+      {!disabled && !readPause && (
         <section
           className="workspace-status-popover data-source-status__popover"
           {...popover.panelProps}

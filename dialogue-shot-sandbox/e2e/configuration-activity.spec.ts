@@ -41,7 +41,19 @@ async function activity(page: Page, state: "dialogue" | "other" | "unknown") {
   await page.evaluate((next) => (window as any).testActivity(next), state);
 }
 
-async function fixture(page: Page) {
+async function expectStatusIconsRightAligned(page: Page) {
+  const [headerBounds, statusBounds] = await Promise.all([
+    page.locator(".app-header").boundingBox(),
+    page.locator(".app-header__status").boundingBox(),
+  ]);
+  expect(headerBounds).not.toBeNull();
+  expect(statusBounds).not.toBeNull();
+  const expectedRight = headerBounds!.x + headerBounds!.width - 16;
+  const statusRight = statusBounds!.x + statusBounds!.width;
+  expect(Math.abs(statusRight - expectedRight)).toBeLessThanOrEqual(1);
+}
+
+async function fixture(page: Page, enterCompact = true) {
   const errors: string[] = [];
   const requests: string[] = [];
   const state = { node: "204801", hold: false, pending: undefined as Route | undefined };
@@ -96,11 +108,42 @@ async function fixture(page: Page) {
     } as unknown as NonNullable<Window["shotSandboxDesktop"]>;
   });
   await page.goto("/");
-  await page.getByRole("button", { name: "进入配置小窗" }).click();
-  await page.setViewportSize({ width: 310, height: 900 });
-  await expect(page.locator(".right-panel")).toHaveAttribute("inert", "");
+  if (enterCompact) {
+    await page.getByRole("button", { name: "进入配置小窗" }).click();
+    await page.setViewportSize({ width: 310, height: 900 });
+    await expect(page.locator(".right-panel")).toHaveAttribute("inert", "");
+  }
   const selectionCount = () => requests.filter((url) => url.includes("/dialogue/selection")).length;
   return { errors, requests, state, selected, selectionCount };
+}
+
+for (const scale of [1, 1.25, 1.5, 2]) {
+  test.describe(`compact header ${scale}`, () => {
+    test.use({ deviceScaleFactor: scale });
+    test("preserves all three icon offsets across window modes", async ({ page }, info) => {
+      const { errors } = await fixture(page, false);
+      const offsets = () => page.locator(".app-header__status .workspace-status-icon").evaluateAll(buttons =>
+        buttons.map(button => {
+          const rect = button.getBoundingClientRect();
+          return { right: innerWidth - rect.right, top: rect.top, width: rect.width, height: rect.height };
+        }));
+      await expect(page.getByRole("button", { name: "进入配置小窗" })).toBeEnabled();
+      const before = await offsets();
+      expect(before).toHaveLength(3);
+      await page.getByRole("button", { name: "进入配置小窗" }).click();
+      await page.setViewportSize({ width: 310, height: 900 });
+      await expect(page.getByRole("button", { name: "返回完整窗口" })).toBeEnabled();
+      const compact = await offsets();
+      expect(compact).toEqual(before);
+      await expect(page.locator(".data-source-status svg.lucide-database")).toHaveCount(1);
+      await page.screenshot({ path: info.outputPath(`compact-header-${scale}.png`) });
+      await page.getByRole("button", { name: "返回完整窗口" }).click();
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await expect(page.getByRole("button", { name: "进入配置小窗" })).toBeEnabled();
+      expect(await offsets()).toEqual(before);
+      expect(errors).toEqual([]);
+    });
+  });
 }
 
 test("compact activity pauses all automatic UE reads and preserves the editor draft", async ({ page }, info) => {
@@ -110,6 +153,10 @@ test("compact activity pauses all automatic UE reads and preserves the editor dr
   await activity(page, "dialogue");
   await expect(page.locator(".inspector-header")).toContainText("UE NODE 204801");
   await expect(page.getByRole("button", { name: "修改当前镜头" })).toContainText("FOV 62");
+  await expect(
+    page.getByRole("button", { name: "暂停 UE 自动读取" }),
+  ).toHaveAttribute("aria-pressed", "false");
+  await expectStatusIconsRightAligned(page);
   await page.getByRole("button", { name: "添加镜头曲线" }).click();
   const draft = page.getByLabel("镜头混合曲线资产名");
   await draft.fill("trans_keep_draft");
@@ -132,6 +179,8 @@ test("compact activity pauses all automatic UE reads and preserves the editor dr
     ".app-header > .configuration-pause-notice",
   );
   await expect(pauseNotice).toHaveText("自动读取已暂停");
+  await expect(pauseNotice.locator("svg")).toHaveCount(0);
+  await expectStatusIconsRightAligned(page);
   const pausedPanelBounds = await page.locator(".right-panel").boundingBox();
   expect(Math.round(pausedPanelBounds!.y)).toBe(
     Math.round(activePanelBounds!.y),
@@ -144,7 +193,7 @@ test("compact activity pauses all automatic UE reads and preserves the editor dr
   );
   await expect(pausedStatusIcons).toHaveCount(2);
   const pauseToggleGlyphOpacity = await page
-    .getByRole("button", { name: "自动暂停 UE 监听" })
+    .getByRole("button", { name: "保持暂停 UE 自动读取" })
     .locator("svg")
     .evaluate((element) => Number.parseFloat(getComputedStyle(element).opacity));
   expect(pauseToggleGlyphOpacity).toBeLessThan(0.7);
@@ -152,6 +201,7 @@ test("compact activity pauses all automatic UE reads and preserves the editor dr
   await activity(page, "dialogue");
   await expect(page.locator(".right-panel")).not.toHaveAttribute("inert");
   await expect(pauseNotice).toHaveCount(0);
+  await expectStatusIconsRightAligned(page);
   expect(await draft.inputValue()).toBe("trans_keep_draft");
   expect(new URL(requests.filter((url) => url.includes("/dialogue/selection")).at(-1)!).searchParams.get("fresh")).toBe("1");
 
@@ -174,9 +224,7 @@ test("compact activity pauses all automatic UE reads and preserves the editor dr
   await expect(page.locator(".right-panel")).not.toHaveAttribute("inert");
   expect(await draft.inputValue()).toBe("trans_keep_draft");
 
-  // Hidden documents pause even in manual listening mode.
-  await page.getByRole("button", { name: "自动暂停 UE 监听" }).click();
-  await expect(page.getByRole("button", { name: "自动暂停 UE 监听" })).toHaveAttribute("aria-pressed", "false");
+  // Hidden documents pause automatically and resume when visible again.
   await page.evaluate(() => {
     Object.defineProperty(document, "hidden", { configurable: true, value: true });
     document.dispatchEvent(new Event("visibilitychange"));
@@ -201,21 +249,32 @@ test("compact activity pauses all automatic UE reads and preserves the editor dr
   expect(errors).toEqual([]);
 });
 
-test("re-enabling automatic mode cannot send a poll using an old dialogue snapshot", async ({ page }) => {
-  const { requests, errors, selectionCount } = await fixture(page);
+test("manual pause stays latched until the user resumes it", async ({ page }) => {
+  const { errors, selectionCount } = await fixture(page);
   await activity(page, "dialogue");
   await expect(page.locator(".right-panel")).not.toHaveAttribute("inert");
-  const toggle = page.getByRole("button", { name: "自动暂停 UE 监听" });
-  await toggle.click();
-  await activity(page, "unknown");
-  const before = selectionCount();
-  await toggle.click();
+  const pause = page.getByRole("button", { name: "暂停 UE 自动读取" });
+  await pause.click();
+  const resume = page.getByRole("button", { name: "恢复 UE 自动读取" });
+  await expect(resume).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator(".right-panel")).toHaveAttribute("inert", "");
+  const pauseNotice = page.locator(".configuration-pause-notice");
+  await expect(pauseNotice).toHaveText("读取已手动暂停");
+  await expect(pauseNotice.locator("svg")).toHaveCount(0);
+  const before = selectionCount();
+  await activity(page, "other");
+  await activity(page, "dialogue");
   await page.waitForTimeout(1_400);
   expect(selectionCount()).toBe(before);
-  await activity(page, "dialogue");
-  await expect.poll(selectionCount).toBe(before + 1);
+  await expect(page.locator(".right-panel")).toHaveAttribute("inert", "");
+  await expect(pauseNotice).toHaveText("读取已手动暂停");
+  expect(await page.evaluate(() => (window as any).monitorEvents)).toEqual([true]);
+  await resume.click();
+  await expect(
+    page.getByRole("button", { name: "暂停 UE 自动读取" }),
+  ).toHaveAttribute("aria-pressed", "false");
+  await expect.poll(selectionCount).toBeGreaterThan(before);
   await expect(page.locator(".right-panel")).not.toHaveAttribute("inert");
-  expect(new URL(requests.filter((url) => url.includes("/dialogue/selection")).at(-1)!).searchParams.get("fresh")).toBe("1");
+  await expect(pauseNotice).toHaveCount(0);
   expect(errors).toEqual([]);
 });

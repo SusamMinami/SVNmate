@@ -251,6 +251,7 @@ describe("separate beat and music requests", () => {
       existingConfigurations: [
         {
           dialogueId: input.dialogue[0].dialogue_id,
+          isOption: null,
           cameraPosition: "",
           moveCameraCount: 0,
           cameraMoveTypes: [],

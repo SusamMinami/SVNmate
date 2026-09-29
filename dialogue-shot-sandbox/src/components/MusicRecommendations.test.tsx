@@ -37,6 +37,7 @@ describe("MusicRecommendations", () => {
         currentDialogueIds={["204801"]}
         existingConfiguration={{
           dialogueId: "204801",
+          isOption: null,
           cameraPosition: "",
           moveCameraCount: 0,
           cameraMoveTypes: [],

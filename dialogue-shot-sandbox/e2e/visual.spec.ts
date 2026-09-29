@@ -155,6 +155,7 @@ test.beforeEach(async ({ page }) => {
           configurations: [
             {
               dialogueId: "204801",
+              isOption: false,
               cameraPosition: "c1",
               moveCameraCount: 1,
               cameraMoveTypes: ["EPush"],
@@ -172,7 +173,26 @@ test.beforeEach(async ({ page }) => {
               backgroundMusicDelaySeconds: 1.5,
             },
             {
+              dialogueId: "204802",
+              isOption: true,
+              cameraPosition: "",
+              moveCameraCount: 0,
+              cameraMoveTypes: [],
+              fov: null,
+              blendCameraType: "",
+              blendCurve: "",
+              blendDuration: 0,
+              schoolCameraKeys: [],
+              schoolCameraCount: 0,
+              soundEffectAssetPath: "",
+              soundEffectAssetName: "",
+              soundEffectDelaySeconds: 0,
+              backgroundMusicStateId: null,
+              backgroundMusicDelaySeconds: 0,
+            },
+            {
               dialogueId: "204803",
+              isOption: false,
               cameraPosition: "c2",
               moveCameraCount: 1,
               cameraMoveTypes: ["EPush"],
@@ -2217,6 +2237,9 @@ test("keeps configuration mode aligned with the selected UE node", async ({
   await expect(page.locator(".inspector-header")).toContainText(
     "UE NODE 204801",
   );
+  await expect(
+    page.getByRole("status", { name: "上一节点选项警示" }),
+  ).toHaveCount(0);
   await expect(ueDataStatus).toHaveAttribute(
     "aria-label",
     /^UE 数据链路 · (同步中|监听中 · 1\.2s) · (读取中|等待下一次同步)$/,
@@ -2407,6 +2430,37 @@ test("keeps configuration mode aligned with the selected UE node", async ({
   await expect(page.locator(".inspector-header")).toContainText(
     "UE NODE 204803",
   );
+  const optionNodeWarning = page.getByRole("status", {
+    name: "上一节点选项警示",
+  });
+  await expect(optionNodeWarning).toContainText(
+    "上一节点 204802 已勾选“是否为选项”",
+  );
+  await expect(page.locator(".inspector-header h2")).toHaveCSS(
+    "color",
+    "rgb(173, 60, 48)",
+  );
+  expect(storyboardReadBodies.at(-1)).toMatchObject({
+    dialogueIds: ["204802", "204803"],
+    configurationOnly: true,
+  });
+  const optionWarningViewport = page.viewportSize();
+  expect(optionWarningViewport).not.toBeNull();
+  await page.setViewportSize({ width: 310, height: 900 });
+  await expect(page.locator(".inspector-header")).toHaveCSS(
+    "min-height",
+    "86px",
+  );
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
+  await page.screenshot({
+    path: testInfo.outputPath("configuration-option-predecessor-warning.png"),
+    fullPage: true,
+  });
+  await page.setViewportSize(optionWarningViewport!);
   await page
     .getByRole("button", { name: "使用上一相机参数" })
     .click();
@@ -2763,6 +2817,7 @@ test("keeps configuration mode aligned with the selected UE node", async ({
   await expect(page.locator(".inspector-header")).toContainText(
     "所有人先别动，门外有脚步声。",
   );
+  await expect(optionNodeWarning).toHaveCount(0);
   await page.waitForTimeout(500);
   expect(formationReadRequests).toBe(
     ueReadsBeforeLocalSwitch.formation,
@@ -3452,7 +3507,7 @@ test("shows local content while TRAE works and applies the completed plan direct
     ],
     music: [],
   });
-  await soundExportDialog.getByRole("button", { name: "完成" }).click();
+  await soundExportDialog.getByRole("button", { name: "完成", exact: true }).click();
   await page.locator(".shot-row").nth(1).click();
   await expect(page.locator(".sound-effect-list")).toHaveCount(0);
   await expect(
@@ -4885,8 +4940,11 @@ test("manually syncs the sound and music catalogs from settings", async ({
   await expect(setup.getByText("端侧导演模型已就绪")).toBeVisible();
   await expect(setup.getByText("NPC 动作库")).toBeVisible();
   await expect(
-    setup.getByRole("combobox", { name: "NPC 动作库目录" }),
-  ).toHaveValue("D:\\NPC\\AnimationLibrary");
+    setup.getByText("D:\\NPC\\AnimationLibrary", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    setup.getByRole("button", { name: "选择 NPC 动作库根目录" }),
+  ).toBeEnabled();
   const updateNotes = setup.locator(".setup-update__notes");
   await updateNotes.getByText("查看本次更新内容").click();
   await expect(updateNotes).toContainText("音效与音乐");
@@ -6842,7 +6900,7 @@ test("offers the detected Blueprint formation before designing shots", async ({
     backgroundActions.locator(".character-action-picker__menu"),
   );
   await backgroundActions
-    .getByRole("button", { name: "移除 西维尔 的新增动作" })
+    .getByRole("button", { name: "移除 西维尔 · n115 的新增动作" })
     .click();
   await guardActions
     .locator(".character-action-row")
@@ -7000,7 +7058,7 @@ test("offers the detected Blueprint formation before designing shots", async ({
     hiddenNodeBackgroundActions.locator(".character-action-picker__menu"),
   );
   await hiddenNodeBackgroundActions
-    .getByRole("button", { name: "移除 西维尔 的新增动作" })
+    .getByRole("button", { name: "移除 西维尔 · n115 的新增动作" })
     .click();
   await hiddenConfigurationNode
     .getByRole("button", { name: "移除 玩家 的新增动作" })

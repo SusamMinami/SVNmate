@@ -1,7 +1,7 @@
 {
   "name": "dialogue-shot-sandbox",
   "private": true,
-  "version": "0.24.14",
+  "version": "0.24.15",
   "description": "面向 UE4 对话制作的 AI 分镜与角色调度工具",
   "author": "Shot Sandbox Team",
   "main": "desktop-dist/main.cjs",
@@ -12,7 +12,8 @@
     "build:icon": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/create-icon.ps1",
     "build:desktop": "npm run build:icon && npm run build && node scripts/build-desktop.mjs",
     "desktop": "npm run build:desktop && electron .",
-    "dist:win": "npm run build:desktop && electron-builder --win nsis portable --publish never",
+    "dist:win": "npm run build:desktop && electron-builder --win nsis portable --publish never && npm run verify:desktop-package",
+    "verify:desktop-package": "node scripts/verify-desktop-package.mjs",
     "mcp:storyboard": "tsx mcp/storyboardServer.ts",
     "advisor:start": "powershell -ExecutionPolicy Bypass -File scripts/start-rule-advisor.ps1",
     "advisor:smoke": "tsx scripts/smoke-rule-advisor.ts",

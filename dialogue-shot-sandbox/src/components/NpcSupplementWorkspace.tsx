@@ -1,19 +1,20 @@
 import {
   AlertTriangle,
   Check,
-  ClipboardCheck,
   Eye,
   FileInput,
   FolderOpen,
   LayoutGrid,
   ListChecks,
   PackageCheck,
+  Pencil,
   Play,
   RefreshCw,
   ScanFace,
+  Search,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { TaskNotice } from "./TaskMotion";
+import { OperationIcon, TaskNotice } from "./TaskMotion";
 import type { TaskPhase } from "../taskFeedback";
 import type {
   NpcSupplementApplyResult,
@@ -571,7 +572,7 @@ export function NpcSupplementWorkspace({
           title="读取策划 UE 内容浏览器中选中的 NPC BP、Body Skeletal Mesh 或 Skeleton"
           aria-label="读取 UE 目标"
         >
-          <RefreshCw size={16} />
+          <OperationIcon kind="read" busy={busy === "target"}><RefreshCw size={16} /></OperationIcon>
           读取 UE
         </button>
         <button
@@ -586,7 +587,7 @@ export function NpcSupplementWorkspace({
         </button>
       </div>
       {(busy || reviewSyncing || error || status) && (
-        <TaskNotice phase={busy || reviewSyncing ? "running" : error ? noticePhase === "uncertain" ? "uncertain" : "failed" : noticePhase} runId={runId}>
+        <TaskNotice animate={!busy} phase={busy || reviewSyncing ? "running" : error ? noticePhase === "uncertain" ? "uncertain" : "failed" : noticePhase} runId={runId}>
           {busy
             ? { target: "正在读取 NPC 并匹配动作目录", plan: "正在检查动作清单", apply: "正在导入动作并配置资产" }[busy]
             : reviewSyncing ? "正在审核当前选择"
@@ -716,7 +717,7 @@ export function NpcSupplementWorkspace({
               }
               onClick={() => void inspectPlan()}
             >
-              <ClipboardCheck size={16} />
+              <OperationIcon kind="search" busy={busy === "plan"}><Search size={16} /></OperationIcon>
               {plan ? "重新扫描动作目录" : "生成动作清单"}
             </button>
           </section>
@@ -1082,7 +1083,7 @@ export function NpcSupplementWorkspace({
                 ) : result ? (
                   <Check size={16} />
                 ) : (
-                  <Play size={16} />
+                  <OperationIcon kind="write" busy={busy === "apply"}><Pencil size={16} /></OperationIcon>
                 )}
                 {result
                   ? result.status === "partial"

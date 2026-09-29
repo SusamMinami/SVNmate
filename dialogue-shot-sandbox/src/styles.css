@@ -51,6 +51,7 @@
   --success: #16825c;
   --warning: #a76816;
   --warning-strong: #8a5612;
+  --danger-strong: #ad3c30;
   letter-spacing: 0;
 }
 
@@ -2612,6 +2613,10 @@ textarea:focus-visible {
   border-bottom: 1px solid var(--border);
 }
 
+.inspector-header__identity {
+  min-width: 0;
+}
+
 .inspector-header small {
   display: inline-flex;
   align-items: center;
@@ -2624,6 +2629,39 @@ textarea:focus-visible {
   margin: 3px 0 0;
   font-size: 15px;
   line-height: 20px;
+}
+
+.inspector-header--option-warning {
+  background: color-mix(in srgb, #c84b3a 7%, var(--surface));
+  border-bottom-color: color-mix(in srgb, #c84b3a 42%, var(--border));
+}
+
+.inspector-header--option-warning small,
+.inspector-header--option-warning h2,
+.configuration-option-warning {
+  color: var(--danger-strong);
+}
+
+.configuration-option-warning {
+  display: grid;
+  grid-template-columns: 13px minmax(0, 1fr);
+  align-items: start;
+  gap: 5px;
+  margin: 5px 0 0;
+  font-size: var(--type-body);
+  font-weight: 600;
+  line-height: 15px;
+}
+
+.configuration-option-warning svg {
+  margin-top: 1px;
+}
+
+.configuration-option-warning code {
+  color: inherit;
+  font-family: var(--font-data);
+  font-size: var(--type-data);
+  font-weight: 700;
 }
 
 .shot-nav {
@@ -7663,10 +7701,6 @@ textarea:focus-visible {
   background: #ffffff;
 }
 
-.setup-status-list > .setup-status-item--wide {
-  grid-column: 1 / -1;
-}
-
 .setup-status-list > div.is-warning {
   color: var(--warning);
 }
@@ -7699,7 +7733,7 @@ textarea:focus-visible {
   align-items: center;
   gap: 5px;
   padding: 5px 7px;
-  color: var(--accent-strong);
+  color: var(--text);
   background: transparent;
   border: 0;
   font-size: 10px;
@@ -8096,10 +8130,6 @@ textarea:focus-visible {
 
   .setup-status-list {
     grid-template-columns: minmax(0, 1fr);
-  }
-
-  .setup-status-list > .setup-status-item--wide {
-    grid-column: auto;
   }
 
   .story-brief-modal__analysis {
@@ -8777,7 +8807,6 @@ textarea:focus-visible {
   overflow: hidden;
   color: #f2f2f0;
   background: #171816;
-  animation: launch-screen-in 480ms cubic-bezier(0.22, 0.8, 0.2, 1) both;
 }
 
 .launch-screen__grid {
@@ -9034,12 +9063,6 @@ textarea:focus-visible {
   color: #858981;
   border-top: 1px solid #3e403c;
   font: 8px/1 "Cascadia Code", Consolas, monospace;
-}
-
-@keyframes launch-screen-in {
-  from {
-    opacity: 0;
-  }
 }
 
 @keyframes launch-signal-in {
@@ -11992,7 +12015,6 @@ textarea:focus-visible {
   grid-template-columns: 1fr;
   grid-template-rows: 72px minmax(0, 1fr) 42px;
   background: #171816;
-  animation: launch-screen-in 600ms cubic-bezier(1, 0, 0.7, 1) both;
 }
 
 .launch-screen.is-leaving {
@@ -12445,7 +12467,8 @@ textarea:focus-visible {
 }
 
 .app-shell[data-configuration-mode="true"] > .app-header .app-header__status {
-  justify-self: auto;
+  grid-column: 2;
+  justify-self: end;
 }
 
 .app-shell[data-configuration-mode="true"] > .workspace {
@@ -12465,26 +12488,22 @@ textarea:focus-visible {
 }
 
 .configuration-pause-notice {
-  display: flex;
+  grid-column: 1;
   min-width: 0;
-  align-items: center;
-  gap: 5px;
+  overflow: hidden;
   color: var(--text-muted);
   font-size: 11px;
   font-weight: 600;
   line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   pointer-events: none;
 }
 
-.configuration-pause-notice > svg {
-  flex: 0 0 auto;
-}
-
 .configuration-pause-notice > span {
-  min-width: 0;
+  display: block;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  text-overflow: inherit;
 }
 
 .configuration-pause-notice[data-state="checking"] {
@@ -12535,9 +12554,8 @@ textarea:focus-visible {
 }
 
 .app-shell[data-configuration-mode="true"]
-  .inspector-header
-  > div:first-child {
-  min-width: 0;
+  .inspector-header--option-warning {
+  min-height: 86px;
 }
 
 .app-shell[data-configuration-mode="true"] .inspector-header h2 {

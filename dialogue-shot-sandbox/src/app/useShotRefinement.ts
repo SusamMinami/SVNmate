@@ -1,7 +1,6 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import type { DialogueSequence, ShotPlan } from "../types";
 import { MiraReadyResponseSchema, type DirectorBlocking, type DirectorSceneAnalysis } from "../director/contracts";
-import { applyRefinement, createShotRefinementRequest, type ShotRefinementRequest } from "../director/shotRefinement";
 import { cancelTraeTask, getTraeRefinement, submitTraeRefinement } from "../trae/client";
 
 interface RefinementState {
@@ -56,12 +55,8 @@ export function useShotRefinement(
 
   async function start(index: number, instruction: string) {
     if (!enabled || active.current) return;
-    let request: ShotRefinementRequest;
-    try {
-      request = createShotRefinementRequest(sequence, shots, [index], instruction, blocking, analysis);
-    } catch {
-      setState({ shotId: shots[index]?.id ?? "", busy: false,
-        message: "当前方案缺少完整导演决策，请先生成分镜后重试。" });
+    if (!shots[index]) {
+      setState({ shotId: "", busy: false, message: "当前镜头已变化，请重新选择后重试。" });
       return;
     }
     onStart();
@@ -73,6 +68,14 @@ export function useShotRefinement(
       source.current.shots === shots && source.current.enabled;
     setState({ shotId: shots[index].id, busy: true, message: "正在提交当前镜头精修" });
     try {
+      const { createShotRefinementRequest, mergeRefinementPatch, applyRefinement } = await import("../director/shotRefinement");
+      if (!current()) return;
+      let request;
+      try {
+        request = createShotRefinementRequest(sequence, shots, [index], instruction, blocking, analysis);
+      } catch {
+        throw new Error("当前方案缺少完整导演决策，请先生成分镜后重试。");
+      }
       const created = await submitTraeRefinement(request);
       task.requestId = created.requestId;
       if (!current()) {
@@ -90,7 +93,6 @@ export function useShotRefinement(
           const plan = MiraReadyResponseSchema.parse(status.result);
           if (plan.request_id !== created.requestId) throw new Error("精修结果不属于当前任务");
           // Verify the response scope again before any local mutation.
-          const { mergeRefinementPatch } = await import("../director/shotRefinement");
           const accepted = mergeRefinementPatch({ ...request, baseline_version: created.baselineVersion }, {
             baseline_version: created.baselineVersion,
             replacements: request.target_indexes.map((i) => ({ shot_index: i, decision: plan.shots[i] })),

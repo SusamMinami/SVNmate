@@ -20,12 +20,13 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { type FormEvent, useMemo, useRef, useState } from "react";
+import { type FormEvent, useCallback, useMemo, useRef, useState } from "react";
 import { useOperationFeedback } from "../app/useOperationFeedback";
 import { OverlayScrollArea } from "./OverlayScrollArea";
 import { OperationIcon, TaskNotice } from "./TaskMotion";
 import { DialogNpcRegistrationModal } from "./DialogNpcRegistrationModal";
 import { MissionTargetDialoguePreview } from "./MissionTargetDialoguePreview";
+import { MissionTargetRow } from "./MissionTargetRow";
 import { NpcRegistrationModal } from "./NpcRegistrationModal";
 import { findDialogueTimeline } from "../data/dialogueRepository";
 import {
@@ -111,15 +112,6 @@ function typeLabel(type: number | null): string {
     return "蓝图";
   }
   return type === null ? "未配置" : `类型 ${type}`;
-}
-
-function modelAssetName(classPath: string): string {
-  const leaf = classPath.replaceAll("\\", "/").split("/").at(-1) ?? "";
-  return leaf.split(".")[0] || leaf;
-}
-
-function ambientDialogueLabel(kind: "complex_chat" | "bubble"): string {
-  return kind === "bubble" ? "冒泡" : "闲话";
 }
 
 function loadSummary(
@@ -1633,7 +1625,7 @@ export function MissionTargetModal({
     setStatus("");
   }
 
-  function toggleTarget(targetId: string) {
+  const toggleTarget = useCallback((targetId: string) => {
     if (existingTargetIds.has(targetId)) {
       return;
     }
@@ -1647,7 +1639,7 @@ export function MissionTargetModal({
       return next;
     });
     setStatus("");
-  }
+  }, [existingTargetIds, setStatus]);
 
   function openTargetEditor() {
     if (!plan || selectedCount === 0) {
@@ -1743,7 +1735,7 @@ export function MissionTargetModal({
     </button>
   );
   const taskNotice = feedback.message ? (
-    <TaskNotice {...feedback} className="mission-target-message">{feedback.message}</TaskNotice>
+    <TaskNotice {...feedback} animate={!activeOperation} className="mission-target-message">{feedback.message}</TaskNotice>
   ) : null;
   const readUeSelectionButton = (
     <button
@@ -2367,121 +2359,12 @@ export function MissionTargetModal({
                                    }
                            : dialogueModelLabel(slot, selected, true);
                          return (
-                          <tr
-                            className={
-                              ueSelectedTargetIds.has(target.targetId)
-                                ? "mission-target-row--ue-selected"
-                                : undefined
-                            }
-                            key={target.targetId}
-                          >
-                             <td className="mission-target-select">
-                               <input
-                                 type="checkbox"
-                                 checked={selected}
-                                 disabled={
-                                   busy ||
-                                   (isDialogueRegistration && !appendable)
-                                 }
-                                 onChange={() =>
-                                   toggleTarget(target.targetId)
-                                 }
-                                 aria-label={`选择目标物 ${target.targetId}`}
-                               />
-                             </td>
-                             <td>
-                               <span className="mission-target-id">
-                                 <strong>{target.targetId}</strong>
-                                 {ueSelectedTargetIds.has(target.targetId) && (
-                                   <span>
-                                     <Crosshair size={10} />
-                                     UE 已选
-                                   </span>
-                                 )}
-                               </span>
-                               <small>
-                                 {target.description || "未填写描述"}
-                               </small>
-                             </td>
-                             <td>{typeLabel(target.type)}</td>
-                             <td>
-                               {target.npcId && target.npcId > 0
-                                 ? `${target.npcName || "未知 NPC"} · ${target.npcId}`
-                                 : "N/A"}
-                             </td>
-                             <td title={target.modelClassPath}>
-                               {target.modelId
-                                 ? `${target.modelId} · ${modelAssetName(target.modelClassPath)}`
-                                 : "N/A"}
-                             </td>
-                             <td>
-                               <div className="mission-target-dialogues">
-                                 {(target.ambientDialogues?.length ?? 0) > 0 ? (
-                                   target.ambientDialogues?.map((dialogue) => (
-                                     <span
-                                       key={`${dialogue.kind}:${dialogue.dialogueFileId}`}
-                                       className={`mission-target-dialogue mission-target-dialogue--${dialogue.kind}`}
-                                       title={`${dialogue.kind === "bubble" ? "冒泡对话" : "复杂闲话"} ${dialogue.dialogueFileId} · 来源：${dialogue.sources.join("、")}`}
-                                     >
-                                       <b>
-                                         {ambientDialogueLabel(dialogue.kind)}
-                                       </b>
-                                       <code>{dialogue.dialogueFileId}</code>
-                                     </span>
-                                   ))
-                                 ) : (
-                                   <span className="mission-target-dialogues__empty">
-                                     无
-                                   </span>
-                                 )}
-                               </div>
-                             </td>
-                             <td>
-                               <code>
-                                 {[
-                                   target.transform.location.x,
-                                   target.transform.location.y,
-                                   target.transform.location.z,
-                                 ]
-                                   .map((value) => value.toFixed(0))
-                                   .join(", ")}
-                               </code>
-                             </td>
-                             <td>
-                               <code>
-                                 {[
-                                   target.transform.rotation.pitch,
-                                   target.transform.rotation.yaw,
-                                   target.transform.rotation.roll,
-                                 ]
-                                   .map((value) => `${value.toFixed(0)}°`)
-                                   .join(", ")}
-                               </code>
-                             </td>
-                             <td>
-                               <span
-                                 className={`preview-kind preview-kind--${target.previewKind}`}
-                               >
-                                 {target.previewKind === "asset"
-                                   ? "实际资产"
-                                   : "定位标记"}
-                               </span>
-                             </td>
-                             <td>
-                               <span
-                                 className={`dialogue-model-status dialogue-model-status--${label.tone}`}
-                               >
-                                 {label.status}
-                               </span>
-                               <code title={label.name}>
-                                 {selected &&
-                                 selectedBlueprintIndex &&
-                                 selectedBlueprintIndex > 0
-                                   ? `BP ${selectedBlueprintIndex} · ${label.name}`
-                                   : label.name}
-                               </code>
-                             </td>
-                           </tr>
+                          <MissionTargetRow key={target.targetId} target={target}
+                            selected={selected} ueSelected={ueSelectedTargetIds.has(target.targetId)}
+                            disabled={busy || (isDialogueRegistration && !appendable)}
+                            blueprintIndex={selectedBlueprintIndex}
+                            modelName={label.name} status={label.status} tone={label.tone}
+                            onToggle={toggleTarget} />
                          );
                        })}
                      </tbody>

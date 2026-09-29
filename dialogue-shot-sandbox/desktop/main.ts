@@ -1068,7 +1068,7 @@ async function createMainWindow(port: number): Promise<void> {
     ...(app.isPackaged
       ? {}
       : { icon: join(app.getAppPath(), "build", "icon.png") }),
-    backgroundColor: "#eef0f2",
+    backgroundColor: "#171816",
     show: false,
     autoHideMenuBar: true,
     webPreferences: {
