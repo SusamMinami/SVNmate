@@ -972,7 +972,8 @@ function ShotInspector({
     !cameraQuickActionBlocked &&
     !(
       (cameraQuickActionSelection?.mode === "school_cameras" ||
-        cameraQuickActionSelection?.mode === "copy_school_cameras") &&
+        cameraQuickActionSelection?.mode === "copy_school_cameras" ||
+        cameraQuickActionSelection?.mode === "camera_shake") &&
       !cameraQuickActionSelection.changed
     );
   const activeNodeWriteError = tab === "shot" ? "" : exportError;
@@ -2362,31 +2363,6 @@ export default function App() {
         : selectedUeShotIndex < 0
           ? `已同步 UE 节点 ${selectedUeDialogueNodeId}`
           : ueDialogueSelection.message;
-  const configurationReadNotice =
-    configurationMode &&
-    configurationSelectionSuspended &&
-    ueDialogueSelection
-      ? configurationActivity.paused
-        ? {
-            state: "paused" as const,
-            label: configurationActivity.manualPaused
-              ? "读取已手动暂停"
-              : "自动读取已暂停",
-            detail: configurationActivity.message,
-          }
-        : configurationMapSwitching
-          ? {
-              state: "paused" as const,
-              label: "切图中，读取已暂停",
-              detail: "切图期间已暂停自动读取",
-            }
-          : {
-              state: "checking" as const,
-              label: "正在重新核对节点",
-              detail: "正在重新核对 UE 当前节点",
-            }
-      : null;
-
   useEffect(() => {
     if (!configurationMode) {
       configurationAutoLoadNodeRef.current = "";
@@ -5415,18 +5391,6 @@ export default function App() {
             </p>
           </div>
         </div>
-
-        {configurationReadNotice && (
-          <div
-            className="configuration-pause-notice"
-            data-state={configurationReadNotice.state}
-            role="status"
-            aria-label={configurationReadNotice.detail}
-            title={configurationReadNotice.detail}
-          >
-            <span>{configurationReadNotice.label}</span>
-          </div>
-        )}
 
         <div className="app-header__status" ref={statusTooltipsRef}>
           {activeWorkspace === "storyboard" && (

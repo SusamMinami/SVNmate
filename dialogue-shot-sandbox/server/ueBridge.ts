@@ -95,6 +95,11 @@ import {
   adaptSchoolCameraMovesForHeight,
   schoolCameraHeightDeltaCm,
 } from "../src/ue/schoolCameraHeight";
+import {
+  DIALOGUE_CAMERA_SHAKE_ASSET_NAMES,
+  dialogueCameraShakeAssetPath,
+  dialogueCameraShakeClassPath,
+} from "../src/ue/dialogueCameraShakePresets";
 
 const PREVIEW_MARKER_CLASS = "/Script/Engine.TargetPoint";
 const PREVIEW_ACTOR_PREFIX = "ShotSandboxMissionTargetPreview";
@@ -273,6 +278,7 @@ const MissionTargetBlueprintCreateRequestSchema = z.object({
 const MissionTargetBlueprintAppendRequestSchema = z.object({
   blueprintName: z.string().trim().min(1).max(512),
   dialogueId: DialogueAssetIdSchema.optional(),
+  normalizeLegacySlots: z.boolean().optional(),
   plan: MissionTargetPreviewPlanSchema,
   selectedTargetIds: z
     .array(z.string().regex(/^\d+$/))
@@ -312,6 +318,7 @@ const MissionTargetBlueprintInspectionRequestSchema = z.object({
 const DialogueModelRegistrationRequestSchema = z.object({
   blueprintName: z.string().trim().min(1).max(512),
   dialogueId: DialogueAssetIdSchema.optional(),
+  normalizeLegacySlots: z.boolean().optional(),
   selectedModelIndexes: z
     .array(z.number().int().positive())
     .max(200),
@@ -326,6 +333,7 @@ const DialogueModelRegistrationRequestSchema = z.object({
 const MissionTargetBlueprintSyncRequestSchema = z.object({
   blueprintName: z.string().trim().min(1).max(512),
   dialogueId: DialogueAssetIdSchema.optional(),
+  normalizeLegacySlots: z.boolean().optional(),
   taskId: z.string().regex(/^\d+$/),
   selectedTargetIds: z
     .array(z.string().regex(/^\d+$/))
@@ -349,6 +357,7 @@ const BackgroundPropApplyRequestSchema =
     reviewToken: z.string().regex(/^[a-f0-9]{64}$/),
     selectedActorRefs: z.array(z.string().min(1)).min(1).max(200),
     reviewedActorRefs: z.array(z.string().min(1)).min(1).max(200).optional(),
+    normalizeLegacySlots: z.boolean().optional(),
     createPlayerSlot: z.boolean().optional(),
     dialogueNpcSlotAssignments: z
       .array(
@@ -573,39 +582,83 @@ const DialogueCameraPresetRoleHintsSchema = z
     "预设机位角色提示包含重复槽位",
   );
 
-const DialogueCameraQuickActionRequestSchema = z.object({
-  dialogueId: z.string().regex(/^\d{4}$/),
-  startId: z.string().regex(/^\d{4,}$/),
-  dialogueNodeId: z.string().regex(/^\d+$/),
-  roleHints: DialogueCameraPresetRoleHintsSchema.optional(),
-  previousDialogueNodeIds: z
-    .array(z.string().regex(/^\d+$/))
-    .max(500)
-    .optional(),
-  blendCurveAssetName: z
-    .string()
-    .trim()
-    .regex(/^[A-Za-z0-9_]+$/)
-    .max(128)
-    .optional(),
-  blendDuration: z.number().finite().min(0).max(3600).optional(),
-  lookAtActorModelIndex: z.number().int().min(0).max(127).optional(),
-  schoolCameraCopies: DialogueSchoolCameraCopiesSchema.optional(),
-  presetCamera: z.object({
-    modelIndex: z.number().int().min(0).max(127),
-    cameraName: z.string().regex(/^\d{1,6}$/),
-    fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
-  }).optional(),
-  mode: z.enum([
-    "copy_previous",
-    "default",
-    "preset_camera",
-    "look_at_push",
-    "blend_curve",
-    "school_cameras",
-    "copy_school_cameras",
-  ]),
-});
+const DialogueCameraQuickActionRequestSchema = z
+  .object({
+    dialogueId: z.string().regex(/^\d{4}$/),
+    startId: z.string().regex(/^\d{4,}$/),
+    dialogueNodeId: z.string().regex(/^\d+$/),
+    roleHints: DialogueCameraPresetRoleHintsSchema.optional(),
+    previousDialogueNodeIds: z
+      .array(z.string().regex(/^\d+$/))
+      .max(500)
+      .optional(),
+    blendCurveAssetName: z
+      .string()
+      .trim()
+      .regex(/^[A-Za-z0-9_]+$/)
+      .max(128)
+      .optional(),
+    blendDuration: z.number().finite().min(0).max(3600).optional(),
+    cameraShakeAction: z.enum(["play", "clear"]).optional(),
+    cameraShakeAssetName: z
+      .enum(DIALOGUE_CAMERA_SHAKE_ASSET_NAMES)
+      .optional(),
+    cameraShakeDelaySeconds: z.number().finite().min(0).max(60).optional(),
+    lookAtActorModelIndex: z.number().int().min(0).max(127).optional(),
+    schoolCameraCopies: DialogueSchoolCameraCopiesSchema.optional(),
+    presetCamera: z
+      .object({
+        modelIndex: z.number().int().min(0).max(127),
+        cameraName: z.string().regex(/^\d{1,6}$/),
+        fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+      })
+      .optional(),
+    mode: z.enum([
+      "copy_previous",
+      "default",
+      "preset_camera",
+      "look_at_push",
+      "blend_curve",
+      "camera_shake",
+      "school_cameras",
+      "copy_school_cameras",
+    ]),
+  })
+  .superRefine((request, context) => {
+    const cameraShakeFieldsPresent =
+      request.cameraShakeAction !== undefined ||
+      request.cameraShakeAssetName !== undefined ||
+      request.cameraShakeDelaySeconds !== undefined;
+    if (request.mode !== "camera_shake") {
+      if (cameraShakeFieldsPresent) {
+        context.addIssue({
+          code: "custom",
+          message: "镜头抖动参数只能用于镜头抖动模式",
+          path: ["cameraShakeAction"],
+        });
+      }
+      return;
+    }
+    const action = request.cameraShakeAction ?? "play";
+    if (action === "play" && !request.cameraShakeAssetName) {
+      context.addIssue({
+        code: "custom",
+        message: "请选择镜头抖动预设",
+        path: ["cameraShakeAssetName"],
+      });
+    }
+    if (
+      action === "clear" &&
+      (request.cameraShakeAssetName !== undefined ||
+        request.cameraShakeDelaySeconds !== undefined)
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "清除镜头抖动时不能携带播放参数",
+        path: ["cameraShakeAction"],
+      });
+    }
+  });
 
 const DialogueCameraQuickActionApplyRequestSchema =
   DialogueCameraQuickActionRequestSchema.extend({
@@ -1016,6 +1069,28 @@ function normalizeObjectPath(value: unknown): string {
   const trimmed = unrealReferenceText(value).trim().replaceAll("\\", "/");
   const referencedPath = trimmed.match(/'([^']+)'/)?.[1] ?? trimmed;
   return referencedPath.toLowerCase();
+}
+
+function dialogueNpcModelFamilyKey(value: unknown): string {
+  return normalizeObjectPath(value).replace(
+    /_injured?(?=\.|_c$)/g,
+    "",
+  );
+}
+
+function isSameDialogueNpcModel(
+  left: unknown,
+  right: unknown,
+): boolean {
+  const normalizedLeft = normalizeObjectPath(left);
+  const normalizedRight = normalizeObjectPath(right);
+  return (
+    Boolean(normalizedLeft) &&
+    Boolean(normalizedRight) &&
+    (normalizedLeft === normalizedRight ||
+      dialogueNpcModelFamilyKey(normalizedLeft) ===
+        dialogueNpcModelFamilyKey(normalizedRight))
+  );
 }
 
 function isPlayerClassPath(value: unknown): boolean {
@@ -1590,6 +1665,8 @@ interface PreparedDialogueCameraQuickAction {
   desiredMoveCameras: unknown[];
   originalBlendCameraData: Record<string, unknown>;
   desiredBlendCameraData: Record<string, unknown>;
+  originalCameraShake: Record<string, unknown>;
+  desiredCameraShake: Record<string, unknown>;
   originalSchoolMoveCamerasMap: Record<string, unknown>;
   desiredSchoolMoveCamerasMap: Record<string, unknown>;
 }
@@ -2736,12 +2813,21 @@ async function existingNodeConfiguration(
   node: StoryboardDialogueNodeContext,
   exportedSchoolCameraKeys: string[] = [],
 ): Promise<ExistingDialogueNodeConfiguration> {
-  const [blendValue, schoolCameraValue] = await Promise.all([
+  const [blendValue, cameraShakeValue, schoolCameraValue] = await Promise.all([
     readProperty(
       connection,
       node.nodeDataPath,
       "DialogBlendCameraData",
     ).catch(() => ({})),
+    readProperty(
+      connection,
+      node.nodeDataPath,
+      "DialogCameraShake",
+    ).catch(() => ({
+      CameraShake: "None",
+      DelayTime: 0,
+      bStopCameraShake: false,
+    })),
     readProperty(
       connection,
       node.nodeDataPath,
@@ -2751,6 +2837,12 @@ async function existingNodeConfiguration(
   const blend =
     blendValue && typeof blendValue === "object" && !Array.isArray(blendValue)
       ? blendValue as Record<string, unknown>
+      : {};
+  const cameraShake =
+    cameraShakeValue &&
+    typeof cameraShakeValue === "object" &&
+    !Array.isArray(cameraShakeValue)
+      ? cameraShakeValue as Record<string, unknown>
       : {};
   const schoolCameraMap =
     schoolCameraValue &&
@@ -2832,6 +2924,9 @@ async function existingNodeConfiguration(
     ).trim(),
     blendCurve: normalizedAssetPath(blend.BlendCurve),
     blendDuration: Number(blend.Duration) || 0,
+    cameraShakeAssetPath: normalizedAssetPath(cameraShake.CameraShake),
+    cameraShakeDelaySeconds: Number(cameraShake.DelayTime) || 0,
+    stopCameraShake: cameraShake.bStopCameraShake === true,
     schoolCameraKeys,
     schoolCameraCount,
     soundEffectAssetPath,
@@ -4679,6 +4774,22 @@ async function resolveDialogueBlendCurve(
   return assetPath;
 }
 
+async function resolveDialogueCameraShakeClass(
+  connection: UnrealInvoker,
+  assetName: NonNullable<
+    DialogueCameraQuickActionRequest["cameraShakeAssetName"]
+  >,
+): Promise<string> {
+  const assetPath = dialogueCameraShakeAssetPath(assetName);
+  const asset = await connection.invoke("asset.get_asset_by_path", {
+    AssetPath: assetPath,
+  });
+  if (!hasUnrealObjectReference(asset)) {
+    throw new Error(`未找到镜头抖动预设 ${assetName}`);
+  }
+  return dialogueCameraShakeClassPath(assetName);
+}
+
 async function prepareDialogueCameraQuickAction(
   connection: UnrealInvoker,
   request: DialogueCameraQuickActionRequest,
@@ -4710,6 +4821,12 @@ async function prepareDialogueCameraQuickAction(
     request.lookAtActorModelIndex !== undefined
   ) {
     throw new Error("注视角色只能用于 ELookAtPush 转换");
+  }
+  if (
+    request.mode === "camera_shake" &&
+    request.dialogueNodeId.endsWith("00")
+  ) {
+    throw new Error("镜头抖动只能写入普通对白节点");
   }
   if (
     request.mode === "copy_previous" &&
@@ -4788,11 +4905,17 @@ async function prepareDialogueCameraQuickAction(
     );
   }
 
-  const [blendCameraValue, schoolCameraValue] = await Promise.all([
+  const [blendCameraValue, cameraShakeValue, schoolCameraValue] =
+    await Promise.all([
     readProperty(
       connection,
       currentNode.nodeDataPath,
       "DialogBlendCameraData",
+    ),
+    readProperty(
+      connection,
+      currentNode.nodeDataPath,
+      "DialogCameraShake",
     ),
     readProperty(
       connection,
@@ -4803,6 +4926,10 @@ async function prepareDialogueCameraQuickAction(
   const originalBlendCameraData = reflectedRecord(
     blendCameraValue,
     "DialogBlendCameraData",
+  );
+  const originalCameraShake = reflectedRecord(
+    cameraShakeValue,
+    "DialogCameraShake",
   );
   const originalSchoolMoveCamerasMap = reflectedRecord(
     schoolCameraValue,
@@ -4815,6 +4942,7 @@ async function prepareDialogueCameraQuickAction(
   let desiredBlendCameraData = clonedValue(
     originalBlendCameraData,
   );
+  let desiredCameraShake = clonedValue(originalCameraShake);
   let desiredSchoolMoveCamerasMap = clonedValue(
     originalSchoolMoveCamerasMap,
   );
@@ -4903,6 +5031,25 @@ async function prepareDialogueCameraQuickAction(
       ),
       Duration: request.blendDuration ?? 0,
     };
+  } else if (request.mode === "camera_shake") {
+    if ((request.cameraShakeAction ?? "play") === "clear") {
+      desiredCameraShake = {
+        ...desiredCameraShake,
+        CameraShake: "None",
+        DelayTime: 0,
+        bStopCameraShake: false,
+      };
+    } else {
+      desiredCameraShake = {
+        ...desiredCameraShake,
+        CameraShake: await resolveDialogueCameraShakeClass(
+          connection,
+          request.cameraShakeAssetName!,
+        ),
+        DelayTime: request.cameraShakeDelaySeconds ?? 0,
+        bStopCameraShake: false,
+      };
+    }
   } else if (
     request.mode === "school_cameras" ||
     request.mode === "copy_school_cameras"
@@ -5030,6 +5177,11 @@ async function prepareDialogueCameraQuickAction(
       desiredBlendCameraData,
       "DialogBlendCameraData",
     ) !== null ||
+    unrealValueMismatch(
+      originalCameraShake,
+      desiredCameraShake,
+      "DialogCameraShake",
+    ) !== null ||
     schoolCameraMapMismatch(
       originalSchoolMoveCamerasMap,
       desiredSchoolMoveCamerasMap,
@@ -5042,10 +5194,12 @@ async function prepareDialogueCameraQuickAction(
         originalCommonProperties: currentNode.commonProperties,
         originalMoveCameras: currentNode.existingMoveCameras,
         originalBlendCameraData,
+        originalCameraShake,
         originalSchoolMoveCamerasMap,
         desiredCommonProperties,
         desiredMoveCameras,
         desiredBlendCameraData,
+        desiredCameraShake,
         desiredSchoolMoveCamerasMap,
       }),
     )
@@ -5079,6 +5233,20 @@ async function prepareDialogueCameraQuickAction(
       ),
       blendDuration:
         Number(desiredBlendCameraData.Duration) || 0,
+      existingCameraShake: normalizedAssetPath(
+        originalCameraShake.CameraShake,
+      ),
+      desiredCameraShake: normalizedAssetPath(
+        desiredCameraShake.CameraShake,
+      ),
+      existingCameraShakeDelaySeconds:
+        Number(originalCameraShake.DelayTime) || 0,
+      desiredCameraShakeDelaySeconds:
+        Number(desiredCameraShake.DelayTime) || 0,
+      existingStopCameraShake:
+        originalCameraShake.bStopCameraShake === true,
+      desiredStopCameraShake:
+        desiredCameraShake.bStopCameraShake === true,
       existingSchoolCameraKeys,
       addedSchoolCameraKeys,
       desiredSchoolCameraKeys:
@@ -5106,6 +5274,8 @@ async function prepareDialogueCameraQuickAction(
     desiredMoveCameras,
     originalBlendCameraData,
     desiredBlendCameraData,
+    originalCameraShake,
+    desiredCameraShake,
     originalSchoolMoveCamerasMap,
     desiredSchoolMoveCamerasMap,
   };
@@ -5203,6 +5373,7 @@ export async function applyDialogueCameraQuickAction(
       request.mode !== "copy_school_cameras" &&
       request.mode !== "default" &&
       request.mode !== "blend_curve" &&
+      request.mode !== "camera_shake" &&
       request.mode !== "preset_camera"
     ) {
       throw new Error("镜头快捷操作缺少审核令牌，请重新检查后再写入");
@@ -5243,6 +5414,12 @@ export async function applyDialogueCameraQuickAction(
         prepared.desiredBlendCameraData,
         "DialogBlendCameraData",
       ) !== null;
+    const writeCameraShake =
+      unrealValueMismatch(
+        prepared.originalCameraShake,
+        prepared.desiredCameraShake,
+        "DialogCameraShake",
+      ) !== null;
     const writeSchoolMoveCamerasMap =
       schoolCameraMapMismatch(
         prepared.originalSchoolMoveCamerasMap,
@@ -5274,6 +5451,14 @@ export async function applyDialogueCameraQuickAction(
           Value: prepared.desiredBlendCameraData,
         });
       }
+      if (writeCameraShake) {
+        writtenProperties.push("DialogCameraShake");
+        await connection.invoke("reflect.write_object_property", {
+          ThisPtr: prepared.nodeDataPath,
+          PropertyName: "DialogCameraShake",
+          Value: prepared.desiredCameraShake,
+        });
+      }
       if (writeSchoolMoveCamerasMap) {
         writtenProperties.push("SchoolMoveCamerasMap");
         await connection.invoke("reflect.write_object_property", {
@@ -5286,6 +5471,7 @@ export async function applyDialogueCameraQuickAction(
         commonProperties,
         moveCameras,
         blendCameraData,
+        cameraShake,
         schoolMoveCamerasMap,
       ] = await Promise.all([
         readProperty(
@@ -5298,6 +5484,11 @@ export async function applyDialogueCameraQuickAction(
           connection,
           prepared.nodeDataPath,
           "DialogBlendCameraData",
+        ),
+        readProperty(
+          connection,
+          prepared.nodeDataPath,
+          "DialogCameraShake",
         ),
         readProperty(
           connection,
@@ -5325,6 +5516,13 @@ export async function applyDialogueCameraQuickAction(
               blendCameraData,
               prepared.desiredBlendCameraData,
               "DialogBlendCameraData",
+            )
+          : null) ??
+        (writeCameraShake
+          ? unrealValueMismatch(
+              cameraShake,
+              prepared.desiredCameraShake,
+              "DialogCameraShake",
             )
           : null) ??
         (writeSchoolMoveCamerasMap
@@ -5356,6 +5554,7 @@ export async function applyDialogueCameraQuickAction(
             prepared.originalCommonProperties,
           MoveCameras: prepared.originalMoveCameras,
           DialogBlendCameraData: prepared.originalBlendCameraData,
+          DialogCameraShake: prepared.originalCameraShake,
           SchoolMoveCamerasMap:
             prepared.originalSchoolMoveCamerasMap,
         };
@@ -5983,12 +6182,20 @@ export async function updateDialogueContents(
 interface DialogueModelSourceSlot {
   modelIndex: number;
   targetId: string | null;
+  componentName?: string;
+  usesLegacyComponentName?: boolean;
   modelClassPath: string;
 }
 
 interface DialogNpcRegistryEntry {
   name: string;
   characterClassPath: string;
+}
+
+interface ResolvedBlueprintModelSlot extends DialogueModelSourceSlot {
+  componentName: string;
+  usesLegacyComponentName: boolean;
+  component: BlueprintComponentInfo;
 }
 
 interface DialogueRegistrationContext {
@@ -6007,6 +6214,135 @@ function normalizedDialogueModelName(value: unknown): string {
   return ["", "none", "null"].includes(name.toLowerCase())
     ? "None"
     : name;
+}
+
+function isChildActorBlueprintComponent(
+  component: BlueprintComponentInfo,
+): boolean {
+  return (
+    normalizeObjectPath(component.componentClass) ===
+      normalizeObjectPath(CHILD_ACTOR_COMPONENT_CLASS) &&
+    Boolean(normalizeObjectPath(component.childActorClass))
+  );
+}
+
+function registryClassPathForModelName(
+  modelName: string,
+  registry: readonly DialogNpcRegistryEntry[],
+): string {
+  if (modelName.toLowerCase() === "player") {
+    return PLAYER_CLASS;
+  }
+  return (
+    registry.find(
+      (entry) => entry.name.toLowerCase() === modelName.toLowerCase(),
+    )?.characterClassPath ?? ""
+  );
+}
+
+export function resolveBlueprintModelSlots(
+  components: readonly BlueprintComponentInfo[],
+  existingModels: readonly string[],
+  registry: readonly DialogNpcRegistryEntry[],
+): ResolvedBlueprintModelSlot[] {
+  const numericComponents = components.filter((component) =>
+    /^\d+$/.test(component.variableName),
+  );
+  const invalidNumericComponent = numericComponents.find(
+    (component) => !isChildActorBlueprintComponent(component),
+  );
+  if (invalidNumericComponent) {
+    throw new Error(
+      `BP 数字槽位 ${invalidNumericComponent.variableName} 不是有效的 ChildActorComponent 或未配置模型`,
+    );
+  }
+
+  const usedIndexes = new Set<number>();
+  const result: ResolvedBlueprintModelSlot[] = [];
+  for (const component of numericComponents) {
+    const modelIndex = Number(component.variableName);
+    if (usedIndexes.has(modelIndex)) {
+      throw new Error(
+        `BP 数字槽位 ${modelIndex} 存在重复命名，无法建立稳定映射`,
+      );
+    }
+    usedIndexes.add(modelIndex);
+    result.push({
+      modelIndex,
+      targetId: null,
+      componentName: component.variableName,
+      usesLegacyComponentName:
+        component.variableName !== String(modelIndex),
+      modelClassPath: component.childActorClass,
+      component,
+    });
+  }
+
+  const registryClassPaths = new Set(
+    registry
+      .map((entry) => normalizeObjectPath(entry.characterClassPath))
+      .filter(Boolean),
+  );
+  const legacyComponents = components.filter(
+    (component) =>
+      !/^\d+$/.test(component.variableName) &&
+      isChildActorBlueprintComponent(component) &&
+      (isPlayerBlueprintComponent(component) ||
+        registryClassPaths.has(
+          normalizeObjectPath(component.childActorClass),
+        )),
+  );
+  const existingIndexesByClass = new Map<string, number[]>();
+  existingModels.forEach((modelNameValue, modelIndex) => {
+    if (modelIndex === 0 || usedIndexes.has(modelIndex)) {
+      return;
+    }
+    const modelName = normalizedDialogueModelName(modelNameValue);
+    if (modelName === "None") {
+      return;
+    }
+    const classPath = normalizeObjectPath(
+      registryClassPathForModelName(modelName, registry),
+    );
+    if (classPath) {
+      existingIndexesByClass.set(classPath, [
+        ...(existingIndexesByClass.get(classPath) ?? []),
+        modelIndex,
+      ]);
+    }
+  });
+  const nextAvailableIndex = (start: number): number => {
+    let index = start;
+    while (usedIndexes.has(index)) {
+      index += 1;
+    }
+    return index;
+  };
+  for (const component of legacyComponents) {
+    const classPath = normalizeObjectPath(component.childActorClass);
+    let modelIndex: number;
+    if (isPlayerBlueprintComponent(component) && !usedIndexes.has(0)) {
+      modelIndex = 0;
+    } else {
+      const matchingIndexes = existingIndexesByClass.get(classPath) ?? [];
+      modelIndex =
+        matchingIndexes.find((index) => !usedIndexes.has(index)) ??
+        nextAvailableIndex(1);
+    }
+    usedIndexes.add(modelIndex);
+    result.push({
+      modelIndex,
+      targetId: null,
+      componentName: component.variableName,
+      usesLegacyComponentName:
+        component.variableName !== String(modelIndex),
+      modelClassPath: component.childActorClass,
+      component,
+    });
+  }
+  return result.sort(
+    (left, right) => left.modelIndex - right.modelIndex,
+  );
 }
 
 async function findDialogueStartNodeData(
@@ -6263,6 +6599,39 @@ async function readDialogueRegistrationContext(
   };
 }
 
+async function readBlueprintDialogueRegistrationContext(
+  connection: UnrealInvoker,
+  blueprintAssetPathValue: string,
+  components: readonly BlueprintComponentInfo[],
+  dialogueIdOverride?: string,
+): Promise<{
+  dialogue: DialogueRegistrationContext;
+  modelSlots: ResolvedBlueprintModelSlot[];
+}> {
+  const baseContext = await readDialogueRegistrationContext(
+    connection,
+    blueprintAssetPathValue,
+    [],
+    dialogueIdOverride,
+  );
+  const modelSlots = resolveBlueprintModelSlots(
+    components,
+    baseContext.existingModels,
+    baseContext.registry,
+  );
+  return {
+    dialogue: {
+      ...baseContext,
+      slots: buildDialogueModelRegistrationSlots(
+        modelSlots,
+        baseContext.existingModels,
+        baseContext.registry,
+      ),
+    },
+    modelSlots,
+  };
+}
+
 interface DialogueSpatialContext {
   commonProperties: ReflectedProperty[];
   specialProperties: ReflectedProperty[];
@@ -6455,7 +6824,7 @@ function transformRotationDistance(
 
 function buildBlueprintDialoguePreviewPlan(
   blueprintAssetPathValue: string,
-  components: BlueprintComponentInfo[],
+  modelSlots: ResolvedBlueprintModelSlot[],
   dialogue: DialogueRegistrationContext,
   spatial: DialogueSpatialContext,
   dialogueTimeline?: DialoguePositionTimelineRow[],
@@ -6464,14 +6833,8 @@ function buildBlueprintDialoguePreviewPlan(
   blockedReasons: string[];
 } {
   const blockedReasons: string[] = [];
-  const numericComponents = components
-    .filter((component) => /^\d+$/.test(component.variableName))
-    .sort(
-      (left, right) =>
-        Number(left.variableName) - Number(right.variableName),
-    );
-  if (numericComponents.length === 0) {
-    blockedReasons.push("BP 中没有可加载的数字模型槽位");
+  if (modelSlots.length === 0) {
+    blockedReasons.push("BP 中没有可识别的模型槽位");
   }
   if (!dialogueTimeline || dialogueTimeline.length === 0) {
     blockedReasons.push("本地对话表中未找到指定节点");
@@ -6523,17 +6886,18 @@ function buildBlueprintDialoguePreviewPlan(
     };
   }
   const finalStates = resolveDialogueFinalTransforms(
-    numericComponents.map((component) => ({
-      modelIndex: Number(component.variableName),
-      transform: component.transform,
+    modelSlots.map((slot) => ({
+      modelIndex: slot.modelIndex,
+      transform: slot.component.transform,
     })),
     timelineRows,
   );
   let movementActionCount = 0;
   let rotationActionCount = 0;
   let adjustedCharacterCount = 0;
-  const targets = numericComponents.map((component) => {
-    const modelIndex = Number(component.variableName);
+  const targets = modelSlots.map((slot) => {
+    const modelIndex = slot.modelIndex;
+    const component = slot.component;
     const registration = registrationByIndex.get(modelIndex);
     const modelClassPath = objectReferencePath(
       component.childActorClass,
@@ -7143,40 +7507,37 @@ export async function inspectMissionTargetBlueprint(
         `BP 父类既不是 TaskActorBase 也不是 PositionModeBase：${blueprint.parentClassPath || "无法读取"}`,
       );
     }
+    const baseDialogue = await readDialogueRegistrationContext(
+      connection,
+      resolved.assetPath,
+      [],
+      request.dialogueId,
+    );
+    const modelSlots = resolveBlueprintModelSlots(
+      blueprint.components,
+      baseDialogue.existingModels,
+      baseDialogue.registry,
+    );
     const reservedComponents = blueprint.components.filter(
-      (component) =>
-        /^\d+$/.test(component.variableName) ||
-        component.variableName.toLowerCase() === "c1",
+      (component) => component.variableName.toLowerCase() === "c1",
     );
     const blueprintState =
-      reservedComponents.length === 0 ? "empty" : "populated";
-    const numericComponents = blueprint.components
-      .filter((component) => /^\d+$/.test(component.variableName))
-      .sort(
-        (left, right) =>
-          Number(left.variableName) - Number(right.variableName),
-      );
-    if (
-      blueprintState === "populated" &&
-      numericComponents.some((component) => !component.childActorClass)
-    ) {
-      throw new Error("BP 数字槽位中存在非 ChildActorComponent 或空模型");
-    }
-    const playerSlots = playerBlueprintComponents(numericComponents);
+      reservedComponents.length === 0 && modelSlots.length === 0
+        ? "empty"
+        : "populated";
+    const playerSlots = modelSlots.filter((slot) =>
+      isPlayerClassPath(slot.modelClassPath),
+    );
     if (blueprintState === "populated" && playerSlots.length > 1) {
       throw new Error(
-        "BP 数字槽中存在多个 Eric 玩家模型，无法确认玩家实例",
+        "BP 模型槽中存在多个 Eric 玩家模型，无法确认玩家实例",
       );
     }
     const playerSlotMissing =
       blueprintState === "populated" && playerSlots.length === 0;
     const sourceSlots: DialogueModelSourceSlot[] =
       blueprintState === "populated"
-        ? numericComponents.map((component) => ({
-            modelIndex: Number(component.variableName),
-            targetId: null,
-            modelClassPath: component.childActorClass,
-          }))
+        ? modelSlots
         : refreshedPlan
           ? [
               {
@@ -7191,12 +7552,14 @@ export async function inspectMissionTargetBlueprint(
               })),
             ]
           : [];
-    const dialogue = await readDialogueRegistrationContext(
-      connection,
-      resolved.assetPath,
-      sourceSlots,
-      request.dialogueId,
-    );
+    const dialogue: DialogueRegistrationContext = {
+      ...baseDialogue,
+      slots: buildDialogueModelRegistrationSlots(
+        sourceSlots,
+        baseDialogue.existingModels,
+        baseDialogue.registry,
+      ),
+    };
     const registeredCharacterCount = dialogue.slots.filter(
       (slot) => slot.status === "registered",
     ).length;
@@ -7221,7 +7584,7 @@ export async function inspectMissionTargetBlueprint(
         if (request.dialogueTimeline !== undefined) {
           const preview = buildBlueprintDialoguePreviewPlan(
             resolved.assetPath,
-            numericComponents,
+            modelSlots,
             dialogue,
             dialogueSpatial,
             request.dialogueTimeline,
@@ -7247,10 +7610,10 @@ export async function inspectMissionTargetBlueprint(
     ) {
       sync = buildMissionTargetBlueprintSync(
         refreshedPlan.targets,
-        numericComponents.map((component) => ({
-          modelIndex: Number(component.variableName),
-          modelClassPath: component.childActorClass,
-          transform: component.transform,
+        modelSlots.map((slot) => ({
+          modelIndex: slot.modelIndex,
+          modelClassPath: slot.modelClassPath,
+          transform: slot.component.transform,
         })),
         dialogueSpatial.root,
         getConfigCsvDirectory(),
@@ -7292,9 +7655,7 @@ export async function inspectMissionTargetBlueprint(
       const nextModelIndex =
         Math.max(
           0,
-          ...numericComponents.map((component) =>
-            Number(component.variableName),
-          ),
+          ...modelSlots.map((slot) => slot.modelIndex),
         ) + 1;
       appendSlots = buildDialogueModelRegistrationSlots(
         refreshedPlan.targets
@@ -7322,6 +7683,17 @@ export async function inspectMissionTargetBlueprint(
       dialogueAssetPath: dialogue.dialogueAssetPath,
       formationClassPath: dialogue.formationClassPath,
       slots: dialogue.slots,
+      ...(modelSlots.some((slot) => slot.usesLegacyComponentName)
+        ? {
+            legacySlotRenames: modelSlots
+              .filter((slot) => slot.usesLegacyComponentName)
+              .map((slot) => ({
+                componentName: slot.componentName,
+                modelIndex: slot.modelIndex,
+                modelClassPath: slot.modelClassPath,
+              })),
+          }
+        : {}),
       appendSlots,
       dialoguePreviewPlan,
       dialoguePreviewBlockedReasons,
@@ -7329,8 +7701,12 @@ export async function inspectMissionTargetBlueprint(
         blueprintState === "empty"
           ? "BP 尚未创建站位组件"
           : playerSlotMissing
-            ? `BP 已识别 ${numericComponents.length} 个角色位（未找到 Eric 玩家模型；读取 UE 选择时可补建 0 号玩家）`
-            : `BP 已识别 ${numericComponents.length} 个角色位（玩家位于 ${playerSlots[0].variableName} 号槽）`
+            ? `BP 已识别 ${modelSlots.length} 个角色位（未找到 Eric 玩家模型；读取 UE 选择时可补建 0 号玩家）`
+            : `BP 已识别 ${modelSlots.length} 个角色位（玩家位于 ${playerSlots[0].modelIndex} 号槽）`
+      }${
+        modelSlots.some((slot) => slot.usesLegacyComponentName)
+          ? `；兼容识别 ${modelSlots.filter((slot) => slot.usesLegacyComponentName).length} 个旧命名槽位`
+          : ""
       }；对话已注册 ${registeredCharacterCount} 个角色${
         formationMatched ? "" : "；Formation 未指向当前 BP"
       }${
@@ -7358,7 +7734,7 @@ interface PreparedMissionTargetBlueprintSync {
   plan: MissionTargetPreviewPlan;
   resolved: { assetPath: string; blueprint: string };
   blueprint: Awaited<ReturnType<typeof readValidatedBlueprint>>;
-  numericComponents: BlueprintComponentInfo[];
+  modelSlots: ResolvedBlueprintModelSlot[];
   dialogue: DialogueRegistrationContext;
   spatial: DialogueSpatialContext;
   sync: MissionTargetBlueprintSyncState;
@@ -7391,45 +7767,33 @@ async function prepareMissionTargetBlueprintSync(
     throw new Error(`BP 文件不存在：${request.blueprintName}`);
   }
   const blueprint = await readValidatedBlueprint(connection, resolved);
-  const numericComponents = blueprint.components
-    .filter((component) => /^\d+$/.test(component.variableName))
-    .sort(
-      (left, right) =>
-        Number(left.variableName) - Number(right.variableName),
+  const { dialogue, modelSlots } =
+    await readBlueprintDialogueRegistrationContext(
+      connection,
+      resolved.assetPath,
+      blueprint.components,
+      request.dialogueId,
     );
-  const playerSlots = playerBlueprintComponents(numericComponents);
+  const playerSlots = modelSlots.filter((slot) =>
+    isPlayerClassPath(slot.modelClassPath),
+  );
   if (playerSlots.length !== 1) {
     throw new Error(
       playerSlots.length === 0
-        ? "BP 数字槽中未找到 Eric 玩家模型"
-        : "BP 数字槽中存在多个 Eric 玩家模型，无法确认玩家实例",
+        ? "BP 模型槽中未找到 Eric 玩家模型"
+        : "BP 模型槽中存在多个 Eric 玩家模型，无法确认玩家实例",
     );
   }
-  if (
-    numericComponents.some((component) => !component.childActorClass)
-  ) {
-    throw new Error("BP 数字槽位中存在非 ChildActorComponent 或空模型");
-  }
-  const dialogue = await readDialogueRegistrationContext(
-    connection,
-    resolved.assetPath,
-    numericComponents.map((component) => ({
-      modelIndex: Number(component.variableName),
-      targetId: null,
-      modelClassPath: component.childActorClass,
-    })),
-    request.dialogueId,
-  );
   const spatial = await readDialogueSpatialContext(
     connection,
     dialogue.startNodeData,
   );
   const sync = buildMissionTargetBlueprintSync(
     plan.targets,
-    numericComponents.map((component) => ({
-      modelIndex: Number(component.variableName),
-      modelClassPath: component.childActorClass,
-      transform: component.transform,
+    modelSlots.map((slot) => ({
+      modelIndex: slot.modelIndex,
+      modelClassPath: slot.modelClassPath,
+      transform: slot.component.transform,
     })),
     spatial.root,
     getConfigCsvDirectory(),
@@ -7467,7 +7831,7 @@ async function prepareMissionTargetBlueprintSync(
     plan,
     resolved,
     blueprint,
-    numericComponents,
+    modelSlots,
     dialogue,
     spatial,
     sync,
@@ -7545,6 +7909,120 @@ async function compileAndSaveBlueprint(
   }
 }
 
+async function normalizeLegacyBlueprintModelSlots(
+  connection: UnrealInvoker,
+  resolved: { assetPath: string; blueprint: string },
+  blueprintClassPathValue: string,
+  modelSlots: readonly ResolvedBlueprintModelSlot[],
+  existingModels: readonly string[],
+  registry: readonly DialogNpcRegistryEntry[],
+): Promise<ResolvedBlueprintModelSlot[]> {
+  const legacySlots = modelSlots.filter(
+    (slot) => slot.usesLegacyComponentName,
+  );
+  if (legacySlots.length === 0) {
+    return [...modelSlots];
+  }
+  const renamedSlots: ResolvedBlueprintModelSlot[] = [];
+  try {
+    for (const slot of legacySlots) {
+      const result = await connection.invoke(
+        "bp.modify_member_variable",
+        {
+          Bp: resolved.blueprint,
+          OldVarName: slot.componentName,
+          NewVarName: String(slot.modelIndex),
+          NewVarType: "",
+          NewDefaultValue: "",
+        },
+      );
+      if (result === false) {
+        throw new Error(
+          `BP 组件 ${slot.componentName} 无法重命名为 ${slot.modelIndex}`,
+        );
+      }
+      renamedSlots.push(slot);
+    }
+    const compileResult = await connection.invoke(
+      "bp.compile_blueprint",
+      { Bp: resolved.blueprint },
+    );
+    const compileError = compileFailure(compileResult);
+    if (compileError) {
+      throw new Error(compileError);
+    }
+    const actualComponents = await readBlueprintComponents(
+      connection,
+      blueprintClassPathValue,
+    );
+    const normalizedSlots = resolveBlueprintModelSlots(
+      actualComponents,
+      existingModels,
+      registry,
+    );
+    for (const expected of legacySlots) {
+      const actual = normalizedSlots.find(
+        (slot) =>
+          slot.modelIndex === expected.modelIndex &&
+          slot.componentName === String(expected.modelIndex),
+      );
+      if (
+        !actual ||
+        normalizeObjectPath(actual.modelClassPath) !==
+          normalizeObjectPath(expected.modelClassPath) ||
+        blueprintTransformsDiffer(
+          actual.component.transform,
+          expected.component.transform,
+        )
+      ) {
+        throw new Error(
+          `BP 组件 ${expected.componentName} 重命名为 ${expected.modelIndex} 后回读不一致`,
+        );
+      }
+    }
+    return normalizedSlots;
+  } catch (error) {
+    let rollbackFailed = false;
+    for (const slot of renamedSlots.reverse()) {
+      try {
+        const result = await connection.invoke(
+          "bp.modify_member_variable",
+          {
+            Bp: resolved.blueprint,
+            OldVarName: String(slot.modelIndex),
+            NewVarName: slot.componentName,
+            NewVarType: "",
+            NewDefaultValue: "",
+          },
+        );
+        if (result === false) {
+          rollbackFailed = true;
+        }
+      } catch {
+        rollbackFailed = true;
+      }
+    }
+    try {
+      const compileResult = await connection.invoke(
+        "bp.compile_blueprint",
+        { Bp: resolved.blueprint },
+      );
+      if (compileFailure(compileResult)) {
+        rollbackFailed = true;
+      }
+    } catch {
+      rollbackFailed = true;
+    }
+    throw new Error(
+      `${error instanceof Error ? error.message : "旧组件重命名失败"}${
+        rollbackFailed
+          ? "；恢复旧组件名失败，请立即在 UE 中检查"
+          : "；已恢复旧组件名"
+      }`,
+    );
+  }
+}
+
 export async function updateMissionTargetBlueprintPositions(
   rawRequest: unknown,
   connectionFactory: () => UnrealInvoker = () => new UnrealMcpConnection(),
@@ -7554,7 +8032,9 @@ export async function updateMissionTargetBlueprintPositions(
   await connectUnreal(connection);
   let prepared: PreparedMissionTargetBlueprintSync | null = null;
   let blueprintSaved = false;
+  let legacySlotsNormalized = false;
   const changedComponents: Array<{
+    modelIndex: number;
     component: BlueprintComponentInfo;
     desired: UnrealTransform;
   }> = [];
@@ -7609,10 +8089,27 @@ export async function updateMissionTargetBlueprintPositions(
         `对话资产 ${dialoguePackagePath} 存在未保存修改，请先在 UE 中保存或撤销`,
       );
     }
+    const shouldNormalizeLegacySlots =
+      request.normalizeLegacySlots === true &&
+      prepared.modelSlots.some(
+        (slot) => slot.usesLegacyComponentName,
+      );
+    let activeModelSlots = prepared.modelSlots;
+    if (shouldNormalizeLegacySlots) {
+      activeModelSlots = await normalizeLegacyBlueprintModelSlots(
+          connection,
+          prepared.resolved,
+          prepared.blueprint.blueprintClassPath,
+          prepared.modelSlots,
+          prepared.dialogue.existingModels,
+          prepared.dialogue.registry,
+        );
+      legacySlotsNormalized = true;
+    }
     const componentsByIndex = new Map(
-      prepared.numericComponents.map((component) => [
-        Number(component.variableName),
-        component,
+      activeModelSlots.map((slot) => [
+        slot.modelIndex,
+        slot.component,
       ]),
     );
     for (const mapping of selectedMappings) {
@@ -7625,6 +8122,7 @@ export async function updateMissionTargetBlueprintPositions(
         )
       ) {
         changedComponents.push({
+          modelIndex: mapping.modelIndex,
           component,
           desired: mapping.desiredBlueprintTransform,
         });
@@ -7638,7 +8136,7 @@ export async function updateMissionTargetBlueprintPositions(
         change.desired,
       );
     }
-    if (changedComponents.length > 0) {
+    if (changedComponents.length > 0 || legacySlotsNormalized) {
       const compileResult = await connection.invoke(
         "bp.compile_blueprint",
         { Bp: prepared.resolved.blueprint },
@@ -7698,14 +8196,15 @@ export async function updateMissionTargetBlueprintPositions(
     return {
       status:
         changedComponents.length > 0 ||
+        legacySlotsNormalized ||
         dialogueResult.status !== "unchanged"
           ? "updated"
           : "unchanged",
       taskId: prepared.plan.taskId,
       blueprintAssetPath: prepared.resolved.assetPath,
       dialogueAssetPath: prepared.dialogue.dialogueAssetPath,
-      updatedModelIndexes: changedComponents.map(({ component }) =>
-        Number(component.variableName),
+      updatedModelIndexes: changedComponents.map(
+        ({ modelIndex }) => modelIndex,
       ),
       blueprintSaved,
       dialogueSaved: dialogueResult.status !== "unchanged",
@@ -7734,7 +8233,13 @@ export async function updateMissionTargetBlueprintPositions(
         );
       }
     }
-    throw error;
+    throw new Error(
+      `${error instanceof Error ? error.message : "修改 BP 位置失败"}${
+        legacySlotsNormalized && !blueprintSaved
+          ? "；组件重命名可能留在 UE 的未保存 BP 中，请检查后撤销"
+          : ""
+      }`,
+    );
   } finally {
     connection.close();
   }
@@ -7833,6 +8338,7 @@ export async function registerBlueprintDialogueModels(
   const connection = connectionFactory();
   await connectUnreal(connection);
   let mutationStarted = false;
+  let blueprintNormalized = false;
   try {
     const resolved = await resolveExistingBlueprint(
       connection,
@@ -7842,35 +8348,30 @@ export async function registerBlueprintDialogueModels(
       throw new Error(`BP 文件不存在：${request.blueprintName}`);
     }
     const blueprint = await readValidatedBlueprint(connection, resolved);
-    const numericComponents = blueprint.components
-      .filter((component) => /^\d+$/.test(component.variableName))
-      .sort(
-        (left, right) =>
-          Number(left.variableName) - Number(right.variableName),
+    const resolvedContext =
+      await readBlueprintDialogueRegistrationContext(
+        connection,
+        resolved.assetPath,
+        blueprint.components,
+        request.dialogueId,
       );
-    const playerSlots = playerBlueprintComponents(numericComponents);
+    let modelSlots = resolvedContext.modelSlots;
+    const context = resolvedContext.dialogue;
+    const playerSlots = modelSlots.filter((slot) =>
+      isPlayerClassPath(slot.modelClassPath),
+    );
     if (
       !request.preserveModels &&
       playerSlots.length !== 1
     ) {
       throw new Error(
         playerSlots.length === 0
-          ? "BP 数字槽中未找到 Eric 玩家模型"
-          : "BP 数字槽中存在多个 Eric 玩家模型，无法确认玩家实例",
+          ? "BP 模型槽中未找到 Eric 玩家模型"
+          : "BP 模型槽中存在多个 Eric 玩家模型，无法确认玩家实例",
       );
     }
-    if (
-      numericComponents.some((component) => !component.childActorClass)
-    ) {
-      throw new Error("BP 数字槽位中存在非 ChildActorComponent 或空模型");
-    }
-    const sourceSlots = numericComponents.map((component) => ({
-      modelIndex: Number(component.variableName),
-      targetId: null,
-      modelClassPath: component.childActorClass,
-    }));
     const validIndexes = new Set(
-      sourceSlots
+      modelSlots
         .filter((slot) => !isPlayerClassPath(slot.modelClassPath))
         .map((slot) => slot.modelIndex),
     );
@@ -7881,12 +8382,6 @@ export async function registerBlueprintDialogueModels(
     ) {
       throw new Error("所选模型槽位不属于当前 BP");
     }
-    const context = await readDialogueRegistrationContext(
-      connection,
-      resolved.assetPath,
-      sourceSlots,
-      request.dialogueId,
-    );
     const dialogueSpatial = await readDialogueSpatialContext(
       connection,
       context.startNodeData,
@@ -7961,10 +8456,10 @@ export async function registerBlueprintDialogueModels(
         );
         const sync = buildMissionTargetBlueprintSync(
           plan.targets,
-          numericComponents.map((component) => ({
-            modelIndex: Number(component.variableName),
-            modelClassPath: component.childActorClass,
-            transform: component.transform,
+          modelSlots.map((slot) => ({
+            modelIndex: slot.modelIndex,
+            modelClassPath: slot.modelClassPath,
+            transform: slot.component.transform,
           })),
           dialogueSpatial.root,
           getConfigCsvDirectory(),
@@ -7978,6 +8473,39 @@ export async function registerBlueprintDialogueModels(
           };
         }
       }
+    }
+    if (
+      request.normalizeLegacySlots === true &&
+      modelSlots.some((slot) => slot.usesLegacyComponentName)
+    ) {
+      const dirtyPackages = new Set(
+        (await dirtyContentPackages(connection)).map((path) =>
+          path.toLowerCase(),
+        ),
+      );
+      const blueprintPackagePath = resolved.assetPath.split(".")[0];
+      if (dirtyPackages.has(blueprintPackagePath.toLowerCase())) {
+        throw new Error(
+          `Formation BP ${blueprintPackagePath} 存在未保存修改，请先在 UE 中保存或撤销`,
+        );
+      }
+      const dialoguePackagePath = context.dialogueAssetPath.split(".")[0];
+      if (dirtyPackages.has(dialoguePackagePath.toLowerCase())) {
+        throw new Error(
+          `对话资产 ${dialoguePackagePath} 存在未保存修改，请先在 UE 中保存或撤销`,
+        );
+      }
+      modelSlots = await normalizeLegacyBlueprintModelSlots(
+        connection,
+        resolved,
+        blueprint.blueprintClassPath,
+        modelSlots,
+        context.existingModels,
+        context.registry,
+      );
+      mutationStarted = true;
+      await compileAndSaveBlueprint(connection, resolved);
+      blueprintNormalized = true;
     }
     mutationStarted = true;
     const result = await writeDialogueRegistration(
@@ -8009,7 +8537,11 @@ export async function registerBlueprintDialogueModels(
           : "注册 DialogModels 失败";
     throw new Error(
       mutationStarted
-        ? `${message}；对话资产可能留有未保存修改，请在 UE 中检查`
+        ? `${message}；${
+            blueprintNormalized
+              ? "BP 组件已完成重命名，"
+              : ""
+          }对话资产可能留有未保存修改，请在 UE 中检查`
         : message,
     );
   } finally {
@@ -8545,6 +9077,7 @@ export async function appendMissionTargetBlueprint(
   ) as {
     blueprintName: string;
     dialogueId?: string;
+    normalizeLegacySlots?: boolean;
     plan: MissionTargetPreviewPlan;
     selectedTargetIds: string[];
   };
@@ -8586,37 +9119,27 @@ export async function appendMissionTargetBlueprint(
       throw new Error(`BP 文件不存在：${request.blueprintName}`);
     }
     const blueprint = await readValidatedBlueprint(connection, resolved);
-    const numericComponents = blueprint.components
-      .filter((component) => /^\d+$/.test(component.variableName))
-      .sort(
-        (left, right) =>
-          Number(left.variableName) - Number(right.variableName),
+    const resolvedContext =
+      await readBlueprintDialogueRegistrationContext(
+        connection,
+        resolved.assetPath,
+        blueprint.components,
+        request.dialogueId,
       );
-    const playerSlots = playerBlueprintComponents(numericComponents);
+    const existingModelSlots = resolvedContext.modelSlots;
+    const dialogueContext = resolvedContext.dialogue;
+    const playerSlots = existingModelSlots.filter((slot) =>
+      isPlayerClassPath(slot.modelClassPath),
+    );
     if (playerSlots.length !== 1) {
       throw new Error(
         playerSlots.length === 0
-          ? "BP 数字槽中未找到 Eric 玩家模型"
-          : "BP 数字槽中存在多个 Eric 玩家模型，无法确认玩家实例",
+          ? "BP 模型槽中未找到 Eric 玩家模型"
+          : "BP 模型槽中存在多个 Eric 玩家模型，无法确认玩家实例",
       );
     }
-    if (
-      numericComponents.some((component) => !component.childActorClass)
-    ) {
-      throw new Error("BP 数字槽位中存在非 ChildActorComponent 或空模型");
-    }
     const existingSourceSlots: DialogueModelSourceSlot[] =
-      numericComponents.map((component) => ({
-        modelIndex: Number(component.variableName),
-        targetId: null,
-        modelClassPath: component.childActorClass,
-      }));
-    const dialogueContext = await readDialogueRegistrationContext(
-      connection,
-      resolved.assetPath,
-      existingSourceSlots,
-      request.dialogueId,
-    );
+      existingModelSlots;
     const dialogueSpatial = await readDialogueSpatialContext(
       connection,
       dialogueContext.startNodeData,
@@ -8665,10 +9188,10 @@ export async function appendMissionTargetBlueprint(
       } else {
         const inferredSync = buildMissionTargetBlueprintSync(
           request.plan.targets,
-          numericComponents.map((component) => ({
-            modelIndex: Number(component.variableName),
-            modelClassPath: component.childActorClass,
-            transform: component.transform,
+          existingModelSlots.map((slot) => ({
+            modelIndex: slot.modelIndex,
+            modelClassPath: slot.modelClassPath,
+            transform: slot.component.transform,
           })),
           dialogueSpatial.root,
           getConfigCsvDirectory(),
@@ -8693,10 +9216,10 @@ export async function appendMissionTargetBlueprint(
 
     const existingSync = buildMissionTargetBlueprintSync(
       request.plan.targets,
-      numericComponents.map((component) => ({
-        modelIndex: Number(component.variableName),
-        modelClassPath: component.childActorClass,
-        transform: component.transform,
+      existingModelSlots.map((slot) => ({
+        modelIndex: slot.modelIndex,
+        modelClassPath: slot.modelClassPath,
+        transform: slot.component.transform,
       })),
       { explicit: true, transform: rootTransform },
       getConfigCsvDirectory(),
@@ -8716,9 +9239,7 @@ export async function appendMissionTargetBlueprint(
     const nextModelIndex =
       Math.max(
         0,
-        ...numericComponents.map((component) =>
-          Number(component.variableName),
-        ),
+        ...existingModelSlots.map((slot) => slot.modelIndex),
       ) + 1;
     const selectedEntries = selectedTargets.map((target, index) => ({
       target,
@@ -8780,6 +9301,20 @@ export async function appendMissionTargetBlueprint(
       }
     }
 
+    if (
+      request.normalizeLegacySlots === true &&
+      existingModelSlots.some((slot) => slot.usesLegacyComponentName)
+    ) {
+      await normalizeLegacyBlueprintModelSlots(
+        connection,
+        resolved,
+        blueprint.blueprintClassPath,
+        existingModelSlots,
+        dialogueContext.existingModels,
+        dialogueContext.registry,
+      );
+      mutationStarted = true;
+    }
     mutationStarted = true;
     for (const component of components) {
       await addBlueprintComponent(
@@ -9164,6 +9699,7 @@ interface PreparedBackgroundPropImport {
   preview: BackgroundPropImportPreview;
   resolved: { assetPath: string; blueprint: string };
   blueprint: Awaited<ReturnType<typeof readValidatedBlueprint>>;
+  modelSlots: ResolvedBlueprintModelSlot[];
   items: PreparedBackgroundPropItem[];
   dialogueContext: DialogueRegistrationContext | null;
 }
@@ -9378,12 +9914,22 @@ async function prepareBackgroundPropImport(
     blockedReasons.push("UE 当前没有选中的 Actor");
   }
 
-  const numericComponents = blueprint.components
-    .filter((component) => /^\d+$/.test(component.variableName))
-    .sort(
-      (left, right) =>
-        Number(left.variableName) - Number(right.variableName),
-    );
+  let baseDialogueContext: DialogueRegistrationContext | null = null;
+  let existingModelSlots: ResolvedBlueprintModelSlot[] = [];
+  if (parentKind === "position_mode") {
+    const resolvedContext =
+      await readBlueprintDialogueRegistrationContext(
+        connection,
+        resolved.assetPath,
+        blueprint.components,
+        dialogueIdOverride,
+      );
+    baseDialogueContext = resolvedContext.dialogue;
+    existingModelSlots = resolvedContext.modelSlots;
+  }
+  const modelSlotByComponentName = new Map(
+    existingModelSlots.map((slot) => [slot.componentName, slot]),
+  );
   const assignableActorComponents = blueprint.components.filter(
     (component) =>
       normalizeObjectPath(component.componentClass) ===
@@ -9394,18 +9940,18 @@ async function prepareBackgroundPropImport(
   let nextModelIndex =
     Math.max(
       0,
-      ...numericComponents.map((component) =>
-        Number(component.variableName),
-      ),
+      ...existingModelSlots.map((slot) => slot.modelIndex),
     ) + 1;
   const dialogueNpcAssignments = new Map<
     string,
     {
       newModelIndex: number;
+      modelIndex?: number;
       existingComponent: BlueprintComponentInfo | null;
       matchingModelComponents: Array<{
         componentName: string;
         modelIndex?: number;
+        modelVariant?: boolean;
         transformMatches: boolean;
       }>;
     }
@@ -9417,11 +9963,20 @@ async function prepareBackgroundPropImport(
         rootTransform,
         actor.transform.scale,
       );
-      const matchingComponents = assignableActorComponents.filter(
+      const exactMatchingComponents = assignableActorComponents.filter(
         (component) =>
           normalizeObjectPath(component.childActorClass) ===
           normalizeObjectPath(actor.classPath),
       );
+      const matchingComponents =
+        exactMatchingComponents.length > 0
+          ? exactMatchingComponents
+          : assignableActorComponents.filter((component) =>
+              isSameDialogueNpcModel(
+                component.childActorClass,
+                actor.classPath,
+              ),
+            );
       const availableMatchingComponents = matchingComponents.filter(
         (component) =>
           !claimedComponentNames.has(component.variableName),
@@ -9440,16 +9995,32 @@ async function prepareBackgroundPropImport(
       if (existingComponent) {
         claimedComponentNames.add(existingComponent.variableName);
       }
+      const existingModelSlot = existingComponent
+        ? modelSlotByComponentName.get(existingComponent.variableName)
+        : undefined;
       dialogueNpcAssignments.set(actor.actorRef, {
         newModelIndex: existingComponent
           ? nextModelIndex
           : nextModelIndex++,
+        ...(!existingComponent || existingModelSlot
+          ? {
+              modelIndex:
+                existingModelSlot?.modelIndex ?? nextModelIndex - 1,
+            }
+          : {}),
         existingComponent,
         matchingModelComponents: matchingComponents.map((component) => ({
           componentName: component.variableName,
-          ...(/^\d+$/.test(component.variableName)
-            ? { modelIndex: Number(component.variableName) }
+          ...(modelSlotByComponentName.has(component.variableName)
+            ? {
+                modelIndex: modelSlotByComponentName.get(
+                  component.variableName,
+                )!.modelIndex,
+              }
             : {}),
+          modelVariant:
+            normalizeObjectPath(component.childActorClass) !==
+            normalizeObjectPath(actor.classPath),
           transformMatches: !blueprintTransformsDiffer(
             component.transform,
             relativeTransform,
@@ -9485,6 +10056,19 @@ async function prepareBackgroundPropImport(
               componentName.toLowerCase(),
           ) ??
         null;
+      const modelVariantMatch =
+        importMode === "dialogue_npc" &&
+        Boolean(existingComponent) &&
+        normalizeObjectPath(existingComponent?.childActorClass) !==
+          normalizeObjectPath(actor.classPath) &&
+        isSameDialogueNpcModel(
+          existingComponent?.childActorClass,
+          actor.classPath,
+        );
+      const assetValue =
+        modelVariantMatch && existingComponent
+          ? existingComponent.sourceAssetPath
+          : spec?.assetValue ?? "";
       let action: BackgroundPropPreviewItem["action"] = "create";
       let message =
         importMode === "dialogue_npc"
@@ -9518,7 +10102,7 @@ async function prepareBackgroundPropImport(
           normalizeObjectPath(existingComponent.componentClass) !==
             normalizeObjectPath(spec.componentClass) ||
           normalizeObjectPath(existingComponent.sourceAssetPath) !==
-            normalizeObjectPath(spec.assetValue)
+            normalizeObjectPath(assetValue)
         ) {
           action = "blocked";
           message = `BP 已有同名但资产不同的组件 ${componentName}`;
@@ -9535,6 +10119,9 @@ async function prepareBackgroundPropImport(
                 ? `更新已有对话角色槽 ${componentName} Transform`
                 : `更新已有角色组件 ${componentName} Transform`
               : "更新已有背景组件 Transform";
+          if (modelVariantMatch) {
+            message += `；保留 BP 现有模型 ${assetNameFromPath(existingComponent.childActorClass)}`;
+          }
         } else {
           action = "unchanged";
           message =
@@ -9543,11 +10130,14 @@ async function prepareBackgroundPropImport(
                 ? `对话角色槽 ${componentName} 已存在且 Transform 一致`
                 : `角色组件 ${componentName} 已存在且 Transform 一致`
               : "BP 中已存在且 Transform 一致";
+          if (modelVariantMatch) {
+            message += `；保留 BP 现有模型 ${assetNameFromPath(existingComponent.childActorClass)}`;
+          }
         }
       }
       return {
         actor,
-        assetValue: spec?.assetValue ?? "",
+        assetValue,
         existingComponent,
         ...(dialogueNpcAssignment
           ? { newModelIndex: dialogueNpcAssignment.newModelIndex }
@@ -9561,8 +10151,8 @@ async function prepareBackgroundPropImport(
           componentName,
           ...(dialogueNpcAssignment
             ? {
-                ...(/^\d+$/.test(componentName)
-                  ? { modelIndex: Number(componentName) }
+                ...(dialogueNpcAssignment.modelIndex !== undefined
+                  ? { modelIndex: dialogueNpcAssignment.modelIndex }
                   : {}),
                 matchingModelComponents:
                   dialogueNpcAssignment.matchingModelComponents,
@@ -9579,15 +10169,14 @@ async function prepareBackgroundPropImport(
     },
   );
   const existingSourceSlots: DialogueModelSourceSlot[] =
-    numericComponents.map((component) => ({
-      modelIndex: Number(component.variableName),
-      targetId: null,
-      modelClassPath: component.childActorClass,
-    }));
-  let dialogueContext: DialogueRegistrationContext | null = null;
-  const playerSlots = playerBlueprintComponents(numericComponents);
-  const slotZero = numericComponents.find(
-    (component) => component.variableName === "0",
+    existingModelSlots;
+  let dialogueContext: DialogueRegistrationContext | null =
+    baseDialogueContext;
+  const playerSlots = existingModelSlots.filter((slot) =>
+    isPlayerClassPath(slot.modelClassPath),
+  );
+  const slotZero = existingModelSlots.find(
+    (slot) => slot.modelIndex === 0,
   );
   const canCreatePlayerSlot =
     playerSlots.length === 0 && !slotZero;
@@ -9606,7 +10195,7 @@ async function prepareBackgroundPropImport(
       (component) => component.variableName.toLowerCase() === "c1",
     );
     willCreateCameraSlot =
-      numericComponents.length === 0 &&
+      existingModelSlots.length === 0 &&
       willCreatePlayerSlot &&
       !cameraSlot;
     if (
@@ -9623,12 +10212,9 @@ async function prepareBackgroundPropImport(
         "BP 的 c1 组件不是 CameraComponent，请先修复摄像机槽位",
       );
     }
-    const baseDialogueContext = await readDialogueRegistrationContext(
-      connection,
-      resolved.assetPath,
-      existingSourceSlots,
-      dialogueIdOverride,
-    );
+    if (!dialogueContext) {
+      throw new Error("无法读取对话 NPC 对应的对话注册信息");
+    }
     const sourceSlots = [
       ...(willCreatePlayerSlot
         ? [
@@ -9654,11 +10240,11 @@ async function prepareBackgroundPropImport(
         })),
     ];
     dialogueContext = {
-      ...baseDialogueContext,
+      ...dialogueContext,
       slots: buildDialogueModelRegistrationSlots(
         sourceSlots,
-        baseDialogueContext.existingModels,
-        baseDialogueContext.registry,
+        dialogueContext.existingModels,
+        dialogueContext.registry,
       ),
     };
     const registrationByIndex = new Map(
@@ -9677,22 +10263,17 @@ async function prepareBackgroundPropImport(
                   modelClassPath: item.actor.classPath,
                 },
               ],
-              baseDialogueContext.existingModels,
-              baseDialogueContext.registry,
+              dialogueContext.existingModels,
+              dialogueContext.registry,
             )[0]);
       item.preview.dialogueModelName =
         registration?.suggestedModelName ?? null;
       if (item.preview.action !== "blocked") {
-        if (
-          item.existingComponent &&
-          !/^\d+$/.test(item.existingComponent.variableName)
-        ) {
-          item.preview.message += "；不修改 DialogModels";
-        } else {
-          item.preview.message += registration?.suggestedModelName
+        item.preview.message += item.preview.modelIndex === undefined
+          ? "；不修改 DialogModels"
+          : registration?.suggestedModelName
             ? `；DialogModels=${registration.suggestedModelName}`
             : "；DialogNPCTable 未登记，将写入 None";
-        }
       }
     }
   }
@@ -9724,7 +10305,7 @@ async function prepareBackgroundPropImport(
     rootTransform,
     playerModelIndex:
       playerSlots.length === 1
-        ? Number(playerSlots[0].variableName)
+        ? playerSlots[0].modelIndex
         : null,
     canCreatePlayerSlot,
     willCreatePlayerSlot,
@@ -9739,6 +10320,7 @@ async function prepareBackgroundPropImport(
     },
     resolved,
     blueprint,
+    modelSlots: existingModelSlots,
     items: preparedItems,
     dialogueContext,
   };
@@ -9796,15 +10378,10 @@ function resolveBackgroundPropNpcAssignments(
     );
   }
 
-  const numericComponents = prepared.blueprint.components.filter(
-    (component) => /^\d+$/.test(component.variableName),
-  );
   let nextModelIndex =
     Math.max(
       0,
-      ...numericComponents.map((component) =>
-        Number(component.variableName),
-      ),
+      ...prepared.modelSlots.map((slot) => slot.modelIndex),
     ) + 1;
   const claimedComponentNames = new Set<string>();
 
@@ -9840,8 +10417,10 @@ function resolveBackgroundPropNpcAssignments(
       (component) =>
         component.variableName === targetComponentName &&
         !isPlayerBlueprintComponent(component) &&
-        normalizeObjectPath(component.childActorClass) ===
-          normalizeObjectPath(item.actor.classPath),
+        isSameDialogueNpcModel(
+          component.childActorClass,
+          item.actor.classPath,
+        ),
     );
     if (
       !existingComponent ||
@@ -9855,30 +10434,40 @@ function resolveBackgroundPropNpcAssignments(
       );
     }
     claimedComponentNames.add(targetComponentName);
+    const selectedCandidate =
+      item.preview.matchingModelComponents?.find(
+        (candidate) =>
+          candidate.componentName === targetComponentName,
+      );
     const action = blueprintTransformsDiffer(
       existingComponent.transform,
       item.preview.relativeTransform,
     )
       ? "update"
       : "unchanged";
+    let message =
+      action === "update"
+        ? selectedCandidate?.modelIndex !== undefined
+          ? `更新已有对话角色槽 ${existingComponent.variableName} Transform`
+          : `更新已有角色组件 ${existingComponent.variableName} Transform；不修改 DialogModels`
+        : selectedCandidate?.modelIndex !== undefined
+          ? `对话角色槽 ${existingComponent.variableName} 已存在且 Transform 一致`
+          : `角色组件 ${existingComponent.variableName} 已存在且 Transform 一致；不修改 DialogModels`;
+    if (selectedCandidate?.modelVariant) {
+      message += `；保留 BP 现有模型 ${assetNameFromPath(existingComponent.childActorClass)}`;
+    }
     return {
       ...item,
+      assetValue: existingComponent.sourceAssetPath,
       existingComponent,
       preview: {
         ...item.preview,
         componentName: existingComponent.variableName,
-        ...(/^\d+$/.test(existingComponent.variableName)
-          ? { modelIndex: Number(existingComponent.variableName) }
+        ...(selectedCandidate?.modelIndex !== undefined
+          ? { modelIndex: selectedCandidate.modelIndex }
           : { modelIndex: undefined }),
         action,
-        message:
-          action === "update"
-            ? /^\d+$/.test(existingComponent.variableName)
-              ? `更新已有对话角色槽 ${existingComponent.variableName} Transform`
-              : `更新已有角色组件 ${existingComponent.variableName} Transform；不修改 DialogModels`
-            : /^\d+$/.test(existingComponent.variableName)
-              ? `对话角色槽 ${existingComponent.variableName} 已存在且 Transform 一致`
-              : `角色组件 ${existingComponent.variableName} 已存在且 Transform 一致；不修改 DialogModels`,
+        message,
       },
     };
   });
@@ -9904,6 +10493,7 @@ export async function applyBackgroundPropImport(
   const changedItems: PreparedBackgroundPropItem[] = [];
   let mutationStarted = false;
   let blueprintSaved = false;
+  let legacySlotsNormalized = false;
   try {
     prepared = await prepareBackgroundPropImport(
       connection,
@@ -9933,7 +10523,7 @@ export async function applyBackgroundPropImport(
         `${blockedItem.preview.actorLabel}：${blockedItem.preview.message}`,
       );
     }
-    const selectedItems = resolveBackgroundPropNpcAssignments(
+    let selectedItems = resolveBackgroundPropNpcAssignments(
       prepared,
       initiallySelectedItems,
       request.dialogueNpcSlotAssignments,
@@ -9950,17 +10540,18 @@ export async function applyBackgroundPropImport(
         `Formation BP ${blueprintPackagePath} 存在未保存修改，请先在 UE 中保存或撤销`,
       );
     }
+    let actualComponents = prepared.blueprint.components;
     const selectedDialogueNpcItems = selectedItems.filter(
       (item) => item.preview.importMode === "dialogue_npc",
     );
-    const selectedNumericDialogueNpcItems =
+    const selectedModelSlotDialogueNpcItems =
       selectedDialogueNpcItems.filter((item) =>
-        /^\d+$/.test(item.preview.componentName),
+        item.preview.modelIndex !== undefined,
       );
     const requestedPlayerCreation =
       request.createPlayerSlot ?? prepared.preview.willCreatePlayerSlot;
     if (
-      selectedNumericDialogueNpcItems.length > 0 &&
+      selectedModelSlotDialogueNpcItems.length > 0 &&
       requestedPlayerCreation &&
       !prepared.preview.canCreatePlayerSlot
     ) {
@@ -9971,13 +10562,13 @@ export async function applyBackgroundPropImport(
       );
     }
     const createPlayerSlot =
-      selectedNumericDialogueNpcItems.length > 0 &&
+      selectedModelSlotDialogueNpcItems.length > 0 &&
       requestedPlayerCreation;
     const createCameraSlot =
       createPlayerSlot &&
       prepared.preview.willCreateCameraSlot;
     const registerDialogueModels =
-      selectedNumericDialogueNpcItems.length > 0 &&
+      selectedModelSlotDialogueNpcItems.length > 0 &&
       (prepared.preview.playerModelIndex !== null || createPlayerSlot);
     if (registerDialogueModels) {
       if (!prepared.dialogueContext) {
@@ -9999,6 +10590,56 @@ export async function applyBackgroundPropImport(
         throw new Error(`玩家模型资产不存在：${PLAYER_CLASS}`);
       }
     }
+    if (
+      request.normalizeLegacySlots === true &&
+      prepared.modelSlots.some((slot) => slot.usesLegacyComponentName)
+    ) {
+      if (!prepared.dialogueContext) {
+        throw new Error("无法读取旧组件对应的对话注册信息");
+      }
+      const originalLegacySlots = prepared.modelSlots.filter(
+        (slot) => slot.usesLegacyComponentName,
+      );
+      prepared.modelSlots = await normalizeLegacyBlueprintModelSlots(
+        connection,
+        prepared.resolved,
+        prepared.blueprint.blueprintClassPath,
+        prepared.modelSlots,
+        prepared.dialogueContext.existingModels,
+        prepared.dialogueContext.registry,
+      );
+      mutationStarted = true;
+      legacySlotsNormalized = true;
+      const renamedComponents = new Map(
+        originalLegacySlots.map((slot) => [
+          slot.componentName,
+          String(slot.modelIndex),
+        ]),
+      );
+      selectedItems = selectedItems.map((item) => {
+        const renamedComponentName = item.existingComponent
+          ? renamedComponents.get(item.existingComponent.variableName)
+          : undefined;
+        if (!renamedComponentName || !item.existingComponent) {
+          return item;
+        }
+        return {
+          ...item,
+          existingComponent: {
+            ...item.existingComponent,
+            variableName: renamedComponentName,
+          },
+          preview: {
+            ...item.preview,
+            componentName: renamedComponentName,
+          },
+        };
+      });
+      actualComponents = await readBlueprintComponents(
+        connection,
+        prepared.blueprint.blueprintClassPath,
+      );
+    }
     changedItems.push(
       ...selectedItems.filter(
         (item) =>
@@ -10008,7 +10649,8 @@ export async function applyBackgroundPropImport(
     );
     if (
       changedItems.length === 0 &&
-      !registerDialogueModels
+      !registerDialogueModels &&
+      !legacySlotsNormalized
     ) {
       return {
         status: "unchanged",
@@ -10018,11 +10660,11 @@ export async function applyBackgroundPropImport(
         saved: false,
       };
     }
-    let actualComponents = prepared.blueprint.components;
     if (
       changedItems.length > 0 ||
       createPlayerSlot ||
-      createCameraSlot
+      createCameraSlot ||
+      legacySlotsNormalized
     ) {
       mutationStarted = true;
       if (createPlayerSlot) {
@@ -10148,13 +10790,11 @@ export async function applyBackgroundPropImport(
     }
     let dialogueRegistration: DialogueModelRegistrationResult | undefined;
     if (registerDialogueModels) {
-      const sourceSlots = actualComponents
-        .filter((component) => /^\d+$/.test(component.variableName))
-        .map((component) => ({
-          modelIndex: Number(component.variableName),
-          targetId: null,
-          modelClassPath: component.childActorClass,
-        }));
+      const sourceSlots = resolveBlueprintModelSlots(
+        actualComponents,
+        prepared.dialogueContext!.existingModels,
+        prepared.dialogueContext!.registry,
+      );
       const registrationContext = {
         ...prepared.dialogueContext!,
         slots: buildDialogueModelRegistrationSlots(
@@ -10180,6 +10820,7 @@ export async function applyBackgroundPropImport(
       );
     }
     const changed =
+      legacySlotsNormalized ||
       createPlayerSlot ||
       createCameraSlot ||
       changedItems.length > 0 ||

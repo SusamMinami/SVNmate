@@ -717,7 +717,7 @@ test("loads dialogue content before explicitly starting the director", async ({
   await ruleDirectorButton.click();
   await expect(ruleDirectorButton).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator(".shot-row")).toHaveCount(4);
-  expect(beatRequests).toBe(1);
+  await expect.poll(() => beatRequests).toBe(1);
 });
 
 test("discovers action roles from UE when the configuration window skips Formation", async ({
@@ -8973,6 +8973,160 @@ test("locks and registers every existing numeric Blueprint slot", async ({
   await expect(
     workspace.getByText(/角色 4 个（含玩家）/),
   ).toBeVisible();
+});
+
+test("recognizes legacy Blueprint role names and asks before normalizing them", async ({
+  page,
+}, testInfo) => {
+  const registrationRequests: Array<Record<string, unknown>> = [];
+  await page.route(
+    "**/api/ue/mission-targets/inspect-blueprint",
+    async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          data: {
+            blueprintState: "populated",
+            blueprintAssetPath:
+              "/Game/Seria/Task/Mod/Tutorial/3311/BP_526900.BP_526900",
+            blueprintClassPath:
+              "/Game/Seria/Task/Mod/Tutorial/3311/BP_526900.BP_526900_C",
+            parentClassPath:
+              "/Game/Seria/Task/Mod/PositionMode/PositionModeBase.PositionModeBase_C",
+            dialogueId: "526900",
+            dialogueAssetPath:
+              "/Game/Seria/Task/dialoggraph/Tutorial/526900.526900",
+            formationClassPath:
+              "/Game/Seria/Task/Mod/Tutorial/3311/BP_526900.BP_526900_C",
+            slots: [
+              {
+                modelIndex: 0,
+                targetId: null,
+                componentName: "0",
+                usesLegacyComponentName: false,
+                modelClassPath:
+                  "/Game/Seria/Characters/Eric/BP_Eric.BP_Eric_C",
+                existingModelName: "player",
+                suggestedModelName: "player",
+                candidateModelNames: ["player"],
+                status: "registered",
+              },
+              {
+                modelIndex: 1,
+                targetId: null,
+                componentName: "ChildActor",
+                usesLegacyComponentName: true,
+                modelClassPath: "/Game/Test/BP_Guard.BP_Guard_C",
+                existingModelName: "Guard",
+                suggestedModelName: "Guard",
+                candidateModelNames: ["Guard"],
+                status: "registered",
+              },
+            ],
+            legacySlotRenames: [
+              {
+                componentName: "ChildActor",
+                modelIndex: 1,
+                modelClassPath: "/Game/Test/BP_Guard.BP_Guard_C",
+              },
+            ],
+            dialoguePreviewBlockedReasons: [],
+            message:
+              "BP 已识别 2 个角色位；兼容识别 1 个旧命名槽位；对话已注册 2 个角色",
+          },
+        }),
+      });
+    },
+  );
+  await page.route(
+    "**/api/ue/mission-targets/register-dialogue",
+    async (route) => {
+      registrationRequests.push(route.request().postDataJSON());
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          data: {
+            status: "unchanged",
+            blueprintAssetPath:
+              "/Game/Seria/Task/Mod/Tutorial/3311/BP_526900.BP_526900",
+            dialogueId: "526900",
+            dialogueAssetPath:
+              "/Game/Seria/Task/dialoggraph/Tutorial/526900.526900",
+            dialogueModels: ["player", "Guard"],
+            registeredCount: 1,
+            characterCount: 2,
+            emptyCount: 0,
+            unresolvedIndexes: [],
+            spatialStatus: "unchanged",
+          },
+        }),
+      });
+    },
+  );
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "任务目标物" }).click();
+  const workspace = page.getByRole("region", {
+    name: "任务目标物",
+    exact: true,
+  });
+  await workspace.getByLabel("BP 文件名").fill("5269");
+  await workspace
+    .getByRole("button", { name: "检查 BP 与对话模型" })
+    .click();
+
+  await expect(
+    workspace.getByText("已按模型兼容识别 1 个旧命名槽位"),
+  ).toBeVisible();
+  const mapping = workspace.locator(".mission-target-slot-mapping").nth(1);
+  await expect(mapping).toContainText("ChildActor");
+  await expect(mapping).toContainText("1");
+
+  await workspace
+    .getByRole("button", { name: "按 BP 注册到对话" })
+    .click();
+  const choice = page.getByRole("alertdialog", {
+    name: "是否统一旧组件名",
+  });
+  await expect(choice.getByRole("button", { name: "取消" })).toBeVisible();
+  await expect(
+    choice.getByRole("button", { name: "保留原名并继续" }),
+  ).toBeVisible();
+  await expect(
+    choice.getByRole("button", { name: "重命名并继续" }),
+  ).toBeVisible();
+  await choice.screenshot({
+    path: testInfo.outputPath("legacy-blueprint-slot-choice.png"),
+  });
+  await choice.getByRole("button", { name: "保留原名并继续" }).click();
+  await expect.poll(() => registrationRequests.length).toBe(1);
+  expect(registrationRequests[0]).not.toHaveProperty(
+    "normalizeLegacySlots",
+  );
+
+  await page.setViewportSize({ width: 420, height: 800 });
+  await workspace
+    .getByRole("button", { name: "按 BP 注册到对话" })
+    .click();
+  const mobileChoice = page.getByRole("alertdialog", {
+    name: "是否统一旧组件名",
+  });
+  await mobileChoice.screenshot({
+    path: testInfo.outputPath("legacy-blueprint-slot-choice-mobile.png"),
+  });
+  await mobileChoice
+    .getByRole("button", { name: "重命名并继续" })
+    .click();
+  await expect.poll(() => registrationRequests.length).toBe(2);
+  expect(registrationRequests[1]).toMatchObject({
+    blueprintName: "5269",
+    selectedModelIndexes: [1],
+    normalizeLegacySlots: true,
+  });
 });
 
 test("separates four-digit registration from six-digit node positioning", async ({

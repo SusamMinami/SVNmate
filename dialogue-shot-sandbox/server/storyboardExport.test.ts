@@ -126,6 +126,32 @@ class FakeStoryboardExportConnection implements UnrealInvoker {
       },
     ],
   ]);
+  readonly cameraShakeByData = new Map<string, Record<string, unknown>>([
+    [
+      "ActionData1",
+      {
+        CameraShake: "None",
+        DelayTime: 0,
+        bStopCameraShake: false,
+      },
+    ],
+    [
+      "ActionData2",
+      {
+        CameraShake: "None",
+        DelayTime: 0,
+        bStopCameraShake: false,
+      },
+    ],
+    [
+      "ActionData3",
+      {
+        CameraShake: "None",
+        DelayTime: 0,
+        bStopCameraShake: false,
+      },
+    ],
+  ]);
   readonly schoolCamerasByData = new Map<
     string,
     Record<string, unknown>
@@ -259,6 +285,12 @@ class FakeStoryboardExportConnection implements UnrealInvoker {
           structuredClone(args.Value as Record<string, unknown>),
         );
       }
+      if (args.PropertyName === "DialogCameraShake") {
+        this.cameraShakeByData.set(
+          dataName,
+          structuredClone(args.Value as Record<string, unknown>),
+        );
+      }
       if (args.PropertyName === "SchoolMoveCamerasMap") {
         this.schoolCamerasByData.set(
           dataName,
@@ -339,6 +371,9 @@ class FakeStoryboardExportConnection implements UnrealInvoker {
       }
       if (property === "DialogBlendCameraData") {
         return structuredClone(this.blendByData.get(dataName));
+      }
+      if (property === "DialogCameraShake") {
+        return structuredClone(this.cameraShakeByData.get(dataName));
       }
       if (property === "SchoolMoveCamerasMap") {
         return structuredClone(this.schoolCamerasByData.get(dataName));
@@ -2387,6 +2422,76 @@ describe("dialogue camera quick actions", () => {
     });
   });
 
+  it("configures and clears an approved dialogue camera shake", async () => {
+    const connection = new FakeStoryboardExportConnection();
+    const request = {
+      dialogueId: "7352",
+      startId: "735200",
+      dialogueNodeId: "735201",
+      mode: "camera_shake" as const,
+      cameraShakeAction: "play" as const,
+      cameraShakeAssetName: "BP_Dialog_CameraShake_4" as const,
+      cameraShakeDelaySeconds: 0.6,
+    };
+
+    const preview = await inspectDialogueCameraQuickAction(
+      request,
+      () => connection,
+    );
+    expect(preview).toMatchObject({
+      existingCameraShake: "",
+      desiredCameraShake:
+        "/Game/Seria/Core/CameraShake/BP_Dialog_CameraShake_4.BP_Dialog_CameraShake_4_C",
+      existingCameraShakeDelaySeconds: 0,
+      desiredCameraShakeDelaySeconds: 0.6,
+      changed: true,
+    });
+
+    await applyDialogueCameraQuickAction(request, () => connection);
+    expect(connection.cameraShakeByData.get("ActionData1")).toEqual({
+      CameraShake:
+        "/Game/Seria/Core/CameraShake/BP_Dialog_CameraShake_4.BP_Dialog_CameraShake_4_C",
+      DelayTime: 0.6,
+      bStopCameraShake: false,
+    });
+
+    await applyDialogueCameraQuickAction(
+      {
+        dialogueId: "7352",
+        startId: "735200",
+        dialogueNodeId: "735201",
+        mode: "camera_shake",
+        cameraShakeAction: "clear",
+      },
+      () => connection,
+    );
+    expect(connection.cameraShakeByData.get("ActionData1")).toEqual({
+      CameraShake: "None",
+      DelayTime: 0,
+      bStopCameraShake: false,
+    });
+  });
+
+  it("rejects camera shake assets outside the dialogue preset allow-list", async () => {
+    const connection = new FakeStoryboardExportConnection();
+
+    await expect(
+      applyDialogueCameraQuickAction(
+        {
+          dialogueId: "7352",
+          startId: "735200",
+          dialogueNodeId: "735201",
+          mode: "camera_shake",
+          cameraShakeAction: "play",
+          cameraShakeAssetName:
+            "BP_CameraShake_Monster_Boss" as "BP_Dialog_CameraShake",
+        },
+        () => connection,
+      ),
+    ).rejects.toThrow();
+    expect(connection.connected).toBe(false);
+  });
+
   it("copies the main camera config to Ring, Nino and Jodie", async () => {
     const connection = new FakeStoryboardExportConnection();
     connection.selectedDialogueNodeId = "735202";
@@ -2797,6 +2902,9 @@ describe("existing dialogue storyboard", () => {
     expect(result.configurations).toHaveLength(1);
     expect(result.configurations[0]).toMatchObject({
       dialogueId: "735201",
+      cameraShakeAssetPath: "",
+      cameraShakeDelaySeconds: 0,
+      stopCameraShake: false,
       backgroundMusicStateId: 18,
       backgroundMusicDelaySeconds: 2.5,
     });

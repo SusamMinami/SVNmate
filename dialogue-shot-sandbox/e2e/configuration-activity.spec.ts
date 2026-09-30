@@ -175,11 +175,7 @@ test("compact activity pauses all automatic UE reads and preserves the editor dr
   expect(pausedReads).toBe(0);
   // inert keeps the actual editor in the DOM, including unsaved input.
   expect(await draft.inputValue()).toBe("trans_keep_draft");
-  const pauseNotice = page.locator(
-    ".app-header > .configuration-pause-notice",
-  );
-  await expect(pauseNotice).toHaveText("自动读取已暂停");
-  await expect(pauseNotice.locator("svg")).toHaveCount(0);
+  await expect(page.locator(".configuration-pause-notice")).toHaveCount(0);
   await expectStatusIconsRightAligned(page);
   const pausedPanelBounds = await page.locator(".right-panel").boundingBox();
   expect(Math.round(pausedPanelBounds!.y)).toBe(
@@ -200,7 +196,6 @@ test("compact activity pauses all automatic UE reads and preserves the editor dr
   await page.screenshot({ path: info.outputPath("compact-paused-draft.png") });
   await activity(page, "dialogue");
   await expect(page.locator(".right-panel")).not.toHaveAttribute("inert");
-  await expect(pauseNotice).toHaveCount(0);
   await expectStatusIconsRightAligned(page);
   expect(await draft.inputValue()).toBe("trans_keep_draft");
   expect(new URL(requests.filter((url) => url.includes("/dialogue/selection")).at(-1)!).searchParams.get("fresh")).toBe("1");
@@ -258,9 +253,7 @@ test("manual pause stays latched until the user resumes it", async ({ page }) =>
   const resume = page.getByRole("button", { name: "恢复 UE 读取" });
   await expect(resume).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator(".right-panel")).toHaveAttribute("inert", "");
-  const pauseNotice = page.locator(".configuration-pause-notice");
-  await expect(pauseNotice).toHaveText("读取已手动暂停");
-  await expect(pauseNotice.locator("svg")).toHaveCount(0);
+  await expect(page.locator(".configuration-pause-notice")).toHaveCount(0);
   const before = selectionCount();
   await activity(page, "other");
   await activity(page, "dialogue");
@@ -268,7 +261,6 @@ test("manual pause stays latched until the user resumes it", async ({ page }) =>
   await page.waitForTimeout(1_400);
   expect(selectionCount()).toBe(before);
   await expect(page.locator(".right-panel")).toHaveAttribute("inert", "");
-  await expect(pauseNotice).toHaveText("读取已手动暂停");
   expect(await page.evaluate(() => (window as any).monitorEvents)).toEqual([true]);
   await resume.click();
   await expect(
@@ -276,7 +268,6 @@ test("manual pause stays latched until the user resumes it", async ({ page }) =>
   ).toHaveAttribute("aria-pressed", "false");
   await expect.poll(selectionCount).toBeGreaterThan(before);
   await expect(page.locator(".right-panel")).not.toHaveAttribute("inert");
-  await expect(pauseNotice).toHaveCount(0);
   await page.evaluate(() => {
     Object.defineProperty(document, "hidden", {
       configurable: true,

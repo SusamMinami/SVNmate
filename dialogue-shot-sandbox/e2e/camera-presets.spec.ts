@@ -1,7 +1,11 @@
 import { expect, test, type Page } from "@playwright/test";
 import type { DialogueCameraQuickActionRequest } from "../src/types";
 
-async function cameraPresetFixture(page: Page, moveCameraCount = 1) {
+async function cameraPresetFixture(
+  page: Page,
+  moveCameraCount = 1,
+  cameraShakeAssetPath = "",
+) {
   const state = {
     node: "204801",
     reads: 0,
@@ -28,6 +32,8 @@ async function cameraPresetFixture(page: Page, moveCameraCount = 1) {
         dialogueId, cameraPosition: "c1", moveCameraCount, cameraMoveTypes: ["EPush"], fov: 49,
         cameraVelocity: 7, cameraBlendOutTime: 2.5, cameraRelative: true,
         blendCameraType: "EBlend", blendCurve: "/Game/Test/trans_6015.trans_6015", blendDuration: 3,
+        cameraShakeAssetPath, cameraShakeDelaySeconds: cameraShakeAssetPath ? 0.4 : 0,
+        stopCameraShake: false,
         schoolCameraKeys: ["ERing"], schoolCameraCount: 1, soundEffectAssetPath: "", soundEffectAssetName: "",
         soundEffectDelaySeconds: 0, backgroundMusicStateId: 0, backgroundMusicDelaySeconds: 0,
       })),
@@ -347,6 +353,80 @@ test("converts the configured EPush to ELookAtPush with a UE role target", async
     dialogueNodeId: "204801",
     lookAtActorModelIndex: 1,
     reviewToken: "b".repeat(64),
+  });
+});
+
+test("stages a dialogue camera shake preset and delay in the small-window camera tab", async ({ page }, testInfo) => {
+  const state = await cameraPresetFixture(page);
+  await page.setViewportSize({ width: 420, height: 820 });
+  const write = page.getByRole("button", {
+    name: "写入节点",
+    exact: true,
+  });
+  const cameraShake = page.getByRole("button", {
+    name: /镜头抖动/,
+  });
+
+  await expect(cameraShake).not.toHaveClass(/is-configured/);
+  await cameraShake.click();
+  const presets = page.getByRole("radiogroup", {
+    name: "镜头抖动预设",
+  });
+  await expect(presets.getByRole("radio")).toHaveCount(8);
+  await expect(write).toBeDisabled();
+
+  await presets.getByRole("radio", { name: /第一人称·紧急/ }).click();
+  const delay = page.getByRole("spinbutton", {
+    name: "镜头抖动触发延迟",
+  });
+  await delay.fill("0.6");
+  await expect(write).toBeEnabled();
+  const review = page.getByLabel("节点镜头写入确认");
+  await expect(review).toContainText("第一人称·紧急");
+  await expect(review).toContainText("急促呼吸、紧张逼近");
+  await expect(review).toContainText("Blend Out 0.65s");
+  await page.screenshot({
+    path: testInfo.outputPath("dialogue-camera-shake-picker.png"),
+  });
+
+  await write.click();
+  await expect
+    .poll(() => state.writes.length)
+    .toBe(1);
+  expect(state.writes[0]).toMatchObject({
+    dialogueNodeId: "204801",
+    mode: "camera_shake",
+    cameraShakeAction: "play",
+    cameraShakeAssetName: "6015_CameraShake_Fast",
+    cameraShakeDelaySeconds: 0.6,
+  });
+  expect(state.writes[0]).not.toHaveProperty("reviewToken");
+});
+
+test("clears an existing dialogue camera shake from the same compact control", async ({ page }) => {
+  const state = await cameraPresetFixture(
+    page,
+    1,
+    "/Game/Seria/Core/CameraShake/BP_Dialog_CameraShake_4.BP_Dialog_CameraShake_4_C",
+  );
+  const cameraShake = page.getByRole("button", {
+    name: /镜头抖动/,
+  });
+  await expect(cameraShake).toHaveClass(/is-configured/);
+  await expect(cameraShake).toContainText("环境震颤 · 延迟 0.4s");
+  await cameraShake.click();
+  await page.getByRole("button", { name: "清除节点配置" }).click();
+  await expect(page.getByLabel("节点镜头写入确认")).toContainText(
+    "环境震颤",
+  );
+  await expect(
+    page.getByRole("button", { name: "写入节点", exact: true }),
+  ).toBeEnabled();
+  await page.getByRole("button", { name: "写入节点", exact: true }).click();
+  expect(state.writes[0]).toMatchObject({
+    dialogueNodeId: "204801",
+    mode: "camera_shake",
+    cameraShakeAction: "clear",
   });
 });
 

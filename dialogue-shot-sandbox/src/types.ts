@@ -380,6 +380,8 @@ export interface MissionTargetBlueprintCompatibility {
 export interface DialogueModelRegistrationSlot {
   modelIndex: number;
   targetId: string | null;
+  componentName?: string;
+  usesLegacyComponentName?: boolean;
   modelClassPath: string;
   existingModelName: string;
   existingModelClassPath?: string | null;
@@ -453,6 +455,11 @@ export interface MissionTargetBlueprintInspection {
   dialogueAssetPath: string | null;
   formationClassPath: string | null;
   slots: DialogueModelRegistrationSlot[];
+  legacySlotRenames?: Array<{
+    componentName: string;
+    modelIndex: number;
+    modelClassPath: string;
+  }>;
   appendSlots?: DialogueModelRegistrationSlot[];
   message: string;
   refreshedPlan?: MissionTargetPreviewPlan;
@@ -735,8 +742,11 @@ export type DialogueCameraQuickActionMode =
   | "preset_camera"
   | "look_at_push"
   | "blend_curve"
+  | "camera_shake"
   | "school_cameras"
   | "copy_school_cameras";
+
+export type DialogueCameraShakeAction = "play" | "clear";
 
 export interface DialogueCameraQuickActionRequest {
   dialogueId: string;
@@ -746,6 +756,9 @@ export interface DialogueCameraQuickActionRequest {
   previousDialogueNodeIds?: string[];
   blendCurveAssetName?: string;
   blendDuration?: number;
+  cameraShakeAction?: DialogueCameraShakeAction;
+  cameraShakeAssetName?: import("./ue/dialogueCameraShakePresets").DialogueCameraShakeAssetName;
+  cameraShakeDelaySeconds?: number;
   lookAtActorModelIndex?: number;
   schoolCameraCopies?: DialogueSchoolCameraCopy[];
   presetCamera?: {
@@ -784,6 +797,12 @@ export interface DialogueCameraQuickActionPreview {
   schoolCameraHeightAdjustments?: DialogueSchoolCameraHeightAdjustment[];
   existingSchoolCameraCount: number;
   desiredSchoolCameraCount: number;
+  existingCameraShake?: string;
+  desiredCameraShake?: string;
+  existingCameraShakeDelaySeconds?: number;
+  desiredCameraShakeDelaySeconds?: number;
+  existingStopCameraShake?: boolean;
+  desiredStopCameraShake?: boolean;
   changed: boolean;
   blockedReasons: string[];
   lookAtActor?: {
@@ -858,6 +877,9 @@ export interface ExistingDialogueNodeConfiguration {
   blendCameraType: string;
   blendCurve: string;
   blendDuration: number;
+  cameraShakeAssetPath?: string;
+  cameraShakeDelaySeconds?: number;
+  stopCameraShake?: boolean;
   schoolCameraKeys: string[];
   schoolCameraCount: number;
   soundEffectAssetPath: string;
@@ -944,6 +966,7 @@ export interface BackgroundPropPreviewItem {
   matchingModelComponents?: Array<{
     componentName: string;
     modelIndex?: number;
+    modelVariant?: boolean;
     transformMatches: boolean;
   }>;
   action: "create" | "update" | "unchanged" | "blocked";

@@ -11,7 +11,9 @@ import {
   LoaderCircle,
   Pencil,
   RefreshCw,
+  Trash2,
   Users,
+  Vibrate,
   X,
 } from "lucide-react";
 import {
@@ -43,6 +45,13 @@ import {
 import {
   schoolCameraHeightDeltaCm,
 } from "../ue/schoolCameraHeight";
+import {
+  DIALOGUE_CAMERA_SHAKE_PRESETS,
+  dialogueCameraShakeAssetNameFromPath,
+  dialogueCameraShakeClassPath,
+  dialogueCameraShakePreset,
+  type DialogueCameraShakeAssetName,
+} from "../ue/dialogueCameraShakePresets";
 
 interface NodeCameraQuickActionsProps {
   dialogueId: string;
@@ -97,6 +106,7 @@ function actionLabel(mode: DialogueCameraQuickActionMode): string {
     preset_camera: "使用预设机位",
     look_at_push: "粘贴到 ELookAtPush",
     blend_curve: "添加镜头曲线",
+    camera_shake: "配置镜头抖动",
     school_cameras: "添加角色相机",
     copy_school_cameras: "复制角色相机",
   }[mode];
@@ -297,6 +307,62 @@ function blendCurveConfirmationPreview(
   };
 }
 
+function cameraShakeConfirmationPreview(
+  request: DialogueCameraQuickActionRequest,
+  configuration: ExistingDialogueNodeConfiguration,
+): DialogueCameraQuickActionPreview {
+  const action = request.cameraShakeAction ?? "play";
+  const desiredCameraShake =
+    action === "play" && request.cameraShakeAssetName
+      ? dialogueCameraShakeClassPath(request.cameraShakeAssetName)
+      : "";
+  const desiredDelay =
+    action === "play" ? request.cameraShakeDelaySeconds ?? 0 : 0;
+  const existingCameraShake = configuration.cameraShakeAssetPath ?? "";
+  const existingKeys = Array.from(new Set(configuration.schoolCameraKeys));
+  return {
+    reviewToken: "",
+    dialogueId: request.dialogueId,
+    startId: request.startId,
+    dialogueNodeId: request.dialogueNodeId,
+    dialogueAssetPath: "",
+    mode: "camera_shake",
+    sourceDialogueNodeId: null,
+    existingCameraPosition: configuration.cameraPosition,
+    desiredCameraPosition: configuration.cameraPosition,
+    existingMoveCount: configuration.moveCameraCount,
+    desiredMoveCount: configuration.moveCameraCount,
+    cameraMoveType: configuration.cameraMoveTypes[0] ?? "",
+    velocity: configuration.cameraVelocity ?? null,
+    blendOutTime: configuration.cameraBlendOutTime ?? null,
+    fov: configuration.fov,
+    existingBlendCameraType: configuration.blendCameraType,
+    desiredBlendCameraType: configuration.blendCameraType,
+    existingBlendCurve: configuration.blendCurve,
+    desiredBlendCurve: configuration.blendCurve,
+    blendDuration: configuration.blendDuration,
+    existingSchoolCameraKeys: existingKeys,
+    addedSchoolCameraKeys: [],
+    desiredSchoolCameraKeys: existingKeys,
+    schoolCameraCopies: [],
+    existingSchoolCameraCount: configuration.schoolCameraCount,
+    desiredSchoolCameraCount: configuration.schoolCameraCount,
+    existingCameraShake,
+    desiredCameraShake,
+    existingCameraShakeDelaySeconds:
+      configuration.cameraShakeDelaySeconds ?? 0,
+    desiredCameraShakeDelaySeconds: desiredDelay,
+    existingStopCameraShake: configuration.stopCameraShake ?? false,
+    desiredStopCameraShake: false,
+    changed:
+      existingCameraShake.toLocaleLowerCase() !==
+        desiredCameraShake.toLocaleLowerCase() ||
+      (configuration.cameraShakeDelaySeconds ?? 0) !== desiredDelay ||
+      (configuration.stopCameraShake ?? false),
+    blockedReasons: [],
+  };
+}
+
 function presetCameraConfirmationPreview(
   request: DialogueCameraQuickActionRequest,
   configuration: ExistingDialogueNodeConfiguration,
@@ -438,6 +504,13 @@ export const NodeCameraQuickActions = forwardRef<
   const [blendCurveAssetName, setBlendCurveAssetName] =
     useState("trans_6015");
   const [blendDuration, setBlendDuration] = useState(0);
+  const [cameraShakeOpen, setCameraShakeOpen] = useState(false);
+  const [
+    selectedCameraShakeAssetName,
+    setSelectedCameraShakeAssetName,
+  ] = useState<DialogueCameraShakeAssetName | "">("");
+  const [cameraShakeDelaySeconds, setCameraShakeDelaySeconds] =
+    useState(0);
   const [
     selectedSchoolCameraSource,
     setSelectedSchoolCameraSource,
@@ -489,6 +562,25 @@ export const NodeCameraQuickActions = forwardRef<
         .filter(Boolean)
         .join(" · ")
     : `${blendCurveAssetName || "请输入 CurveFloat 资产名"} · EBlend`;
+  const configuredCameraShakeAssetName =
+    dialogueCameraShakeAssetNameFromPath(
+      existingConfiguration?.cameraShakeAssetPath ?? "",
+    );
+  const configuredCameraShakePreset = dialogueCameraShakePreset(
+    configuredCameraShakeAssetName,
+  );
+  const cameraShakeConfigured = Boolean(
+    existingConfiguration?.cameraShakeAssetPath,
+  );
+  const cameraShakeSummary = configurationLoading
+    ? "正在读取当前节点抖动..."
+    : configuredCameraShakePreset
+      ? `${configuredCameraShakePreset.label} · 延迟 ${
+          existingConfiguration?.cameraShakeDelaySeconds ?? 0
+        }s`
+      : cameraShakeConfigured
+        ? `${assetName(existingConfiguration?.cameraShakeAssetPath ?? "")} · 自定义`
+        : "未配置";
   const configuredSchoolCameraKeys = new Set(
     existingConfiguration?.schoolCameraKeys ?? [],
   );
@@ -549,6 +641,9 @@ export const NodeCameraQuickActions = forwardRef<
     setError("");
     setStatus("");
     setBlendDuration(0);
+    setCameraShakeOpen(false);
+    setSelectedCameraShakeAssetName("");
+    setCameraShakeDelaySeconds(0);
     setSelectedSchoolCameraSource(null);
     setDraggedSchoolCameraSource(null);
     setSchoolCameraDropTarget(null);
@@ -656,6 +751,10 @@ export const NodeCameraQuickActions = forwardRef<
       setPresetOpen(false);
       presetReadRunRef.current += 1;
       setPresetLoading(false);
+    }
+    if (mode !== "camera_shake") {
+      setCameraShakeOpen(false);
+      setSelectedCameraShakeAssetName("");
     }
     const nextRequest: DialogueCameraQuickActionRequest = {
       dialogueId,
@@ -765,6 +864,64 @@ export const NodeCameraQuickActions = forwardRef<
     setPreview(
       blendCurveConfirmationPreview(nextRequest, existingConfiguration),
     );
+    setError("");
+    setStatus("");
+  }
+
+  function stageCameraShake(
+    cameraShakeAssetName: DialogueCameraShakeAssetName,
+    delaySeconds = cameraShakeDelaySeconds,
+  ): void {
+    if (!existingConfiguration || busy !== null) {
+      return;
+    }
+    operationRunRef.current += 1;
+    const nextRequest: DialogueCameraQuickActionRequest = {
+      dialogueId,
+      startId,
+      dialogueNodeId,
+      mode: "camera_shake",
+      cameraShakeAction: "play",
+      cameraShakeAssetName,
+      cameraShakeDelaySeconds: delaySeconds,
+    };
+    setSelectedCameraShakeAssetName(cameraShakeAssetName);
+    setRequest(nextRequest);
+    setPreview(
+      cameraShakeConfirmationPreview(nextRequest, existingConfiguration),
+    );
+    setBusy(null);
+    setError("");
+    setStatus("");
+  }
+
+  function updateCameraShakeDelay(nextDelay: number): void {
+    const delaySeconds = Math.min(60, Math.max(0, nextDelay || 0));
+    setCameraShakeDelaySeconds(delaySeconds);
+    if (selectedCameraShakeAssetName) {
+      stageCameraShake(selectedCameraShakeAssetName, delaySeconds);
+    }
+  }
+
+  function stageCameraShakeClear(): void {
+    if (!existingConfiguration || busy !== null) {
+      return;
+    }
+    operationRunRef.current += 1;
+    const nextRequest: DialogueCameraQuickActionRequest = {
+      dialogueId,
+      startId,
+      dialogueNodeId,
+      mode: "camera_shake",
+      cameraShakeAction: "clear",
+    };
+    setSelectedCameraShakeAssetName("");
+    setCameraShakeDelaySeconds(0);
+    setRequest(nextRequest);
+    setPreview(
+      cameraShakeConfirmationPreview(nextRequest, existingConfiguration),
+    );
+    setBusy(null);
     setError("");
     setStatus("");
   }
@@ -929,6 +1086,9 @@ export const NodeCameraQuickActions = forwardRef<
     presetReadRunRef.current += 1;
     setPresetOpen(false);
     setPresetLoading(false);
+    setCameraShakeOpen(false);
+    setSelectedCameraShakeAssetName("");
+    setCameraShakeDelaySeconds(0);
     setPreview(null);
     setRequest(null);
     setBusy(null);
@@ -1202,6 +1362,144 @@ export const NodeCameraQuickActions = forwardRef<
           <ChevronRight size={15} />
         </button>
         <button
+          className={[
+            cameraShakeConfigured ? "is-configured" : "",
+            cameraShakeOpen ? "is-selected" : "",
+          ].filter(Boolean).join(" ")}
+          type="button"
+          aria-expanded={cameraShakeOpen}
+          aria-controls={`camera-shake-picker-${dialogueNodeId}`}
+          disabled={
+            busy !== null ||
+            configurationLoading ||
+            !existingConfiguration
+          }
+          title={
+            configurationLoading || !existingConfiguration
+              ? "等待读取当前节点镜头配置"
+              : "选择对白镜头抖动预设并设置触发延迟"
+          }
+          onClick={() => {
+            if (cameraShakeOpen) {
+              clear();
+              return;
+            }
+            setPresetOpen(false);
+            presetReadRunRef.current += 1;
+            setPresetLoading(false);
+            operationRunRef.current += 1;
+            setPreview(null);
+            setRequest(null);
+            setBusy(null);
+            setError("");
+            setStatus("");
+            setCameraShakeDelaySeconds(
+              existingConfiguration?.cameraShakeDelaySeconds ?? 0,
+            );
+            setSelectedCameraShakeAssetName(
+              configuredCameraShakeAssetName ?? "",
+            );
+            setCameraShakeOpen(true);
+          }}
+        >
+          <Vibrate size={16} />
+          <span>
+            <strong>镜头抖动</strong>
+            <small>{cameraShakeSummary}</small>
+          </span>
+          {cameraShakeOpen ? (
+            <ChevronDown size={15} />
+          ) : (
+            <ChevronRight size={15} />
+          )}
+        </button>
+        {cameraShakeOpen && (
+          <div
+            className="node-camera-shake-picker"
+            id={`camera-shake-picker-${dialogueNodeId}`}
+          >
+            <div
+              className="node-camera-shake-list"
+              role="radiogroup"
+              aria-label="镜头抖动预设"
+            >
+              {DIALOGUE_CAMERA_SHAKE_PRESETS.map((preset) => {
+                const configured =
+                  configuredCameraShakeAssetName === preset.assetName;
+                const selected =
+                  selectedCameraShakeAssetName === preset.assetName;
+                return (
+                  <button
+                    className={[
+                      configured ? "is-configured" : "",
+                      selected ? "is-selected" : "",
+                    ].filter(Boolean).join(" ")}
+                    type="button"
+                    role="radio"
+                    aria-checked={selected}
+                    disabled={busy !== null}
+                    key={preset.assetName}
+                    title={`${preset.useCase}；${preset.motionSummary}`}
+                    onClick={() => stageCameraShake(preset.assetName)}
+                  >
+                    <span
+                      className="node-camera-shake-list__mark"
+                      aria-hidden="true"
+                    />
+                    <span className="node-camera-shake-list__copy">
+                      <strong>{preset.label}</strong>
+                      <small>{preset.useCase}</small>
+                    </span>
+                    <span className="node-camera-shake-list__data">
+                      <strong>{preset.intensity}</strong>
+                      <small>
+                        {preset.durationLabel ??
+                          `${preset.durationSeconds}s`}
+                      </small>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="node-camera-shake-controls">
+              <label>
+                <span>触发延迟</span>
+                <span className="node-camera-shake-delay">
+                  <input
+                    aria-label="镜头抖动触发延迟"
+                    type="number"
+                    min={0}
+                    max={60}
+                    step={0.1}
+                    value={cameraShakeDelaySeconds}
+                    disabled={
+                      busy !== null || !selectedCameraShakeAssetName
+                    }
+                    onChange={(event) =>
+                      updateCameraShakeDelay(Number(event.target.value))
+                    }
+                  />
+                  <span>s</span>
+                </span>
+              </label>
+              <button
+                className="button"
+                type="button"
+                disabled={busy !== null || !cameraShakeConfigured}
+                title={
+                  cameraShakeConfigured
+                    ? "移除当前节点的镜头抖动配置"
+                    : "当前节点没有镜头抖动"
+                }
+                onClick={stageCameraShakeClear}
+              >
+                <Trash2 size={13} />
+                清除节点配置
+              </button>
+            </div>
+          </div>
+        )}
+        <button
           className={
             [
               allSchoolCamerasConfigured ? "is-configured" : "",
@@ -1461,7 +1759,11 @@ export const NodeCameraQuickActions = forwardRef<
             ) : (
               <>
                 <header>
-                  <Camera size={15} />
+                  {preview.mode === "camera_shake" ? (
+                    <Vibrate size={15} />
+                  ) : (
+                    <Camera size={15} />
+                  )}
                   <span>
                     <strong>{actionLabel(preview.mode)}</strong>
                     <small>
@@ -1630,6 +1932,73 @@ export const NodeCameraQuickActions = forwardRef<
                           </label>
                         </dd>
                       </div>
+                    </>
+                  )}
+                  {preview.mode === "camera_shake" && (
+                    <>
+                      <div>
+                        <dt>Camera Shake</dt>
+                        <dd>
+                          <code>
+                            {dialogueCameraShakePreset(
+                              dialogueCameraShakeAssetNameFromPath(
+                                preview.existingCameraShake ?? "",
+                              ),
+                            )?.label ??
+                              (assetName(
+                                preview.existingCameraShake ?? "",
+                              ) || "空")}
+                          </code>
+                          <ChevronRight size={12} />
+                          <code>
+                            {dialogueCameraShakePreset(
+                              dialogueCameraShakeAssetNameFromPath(
+                                preview.desiredCameraShake ?? "",
+                              ),
+                            )?.label ??
+                              (assetName(
+                                preview.desiredCameraShake ?? "",
+                              ) || "空")}
+                          </code>
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>触发延迟</dt>
+                        <dd>
+                          <code>
+                            {preview.existingCameraShakeDelaySeconds ?? 0}s
+                          </code>
+                          <ChevronRight size={12} />
+                          <code>
+                            {preview.desiredCameraShakeDelaySeconds ?? 0}s
+                          </code>
+                        </dd>
+                      </div>
+                      {request.cameraShakeAssetName && (
+                        <>
+                          <div>
+                            <dt>适用</dt>
+                            <dd>
+                              {dialogueCameraShakePreset(
+                                request.cameraShakeAssetName,
+                              )?.useCase ?? "-"}
+                            </dd>
+                          </div>
+                          <div>
+                            <dt>资产参数</dt>
+                            <dd>
+                              {dialogueCameraShakePreset(
+                                request.cameraShakeAssetName,
+                              )?.motionSummary ?? "-"}
+                              {" · "}
+                              Blend Out{" "}
+                              {dialogueCameraShakePreset(
+                                request.cameraShakeAssetName,
+                              )?.blendOutSeconds ?? "-"}s
+                            </dd>
+                          </div>
+                        </>
+                      )}
                     </>
                   )}
                 </dl>

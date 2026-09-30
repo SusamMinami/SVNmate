@@ -90,6 +90,12 @@ interface MapLoadDecision {
   error: string;
 }
 
+interface LegacySlotWritePrompt {
+  actionLabel: string;
+}
+
+type LegacySlotWriteChoice = "normalize" | "preserve" | null;
+
 function isMapLoadStillInProgress(message: string): boolean {
   return /(?:正在加载|暂时无法读取关卡状态|尚未完成.*地图切换|加载期间通信暂时不可用|['"]?this['"]?\s+pointer is invalid)/i.test(
     message,
@@ -274,8 +280,13 @@ export function MissionTargetModal({
     useState("");
   const [mapLoadDecision, setMapLoadDecision] =
     useState<MapLoadDecision | null>(null);
+  const [legacySlotWritePrompt, setLegacySlotWritePrompt] =
+    useState<LegacySlotWritePrompt | null>(null);
   const { busy, setBusy, setError, setStatus, beginTask, setTaskLabel, feedback, activeOperation } = useOperationFeedback();
   const lastTaskSearchIdRef = useRef("");
+  const legacySlotWriteResolverRef = useRef<
+    ((choice: LegacySlotWriteChoice) => void) | null
+  >(null);
   const selectedCount = useMemo(() =>
     plan?.targets.filter((target) => selectedTargetIds.has(target.targetId))
       .length ?? 0, [plan, selectedTargetIds]);
@@ -541,6 +552,27 @@ export function MissionTargetModal({
         !backgroundDialogueSetupReasons.includes(reason),
     ) ?? [];
 
+  function requestLegacySlotWriteChoice(
+    actionLabel: string,
+  ): Promise<LegacySlotWriteChoice> {
+    if (!blueprintInspection?.legacySlotRenames?.length) {
+      return Promise.resolve("preserve");
+    }
+    return new Promise((resolve) => {
+      legacySlotWriteResolverRef.current = resolve;
+      setLegacySlotWritePrompt({ actionLabel });
+    });
+  }
+
+  function resolveLegacySlotWriteChoice(
+    choice: LegacySlotWriteChoice,
+  ) {
+    const resolve = legacySlotWriteResolverRef.current;
+    legacySlotWriteResolverRef.current = null;
+    setLegacySlotWritePrompt(null);
+    resolve?.(choice);
+  }
+
   function applyBlueprintInspection(
     inspection: MissionTargetBlueprintInspection,
     updateStatus = true,
@@ -575,11 +607,12 @@ export function MissionTargetModal({
         );
       }
       setExistingSlotsExpanded(
-        inspection.slots.some(
-          (slot) =>
-            slot.status !== "registered" ||
-            slot.registrationMatchesModel === false,
-        ),
+        Boolean(inspection.legacySlotRenames?.length) ||
+          inspection.slots.some(
+            (slot) =>
+              slot.status !== "registered" ||
+              slot.registrationMatchesModel === false,
+          ),
       );
     } else {
       setExistingSlotsExpanded(false);
@@ -778,6 +811,7 @@ export function MissionTargetModal({
 
   async function fillBackgroundDialogueConfiguration(
     reviewedActorRefs: string[],
+    normalizeLegacySlots = false,
   ) {
     const matchedTargetIds = backgroundMatchedTargetIds;
     const result = await registerBlueprintDialogueModels(
@@ -787,6 +821,7 @@ export function MissionTargetModal({
       targetOverrideItems,
       true,
       configuredDialogueId,
+      normalizeLegacySlots,
     );
     const inspection = await inspectMissionTargetBlueprint(
       blueprintName.trim(),
@@ -856,6 +891,13 @@ export function MissionTargetModal({
       setStatus("已取消补齐对话配置", "cancelled");
       return;
     }
+    const legacySlotChoice = await requestLegacySlotWriteChoice(
+      "补齐对话配置",
+    );
+    if (legacySlotChoice === null) {
+      setStatus("已取消补齐对话配置", "cancelled");
+      return;
+    }
     beginTask("正在补齐对话空间配置");
     setBackgroundPropError("");
     setError("");
@@ -863,13 +905,21 @@ export function MissionTargetModal({
     try {
       const { result } = await fillBackgroundDialogueConfiguration(
         backgroundPropPreview.items.map((item) => item.actorRef),
+        legacySlotChoice === "normalize",
       );
       if (result.spatialStatus === "not_configured") {
         setBackgroundPropError(
           "Formation 已补齐，但无法确定 BP 的世界位置。请把该 BP 放入当前地图，或输入任务节点后重试。",
         );
       } else {
-        setStatus("已补齐对话空间配置，并重新读取 UE 当前选择", "success");
+        setStatus(
+          `已补齐对话空间配置，并重新读取 UE 当前选择${
+            legacySlotChoice === "normalize"
+              ? "；旧组件已统一为数字名"
+              : ""
+          }`,
+          "success",
+        );
       }
     } catch (configurationError) {
       setBackgroundPropError(
@@ -915,7 +965,7 @@ export function MissionTargetModal({
         );
         applyBlueprintInspection(inspection, false);
         if (inspection.blueprintState !== "populated") {
-          throw new Error("当前 BP 中没有可加载的数字模型槽位");
+          throw new Error("当前 BP 中没有可加载的模型槽位");
         }
         if (!inspection.dialoguePreviewPlan) {
           throw new Error(
@@ -1269,6 +1319,13 @@ export function MissionTargetModal({
       setStatus("已取消 UE 选择写入 BP", "cancelled");
       return;
     }
+    const legacySlotChoice = await requestLegacySlotWriteChoice(
+      "写入 UE 选择",
+    );
+    if (legacySlotChoice === null) {
+      setStatus("已取消 UE 选择写入 BP", "cancelled");
+      return;
+    }
     beginTask(backgroundAutoConfigurationRequired ? "正在补齐对话配置并准备写入 BP" : "正在写入 BP 与对话配置", "background-write");
     setError("");
     let dialogueConfigurationCompleted = false;
@@ -1299,6 +1356,7 @@ export function MissionTargetModal({
         taskId.trim() || undefined,
         createMissingPlayerSlot,
         dialogueNpcSlotAssignments,
+        legacySlotChoice === "normalize",
       );
       setBackgroundPropPreview(null);
       setSelectedBackgroundActorRefs(new Set());
@@ -1315,6 +1373,10 @@ export function MissionTargetModal({
           : `已写入 BP：新增 ${result.createdComponentNames.length} 个，更新 ${result.updatedComponentNames.length} 个${
               result.dialogueRegistration
                 ? `；DialogModels 已注册 ${result.dialogueRegistration.registeredCount} 个角色`
+                : ""
+            }${
+              legacySlotChoice === "normalize"
+                ? "；旧组件已统一为数字名"
                 : ""
             }`),
         result.status === "unchanged" ? "ready" : "success",
@@ -1481,10 +1543,17 @@ export function MissionTargetModal({
     });
     if (
       !window.confirm(
-        `将保留 BP 中现有 ${blueprintRegistrationSlots.length} 个数字槽位，并按顺序追加：\n${additions.join("\n")}` +
-          "\n\n新增组件会写入 BP，并将全部 BP 数字槽位注册到对应 DialogModels。BP 与对话资产将保存，是否继续？",
+        `将保留 BP 中现有 ${blueprintRegistrationSlots.length} 个逻辑槽位，并按顺序追加：\n${additions.join("\n")}` +
+          "\n\n新增组件会写入 BP，并将全部 BP 模型槽位注册到对应 DialogModels。BP 与对话资产将保存，是否继续？",
       )
     ) {
+      setStatus("已取消追加目标物", "cancelled");
+      return;
+    }
+    const legacySlotChoice = await requestLegacySlotWriteChoice(
+      "添加目标物并注册",
+    );
+    if (legacySlotChoice === null) {
       setStatus("已取消追加目标物", "cancelled");
       return;
     }
@@ -1497,13 +1566,18 @@ export function MissionTargetModal({
         plan,
         selectedAppendTargets.map((target) => target.targetId),
         configuredDialogueId,
+        legacySlotChoice === "normalize",
       );
       const registration = result.dialogueRegistration;
       const unresolved = registration.unresolvedIndexes.length
         ? `；槽位 ${registration.unresolvedIndexes.join("、")} 未在 DialogNPCTable 登记，保持 None`
         : "";
       setStatus(
-        `已追加 BP 槽位 ${result.addedModelIndexes.join("、")}，并注册 ${registration.characterCount} 个对话角色${unresolved}`,
+        `已追加 BP 槽位 ${result.addedModelIndexes.join("、")}，并注册 ${registration.characterCount} 个对话角色${unresolved}${
+          legacySlotChoice === "normalize"
+            ? "；旧组件已统一为数字名"
+            : ""
+        }`,
         registration.unresolvedIndexes.length || registration.spatialStatus === "not_configured" ? "warning" : "success",
       );
       const inspection = await inspectMissionTargetBlueprint(
@@ -1541,6 +1615,13 @@ export function MissionTargetModal({
       await openDialogNpcRegistration(missingSlots);
       return;
     }
+    const legacySlotChoice = await requestLegacySlotWriteChoice(
+      "按 BP 注册到对话",
+    );
+    if (legacySlotChoice === null) {
+      setStatus("已取消注册 DialogModels", "cancelled");
+      return;
+    }
     beginTask("正在按 BP 槽位注册对话并核对配置");
     setError("");
     setStatus("");
@@ -1552,6 +1633,7 @@ export function MissionTargetModal({
         targetOverrideItems,
         false,
         configuredDialogueId,
+        legacySlotChoice === "normalize",
       );
       const unresolved = result.unresolvedIndexes.length
         ? `；槽位 ${result.unresolvedIndexes.join("、")} 未在 DialogNPCTable 登记，保持 None`
@@ -1573,7 +1655,11 @@ export function MissionTargetModal({
               ? "；未找到关卡中的对应 BP，空间配置仍不完整"
             : "";
       setStatus(
-        `${result.status === "unchanged" ? "对话模型无需变更" : `已按 BP 槽位注册到对话 ${result.dialogueId}`}：角色 ${result.characterCount ?? result.registeredCount + 1} 个（含玩家），None ${result.emptyCount} 个${unresolved}${spatialMessage}`,
+        `${result.status === "unchanged" ? "对话模型无需变更" : `已按 BP 槽位注册到对话 ${result.dialogueId}`}：角色 ${result.characterCount ?? result.registeredCount + 1} 个（含玩家），None ${result.emptyCount} 个${unresolved}${spatialMessage}${
+          legacySlotChoice === "normalize"
+            ? "；旧组件已统一为数字名"
+            : ""
+        }`,
         result.spatialStatus === "not_configured" || result.unresolvedIndexes.length || result.emptyCount
           ? "warning" : result.status === "unchanged" ? "ready" : "success",
       );
@@ -1623,6 +1709,13 @@ export function MissionTargetModal({
       setStatus("已取消修改 BP 位置", "cancelled");
       return;
     }
+    const legacySlotChoice = await requestLegacySlotWriteChoice(
+      "修改 BP 位置",
+    );
+    if (legacySlotChoice === null) {
+      setStatus("已取消修改 BP 位置", "cancelled");
+      return;
+    }
     beginTask("正在把目标物位置写入 BP 并核对");
     setError("");
     setStatus("");
@@ -1633,6 +1726,7 @@ export function MissionTargetModal({
         selectedSyncMappings.map((mapping) => mapping.targetId),
         targetOverrideItems,
         configuredDialogueId,
+        legacySlotChoice === "normalize",
       );
       const inspection = await inspectMissionTargetBlueprint(
         blueprintName.trim(),
@@ -1646,7 +1740,11 @@ export function MissionTargetModal({
       setStatus(
         result.status === "unchanged"
           ? "BP 位置与对话空间配置已是最新"
-          : `已更新 BP 槽位 ${result.updatedModelIndexes.join("、") || "无坐标变化"}；对话空间配置已同步`,
+          : `已更新 BP 槽位 ${result.updatedModelIndexes.join("、") || "无坐标变化"}；对话空间配置已同步${
+              legacySlotChoice === "normalize"
+                ? "；旧组件已统一为数字名"
+                : ""
+            }`,
         result.status === "unchanged" ? "ready" : "success",
       );
     } catch (updateError) {
@@ -2157,6 +2255,20 @@ export function MissionTargetModal({
                   plan={blueprintDialoguePreviewPlan}
                 />
               )}
+              {Boolean(blueprintInspection.legacySlotRenames?.length) && (
+                <section className="mission-target-legacy-notice">
+                  <AlertTriangle size={15} />
+                  <span>
+                    <strong>
+                      已按模型兼容识别{" "}
+                      {blueprintInspection.legacySlotRenames?.length} 个旧命名槽位
+                    </strong>
+                    <small>
+                      读取不受组件名影响；写入前可选择改为数字名称
+                    </small>
+                  </span>
+                </section>
+              )}
               <button
                 className="mission-target-section-label mission-target-section-toggle"
                 type="button"
@@ -2174,7 +2286,10 @@ export function MissionTargetModal({
                   <strong>BP 已有内容</strong>
                 </span>
                 <span>
-                  {blueprintRegistrationSlots.length} 个固定槽位 · 不重新编号
+                  {blueprintRegistrationSlots.length} 个逻辑槽位
+                  {blueprintInspection.legacySlotRenames?.length
+                    ? ` · ${blueprintInspection.legacySlotRenames.length} 个旧名`
+                    : " · 数字命名"}
                 </span>
               </button>
               {existingSlotsExpanded && (
@@ -2194,7 +2309,7 @@ export function MissionTargetModal({
                             aria-label="已有 BP 模型固定保留"
                           />
                         </th>
-                        <th>槽位</th>
+                        <th>组件 / 槽位</th>
                         <th>BP 模型资源</th>
                         <th>DialogNPCTable 名称</th>
                         <th>对话状态</th>
@@ -2218,7 +2333,17 @@ export function MissionTargetModal({
                               />
                             </td>
                             <td>
-                              <strong>{slot.modelIndex}</strong>
+                              <span className="mission-target-slot-mapping">
+                                <code>
+                                  {slot.componentName ?? slot.modelIndex}
+                                </code>
+                                {slot.usesLegacyComponentName && (
+                                  <>
+                                    <ArrowRight size={13} />
+                                    <strong>{slot.modelIndex}</strong>
+                                  </>
+                                )}
+                              </span>
                             </td>
                             <td title={slot.modelClassPath}>
                               <code>
@@ -2672,7 +2797,7 @@ export function MissionTargetModal({
                   isDialogueRegistration
                     ? selectedAppendTargets.length > 0
                       ? "保留现有 BP 槽位，按顺序追加所选目标物并注册全部 DialogModels"
-                      : "读取 BP 全部数字槽位并按原序写入 DialogModels"
+                      : "读取 BP 全部模型槽位并按逻辑顺序写入 DialogModels"
                     : "向空 PositionMode BP 写入所选资产并注册 DialogModels"
                 }
               >
@@ -2958,6 +3083,10 @@ export function MissionTargetModal({
                                     candidate.modelIndex === undefined
                                       ? `组件 ${candidate.componentName}`
                                       : `槽 ${candidate.modelIndex}`;
+                                  const variantLabel =
+                                    candidate.modelVariant
+                                      ? "，同角色变体"
+                                      : "";
                                   return (
                                     <option
                                       key={candidate.componentName}
@@ -2965,10 +3094,10 @@ export function MissionTargetModal({
                                       disabled={usedByAnotherActor}
                                     >
                                       {candidate.transformMatches
-                                        ? `使用${matchingLabel}（位置一致）`
+                                        ? `使用${matchingLabel}（位置一致${variantLabel}）`
                                         : candidate.modelIndex === undefined
-                                          ? `更新组件 ${candidate.componentName} 位置`
-                                          : `更新槽 ${candidate.modelIndex} 位置`}
+                                          ? `更新组件 ${candidate.componentName} 位置${candidate.modelVariant ? "（保留 BP 变体）" : ""}`
+                                          : `更新槽 ${candidate.modelIndex} 位置${candidate.modelVariant ? "（保留 BP 变体）" : ""}`}
                                     </option>
                                   );
                                 })}
@@ -3294,6 +3423,97 @@ export function MissionTargetModal({
                     </button>
                   </>
                 )}
+              </footer>
+            </section>
+          </div>
+        )}
+
+        {legacySlotWritePrompt && (
+          <div
+            className="mission-map-choice-layer mission-target-legacy-choice-layer"
+            role="presentation"
+          >
+            <section
+              className="mission-map-choice mission-target-legacy-choice"
+              role="alertdialog"
+              aria-modal="true"
+              aria-labelledby="mission-target-legacy-choice-title"
+              aria-describedby="mission-target-legacy-choice-description"
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  resolveLegacySlotWriteChoice(null);
+                }
+              }}
+            >
+              <header>
+                <span>
+                  <PencilLine size={18} />
+                </span>
+                <div>
+                  <small>{legacySlotWritePrompt.actionLabel}</small>
+                  <h3 id="mission-target-legacy-choice-title">
+                    是否统一旧组件名
+                  </h3>
+                </div>
+              </header>
+              <div
+                className="mission-map-choice__body"
+                id="mission-target-legacy-choice-description"
+              >
+                <p>
+                  当前 BP 有{" "}
+                  {blueprintInspection?.legacySlotRenames?.length ?? 0}{" "}
+                  个角色组件使用旧名称。模型与逻辑槽位已经识别，保留原名也可继续写入。
+                </p>
+                <div className="mission-target-legacy-choice__mappings">
+                  {blueprintInspection?.legacySlotRenames
+                    ?.slice(0, 6)
+                    .map((slot) => (
+                      <span key={`${slot.componentName}-${slot.modelIndex}`}>
+                        <code>{slot.componentName}</code>
+                        <ArrowRight size={13} />
+                        <code>{slot.modelIndex}</code>
+                      </span>
+                    ))}
+                  {(blueprintInspection?.legacySlotRenames?.length ?? 0) >
+                    6 && (
+                    <small>
+                      另有{" "}
+                      {(blueprintInspection?.legacySlotRenames?.length ?? 0) -
+                        6}{" "}
+                      个组件
+                    </small>
+                  )}
+                </div>
+              </div>
+              <footer>
+                <button
+                  className="button"
+                  type="button"
+                  onClick={() => resolveLegacySlotWriteChoice(null)}
+                >
+                  取消
+                </button>
+                <button
+                  className="button"
+                  type="button"
+                  onClick={() =>
+                    resolveLegacySlotWriteChoice("preserve")
+                  }
+                >
+                  保留原名并继续
+                </button>
+                <button
+                  className="button button--primary"
+                  type="button"
+                  autoFocus
+                  onClick={() =>
+                    resolveLegacySlotWriteChoice("normalize")
+                  }
+                >
+                  <PencilLine size={15} />
+                  重命名并继续
+                </button>
               </footer>
             </section>
           </div>

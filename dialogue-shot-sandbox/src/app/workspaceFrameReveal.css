@@ -78,10 +78,6 @@
   transform-origin: bottom;
 }
 
-.workspace .viewport-toolbar {
-  --workspace-frame-final-color: var(--ink);
-}
-
 .workspace .inspector-tabs {
   --workspace-frame-final-color: var(--border);
 }

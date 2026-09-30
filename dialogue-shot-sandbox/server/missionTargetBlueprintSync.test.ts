@@ -344,6 +344,18 @@ class BackgroundPropConnection extends BlueprintSyncConnection {
       });
       return true;
     }
+    if (action === "bp.modify_member_variable") {
+      this.calls.push({ action, args });
+      const oldName = String(args.OldVarName);
+      const newName = String(args.NewVarName);
+      const component = this.backgroundComponents.get(oldName);
+      if (!component || this.backgroundComponents.has(newName)) {
+        return false;
+      }
+      this.backgroundComponents.delete(oldName);
+      this.backgroundComponents.set(newName, component);
+      return true;
+    }
     if (
       action === "bp.set_component_property" &&
       this.backgroundComponents.has(String(args.ComponentName))
@@ -788,7 +800,111 @@ describe("mission target Blueprint synchronization", () => {
         },
         () => connection,
       ),
-    ).rejects.toThrow("BP 数字槽中未找到 Eric 玩家模型");
+    ).rejects.toThrow("BP 模型槽中未找到 Eric 玩家模型");
+  });
+
+  it("recognizes a BP_526900-style set of legacy role components by model identity", async () => {
+    const connection = new EmptyPositionModeBackgroundPropConnection();
+    connection.dialogueModels = [];
+    connection.dialogNpcNames = Array.from(
+      { length: 17 },
+      (_, index) => `Npc${index + 1}`,
+    );
+    connection.dialogNpcPaths = connection.dialogNpcNames.map(
+      (name) => `/Game/Test/${name}.${name}_C`,
+    );
+    connection.dialogNpcNames.forEach((name, index) => {
+      const componentName =
+        index === 0 ? "ChildActor" : `ChildActor${index}`;
+      connection.backgroundComponents.set(componentName, {
+        componentClass: "/Script/Engine.ChildActorComponent",
+        assetPath: `/Game/Test/${name}.${name}_C`,
+        location: { X: index * 20, Y: index * 10, Z: 100 },
+        rotation: { Pitch: 0, Yaw: 0, Roll: 0 },
+        scale: { X: 1, Y: 1, Z: 1 },
+      });
+    });
+    for (const cameraName of ["c1", "c2", "c3"]) {
+      connection.backgroundComponents.set(cameraName, {
+        componentClass: "/Script/Engine.CameraComponent",
+        assetPath: "",
+        location: { X: 0, Y: 0, Z: 99 },
+        rotation: { Pitch: 0, Yaw: -90, Roll: 0 },
+        scale: { X: 1, Y: 1, Z: 1 },
+      });
+    }
+    connection.backgroundComponents.set("BackdropActor", {
+      componentClass: "/Script/Engine.ChildActorComponent",
+      assetPath: "/Game/Test/BP_Backdrop.BP_Backdrop_C",
+      location: { X: 0, Y: 0, Z: 0 },
+      rotation: { Pitch: 0, Yaw: 0, Roll: 0 },
+      scale: { X: 1, Y: 1, Z: 1 },
+    });
+
+    const inspection = await inspectMissionTargetBlueprint(
+      { blueprintName: "BP_735200" },
+      () => connection,
+    );
+
+    expect(inspection.blueprintState).toBe("populated");
+    expect(inspection.slots).toHaveLength(17);
+    expect(inspection.slots.map((slot) => slot.modelIndex)).toEqual(
+      Array.from({ length: 17 }, (_, index) => index + 1),
+    );
+    expect(inspection.slots[0]).toMatchObject({
+      componentName: "ChildActor",
+      modelIndex: 1,
+      usesLegacyComponentName: true,
+      modelClassPath: "/Game/Test/Npc1.Npc1_C",
+    });
+    expect(inspection.legacySlotRenames).toHaveLength(17);
+    expect(inspection.message).toContain("兼容识别 17 个旧命名槽位");
+  });
+
+  it("renames recognized legacy role components only when explicitly requested", async () => {
+    const connection = new EmptyPositionModeBackgroundPropConnection();
+    connection.commonProperties[0].CurrentBool = true;
+    connection.specialProperties[0].CurrentBool = true;
+    connection.previewLevel = "/Game/Test/Maps/TestMap.TestMap";
+    connection.backgroundComponents.set("PlayerActor", {
+      componentClass: "/Script/Engine.ChildActorComponent",
+      assetPath: "/Game/Seria/Characters/Eric/BP_Eric.BP_Eric_C",
+      location: { X: 0, Y: 0, Z: 100 },
+      rotation: { Pitch: 0, Yaw: 0, Roll: 0 },
+      scale: { X: 1, Y: 1, Z: 1 },
+    });
+    connection.backgroundComponents.set("ChildActor", {
+      componentClass: "/Script/Engine.ChildActorComponent",
+      assetPath: "/Game/Test/BP_Guard.BP_Guard_C",
+      location: { X: 0, Y: 0, Z: 100 },
+      rotation: { Pitch: 0, Yaw: 0, Roll: 0 },
+      scale: { X: 1, Y: 1, Z: 1 },
+    });
+
+    await registerBlueprintDialogueModels(
+      {
+        blueprintName: "BP_735200",
+        selectedModelIndexes: [1],
+        normalizeLegacySlots: true,
+      },
+      () => connection,
+    );
+
+    expect(
+      connection.calls
+        .filter((call) => call.action === "bp.modify_member_variable")
+        .map((call) => [
+          call.args.OldVarName,
+          call.args.NewVarName,
+        ]),
+    ).toEqual([
+      ["PlayerActor", "0"],
+      ["ChildActor", "1"],
+    ]);
+    expect(connection.backgroundComponents.has("PlayerActor")).toBe(false);
+    expect(connection.backgroundComponents.has("ChildActor")).toBe(false);
+    expect(connection.backgroundComponents.has("0")).toBe(true);
+    expect(connection.backgroundComponents.has("1")).toBe(true);
   });
 
   it("appends selected targets after existing slots and registers all models", async () => {
@@ -1727,7 +1843,7 @@ describe("background prop import", () => {
     expect(updatePreview).toMatchObject({
       playerModelIndex: null,
       canCreatePlayerSlot: true,
-      willCreatePlayerSlot: false,
+      willCreatePlayerSlot: true,
       items: [
         {
           actorRef,
@@ -1735,6 +1851,7 @@ describe("background prop import", () => {
           matchingModelComponents: [
             {
               componentName: "ChildActor",
+              modelIndex: 1,
               transformMatches: false,
             },
           ],
@@ -1742,7 +1859,7 @@ describe("background prop import", () => {
         },
       ],
     });
-    expect(updatePreview.items[0].modelIndex).toBeUndefined();
+    expect(updatePreview.items[0].modelIndex).toBe(1);
 
     const updateResult = await applyBackgroundPropImport(
       {
@@ -1764,12 +1881,44 @@ describe("background prop import", () => {
       saved: true,
     });
     expect(updateResult.dialogueRegistration).toBeUndefined();
+    expect(
+      connection.calls.some(
+        (call) => call.action === "bp.modify_member_variable",
+      ),
+    ).toBe(false);
     expect(connection.backgroundComponents.get("ChildActor")).toMatchObject({
       assetPath:
         "/Game/Seria/NPC/N87_Dorothy/BP_N87_Dorothy.BP_N87_Dorothy_C",
       location: { X: 40, Y: 50, Z: 100 },
       rotation: { Pitch: 0, Yaw: 30, Roll: 0 },
     });
+
+    const normalizePreview = await inspectBackgroundPropImport(
+      { blueprintName: "BP_735200", actorRefs: [actorRef] },
+      () => connection,
+    );
+    const normalizeResult = await applyBackgroundPropImport(
+      {
+        blueprintName: "BP_735200",
+        reviewToken: normalizePreview.reviewToken,
+        selectedActorRefs: [actorRef],
+        createPlayerSlot: false,
+        normalizeLegacySlots: true,
+        dialogueNpcSlotAssignments: [
+          { actorRef, targetComponentName: "ChildActor" },
+        ],
+      },
+      () => connection,
+    );
+
+    expect(normalizeResult).toMatchObject({
+      status: "updated",
+      createdComponentNames: [],
+      updatedComponentNames: [],
+      saved: true,
+    });
+    expect(connection.backgroundComponents.has("ChildActor")).toBe(false);
+    expect(connection.backgroundComponents.has("1")).toBe(true);
 
     const createPreview = await inspectBackgroundPropImport(
       { blueprintName: "BP_735200", actorRefs: [actorRef] },
@@ -1790,19 +1939,24 @@ describe("background prop import", () => {
 
     expect(createResult).toMatchObject({
       status: "updated",
-      createdComponentNames: ["1"],
+      createdComponentNames: ["2"],
       updatedComponentNames: [],
       saved: true,
     });
     expect(createResult.dialogueRegistration).toBeUndefined();
   });
 
-  it("does not offer an injured legacy component for a base-model actor", async () => {
+  it("updates an injured legacy component from its base-model actor without replacing the BP model", async () => {
     await writeConfigFixture();
     const connection = new EmptyPositionModeBackgroundPropConnection();
     connection.commonProperties[0].CurrentBool = true;
     connection.specialProperties[0].CurrentBool = true;
     connection.previewLevel = "/Game/Test/Maps/PlacedMap.PlacedMap";
+    connection.dialogueModels = [];
+    connection.dialogNpcNames = ["N28_Citizen_Male_C02_Injured"];
+    connection.dialogNpcPaths = [
+      "/Game/Seria/NPC/N28_Citizen_Male_C02/BP_N28_Citizen_Male_C02_Injured.BP_N28_Citizen_Male_C02_Injured_C",
+    ];
     connection.backgroundComponents.set("ChildActor4", {
       componentClass: "/Script/Engine.ChildActorComponent",
       assetPath:
@@ -1833,16 +1987,105 @@ describe("background prop import", () => {
 
     expect(preview.items[0]).toMatchObject({
       actorRef,
-      componentName: "1",
+      componentName: "ChildActor4",
       modelIndex: 1,
-      matchingModelComponents: [],
-      action: "create",
+      matchingModelComponents: [
+        {
+          componentName: "ChildActor4",
+          modelIndex: 1,
+          modelVariant: true,
+          transformMatches: false,
+        },
+      ],
+      action: "update",
+      message: expect.stringContaining(
+        "保留 BP 现有模型 BP_N28_Citizen_Male_C02_Injured",
+      ),
+    });
+
+    const result = await applyBackgroundPropImport(
+      {
+        blueprintName: "BP_735200",
+        reviewToken: preview.reviewToken,
+        selectedActorRefs: [actorRef],
+        createPlayerSlot: false,
+        dialogueNpcSlotAssignments: [
+          { actorRef, targetComponentName: "ChildActor4" },
+        ],
+      },
+      () => connection,
+    );
+
+    expect(result).toMatchObject({
+      status: "updated",
+      createdComponentNames: [],
+      updatedComponentNames: ["ChildActor4"],
+    });
+    expect(connection.backgroundComponents.get("ChildActor4")).toMatchObject({
+      assetPath:
+        "/Game/Seria/NPC/N28_Citizen_Male_C02/BP_N28_Citizen_Male_C02_Injured.BP_N28_Citizen_Male_C02_Injured_C",
+      location: { X: 40, Y: 50, Z: 100 },
+      rotation: { Pitch: 0, Yaw: 30, Roll: 0 },
     });
     expect(
-      preview.items[0].matchingModelComponents?.some(
-        (candidate) => candidate.componentName === "ChildActor4",
+      connection.calls.some(
+        (call) =>
+          call.action === "bp.set_component_property" &&
+          call.args.ComponentName === "ChildActor4" &&
+          call.args.PropertyName === "ChildActorClass",
       ),
     ).toBe(false);
+  });
+
+  it("treats the legacy _Injure suffix as the same dialogue NPC model family", async () => {
+    const connection = new EmptyPositionModeBackgroundPropConnection();
+    connection.commonProperties[0].CurrentBool = true;
+    connection.specialProperties[0].CurrentBool = true;
+    connection.previewLevel = "/Game/Test/Maps/PlacedMap.PlacedMap";
+    connection.dialogueModels = [];
+    connection.dialogNpcNames = ["N17_Villager_Male_B_Injure"];
+    connection.dialogNpcPaths = [
+      "/Game/Seria/NPC/N17_Villager_Male_B/BP_N17_Villager_Male_B_Injure.BP_N17_Villager_Male_B_Injure_C",
+    ];
+    connection.backgroundComponents.set("ChildActor6", {
+      componentClass: "/Script/Engine.ChildActorComponent",
+      assetPath:
+        "/Game/Seria/NPC/N17_Villager_Male_B/BP_N17_Villager_Male_B_Injure.BP_N17_Villager_Male_B_Injure_C",
+      location: { X: 0, Y: 0, Z: 100 },
+      rotation: { Pitch: 0, Yaw: 0, Roll: 0 },
+      scale: { X: 1, Y: 1, Z: 1 },
+    });
+    const actorRef = "PersistentLevel.BP_N17_Villager_Male_B_C_2";
+    connection.selectedPlacementActors = [
+      {
+        actor_ref: actorRef,
+        label: "BP_N17_Villager_Male_B",
+        class_path:
+          "/Game/Seria/NPC/N17_Villager_Male_B/BP_N17_Villager_Male_B.BP_N17_Villager_Male_B_C",
+        parent_class_path: "/Script/Seria.SeriaNPC",
+        child_preview_class_path: "",
+        location: [140, 250, 300],
+        rotation: [0, 30, 0],
+        scale: [1, 1, 1],
+      },
+    ];
+
+    const preview = await inspectBackgroundPropImport(
+      { blueprintName: "BP_735200", actorRefs: [actorRef] },
+      () => connection,
+    );
+
+    expect(preview.items[0]).toMatchObject({
+      componentName: "ChildActor6",
+      modelIndex: 1,
+      matchingModelComponents: [
+        {
+          componentName: "ChildActor6",
+          modelVariant: true,
+        },
+      ],
+      action: "update",
+    });
   });
 
   it("keeps an existing non-zero Eric player slot unchanged", async () => {
@@ -2247,11 +2490,12 @@ describe("background prop import", () => {
       matchingModelComponents: [
         {
           componentName: "BP_Added",
+          modelIndex: 2,
           transformMatches: true,
         },
       ],
       action: "unchanged",
-      message: expect.stringContaining("不修改 DialogModels"),
+      message: expect.stringContaining("DialogModels=Added"),
     });
   });
 

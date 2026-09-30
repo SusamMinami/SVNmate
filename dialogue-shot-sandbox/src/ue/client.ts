@@ -240,6 +240,7 @@ export function appendMissionTargetBlueprint(
   plan: MissionTargetPreviewPlan,
   selectedTargetIds: string[],
   dialogueId?: string,
+  normalizeLegacySlots = false,
 ): Promise<MissionTargetBlueprintAppendResult> {
   return postUe(
     "/api/ue/mission-targets/append-blueprint",
@@ -248,6 +249,7 @@ export function appendMissionTargetBlueprint(
       plan,
       selectedTargetIds,
       dialogueId,
+      ...(normalizeLegacySlots ? { normalizeLegacySlots: true } : {}),
     },
     false,
   );
@@ -281,10 +283,18 @@ export function updateMissionTargetBlueprintPositions(
     Pick<MissionTargetUpdateItem, "targetId" | "transform">
   >,
   dialogueId?: string,
+  normalizeLegacySlots = false,
 ): Promise<MissionTargetBlueprintUpdateResult> {
   return postUe(
     "/api/ue/mission-targets/update-blueprint",
-    { blueprintName, taskId, selectedTargetIds, targetOverrides, dialogueId },
+    {
+      blueprintName,
+      taskId,
+      selectedTargetIds,
+      targetOverrides,
+      dialogueId,
+      ...(normalizeLegacySlots ? { normalizeLegacySlots: true } : {}),
+    },
     false,
   );
 }
@@ -328,6 +338,7 @@ export function applyBackgroundPropImport(
   taskId?: string,
   createPlayerSlot?: boolean,
   dialogueNpcSlotAssignments?: BackgroundPropNpcSlotAssignment[],
+  normalizeLegacySlots = false,
 ): Promise<BackgroundPropImportResult> {
   return postUe(
     "/api/ue/mission-targets/background-props/apply",
@@ -340,6 +351,7 @@ export function applyBackgroundPropImport(
       taskId,
       createPlayerSlot,
       dialogueNpcSlotAssignments,
+      ...(normalizeLegacySlots ? { normalizeLegacySlots: true } : {}),
     },
     false,
   );
@@ -354,6 +366,7 @@ export function registerBlueprintDialogueModels(
   >,
   preserveModels = false,
   dialogueId?: string,
+  normalizeLegacySlots = false,
 ): Promise<DialogueModelRegistrationResult> {
   return postUe(
     "/api/ue/mission-targets/register-dialogue",
@@ -364,6 +377,7 @@ export function registerBlueprintDialogueModels(
       targetOverrides,
       ...(preserveModels ? { preserveModels: true } : {}),
       dialogueId,
+      ...(normalizeLegacySlots ? { normalizeLegacySlots: true } : {}),
     },
     false,
   );

@@ -38,6 +38,22 @@ test("draws the real storyboard module boundaries without moving content", async
       transform: style.transform,
     };
   });
+  const viewportDivider = await workspace
+    .locator(".viewport-toolbar")
+    .evaluate((element) => {
+      const elementStyle = getComputedStyle(element);
+      const dividerStyle = getComputedStyle(element, "::after");
+      return {
+        color: dividerStyle.backgroundColor,
+        finalColor: elementStyle
+          .getPropertyValue("--workspace-frame-final-color")
+          .trim(),
+      };
+    });
+  expect(viewportDivider).toEqual({
+    color: "rgb(199, 201, 194)",
+    finalColor: "#c7c9c2",
+  });
   await expect(workspace).toHaveAttribute(
     "data-frame-phase",
     "revealing",
