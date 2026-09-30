@@ -6,10 +6,10 @@ import {
   Boxes,
   CheckCircle2,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   Crosshair,
   Database,
-  FileSearch,
   Link2,
   MapPinned,
   MonitorUp,
@@ -22,8 +22,13 @@ import {
 } from "lucide-react";
 import { type FormEvent, useCallback, useMemo, useRef, useState } from "react";
 import { useOperationFeedback } from "../app/useOperationFeedback";
+import { useWorkspaceFrameReveal } from "../app/useWorkspaceFrameReveal";
 import { OverlayScrollArea } from "./OverlayScrollArea";
-import { OperationIcon, TaskNotice } from "./TaskMotion";
+import {
+  DocumentSearchIcon,
+  OperationIcon,
+  TaskNotice,
+} from "./TaskMotion";
 import { DialogNpcRegistrationModal } from "./DialogNpcRegistrationModal";
 import { MissionTargetDialoguePreview } from "./MissionTargetDialoguePreview";
 import { MissionTargetRow } from "./MissionTargetRow";
@@ -75,6 +80,7 @@ interface MissionTargetModalProps {
   database: DialogueDatabase;
   onClose: () => void;
   embedded?: boolean;
+  active?: boolean;
 }
 
 interface MapLoadDecision {
@@ -228,6 +234,7 @@ export function MissionTargetModal({
   database,
   onClose,
   embedded = false,
+  active = true,
 }: MissionTargetModalProps) {
   const [taskId, setTaskId] = useState("");
   const [blueprintName, setBlueprintName] = useState("");
@@ -477,6 +484,17 @@ export function MissionTargetModal({
   };
   }, [plan, blueprintInspection, selectedTargetIds, database, isDialogueRegistration,
     targetOverrides, backgroundPropPreview, selectedBackgroundActorRefs, ueTargetSelectionReview]);
+  const emptyEntryPhase = useWorkspaceFrameReveal(
+    active &&
+      embedded &&
+      !plan &&
+      !blueprintInspection &&
+      !backgroundPropPreview &&
+      !mapLoadDecision &&
+      !dialogNpcReview &&
+      !ueTargetSelectionReview &&
+      !feedback.message,
+  );
   const backgroundPlayerModelIndex =
     backgroundPropPreview?.playerModelIndex;
   const backgroundPlayerMissing =
@@ -1911,6 +1929,7 @@ export function MissionTargetModal({
     >
       <section
         className="mission-target-modal"
+        data-empty-entry-phase={emptyEntryPhase}
         role={embedded ? "region" : "dialog"}
         aria-modal={embedded ? undefined : true}
         aria-label={embedded ? "任务目标物" : undefined}
@@ -1980,71 +1999,26 @@ export function MissionTargetModal({
             className="mission-target-blueprint-fields"
             data-dialogue-expanded={dialogueIdExpanded}
           >
-            <div className="input-row">
-              <input
-                id="mission-blueprint-name"
-                value={blueprintName}
-                disabled={busy}
-                onChange={(event) => {
-                  const value = event.target.value;
-                  setBlueprintName(value);
-                  setDialogueId("");
-                  setBlueprintInspection(null);
-                  setError(
-                    /^\d{6}$/.test(value.trim())
-                      ? "六位对话节点 ID 请填写到 BP 右侧的展开输入框"
-                      : "",
-                  );
-                  setStatus("");
-                }}
-                placeholder="7370、BP_737000 或 /Game/.../BP_737000"
-                spellCheck={false}
-                aria-invalid={blueprintInputIsDialogueNode}
-              />
-              <button
-                className="icon-button"
-                type="button"
-                aria-label="检查 BP 与对话模型"
-                onClick={() => void inspectBlueprint()}
-                disabled={
-                  busy ||
-                  !blueprintName.trim() ||
-                  blueprintInputIsDialogueNode ||
-                  !dialogueNodeInputValid
-                }
-                title={
-                  blueprintInputIsDialogueNode
-                    ? "六位对话节点 ID 请填写到右侧展开输入框"
-                    : !dialogueNodeInputValid
-                      ? "对话节点 ID 必须为六位数字"
-                      : "检查 BP 与对话模型"
-                }
-              >
-                <OperationIcon kind="search" busy={activeOperation === "check"}><FileSearch size={18} /></OperationIcon>
-              </button>
-            </div>
-            <button
-              className="mission-target-dialogue-toggle"
-              type="button"
-              data-has-value={Boolean(dialogueId)}
-              aria-expanded={dialogueIdExpanded}
-              aria-controls="mission-dialogue-id"
-              aria-label={`${dialogueIdExpanded ? "收起" : "展开"}对话节点 ID${
-                dialogueId ? `，当前 ${dialogueId}` : ""
-              }`}
-              title={`${dialogueIdExpanded ? "收起" : "展开"}对话节点 ID${
-                dialogueId ? `（当前 ${dialogueId}）` : ""
-              }`}
-              onClick={() =>
-                setDialogueIdExpanded((current) => !current)
-              }
-            >
-              {dialogueIdExpanded ? (
-                <ChevronDown size={14} />
-              ) : (
-                <ChevronRight size={14} />
-              )}
-            </button>
+            <input
+              id="mission-blueprint-name"
+              value={blueprintName}
+              disabled={busy}
+              onChange={(event) => {
+                const value = event.target.value;
+                setBlueprintName(value);
+                setDialogueId("");
+                setBlueprintInspection(null);
+                setError(
+                  /^\d{6}$/.test(value.trim())
+                    ? "六位对话节点 ID 请填写到 BP 右侧的展开输入框"
+                    : "",
+                );
+                setStatus("");
+              }}
+              placeholder="7370、BP_737000 或 /Game/.../BP_737000"
+              spellCheck={false}
+              aria-invalid={blueprintInputIsDialogueNode}
+            />
             {dialogueIdExpanded && (
               <input
                 id="mission-dialogue-id"
@@ -2067,6 +2041,54 @@ export function MissionTargetModal({
                 autoFocus
               />
             )}
+            <button
+              className="mission-target-dialogue-toggle"
+              type="button"
+              data-has-value={Boolean(dialogueId)}
+              aria-expanded={dialogueIdExpanded}
+              aria-controls="mission-dialogue-id"
+              aria-label={`${dialogueIdExpanded ? "收起" : "展开"}对话节点 ID${
+                dialogueId ? `，当前 ${dialogueId}` : ""
+              }`}
+              title={`${dialogueIdExpanded ? "收起" : "展开"}对话节点 ID${
+                dialogueId ? `（当前 ${dialogueId}）` : ""
+              }`}
+              onClick={() =>
+                setDialogueIdExpanded((current) => !current)
+              }
+            >
+              {dialogueIdExpanded ? (
+                <ChevronRight size={14} />
+              ) : (
+                <ChevronLeft size={14} />
+              )}
+            </button>
+            <button
+              className="icon-button"
+              type="button"
+              aria-label="检查 BP 与对话模型"
+              onClick={() => void inspectBlueprint()}
+              disabled={
+                busy ||
+                !blueprintName.trim() ||
+                blueprintInputIsDialogueNode ||
+                !dialogueNodeInputValid
+              }
+              title={
+                blueprintInputIsDialogueNode
+                  ? "六位对话节点 ID 请填写到左侧展开输入框"
+                  : !dialogueNodeInputValid
+                    ? "对话节点 ID 必须为六位数字"
+                    : "检查 BP 与对话模型"
+              }
+            >
+              <OperationIcon
+                kind="document-search"
+                busy={activeOperation === "check"}
+              >
+                <DocumentSearchIcon size={18} />
+              </OperationIcon>
+            </button>
           </div>
         </form>
 

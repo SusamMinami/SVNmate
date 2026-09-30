@@ -116,6 +116,36 @@ describe("resolveMissionTargets", () => {
     expect(plan.targets[2].ambientDialogues).toEqual([]);
   });
 
+  it("diagnoses a model resource ID entered in the NPCID column", () => {
+    const source = database();
+    source.missionRows[0].showTargetIds = "500001";
+    source.missionPositions[0].npcId = 200001;
+
+    const plan = resolveMissionTargets(source, "900001");
+
+    expect(plan.warnings).toEqual([
+      "目标物 500001 疑似 NPC ID 配置错误：NPCID 200001 在 NPC 表中不存在，但模型资源表中存在同号 ID。请将目标物表的 NPCID 改为该模型对应的 NPC ID；当前将使用定位标记",
+    ]);
+    expect(plan.targets[0]).toMatchObject({
+      npcId: 200001,
+      npcName: "",
+      modelId: null,
+      modelClassPath: "",
+      previewKind: "marker",
+    });
+  });
+
+  it("keeps the generic warnings for a genuinely missing NPC", () => {
+    const source = database();
+    source.missionRows[0].showTargetIds = "500001";
+    source.missionPositions[0].npcId = 999999;
+
+    expect(resolveMissionTargets(source, "900001").warnings).toEqual([
+      "目标物 500001 引用了不存在的 NPC 999999，将使用定位标记",
+      "NPC 目标物 500001 没有可加载的模型资源，将使用定位标记",
+    ]);
+  });
+
   it("stops before loading when target MapIDs differ", () => {
     expect(() => resolveMissionTargets(database(), "900002")).toThrow(
       "目标物 MapID 不一致",

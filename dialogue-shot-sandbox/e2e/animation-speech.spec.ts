@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { mkdir } from "node:fs/promises";
 import type { SequenceSnapshot } from "../src/animationVoice";
+import { setReducedMotion } from "./motionPreference";
 
 const assetPath = "/Game/Seria/Sequences/LS_Voice.LS_Voice";
 const sample: SequenceSnapshot = {
@@ -218,10 +219,10 @@ test("speech motion follows real jobs, ignores late cancellation polls and adopt
   await expect(glyph).toHaveAttribute("data-running", "true");
   await expect.poll(() => held !== undefined).toBe(true);
   await page.screenshot({ path: info.outputPath("speech-running.png") });
-  await page.emulateMedia({ reducedMotion: "reduce" });
+  await setReducedMotion(page, true);
   await expect(glyph).toHaveAttribute("data-running", "false");
   expect(await glyph.evaluate((el) => el.getAnimations({ subtree: true }).length)).toBe(0);
-  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await setReducedMotion(page, false);
   await expect(glyph).toHaveAttribute("data-running", "true");
   await page.getByRole("button", { name: "取消任务" }).click();
   await expect(glyph).toHaveAttribute("data-phase", "cancelled");

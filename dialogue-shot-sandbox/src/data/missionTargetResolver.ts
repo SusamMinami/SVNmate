@@ -292,13 +292,22 @@ export function resolveMissionTargets(
 
   const warnings: string[] = [];
   const resolvedTargets = targets.map((target) => {
+    const configuredNpcId = target.npcId;
     const npc =
-      target.npcId !== null && target.npcId > 0
-        ? database.npcs.get(target.npcId)
+      configuredNpcId !== null && configuredNpcId > 0
+        ? database.npcs.get(configuredNpcId)
         : undefined;
-    if (target.npcId !== null && target.npcId > 0 && !npc) {
+    const npcIdLooksLikeModelId =
+      target.type === 1 &&
+      configuredNpcId !== null &&
+      configuredNpcId > 0 &&
+      !npc &&
+      database.models.has(configuredNpcId);
+    if (configuredNpcId !== null && configuredNpcId > 0 && !npc) {
       warnings.push(
-        `目标物 ${target.id} 引用了不存在的 NPC ${target.npcId}，将使用定位标记`,
+        npcIdLooksLikeModelId
+          ? `目标物 ${target.id} 疑似 NPC ID 配置错误：NPCID ${configuredNpcId} 在 NPC 表中不存在，但模型资源表中存在同号 ID。请将目标物表的 NPCID 改为该模型对应的 NPC ID；当前将使用定位标记`
+          : `目标物 ${target.id} 引用了不存在的 NPC ${configuredNpcId}，将使用定位标记`,
       );
     }
     const modelId =
@@ -318,7 +327,7 @@ export function resolveMissionTargets(
       ? model.generatedClassPath ||
         generatedClassPath(model.configuredPath)
       : "";
-    if (target.type === 1 && !modelClassPath) {
+    if (target.type === 1 && !modelClassPath && !npcIdLooksLikeModelId) {
       warnings.push(
         `NPC 目标物 ${target.id} 没有可加载的模型资源，将使用定位标记`,
       );

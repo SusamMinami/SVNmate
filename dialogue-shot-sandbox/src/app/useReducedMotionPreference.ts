@@ -32,14 +32,8 @@ function storedPreference(): boolean | null {
 
 export function isReducedMotionEnabled(): boolean {
   const stored = storedPreference();
-  if (stored !== null) {
-    return stored;
-  }
-  // The desktop app owns an explicit switch and starts with full motion.
-  // Browser-only surfaces retain the platform preference as their fallback.
-  return window.shotSandboxDesktop
-    ? false
-    : window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  // Full motion is the product default on desktop and browser previews.
+  return stored ?? false;
 }
 
 export function applyReducedMotionPreference(): boolean {
@@ -49,15 +43,12 @@ export function applyReducedMotionPreference(): boolean {
 }
 
 function subscribe(listener: () => void): () => void {
-  const media = window.matchMedia("(prefers-reduced-motion: reduce)");
   const changed = () => listener();
   window.addEventListener(REDUCED_MOTION_EVENT, changed);
   window.addEventListener("storage", changed);
-  media.addEventListener("change", changed);
   return () => {
     window.removeEventListener(REDUCED_MOTION_EVENT, changed);
     window.removeEventListener("storage", changed);
-    media.removeEventListener("change", changed);
   };
 }
 

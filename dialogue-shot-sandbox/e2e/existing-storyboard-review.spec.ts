@@ -2,6 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
 import { PNG } from "pngjs";
 import { ExistingStoryboardReviewRequestSchema } from "../src/director/ruleAdvisorContracts";
+import { setReducedMotion } from "./motionPreference";
 
 const cameras = [
   { dialogueId: "735001", cameraPosition: [0.8, 1.6, 3.2], cameraTarget: [0, 1.45, 0] },
@@ -124,7 +125,7 @@ test("reviews imported cameras on request, preserves pixels and shows per-shot f
     .toHaveCSS("color", "rgb(138, 86, 18)");
   await expect(page.getByText(/实际：UE 已有镜头/)).toBeVisible();
   await page.screenshot({ path: info.outputPath("existing-review-desktop.png") });
-  await page.emulateMedia({ reducedMotion: "reduce" });
+  await setReducedMotion(page, true);
   await page.setViewportSize({ width: 1280, height: 800 });
   await expect(page.locator(".existing-shot-review")).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
@@ -248,7 +249,7 @@ test("previews, keeps, adopts and undoes a suggested camera without UE writes", 
   await expect(page.getByRole("button", { name: "采纳到草稿", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "预览调整方案", exact: true }).click();
   await page.screenshot({ path: info.outputPath("suggestion-1440.png") });
-  await page.emulateMedia({ reducedMotion: "reduce" });
+  await setReducedMotion(page, true);
   await page.setViewportSize({ width: 1280, height: 800 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: info.outputPath("suggestion-1280.png") });

@@ -1,5 +1,6 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 import type { SequenceSnapshot } from "../src/animationVoice";
+import { setReducedMotion } from "./motionPreference";
 
 const snapshot: SequenceSnapshot = {
   assetPath: "/Game/Sequences/LS_Test.LS_Test", name: "LS_Test", revision: "r1", stateRevision: "s1",
@@ -130,7 +131,7 @@ test("failed checks and uncertain writes stop immediately; hidden/reduced motion
   expect(await animationCount(page, ".animation-voice__footer")).toBe(0);
   await page.getByRole("button", { name: "检查写入差异" }).click();
   await expect(glyph).toHaveAttribute("data-running", "true");
-  await page.emulateMedia({ reducedMotion: "reduce" });
+  await setReducedMotion(page, true);
   await expect(glyph).toHaveAttribute("data-running", "false");
   expect(await animationCount(page, ".animation-voice__footer")).toBe(0);
   await api.reply("review", { token: "r2", changes: ["修改字幕时间"] });
@@ -148,7 +149,7 @@ test("failed checks and uncertain writes stop immediately; hidden/reduced motion
   await expect(glyph).toHaveAttribute("data-phase", "uncertain");
   await expect(page.getByRole("alert")).toContainText("请先在 UE 核对");
 
-  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await setReducedMotion(page, false);
   await page.getByRole("button", { name: "扫描配置", exact: true }).click();
   const scanGlyph = page.getByRole("button", { name: "扫描配置", exact: true, includeHidden: true }).locator(".task-glyph");
   await expect(scanGlyph).toHaveAttribute("data-running", "true");

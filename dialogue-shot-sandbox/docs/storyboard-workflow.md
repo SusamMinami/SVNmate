@@ -128,6 +128,6 @@
 | 已有镜头评估/建议 | `src/app/useExistingStoryboardReview.ts`、`src/app/useExistingStoryboardSuggestions.ts` |
 | 局部精修 | `src/app/useShotRefinement.ts`、`src/director/shotRefinement.ts`、`server/storyboardTaskStore.ts` |
 
-按改动选择对应测试，具体文件见 [代码与验证地图](code-map.md)，不必从 App 全文开始查找。
+按上表的代码入口选择对应测试，不必从 `App.tsx` 全文开始查找。
 变更后至少验证：纯文字加载不请求 UE、不启动 AI；无分镜节点编辑；切换方案不
 重复生成；等待与中断区分；缓存策略变更失效；后台晚到结果不覆盖另一段对话。

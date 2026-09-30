@@ -1,5 +1,6 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 import { PNG } from "pngjs";
+import { setReducedMotion } from "./motionPreference";
 
 async function isolate(page: Page) {
   const errors: string[] = [];
@@ -63,7 +64,7 @@ for (const density of [1, 1.5, 2]) {
       await hidden(page, true);
       await expect(glyph).toHaveAttribute("data-running", "false");
       await hidden(page, false);
-      await page.emulateMedia({ reducedMotion: "reduce" });
+      await setReducedMotion(page, true);
       await expect(glyph).toHaveAttribute("data-running", "false");
       await expect.poll(() => Boolean(pending)).toBe(true);
       await pending!.fulfill({ json: { ok: true, data: source } });
@@ -119,7 +120,7 @@ test("director node wait pauses, keeps the scene and cancels without replay", as
   await page.getByRole("button", { name: "NPC 迁移", exact: true }).click();
   await expect(glyph).toHaveAttribute("data-running", "false");
   await page.getByRole("button", { name: "分镜工作台", exact: true }).click();
-  await page.emulateMedia({ reducedMotion: "reduce" });
+  await setReducedMotion(page, true);
   await expect(glyph).toHaveAttribute("data-running", "false");
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "中断分析", exact: true }).click();
@@ -223,7 +224,7 @@ test("export has one waiting glyph and separates inspection failure, uncertain w
   await (await take("inspect")).fulfill({ json: { ok: true, data: { ...preview, reviewToken: "fresh-token" } } });
   await expect(confirm).toBeDisabled();
   await page.getByRole("checkbox", { name: /已核对/ }).check();
-  await page.emulateMedia({ reducedMotion: "reduce" });
+  await setReducedMotion(page, true);
   await confirm.focus();
   await page.keyboard.press("Enter");
   await (await take("export")).fulfill({ json: { ok: true, data: {

@@ -1193,11 +1193,10 @@ test("keeps rail icons fixed and slides between workspace levels", async ({
 test("cleans up workspace transitions immediately with reduced motion", async ({
   page,
 }) => {
-  await page.emulateMedia({ reducedMotion: "reduce" });
   await page.addInitScript(() => {
     window.sessionStorage.setItem("shot-sandbox.launch-screen-seen", "1");
   });
-  await page.goto("/");
+  await page.goto("/?motion=reduced");
 
   await page.getByRole("button", { name: "注册 NPC" }).click({
     position: { x: 22, y: 22 },
@@ -8839,29 +8838,59 @@ test("locks and registers every existing numeric Blueprint slot", async ({
   await expect(
     workspace.getByLabel("对话节点 ID（可选）"),
   ).toHaveCount(0);
-  const dialogueIdToggle = workspace.getByRole("button", {
-    name: "展开对话节点 ID",
+  const dialogueIdToggle = workspace.locator(
+    ".mission-target-dialogue-toggle",
+  );
+  const blueprintSearchButton = workspace.getByRole("button", {
+    name: "检查 BP 与对话模型",
   });
+  await expect(dialogueIdToggle).toHaveAccessibleName("展开对话节点 ID");
   await expect(dialogueIdToggle).toHaveText("");
+  await expect(dialogueIdToggle.locator("svg")).toHaveClass(
+    /lucide-chevron-left/,
+  );
   expect((await dialogueIdToggle.boundingBox())?.width).toBeLessThanOrEqual(36);
+  const collapsedToggleBounds = await dialogueIdToggle.boundingBox();
+  const blueprintSearchBounds = await blueprintSearchButton.boundingBox();
+  expect(collapsedToggleBounds).not.toBeNull();
+  expect(blueprintSearchBounds).not.toBeNull();
+  expect(
+    collapsedToggleBounds!.x + collapsedToggleBounds!.width,
+  ).toBeLessThanOrEqual(blueprintSearchBounds!.x);
   await dialogueIdToggle.click();
   const dialogueIdInput = workspace.getByLabel("对话节点 ID（可选）");
+  await expect(dialogueIdToggle.locator("svg")).toHaveClass(
+    /lucide-chevron-right/,
+  );
   expect((await dialogueIdInput.boundingBox())?.width).toBeLessThanOrEqual(160);
+  const dialogueIdBounds = await dialogueIdInput.boundingBox();
+  const expandedToggleBounds = await dialogueIdToggle.boundingBox();
+  expect(dialogueIdBounds).not.toBeNull();
+  expect(expandedToggleBounds).not.toBeNull();
+  expect(dialogueIdBounds!.x + dialogueIdBounds!.width).toBeLessThanOrEqual(
+    expandedToggleBounds!.x,
+  );
+  await workspace.screenshot({
+    path: testInfo.outputPath("dialogue-node-expanded-controls.png"),
+  });
   await dialogueIdInput.fill("846500");
   const collapseDialogueId = workspace.getByRole("button", {
     name: "收起对话节点 ID",
   });
   await expect(collapseDialogueId).toHaveText("");
+  await expect(collapseDialogueId.locator("svg")).toHaveClass(
+    /lucide-chevron-right/,
+  );
   await collapseDialogueId.click();
   await expect(dialogueIdInput).toHaveCount(0);
-  await expect(
-    workspace.getByRole("button", {
-      name: "展开对话节点 ID，当前 846500",
-    }),
-  ).toBeVisible();
-  await workspace
-    .getByRole("button", { name: "检查 BP 与对话模型" })
-    .click();
+  const collapsedDialogueIdWithValue = workspace.getByRole("button", {
+    name: "展开对话节点 ID，当前 846500",
+  });
+  await expect(collapsedDialogueIdWithValue).toBeVisible();
+  await expect(collapsedDialogueIdWithValue.locator("svg")).toHaveClass(
+    /lucide-chevron-left/,
+  );
+  await blueprintSearchButton.click();
 
   await expect(
     workspace.getByText("BP 已有内容", { exact: true }),

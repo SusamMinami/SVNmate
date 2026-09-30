@@ -1,0 +1,228 @@
+.workspace > .left-panel,
+.workspace > .right-panel,
+.workspace .viewport-toolbar,
+.workspace :is(
+  .panel-section,
+  .inspector-section,
+  .inspector-header,
+  .inspector-tabs,
+  .dialogue-strip,
+  .inspector-footer
+) {
+  position: relative;
+}
+
+.workspace > .left-panel {
+  border-right-color: transparent;
+}
+
+.workspace > .right-panel {
+  border-left-color: transparent;
+}
+
+.workspace .viewport-toolbar {
+  border-bottom-color: transparent;
+}
+
+.workspace :is(
+  .panel-section,
+  .inspector-section,
+  .inspector-header,
+  .inspector-tabs
+) {
+  border-bottom-color: transparent;
+}
+
+.workspace .dialogue-strip,
+.workspace .inspector-footer {
+  border-top-color: transparent;
+}
+
+.workspace > .left-panel::after,
+.workspace > .right-panel::before,
+.workspace .viewport-toolbar::after,
+.workspace :is(
+  .panel-section,
+  .inspector-section,
+  .inspector-header,
+  .inspector-tabs
+)::after,
+.workspace .dialogue-strip::before,
+.workspace .inspector-footer::before {
+  position: absolute;
+  z-index: 4;
+  display: block;
+  background-color: var(
+    --workspace-frame-final-color,
+    var(--border)
+  );
+  pointer-events: none;
+  content: "";
+}
+
+.workspace > .left-panel::after,
+.workspace > .right-panel::before {
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  transform: scaleY(1);
+}
+
+.workspace > .left-panel::after {
+  right: -1px;
+  transform-origin: top;
+}
+
+.workspace > .right-panel::before {
+  left: -1px;
+  transform-origin: bottom;
+}
+
+.workspace .viewport-toolbar {
+  --workspace-frame-final-color: var(--ink);
+}
+
+.workspace .inspector-tabs {
+  --workspace-frame-final-color: var(--border);
+}
+
+.workspace .inspector-header--option-warning {
+  --workspace-frame-final-color: color-mix(
+    in srgb,
+    var(--danger-strong) 42%,
+    var(--border)
+  );
+}
+
+.workspace .dialogue-strip {
+  --workspace-frame-final-color: var(--border-strong);
+}
+
+.workspace .viewport-toolbar::after,
+.workspace :is(
+  .panel-section,
+  .inspector-section,
+  .inspector-header,
+  .inspector-tabs
+)::after {
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  height: 1px;
+  transform: scaleX(1);
+  transform-origin: left;
+}
+
+.workspace .dialogue-strip::before,
+.workspace .inspector-footer::before {
+  top: -1px;
+  right: 0;
+  left: 0;
+  height: 1px;
+  transform: scaleX(1);
+  transform-origin: right;
+}
+
+.workspace[data-frame-phase="pending"] > .left-panel::after,
+.workspace[data-frame-phase="pending"] > .right-panel::before {
+  transform: scaleY(0);
+}
+
+.workspace[data-frame-phase="pending"]
+  :is(
+    .viewport-toolbar,
+    .panel-section,
+    .inspector-section,
+    .inspector-header,
+    .inspector-tabs
+  )::after,
+.workspace[data-frame-phase="pending"] .dialogue-strip::before,
+.workspace[data-frame-phase="pending"] .inspector-footer::before {
+  transform: scaleX(0);
+}
+
+.workspace[data-frame-phase="revealing"] > .left-panel::after {
+  animation: workspace-border-vertical 380ms
+    cubic-bezier(0.16, 1, 0.3, 1) 60ms backwards;
+}
+
+.workspace[data-frame-phase="revealing"] > .right-panel::before {
+  animation: workspace-border-vertical 380ms
+    cubic-bezier(0.16, 1, 0.3, 1) 120ms backwards;
+}
+
+.workspace[data-frame-phase="revealing"] .viewport-toolbar::after {
+  animation: workspace-border-horizontal 320ms
+    cubic-bezier(0.16, 1, 0.3, 1) 260ms backwards;
+}
+
+.workspace[data-frame-phase="revealing"] .panel-section::after {
+  animation: workspace-border-horizontal 340ms
+    cubic-bezier(0.16, 1, 0.3, 1) 300ms backwards;
+}
+
+.workspace[data-frame-phase="revealing"]
+  :is(.inspector-header, .inspector-tabs)::after {
+  animation: workspace-border-horizontal 340ms
+    cubic-bezier(0.16, 1, 0.3, 1) 360ms backwards;
+}
+
+.workspace[data-frame-phase="revealing"] .inspector-section::after {
+  animation: workspace-border-horizontal 360ms
+    cubic-bezier(0.16, 1, 0.3, 1) 420ms backwards;
+}
+
+.workspace[data-frame-phase="revealing"]
+  :is(.dialogue-strip, .inspector-footer)::before {
+  animation: workspace-border-horizontal 360ms
+    cubic-bezier(0.16, 1, 0.3, 1) 500ms backwards;
+}
+
+@keyframes workspace-border-horizontal {
+  0% {
+    transform: scaleX(0);
+  }
+
+  100% {
+    transform: scaleX(1);
+  }
+}
+
+@keyframes workspace-border-vertical {
+  0% {
+    transform: scaleY(0);
+  }
+
+  100% {
+    transform: scaleY(1);
+  }
+}
+
+:root[data-reduced-motion="true"]
+  .workspace[data-frame-phase="revealing"]
+  :is(
+    .left-panel,
+    .right-panel,
+    .viewport-toolbar,
+    .panel-section,
+    .inspector-section,
+    .inspector-header,
+    .inspector-tabs,
+    .dialogue-strip,
+    .inspector-footer
+  )::before,
+:root[data-reduced-motion="true"]
+  .workspace[data-frame-phase="revealing"]
+  :is(
+    .left-panel,
+    .right-panel,
+    .viewport-toolbar,
+    .panel-section,
+    .inspector-section,
+    .inspector-header,
+    .inspector-tabs,
+    .dialogue-strip,
+    .inspector-footer
+  )::after {
+  animation: none !important;
+}

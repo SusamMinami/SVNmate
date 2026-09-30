@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import App from "./App";
 import { applyReducedMotionPreference } from "./app/useReducedMotionPreference";
 import "./styles.css";
+import "./app/workspaceFrameReveal.css";
 
 applyReducedMotionPreference();
 

@@ -14,6 +14,7 @@ import {
   ScanFace,
   ScanSearch,
   Settings2,
+  Smile,
   Sparkles,
   UserRoundPlus,
 } from "lucide-react";
@@ -39,6 +40,7 @@ import {
   deriveNpcMigrationIdentity,
   inferStandardAbpTemplate,
 } from "../data/npcMigration";
+import { useWorkspaceFrameReveal } from "../app/useWorkspaceFrameReveal";
 import { NpcSupplementWorkspace } from "./NpcSupplementWorkspace";
 import { TaskNotice } from "./TaskMotion";
 import type { TaskPhase } from "../taskFeedback";
@@ -46,6 +48,7 @@ import type { TaskPhase } from "../taskFeedback";
 interface NpcMigrationWorkspaceProps {
   onClose: () => void;
   onModeChange?: (mode: NpcMigrationMode) => void;
+  active?: boolean;
 }
 
 export type NpcMigrationMode = "new" | "actions" | "face" | null;
@@ -117,11 +120,61 @@ function templateLabel(
       : "女性";
 }
 
+function NewNpcModeIcon() {
+  return (
+    <UserRoundPlus
+      className="npc-migration-mode-glyph__new"
+      size={42}
+      strokeWidth={1.5}
+    />
+  );
+}
+
+function ActionNpcModeIcon() {
+  return (
+    <PersonStanding
+      className="npc-migration-mode-glyph__action-person"
+      size={42}
+      strokeWidth={1.5}
+    />
+  );
+}
+
+function FaceNpcModeIcon() {
+  return (
+    <>
+      <ScanFace
+        className="npc-migration-mode-glyph__face-frame"
+        size={42}
+        strokeWidth={1.5}
+      />
+      <Smile
+        className="npc-migration-mode-glyph__face-smile"
+        size={42}
+        strokeWidth={1.5}
+      />
+    </>
+  );
+}
+
+function NpcMigrationModeEntryFrame() {
+  return (
+    <span className="npc-migration-mode-option__entry-frame" aria-hidden="true">
+      <i data-edge="top" />
+      <i data-edge="right" />
+      <i data-edge="bottom" />
+      <i data-edge="left" />
+    </span>
+  );
+}
+
 export function NpcMigrationWorkspace({
   onClose,
   onModeChange,
+  active = true,
 }: NpcMigrationWorkspaceProps) {
   const [mode, setMode] = useState<NpcMigrationMode>(null);
+  const modeEntryPhase = useWorkspaceFrameReveal(active && mode === null);
   const [source, setSource] = useState<NpcMigrationSourceScan | null>(null);
   const [targetContentDirectory, setTargetContentDirectory] = useState("");
   const [animationSourceDirectory, setAnimationSourceDirectory] = useState("");
@@ -539,7 +592,10 @@ export function NpcMigrationWorkspace({
 
   if (!mode) {
     return (
-      <div className="npc-migration-workspace npc-migration-mode-workspace">
+      <div
+        className="npc-migration-workspace npc-migration-mode-workspace"
+        data-mode-entry-phase={modeEntryPhase}
+      >
         <div className="workspace-floating-actions" key="migration-mode-actions">
           <button
             className="icon-button workspace-floating-back"
@@ -557,6 +613,7 @@ export function NpcMigrationWorkspace({
               <strong>选择处理类型</strong>
               <small>NPC WORKFLOW</small>
             </div>
+            <i className="npc-migration-mode-divider" aria-hidden="true" />
           </header>
           <div className="npc-migration-mode-grid">
             <button
@@ -564,42 +621,54 @@ export function NpcMigrationWorkspace({
               className="npc-migration-mode-option is-primary"
               onClick={() => setMode("new")}
             >
-              <span className="npc-migration-mode-option__icon">
-                <UserRoundPlus size={42} strokeWidth={1.5} />
+              <span
+                className="npc-migration-mode-option__icon npc-migration-mode-option__icon--new"
+                aria-hidden="true"
+              >
+                <NewNpcModeIcon />
               </span>
               <span>
                 <strong>全新 NPC</strong>
                 <small>完整迁移</small>
               </span>
               <em>01</em>
+              <NpcMigrationModeEntryFrame />
             </button>
             <button
               type="button"
               className="npc-migration-mode-option"
               onClick={() => setMode("actions")}
             >
-              <span className="npc-migration-mode-option__icon">
-                <PersonStanding size={42} strokeWidth={1.5} />
+              <span
+                className="npc-migration-mode-option__icon npc-migration-mode-option__icon--actions"
+                aria-hidden="true"
+              >
+                <ActionNpcModeIcon />
               </span>
               <span>
                 <strong>动作补充与修改</strong>
                 <small>BODY + AUTO FACE</small>
               </span>
               <em>02</em>
+              <NpcMigrationModeEntryFrame />
             </button>
             <button
               type="button"
               className="npc-migration-mode-option"
               onClick={() => setMode("face")}
             >
-              <span className="npc-migration-mode-option__icon">
-                <ScanFace size={42} strokeWidth={1.5} />
+              <span
+                className="npc-migration-mode-option__icon npc-migration-mode-option__icon--face"
+                aria-hidden="true"
+              >
+                <FaceNpcModeIcon />
               </span>
               <span>
                 <strong>面部补充</strong>
                 <small>FACE PIPELINE</small>
               </span>
               <em>03</em>
+              <NpcMigrationModeEntryFrame />
             </button>
           </div>
         </div>

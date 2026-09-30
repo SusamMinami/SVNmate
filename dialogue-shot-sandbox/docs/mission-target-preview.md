@@ -2,8 +2,9 @@
 
 > 文档状态：现行专题规范
 >
-> 最近核对：2026-09-12，对应镜头沙盘 `0.24.7`。覆盖任务解析、UE 预览、
-> BP 创建/注册、节点最终站位、双向位置同步、背景资产与 SceneObject NPC。
+> 最近核对：2026-09-30，对应镜头沙盘 `0.24.17`。覆盖任务解析、UE 预览、
+> BP 创建/注册、节点最终站位、双向位置同步、背景资产、SceneObject NPC
+> 与空状态查询交互。
 
 ## 数据链路
 
@@ -37,6 +38,9 @@ MissionPosition.npcchat2             -> 复杂闲话文件
 
 类型 1 的 NPC 和类型 4 的蓝图目标通常可以加载实际资产。没有可解析模型的
 类型 2、类型 3 或异常配置使用 `/Script/Engine.TargetPoint` 定位标记。
+类型 1 的 `NPCID` 在 NPC 表中不存在、但模型资源表存在同号 ID 时，工具会提示
+疑似把模型资源 ID 填入了目标物表的 `NPCID` 列，并继续使用定位标记；不会自动
+把错列值当作 NPC 或模型加载。
 
 解析结果会同时显示 `MissionPosition.Position` 和
 `MissionPosition.Rotation`。旋转按 UE 的 `Pitch / Yaw / Roll` 顺序展示并

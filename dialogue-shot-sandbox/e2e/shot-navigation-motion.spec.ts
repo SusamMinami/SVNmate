@@ -3,6 +3,7 @@ import { PNG } from "pngjs";
 import { demoDatabase } from "../src/data/demo";
 import { findDialogueSequence } from "../src/data/dialogueRepository";
 import { createShotPlan } from "../src/director/shotPlanner";
+import { setReducedMotion } from "./motionPreference";
 
 const shots = createShotPlan(findDialogueSequence(demoDatabase, "2048"));
 
@@ -117,12 +118,12 @@ for (const scale of [1, 1.5, 2]) {
 
       // Change the preference while a pointer transition is still in flight.
       await page.mouse.click(positions[0].x + 100, positions[0].y + 25);
-      await page.emulateMedia({ reducedMotion: "reduce" });
+      await setReducedMotion(page, true);
       await rows.nth(3).click();
       await expect(selection).toHaveCSS("transform", "matrix(1, 0, 0, 1, 0, 186)");
       expect(await selection.evaluate((element) => element.getAnimations()
         .filter((animation) => animation.playState === "running").length)).toBe(0);
-      await page.emulateMedia({ reducedMotion: "no-preference" });
+      await setReducedMotion(page, false);
       await rows.nth(2).click();
       await expect(selection).toHaveCSS("transition-duration", "0.16s");
 

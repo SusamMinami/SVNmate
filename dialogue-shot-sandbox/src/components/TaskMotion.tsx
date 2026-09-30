@@ -1,3 +1,4 @@
+import { FileSearch } from "lucide-react";
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { isReducedMotionEnabled, useReducedMotionPreference } from "../app/useReducedMotionPreference";
 import type { TaskPhase } from "../taskFeedback";
@@ -8,7 +9,7 @@ const settleTiming = { duration: 200, easing: "cubic-bezier(0.23, 1, 0.32, 1)" }
 
 /** Animate the action's own icon; no extra spinner or animation-driven completion. */
 export function OperationIcon({ kind, busy, children }: {
-  kind: "search" | "read" | "write"; busy: boolean; children: ReactNode;
+  kind: "search" | "document-search" | "read" | "write"; busy: boolean; children: ReactNode;
 }) {
   const active = useContext(MotionContext);
   const { reducedMotion } = useReducedMotionPreference();
@@ -33,6 +34,16 @@ export function OperationIcon({ kind, busy, children }: {
     data-busy={busy} data-running={busy && active && visible && !reducedMotion} aria-hidden="true">
     {children}
   </span>;
+}
+
+export function DocumentSearchIcon({ size = 18 }: { size?: number }) {
+  return (
+    <FileSearch
+      className="operation-icon__document-search"
+      size={size}
+      aria-hidden="true"
+    />
+  );
 }
 
 /** One document listener per workspace. Hidden workspaces retain data, not animation. */

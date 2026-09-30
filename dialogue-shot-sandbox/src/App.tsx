@@ -54,6 +54,7 @@ import { ShotRefinementPanel } from "./components/ShotRefinementPanel";
 import { useUeDialogueSelection } from "./app/useUeDialogueSelection";
 import { useConfigurationActivity } from "./app/useConfigurationActivity";
 import { useWorkspaceNavigation } from "./app/useWorkspaceNavigation";
+import { useWorkspaceFrameRevealAttribute } from "./app/useWorkspaceFrameReveal";
 import { useNavigationFeedback } from "./app/useNavigationFeedback";
 import { useStatusTooltips } from "./app/useStatusTooltips";
 import type {
@@ -64,7 +65,6 @@ import type { DialogueTextEditorItem } from "./components/DialogueTextEditorModa
 import { DataSourceStatus } from "./components/DataSourceStatus";
 import { DirectorControl } from "./components/DirectorControl";
 import { OperationIcon, TaskGlyph, TaskMotionScope } from "./components/TaskMotion";
-import { WorkspaceFrameReveal } from "./components/WorkspaceFrameReveal";
 import { ExistingAudioConfiguration } from "./components/ExistingAudioConfiguration";
 import { LaunchScreen } from "./components/LaunchScreen";
 import { MissingNpcModelModal } from "./components/MissingNpcModelModal";
@@ -2057,6 +2057,12 @@ export default function App() {
     switchWorkspace,
     closeToolWorkspace,
   } = useWorkspaceNavigation();
+  const storyboardWorkspaceRef = useRef<HTMLDivElement>(null);
+  useWorkspaceFrameRevealAttribute(
+    storyboardWorkspaceRef,
+    activeWorkspace === "storyboard" && !showLaunchScreen,
+    launchScreenInitiallyVisible ? 0 : 850,
+  );
   const [npcMigrationMode, setNpcMigrationMode] =
     useState<NpcMigrationMode>(null);
   const [loadedToolWorkspaces, setLoadedToolWorkspaces] = useState<
@@ -5507,15 +5513,10 @@ export default function App() {
 
       <div
         className="workspace"
+        ref={storyboardWorkspaceRef}
         {...navigationFeedback}
         {...workspaceProps("storyboard")}
       >
-        <WorkspaceFrameReveal
-          active={
-            activeWorkspace === "storyboard" && !showLaunchScreen
-          }
-          initialDelayMs={launchScreenInitiallyVisible ? 0 : 850}
-        />
         {!configurationMode && (
           <aside className="left-panel">
           <section className="panel-section query-section">
@@ -6586,6 +6587,7 @@ export default function App() {
           <Suspense fallback={<ToolWorkspaceLoading />}>
             <TaskMotionScope active={activeWorkspace === "migration"}>
             <LazyNpcMigrationWorkspace
+              active={activeWorkspace === "migration"}
               onClose={closeToolWorkspace}
               onModeChange={setNpcMigrationMode}
             />
@@ -6606,6 +6608,7 @@ export default function App() {
             <TaskMotionScope active={activeWorkspace === "targets"}>
             <LazyMissionTargetModal
               embedded
+              active={activeWorkspace === "targets"}
               database={database}
               onClose={closeToolWorkspace}
             />

@@ -1,5 +1,275 @@
 import { expect, test } from "@playwright/test";
 
+test("animates the NPC migration entrance and mode icons without moving cards", async ({
+  page,
+}, testInfo) => {
+  await page.addInitScript(() => {
+    window.sessionStorage.setItem("shot-sandbox.launch-screen-seen", "1");
+    window.localStorage.setItem("shot-sandbox.reduced-motion.v1", "false");
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "NPC 迁移" }).click();
+  await page.waitForTimeout(220);
+
+  const modeWorkspace = page.locator(".npc-migration-mode-workspace");
+  const newNpc = page.getByRole("button", { name: /全新 NPC/ });
+  const actions = page.getByRole("button", {
+    name: /动作补充与修改/,
+  });
+  const face = page.getByRole("button", { name: /面部补充/ });
+  const newNpcIcon = newNpc.locator(".npc-migration-mode-option__icon");
+  const actionsIcon = actions.locator(".npc-migration-mode-option__icon");
+  const faceIcon = face.locator(".npc-migration-mode-option__icon");
+  const initialBounds = await Promise.all([
+    newNpc.boundingBox(),
+    actions.boundingBox(),
+    face.boundingBox(),
+  ]);
+  expect(
+    await actions.evaluate((element) =>
+      getComputedStyle(element)
+        .getPropertyValue("--npc-migration-mode-entry-delay")
+        .trim(),
+    ),
+  ).toBe("100ms");
+  expect(
+    await face.evaluate((element) =>
+      getComputedStyle(element)
+        .getPropertyValue("--npc-migration-mode-entry-delay")
+        .trim(),
+    ),
+  ).toBe("200ms");
+
+  const sampleAnimation = async (
+    selector: string,
+    currentTime: number,
+  ) =>
+    page.locator(selector).evaluate((element, time) => {
+      const animation = element.getAnimations()[0];
+      if (!animation) {
+        return null;
+      }
+      animation.pause();
+      animation.currentTime = 0;
+      const start = getComputedStyle(element).transform;
+      animation.currentTime = time;
+      const active = getComputedStyle(element).transform;
+      animation.play();
+      return { start, active };
+    }, currentTime);
+
+  const divider = modeWorkspace.locator(".npc-migration-mode-divider");
+  const topEdge = newNpc.locator(
+    '.npc-migration-mode-option__entry-frame > i[data-edge="top"]',
+  );
+  const rightEdge = newNpc.locator(
+    '.npc-migration-mode-option__entry-frame > i[data-edge="right"]',
+  );
+  await expect(modeWorkspace).toHaveAttribute(
+    "data-mode-entry-phase",
+    "revealing",
+  );
+  await expect(divider).toHaveCSS(
+    "animation-name",
+    "npc-migration-mode-frame-horizontal",
+  );
+  await expect(topEdge).toHaveCSS(
+    "animation-name",
+    "npc-migration-mode-frame-horizontal",
+  );
+  await expect(rightEdge).toHaveCSS(
+    "animation-name",
+    "npc-migration-mode-frame-vertical",
+  );
+  await expect(
+    modeWorkspace.locator(".npc-migration-mode-option__entry-frame > i"),
+  ).toHaveCount(12);
+  const dividerStates = await sampleAnimation(
+    ".npc-migration-mode-divider",
+    260,
+  );
+  const topEdgeStates = await sampleAnimation(
+    '.npc-migration-mode-option:first-child .npc-migration-mode-option__entry-frame > i[data-edge="top"]',
+    230,
+  );
+  expect(dividerStates).not.toBeNull();
+  expect(dividerStates!.active).not.toBe(dividerStates!.start);
+  expect(topEdgeStates).not.toBeNull();
+  expect(topEdgeStates!.active).not.toBe(topEdgeStates!.start);
+  await modeWorkspace.evaluate((element) => {
+    for (const animation of element.getAnimations({ subtree: true })) {
+      if (
+        animation instanceof CSSAnimation &&
+        animation.animationName.startsWith("npc-migration-mode-")
+      ) {
+        animation.pause();
+        animation.currentTime = 440;
+      }
+    }
+  });
+  await page.screenshot({
+    path: testInfo.outputPath("npc-migration-mode-entry.png"),
+    fullPage: true,
+  });
+  await modeWorkspace.evaluate((element) => {
+    for (const animation of element.getAnimations({ subtree: true })) {
+      animation.play();
+    }
+  });
+  await expect(modeWorkspace).toHaveAttribute(
+    "data-mode-entry-phase",
+    "settled",
+  );
+  expect(
+    await Promise.all([
+      newNpc.boundingBox(),
+      actions.boundingBox(),
+      face.boundingBox(),
+    ]),
+  ).toEqual(initialBounds);
+
+  const plus = newNpc
+    .locator(".npc-migration-mode-glyph__new > path")
+    .nth(1);
+  await newNpc.hover({ position: { x: 180, y: 190 } });
+  await expect(plus).toHaveCSS("animation-name", "npc-migration-new-plus");
+  const plusStates = await sampleAnimation(
+    ".npc-migration-mode-glyph__new > path:nth-of-type(2)",
+    320,
+  );
+  expect(plusStates).not.toBeNull();
+  expect(plusStates!.active).not.toBe(plusStates!.start);
+  await newNpcIcon.evaluate((element) => {
+    for (const animation of element.getAnimations({ subtree: true })) {
+      animation.pause();
+      animation.currentTime = 480;
+    }
+  });
+  await page.waitForTimeout(220);
+  await page.screenshot({
+    path: testInfo.outputPath("npc-migration-new-icon-motion.png"),
+    fullPage: true,
+  });
+
+  await actions.hover();
+  const person = actions.locator(
+    ".npc-migration-mode-glyph__action-person",
+  );
+  const arms = person.locator("path").nth(1);
+  await expect(person).toHaveCSS(
+    "animation-name",
+    "npc-migration-action-jump",
+  );
+  await expect(arms).toHaveCSS(
+    "animation-name",
+    "npc-migration-action-wave",
+  );
+  const jumpStates = await sampleAnimation(
+    ".npc-migration-mode-glyph__action-person",
+    280,
+  );
+  const waveStates = await sampleAnimation(
+    ".npc-migration-mode-glyph__action-person > path:nth-of-type(2)",
+    160,
+  );
+  expect(jumpStates).not.toBeNull();
+  expect(jumpStates!.active).not.toBe(jumpStates!.start);
+  expect(waveStates).not.toBeNull();
+  expect(waveStates!.active).not.toBe(waveStates!.start);
+  await actionsIcon.evaluate((element) => {
+    for (const animation of element.getAnimations({ subtree: true })) {
+      animation.pause();
+      animation.currentTime = 280;
+    }
+  });
+  await page.waitForTimeout(220);
+  await page.screenshot({
+    path: testInfo.outputPath("npc-migration-action-icon-motion.png"),
+    fullPage: true,
+  });
+
+  const smile = face.locator(
+    ".npc-migration-mode-glyph__face-smile",
+  );
+  await expect(smile).toHaveCSS("opacity", "1");
+  await expect(
+    face.locator(".npc-migration-mode-glyph__face-neutral"),
+  ).toHaveCount(0);
+  await face.hover();
+  const frameCorner = face
+    .locator(".npc-migration-mode-glyph__face-frame > path")
+    .first();
+  const winkEye = smile.locator("line").nth(1);
+  await expect(frameCorner).toHaveCSS(
+    "animation-name",
+    "npc-migration-face-frame-flash",
+  );
+  await expect(winkEye).toHaveCSS(
+    "animation-name",
+    "npc-migration-face-wink",
+  );
+  await faceIcon.evaluate((element) => {
+    for (const animation of element.getAnimations({ subtree: true })) {
+      animation.pause();
+      animation.currentTime = 380;
+    }
+  });
+  await page.waitForTimeout(220);
+  await page.screenshot({
+    path: testInfo.outputPath("npc-migration-face-icon-motion.png"),
+    fullPage: true,
+  });
+
+  expect(
+    await Promise.all([
+      newNpc.boundingBox(),
+      actions.boundingBox(),
+      face.boundingBox(),
+    ]),
+  ).toEqual(initialBounds);
+  await expect(
+    page.locator(".npc-migration-mode-option__icon"),
+  ).toHaveCount(3);
+  for (const icon of await page
+    .locator(".npc-migration-mode-option__icon")
+    .all()) {
+    expect(await icon.boundingBox()).toMatchObject({
+      width: 72,
+      height: 72,
+    });
+  }
+
+  await page.evaluate(() => {
+    document.documentElement.dataset.reducedMotion = "true";
+  });
+  await newNpc.hover();
+  await expect(plus).toHaveCSS("animation-name", "none");
+  await expect(plus).toHaveCSS("stroke", "rgb(255, 250, 0)");
+  await face.hover();
+  await expect(frameCorner).toHaveCSS("animation-name", "none");
+  await expect(frameCorner).toHaveCSS("stroke", "rgb(255, 250, 0)");
+  await expect(smile).toHaveCSS("opacity", "1");
+  expect(
+    await faceIcon.evaluate(
+      (element) => element.getAnimations({ subtree: true }).length,
+    ),
+  ).toBe(0);
+  await page.getByRole("button", { name: "返回分镜工作台" }).click();
+  await page.getByRole("button", { name: "NPC 迁移" }).click();
+  expect(
+    await modeWorkspace.evaluate((element) =>
+      element
+        .getAnimations({ subtree: true })
+        .filter(
+          (animation) =>
+            animation instanceof CSSAnimation &&
+            animation.animationName.startsWith("npc-migration-mode-"),
+        )
+        .map((animation) => animation.animationName),
+    ),
+  ).toEqual([]);
+});
+
 test("opens the NPC migration workspace without layout overflow", async ({
   page,
 }, testInfo) => {

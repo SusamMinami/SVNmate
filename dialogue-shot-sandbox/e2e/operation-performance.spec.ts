@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { setReducedMotion } from "./motionPreference";
 
 test("large target lists retain correct slots and selection while editing the query", async ({ page }, info) => {
   const errors: string[] = [];
@@ -76,7 +77,20 @@ test("search icon follows the actual request and stops on failure, hidden page a
   const icon = button.locator(".operation-icon");
   await button.click();
   await expect(icon).toHaveAttribute("data-running", "true");
-  await expect(icon.locator("svg")).toHaveCSS("animation-name", "operation-search");
+  const documentSearch = icon.locator(".operation-icon__document-search");
+  await expect(documentSearch).toHaveClass(/lucide-file-search/);
+  await expect(documentSearch.locator("path").nth(1)).toHaveCSS(
+    "animation-name",
+    "none",
+  );
+  await expect(documentSearch.locator("path").nth(2)).toHaveCSS(
+    "animation-name",
+    "operation-document-search",
+  );
+  await expect(documentSearch.locator("circle")).toHaveCSS(
+    "animation-name",
+    "operation-document-search",
+  );
   await expect(page.locator('.mission-target-modal .operation-icon[data-running="true"]')).toHaveCount(1);
   await page.evaluate(() => {
     Object.defineProperty(document, "hidden", { configurable: true, value: true });
@@ -88,7 +102,7 @@ test("search icon follows the actual request and stops on failure, hidden page a
     document.dispatchEvent(new Event("visibilitychange"));
   });
   await expect(icon).toHaveAttribute("data-running", "true");
-  await page.emulateMedia({ reducedMotion: "reduce" });
+  await setReducedMotion(page, true);
   await expect(icon).toHaveAttribute("data-running", "false");
   await expect.poll(() => Boolean(finish)).toBe(true);
   await finish!();

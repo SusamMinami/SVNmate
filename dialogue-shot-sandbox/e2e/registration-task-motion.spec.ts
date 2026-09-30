@@ -1,5 +1,6 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 import type { BackgroundPropImportPreview } from "../src/types";
+import { setReducedMotion } from "./motionPreference";
 
 async function isolate(page: Page) {
   const errors: string[] = [];
@@ -94,7 +95,7 @@ for (const density of [1, 1.25, 1.5, 2]) {
       await expect(write.locator(".operation-icon")).toHaveAttribute("data-running", "false");
       await expect(region.getByRole("alert")).toContainText("核对 Excel 未保存内容");
       // Simulates the operator checking Excel and explicitly retrying.
-      await page.emulateMedia({ reducedMotion: "reduce" });
+      await setReducedMotion(page, true);
       page.once("dialog", (dialog) => dialog.accept());
       await write.focus();
       await page.keyboard.press("Enter");

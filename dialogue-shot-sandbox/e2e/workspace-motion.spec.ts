@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { setReducedMotion } from "./motionPreference";
 
 async function fixture(page: Page) {
   const errors: string[] = [];
@@ -107,7 +108,7 @@ test("settles an in-flight workspace immediately when motion is reduced", async 
   await page.getByRole("button", { name: "注册 NPC", exact: true }).click();
   await page.evaluate(() => document.querySelectorAll<HTMLElement>("[data-workspace-id]")
     .forEach((element) => element.getAnimations().forEach((animation) => animation.pause())));
-  await page.emulateMedia({ reducedMotion: "reduce" });
+  await setReducedMotion(page, true);
   await expect(page.locator('[data-workspace-state="exiting"]')).toHaveCount(0);
   await expect(page.locator('[data-workspace-id="npc"]')).toHaveCSS("will-change", "auto");
   await page.getByRole("button", { name: "任务目标物", exact: true }).click();
@@ -172,7 +173,7 @@ test("status popovers reverse, dismiss, and share immediate adjacent tooltips", 
   await query.click();
   await expect(query).toBeFocused();
   await expect(panel).toHaveAttribute("data-open", "false");
-  await page.emulateMedia({ reducedMotion: "reduce" });
+  await setReducedMotion(page, true);
   await data.click();
   await expect(panel).toHaveCSS("transition-duration", "0s");
   await data.click();

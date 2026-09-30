@@ -5761,6 +5761,8 @@ textarea:focus-visible {
 }
 
 .mission-target-query {
+  position: relative;
+  isolation: isolate;
   display: grid;
   flex: 0 0 auto;
   grid-template-columns: 100px minmax(240px, 1fr);
@@ -5770,6 +5772,159 @@ textarea:focus-visible {
   padding: 12px 18px;
   background: var(--surface-muted);
   border-bottom: 1px solid var(--border);
+}
+
+.mission-target-query > * {
+  position: relative;
+  z-index: 1;
+}
+
+.mission-target-modal:is(
+    [data-empty-entry-phase="pending"],
+    [data-empty-entry-phase="revealing"]
+  )
+  .mission-target-query {
+  background-color: transparent;
+}
+
+.mission-target-modal:is(
+    [data-empty-entry-phase="pending"],
+    [data-empty-entry-phase="revealing"]
+  )
+  .mission-target-query::before {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  content: "";
+  background: var(--surface-muted);
+  pointer-events: none;
+  transform-origin: left;
+}
+
+.mission-target-modal[data-empty-entry-phase="pending"]
+  .mission-target-query::before {
+  opacity: 0;
+  transform: scaleX(0);
+}
+
+.mission-target-modal[data-empty-entry-phase="revealing"]
+  .mission-target-query::before {
+  animation: mission-target-empty-header-reveal 440ms
+    cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.mission-target-modal
+  .mission-target-query
+  input {
+  --mission-target-empty-frame-delay: 180ms;
+}
+
+.mission-target-modal #mission-task-id {
+  --mission-target-empty-frame-delay: 180ms;
+}
+
+.mission-target-modal #mission-blueprint-name {
+  --mission-target-empty-frame-delay: 360ms;
+}
+
+.mission-target-modal #mission-dialogue-id {
+  --mission-target-empty-frame-delay: 540ms;
+}
+
+.mission-target-modal:is(
+    [data-empty-entry-phase="pending"],
+    [data-empty-entry-phase="revealing"]
+  )
+  .mission-target-query
+  input {
+  border-color: transparent !important;
+  background-image:
+    linear-gradient(var(--border-strong), var(--border-strong)),
+    linear-gradient(var(--border-strong), var(--border-strong)),
+    linear-gradient(var(--border-strong), var(--border-strong)),
+    linear-gradient(var(--border-strong), var(--border-strong));
+  background-repeat: no-repeat;
+  background-origin:
+    border-box,
+    border-box,
+    border-box,
+    border-box;
+  background-clip:
+    border-box,
+    border-box,
+    border-box,
+    border-box;
+  background-position:
+    top left,
+    top right,
+    bottom right,
+    bottom left;
+  background-size:
+    0 1px,
+    1px 0,
+    0 1px,
+    1px 0;
+}
+
+.mission-target-modal[data-empty-entry-phase="revealing"]
+  .mission-target-query
+  input {
+  animation: mission-target-empty-frame-trace 320ms linear
+    var(--mission-target-empty-frame-delay) both;
+}
+
+@keyframes mission-target-empty-header-reveal {
+  from {
+    opacity: 0.18;
+    transform: scaleX(0);
+  }
+
+  to {
+    opacity: 1;
+    transform: scaleX(1);
+  }
+}
+
+@keyframes mission-target-empty-frame-trace {
+  0% {
+    background-size:
+      0 1px,
+      1px 0,
+      0 1px,
+      1px 0;
+  }
+
+  25% {
+    background-size:
+      100% 1px,
+      1px 0,
+      0 1px,
+      1px 0;
+  }
+
+  50% {
+    background-size:
+      100% 1px,
+      1px 100%,
+      0 1px,
+      1px 0;
+  }
+
+  75% {
+    background-size:
+      100% 1px,
+      1px 100%,
+      100% 1px,
+      1px 0;
+  }
+
+  100% {
+    background-size:
+      100% 1px,
+      1px 100%,
+      100% 1px,
+      1px 100%;
+  }
 }
 
 .mission-target-query label {
@@ -5808,13 +5963,14 @@ textarea:focus-visible {
 .mission-target-blueprint-fields {
   display: grid;
   min-width: 0;
-  grid-template-columns: minmax(240px, 420px) 32px;
+  grid-template-columns: minmax(240px, 377px) 32px 36px;
   align-items: center;
   gap: 7px;
 }
 
 .mission-target-blueprint-fields[data-dialogue-expanded="true"] {
-  grid-template-columns: minmax(240px, 420px) 32px minmax(120px, 160px);
+  grid-template-columns:
+    minmax(180px, 377px) minmax(120px, 160px) 32px 36px;
 }
 
 .mission-target-dialogue-toggle {
@@ -8061,10 +8217,6 @@ textarea:focus-visible {
       "right right";
   }
 
-  .workspace-frame-reveal {
-    display: none;
-  }
-
   .left-panel {
     grid-area: left;
     height: 680px;
@@ -8263,11 +8415,12 @@ textarea:focus-visible {
 
   .mission-target-blueprint-fields,
   .mission-target-blueprint-fields[data-dialogue-expanded="true"] {
-    grid-template-columns: minmax(0, 1fr) 32px;
+    grid-template-columns: minmax(0, 1fr) 32px 36px;
   }
 
   .mission-target-blueprint-fields[data-dialogue-expanded="true"] {
-    grid-template-columns: minmax(0, 1fr) 32px minmax(120px, 160px);
+    grid-template-columns:
+      minmax(0, 1fr) minmax(120px, 160px) 32px 36px;
   }
 
   .mission-target-summary {
@@ -9531,12 +9684,24 @@ textarea:focus-visible {
 }
 
 .npc-migration-mode-shell > header {
+  position: relative;
   display: flex;
   align-items: end;
   justify-content: space-between;
   gap: 16px;
   padding-bottom: 14px;
-  border-bottom: 1px solid #c9cac4;
+}
+
+.npc-migration-mode-divider {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 1px;
+  background: #c9cac4;
+  transform: scaleX(1);
+  transform-origin: left;
+  pointer-events: none;
 }
 
 .npc-migration-mode-shell > header > div {
@@ -9562,6 +9727,8 @@ textarea:focus-visible {
 }
 
 .npc-migration-mode-option {
+  --npc-migration-mode-entry-delay: 0ms;
+  --npc-migration-mode-frame-color: #c7c9c2;
   position: relative;
   display: grid;
   min-width: 0;
@@ -9577,6 +9744,14 @@ textarea:focus-visible {
     color 200ms ease,
     background-color 200ms ease,
     border-color 200ms ease;
+}
+
+.npc-migration-mode-option:nth-child(2) {
+  --npc-migration-mode-entry-delay: 100ms;
+}
+
+.npc-migration-mode-option:nth-child(3) {
+  --npc-migration-mode-entry-delay: 200ms;
 }
 
 .npc-migration-mode-option::before {
@@ -9595,6 +9770,7 @@ textarea:focus-visible {
 
 .npc-migration-mode-option:hover,
 .npc-migration-mode-option:focus-visible {
+  --npc-migration-mode-frame-color: #5f625c;
   color: #ffffff;
   background: #242724;
   border-color: #242724;
@@ -9605,10 +9781,160 @@ textarea:focus-visible {
   box-shadow: 0 0 0 3px rgba(255, 250, 0, 0.58);
 }
 
+.npc-migration-mode-option__entry-frame {
+  position: absolute;
+  z-index: 3;
+  inset: -1px;
+  overflow: hidden;
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+.npc-migration-mode-option__entry-frame > i {
+  position: absolute;
+  display: block;
+  background: var(--npc-migration-mode-frame-color);
+}
+
+.npc-migration-mode-option__entry-frame > i[data-edge="top"],
+.npc-migration-mode-option__entry-frame > i[data-edge="bottom"] {
+  right: 0;
+  left: 0;
+  height: 1px;
+  transform: scaleX(1);
+}
+
+.npc-migration-mode-option__entry-frame > i[data-edge="top"] {
+  top: 0;
+  transform-origin: left;
+}
+
+.npc-migration-mode-option__entry-frame > i[data-edge="bottom"] {
+  bottom: 0;
+  transform-origin: right;
+}
+
+.npc-migration-mode-option__entry-frame > i[data-edge="right"],
+.npc-migration-mode-option__entry-frame > i[data-edge="left"] {
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  transform: scaleY(1);
+}
+
+.npc-migration-mode-option__entry-frame > i[data-edge="right"] {
+  right: 0;
+  transform-origin: top;
+}
+
+.npc-migration-mode-option__entry-frame > i[data-edge="left"] {
+  left: 0;
+  transform-origin: bottom;
+}
+
+.npc-migration-mode-workspace[data-mode-entry-phase="pending"]
+  .npc-migration-mode-divider {
+  transform: scaleX(0);
+}
+
+.npc-migration-mode-workspace[data-mode-entry-phase="pending"]
+  .npc-migration-mode-option,
+.npc-migration-mode-workspace[data-mode-entry-phase="revealing"]
+  .npc-migration-mode-option {
+  border-color: transparent;
+}
+
+.npc-migration-mode-workspace[data-mode-entry-phase="pending"]
+  .npc-migration-mode-option::before {
+  opacity: 0;
+}
+
+.npc-migration-mode-workspace[data-mode-entry-phase="pending"]
+  .npc-migration-mode-option__entry-frame
+  > i[data-edge="top"],
+.npc-migration-mode-workspace[data-mode-entry-phase="pending"]
+  .npc-migration-mode-option__entry-frame
+  > i[data-edge="bottom"] {
+  transform: scaleX(0);
+}
+
+.npc-migration-mode-workspace[data-mode-entry-phase="pending"]
+  .npc-migration-mode-option__entry-frame
+  > i[data-edge="right"],
+.npc-migration-mode-workspace[data-mode-entry-phase="pending"]
+  .npc-migration-mode-option__entry-frame
+  > i[data-edge="left"] {
+  transform: scaleY(0);
+}
+
+.npc-migration-mode-workspace[data-mode-entry-phase="revealing"]
+  .npc-migration-mode-divider {
+  animation: npc-migration-mode-frame-horizontal 520ms
+    cubic-bezier(0.16, 1, 0.3, 1) 40ms backwards;
+}
+
+.npc-migration-mode-workspace[data-mode-entry-phase="revealing"]
+  .npc-migration-mode-option::before {
+  animation: npc-migration-mode-accent-arrive 140ms ease-out
+    calc(var(--npc-migration-mode-entry-delay) + 580ms) backwards;
+}
+
+.npc-migration-mode-workspace[data-mode-entry-phase="revealing"]
+  .npc-migration-mode-option__entry-frame
+  > i[data-edge="top"] {
+  animation: npc-migration-mode-frame-horizontal 180ms
+    cubic-bezier(0.16, 1, 0.3, 1)
+    calc(var(--npc-migration-mode-entry-delay) + 140ms) backwards;
+}
+
+.npc-migration-mode-workspace[data-mode-entry-phase="revealing"]
+  .npc-migration-mode-option__entry-frame
+  > i[data-edge="right"] {
+  animation: npc-migration-mode-frame-vertical 160ms
+    cubic-bezier(0.16, 1, 0.3, 1)
+    calc(var(--npc-migration-mode-entry-delay) + 290ms) backwards;
+}
+
+.npc-migration-mode-workspace[data-mode-entry-phase="revealing"]
+  .npc-migration-mode-option__entry-frame
+  > i[data-edge="bottom"] {
+  animation: npc-migration-mode-frame-horizontal 180ms
+    cubic-bezier(0.16, 1, 0.3, 1)
+    calc(var(--npc-migration-mode-entry-delay) + 420ms) backwards;
+}
+
+.npc-migration-mode-workspace[data-mode-entry-phase="revealing"]
+  .npc-migration-mode-option__entry-frame
+  > i[data-edge="left"] {
+  animation: npc-migration-mode-frame-vertical 160ms
+    cubic-bezier(0.16, 1, 0.3, 1)
+    calc(var(--npc-migration-mode-entry-delay) + 540ms) backwards;
+}
+
+@keyframes npc-migration-mode-frame-horizontal {
+  from {
+    transform: scaleX(0);
+  }
+}
+
+@keyframes npc-migration-mode-frame-vertical {
+  from {
+    transform: scaleY(0);
+  }
+}
+
+@keyframes npc-migration-mode-accent-arrive {
+  from {
+    opacity: 0;
+  }
+}
+
 .npc-migration-mode-option__icon {
+  position: relative;
   display: grid;
   width: 72px;
   height: 72px;
+  overflow: hidden;
   color: #424540;
   background: #f0f0ed;
   border: 1px solid #d3d4ce;
@@ -9616,11 +9942,295 @@ textarea:focus-visible {
   place-items: center;
 }
 
+.npc-migration-mode-option__icon > svg {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 42px;
+  height: 42px;
+  transform: translate(-50%, -50%);
+}
+
+.npc-migration-mode-glyph__new > path:nth-of-type(n + 2),
+.npc-migration-mode-glyph__action-person,
+.npc-migration-mode-glyph__action-person > path:nth-of-type(2),
+.npc-migration-mode-glyph__face-frame > path:nth-of-type(-n + 4),
+.npc-migration-mode-glyph__face-smile > path,
+.npc-migration-mode-glyph__face-smile > line:nth-of-type(2) {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.npc-migration-mode-glyph__new > path:nth-of-type(n + 2) {
+  transform-box: view-box;
+  transform-origin: 19px 19px;
+}
+
+.npc-migration-mode-glyph__face-frame > path:nth-of-type(n + 5),
+.npc-migration-mode-glyph__face-smile > circle {
+  display: none;
+}
+
+.npc-migration-mode-glyph__face-smile {
+  opacity: 1;
+}
+
 .npc-migration-mode-option:hover .npc-migration-mode-option__icon,
 .npc-migration-mode-option:focus-visible .npc-migration-mode-option__icon {
   color: #ffffff;
   background: #343733;
   border-color: #5f625c;
+}
+
+.npc-migration-mode-option:is(:hover, :focus-visible)
+  .npc-migration-mode-glyph__new
+  > path:nth-of-type(n + 2) {
+  animation: npc-migration-new-plus 720ms cubic-bezier(0.16, 1, 0.3, 1)
+    both;
+  will-change: transform;
+}
+
+.npc-migration-mode-option:is(:hover, :focus-visible)
+  .npc-migration-mode-glyph__action-person {
+  animation: npc-migration-action-jump 800ms cubic-bezier(0.16, 1, 0.3, 1)
+    both;
+  will-change: transform;
+}
+
+.npc-migration-mode-option:is(:hover, :focus-visible)
+  .npc-migration-mode-glyph__action-person
+  > path:nth-of-type(2) {
+  animation: npc-migration-action-wave 800ms ease-in-out both;
+  will-change: transform;
+}
+
+.npc-migration-mode-option:is(:hover, :focus-visible)
+  .npc-migration-mode-glyph__face-frame
+  > path:nth-of-type(-n + 4) {
+  animation: npc-migration-face-frame-flash 760ms ease-out both;
+}
+
+.npc-migration-mode-option:is(:hover, :focus-visible)
+  .npc-migration-mode-glyph__face-smile
+  > path {
+  animation: npc-migration-face-smile-mouth 760ms
+    cubic-bezier(0.16, 1, 0.3, 1) both;
+  will-change: transform;
+}
+
+.npc-migration-mode-option:is(:hover, :focus-visible)
+  .npc-migration-mode-glyph__face-smile
+  > line:nth-of-type(2) {
+  animation: npc-migration-face-wink 760ms ease-in-out both;
+  will-change: transform;
+}
+
+@keyframes npc-migration-new-plus {
+  0% {
+    transform: rotate(0deg) scale(1);
+  }
+
+  66% {
+    transform: rotate(300deg) scale(0.84);
+  }
+
+  84% {
+    transform: rotate(360deg) scale(1.18);
+  }
+
+  100% {
+    transform: rotate(360deg) scale(1.1);
+  }
+}
+
+@keyframes npc-migration-action-jump {
+  0%,
+  100% {
+    transform: translate(-50%, -50%);
+  }
+
+  35% {
+    transform: translate(-50%, calc(-50% - 10px)) rotate(-2deg);
+  }
+
+  53% {
+    transform: translate(-50%, calc(-50% - 8px)) rotate(2deg);
+  }
+
+  76% {
+    transform: translate(-50%, calc(-50% + 1px)) scale(1.05, 0.94);
+  }
+}
+
+@keyframes npc-migration-action-wave {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+
+  20% {
+    transform: rotate(-20deg);
+  }
+
+  40% {
+    transform: rotate(18deg);
+  }
+
+  60% {
+    transform: rotate(-15deg);
+  }
+
+  80% {
+    transform: rotate(10deg);
+  }
+}
+
+@keyframes npc-migration-face-frame-flash {
+  0%,
+  24%,
+  100% {
+    opacity: 1;
+    stroke: currentColor;
+    stroke-width: 1.5;
+  }
+
+  32% {
+    opacity: 0.18;
+  }
+
+  40% {
+    opacity: 1;
+    stroke: var(--signal);
+    stroke-width: 2.4;
+  }
+
+  54% {
+    opacity: 0.42;
+    stroke: #ffffff;
+    stroke-width: 1.8;
+  }
+}
+
+@keyframes npc-migration-face-smile-mouth {
+  0%,
+  26% {
+    transform: scaleX(0.82) translateY(-0.4px);
+  }
+
+  58%,
+  100% {
+    transform: scaleX(1.16) translateY(0.2px);
+  }
+}
+
+@keyframes npc-migration-face-wink {
+  0%,
+  38%,
+  72%,
+  100% {
+    transform: scaleX(1);
+  }
+
+  44%,
+  64% {
+    transform: scaleX(220);
+  }
+}
+
+:root[data-reduced-motion="true"]
+  .npc-migration-mode-workspace:is(
+    [data-mode-entry-phase="pending"],
+    [data-mode-entry-phase="revealing"]
+  )
+  .npc-migration-mode-option {
+  border-color: var(--npc-migration-mode-frame-color);
+}
+
+:root[data-reduced-motion="true"]
+  .npc-migration-mode-workspace
+  .npc-migration-mode-divider,
+:root[data-reduced-motion="true"]
+  .npc-migration-mode-workspace
+  .npc-migration-mode-option__entry-frame
+  > i,
+:root[data-reduced-motion="true"]
+  .npc-migration-mode-workspace
+  .npc-migration-mode-option::before {
+  animation: none !important;
+  opacity: 1;
+  transform: none;
+}
+
+:root[data-reduced-motion="true"]
+  .npc-migration-mode-option:is(:hover, :focus-visible)
+  :is(
+    .npc-migration-mode-glyph__new > path:nth-of-type(n + 2),
+    .npc-migration-mode-glyph__action-person,
+    .npc-migration-mode-glyph__action-person > path:nth-of-type(2),
+    .npc-migration-mode-glyph__face-frame > path:nth-of-type(-n + 4),
+    .npc-migration-mode-glyph__face-smile > path,
+    .npc-migration-mode-glyph__face-smile > line:nth-of-type(2)
+  ) {
+  animation: none !important;
+}
+
+:root[data-reduced-motion="true"]
+  .npc-migration-mode-option:is(:hover, :focus-visible)
+  :is(
+    .npc-migration-mode-glyph__new > path:nth-of-type(n + 2),
+    .npc-migration-mode-glyph__action-person > path:nth-of-type(2),
+    .npc-migration-mode-glyph__face-frame > path:nth-of-type(-n + 4)
+  ) {
+  stroke: var(--signal);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-reduced-motion])
+    .npc-migration-mode-workspace:is(
+      [data-mode-entry-phase="pending"],
+      [data-mode-entry-phase="revealing"]
+    )
+    .npc-migration-mode-option {
+    border-color: var(--npc-migration-mode-frame-color);
+  }
+
+  :root:not([data-reduced-motion])
+    .npc-migration-mode-workspace
+    .npc-migration-mode-divider,
+  :root:not([data-reduced-motion])
+    .npc-migration-mode-workspace
+    .npc-migration-mode-option__entry-frame
+    > i,
+  :root:not([data-reduced-motion])
+    .npc-migration-mode-workspace
+    .npc-migration-mode-option::before {
+    animation: none !important;
+    opacity: 1;
+    transform: none;
+  }
+
+  :root:not([data-reduced-motion])
+    .npc-migration-mode-option:is(:hover, :focus-visible)
+    :is(
+      .npc-migration-mode-glyph__new > path:nth-of-type(n + 2),
+      .npc-migration-mode-glyph__action-person,
+      .npc-migration-mode-glyph__action-person > path:nth-of-type(2),
+      .npc-migration-mode-glyph__face-frame > path:nth-of-type(-n + 4),
+      .npc-migration-mode-glyph__face-smile > path,
+      .npc-migration-mode-glyph__face-smile > line:nth-of-type(2)
+    ) {
+    animation: none !important;
+  }
+
+  :root:not([data-reduced-motion])
+    .npc-migration-mode-option:is(:hover, :focus-visible)
+    :is(
+      .npc-migration-mode-glyph__new > path:nth-of-type(n + 2),
+      .npc-migration-mode-glyph__action-person > path:nth-of-type(2),
+      .npc-migration-mode-glyph__face-frame > path:nth-of-type(-n + 4)
+    ) {
+    stroke: var(--signal);
+  }
 }
 
 .npc-migration-mode-option > span:nth-child(2) {
@@ -10821,12 +11431,13 @@ textarea:focus-visible {
 }
 
 .tool-workspace__embedded .mission-target-blueprint-fields {
-  grid-template-columns: minmax(180px, 1fr) 32px;
+  grid-template-columns: minmax(0, 1fr) 32px 36px;
 }
 
 .tool-workspace__embedded
   .mission-target-blueprint-fields[data-dialogue-expanded="true"] {
-  grid-template-columns: minmax(180px, 1fr) 32px minmax(120px, 160px);
+  grid-template-columns:
+    minmax(0, 1fr) minmax(120px, 160px) 32px 36px;
 }
 
 .workspace-floating-actions {
