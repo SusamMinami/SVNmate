@@ -21,7 +21,12 @@ jobs:
 
       - name: Install Subversion command-line tools
         shell: pwsh
-        run: choco install svn --yes --no-progress
+        run: |
+          choco install svn --yes --no-progress
+          $svnBin = "${env:ProgramFiles(x86)}\Subversion\bin"
+          & (Join-Path $svnBin "svn.exe") --version --quiet
+          & (Join-Path $svnBin "svnadmin.exe") --version --quiet
+          $svnBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Run PowerShell regression tests
         working-directory: seria-wwise-migration
