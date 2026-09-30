@@ -17,6 +17,29 @@ function Assert-Equal {
     }
 }
 
+function Assert-PathListEqual {
+    param(
+        [Parameter(Mandatory = $true)][string[]]$Expected,
+        [Parameter(Mandatory = $true)][string[]]$Actual,
+        [Parameter(Mandatory = $true)][string]$Message
+    )
+
+    $expectedPaths = @(
+        $Expected | ForEach-Object {
+            (Get-Item -LiteralPath $_).FullName
+        }
+    )
+    $actualPaths = @(
+        $Actual | ForEach-Object {
+            (Get-Item -LiteralPath $_).FullName
+        }
+    )
+    Assert-Equal `
+        -Expected ($expectedPaths -join '|') `
+        -Actual ($actualPaths -join '|') `
+        -Message $Message
+}
+
 $testRoot = Join-Path $env:TEMP (
     'SeriaWwiseFullMigrationTest-' + [guid]::NewGuid().ToString('N')
 )
@@ -419,9 +442,12 @@ raise SystemExit(0 if ok else 1)
         -Expected 0 `
         -Actual $LASTEXITCODE `
         -Message 'Source-behind migration exit code.'
-    Assert-Equal `
-        -Expected $sourceProjectRoot `
-        -Actual (Get-Content -LiteralPath $bridgeMarker | Select-Object -First 1) `
+    Assert-PathListEqual `
+        -Expected @($sourceProjectRoot) `
+        -Actual @(
+            Get-Content -LiteralPath $bridgeMarker |
+                Select-Object -First 1
+        ) `
         -Message 'Source update path.'
     Assert-Equal `
         -Expected 'remote-source-content' `
@@ -466,9 +492,12 @@ raise SystemExit(0 if ok else 1)
         -Expected 0 `
         -Actual $LASTEXITCODE `
         -Message 'Target-behind migration exit code.'
-    Assert-Equal `
-        -Expected $targetRoot `
-        -Actual (Get-Content -LiteralPath $bridgeMarker | Select-Object -First 1) `
+    Assert-PathListEqual `
+        -Expected @($targetRoot) `
+        -Actual @(
+            Get-Content -LiteralPath $bridgeMarker |
+                Select-Object -First 1
+        ) `
         -Message 'Target update path.'
     Assert-Equal `
         -Expected $false `
@@ -540,9 +569,14 @@ raise SystemExit(0 if ok else 1)
         -Expected 0 `
         -Actual $LASTEXITCODE `
         -Message 'Batched source/target update exit code.'
-    Assert-Equal `
-        -Expected ('{0}|{1}' -f $sourceProjectRoot, $targetRoot) `
-        -Actual (Get-Content -LiteralPath $bridgeMarker | Select-Object -First 1) `
+    Assert-PathListEqual `
+        -Expected @($sourceProjectRoot, $targetRoot) `
+        -Actual @(
+            (
+                Get-Content -LiteralPath $bridgeMarker |
+                    Select-Object -First 1
+            ) -split '\|'
+        ) `
         -Message 'Batched SVNmate update paths.'
     Assert-Equal `
         -Expected 'batched-source-content' `
