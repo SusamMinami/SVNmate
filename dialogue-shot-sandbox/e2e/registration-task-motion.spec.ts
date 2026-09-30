@@ -40,6 +40,9 @@ for (const density of [1, 1.25, 1.5, 2]) {
     test.use({ deviceScaleFactor: density });
     test("one notice covers read, cancel, uncertain write and unsaved Excel success", async ({ page }, info) => {
       const errors = await isolate(page);
+      if (density === 1) {
+        await page.setViewportSize({ width: 1080, height: 700 });
+      }
       const pending = new Map<string, Route>();
       let writes = 0;
       await page.route("**/api/ue/selection/registration", (route) => { pending.set("read", route); });
@@ -53,21 +56,48 @@ for (const density of [1, 1.25, 1.5, 2]) {
       await page.goto("/");
       await page.getByRole("button", { name: "注册 NPC", exact: true }).click();
       const region = page.getByRole("region", { name: "注册 NPC", exact: true });
-      const glyph = page.locator(".npc-registration-modal .task-glyph");
+      const notice = page.locator(
+        ".app-header__operation > .app-header-task-notice",
+      );
+      const glyph = notice.locator(".task-glyph");
       const read = region.getByRole("button", { name: "读取 UE 选择" });
       const readIcon = page.locator('.npc-registration-modal .operation-icon[data-kind="read"]');
+      const bodyTop = await region.locator(".npc-registration-body").evaluate(
+        (element) => element.getBoundingClientRect().top,
+      );
       await read.click();
+      await expect(notice).toHaveCount(1);
+      await expect(notice).toHaveCSS("height", "32px");
       await expect(glyph).toHaveCount(1);
       await expect(glyph).toHaveAttribute("data-phase", "running");
+      expect(
+        await notice.evaluate((element) => {
+          const noticeBounds = element.getBoundingClientRect();
+          const headerBounds = element.closest(".app-header")!.getBoundingClientRect();
+          return (
+            noticeBounds.top >= headerBounds.top &&
+            noticeBounds.bottom <= headerBounds.bottom &&
+            noticeBounds.left >= headerBounds.left &&
+            noticeBounds.right <= headerBounds.right
+          );
+        }),
+      ).toBe(true);
+      await expect(region.locator(".npc-registration-message")).toHaveCount(0);
+      expect(
+        await region.locator(".npc-registration-body").evaluate(
+          (element) => element.getBoundingClientRect().top,
+        ),
+      ).toBe(bodyTop);
       await expect(readIcon).toHaveAttribute("data-running", "true");
       await expect(readIcon.locator("svg")).toHaveCSS("animation-name", "operation-read");
       await expect(glyph).toHaveAttribute("data-running", "false");
       await expect(region.locator(".spin")).toHaveCount(0);
       await page.getByRole("button", { name: "分镜工作台", exact: true }).click();
       await expect(readIcon).toHaveAttribute("data-running", "false");
-      await expect(glyph).toHaveAttribute("data-running", "false");
+      await expect(notice).toHaveCount(0);
       await (await take("read")).fulfill({ status: 400, json: { ok: false, error: { message: "读取选择失败" } } });
       await page.getByRole("button", { name: "注册 NPC", exact: true }).click();
+      await expect(notice).toHaveCount(1);
       await expect(glyph).toHaveAttribute("data-phase", "failed");
       await read.click();
       await hidden(page, true);
@@ -93,7 +123,8 @@ for (const density of [1, 1.25, 1.5, 2]) {
       await (await take("write")).fulfill({ status: 500, json: { ok: false, error: { message: "Excel 连接中断" } } });
       await expect(glyph).toHaveAttribute("data-phase", "uncertain");
       await expect(write.locator(".operation-icon")).toHaveAttribute("data-running", "false");
-      await expect(region.getByRole("alert")).toContainText("核对 Excel 未保存内容");
+      await expect(notice).toContainText("核对 Excel 未保存内容");
+      await expect(notice).toHaveAttribute("title", /核对 Excel 未保存内容/);
       // Simulates the operator checking Excel and explicitly retrying.
       await setReducedMotion(page, true);
       page.once("dialog", (dialog) => dialog.accept());
@@ -105,7 +136,7 @@ for (const density of [1, 1.25, 1.5, 2]) {
         reusedTargets: [], openedWorkbooks: ["fixture.xlsm"],
       } } });
       await expect(glyph).toHaveAttribute("data-phase", "success");
-      await expect(region.getByRole("status")).toContainText("未保存草稿");
+      await expect(notice).toContainText("未保存草稿");
       await expect(write).toBeDisabled();
       expect(writes).toBe(2);
       expect(await glyph.evaluate((el) => el.getAnimations({ subtree: true }).length)).toBe(0);
@@ -132,7 +163,10 @@ test("target inspection and background overlay keep one feedback location", asyn
   await page.goto("/");
   await page.getByRole("button", { name: "任务目标物", exact: true }).click();
   const region = page.getByRole("region", { name: "任务目标物", exact: true });
-  const glyph = region.locator(".task-glyph");
+  const notice = page.locator(
+    ".app-header__operation > .app-header-task-notice",
+  );
+  const glyph = notice.locator(".task-glyph");
   await region.getByLabel("BP 文件名").fill("BP_204800");
   await region.getByRole("button", { name: "检查 BP 与对话模型" }).click();
   await expect(glyph).toHaveCount(1);
@@ -174,7 +208,7 @@ test("target inspection and background overlay keep one feedback location", asyn
   await page.screenshot({ path: info.outputPath("targets-background-writing.png") });
   await (await take("background-props/apply")).fulfill({ status: 500, json: { ok: false, error: { message: "UE 连接中断" } } });
   await expect(glyph).toHaveAttribute("data-phase", "uncertain");
-  await expect(dialog.getByRole("alert")).toContainText("核对 UE 资产");
+  await expect(notice).toContainText("核对 UE 资产");
   await dialog.getByRole("button", { name: "取消", exact: true }).click();
   await read.click();
   await (await take("background-props/inspect")).fulfill({ json: { ok: true, data: preview } });
@@ -187,8 +221,9 @@ test("target inspection and background overlay keep one feedback location", asyn
   await expect(glyph).toHaveCount(1);
   await expect(glyph).toHaveAttribute("data-phase", "success");
   const body = region.locator(".mission-target-body");
-  const successNotice = body.locator(".mission-target-message");
+  const successNotice = notice;
   await expect(successNotice).toBeVisible();
+  await expect(body.locator(".mission-target-message")).toHaveCount(0);
   const widthBeforeOverflow = await body.evaluate((element) => element.clientWidth);
   await body.evaluate((element) => {
     const spacer = document.createElement("div");
@@ -216,15 +251,8 @@ test("target inspection and background overlay keep one feedback location", asyn
     element.scrollTop = element.scrollHeight;
     element.dispatchEvent(new Event("scroll"));
   });
-  await expect
-    .poll(() =>
-      successNotice.evaluate((notice) => {
-        const noticeBounds = notice.getBoundingClientRect();
-        const bodyBounds = notice.parentElement!.getBoundingClientRect();
-        return noticeBounds.bottom <= bodyBounds.top;
-      }),
-    )
-    .toBe(true);
+  await expect(successNotice).toBeVisible();
+  await expect(successNotice).toHaveText(/已写入 BP/);
   expect(errors).toEqual([]);
 });
 
@@ -330,8 +358,8 @@ test("target errors stay centered and map reload interruptions remain recoverabl
   await resolveButton.click();
   await expect(resolveButton).toBeEnabled();
   await resolveButton.click();
-  const duplicateNotice = region.locator(
-    ".mission-target-body .mission-target-message",
+  const duplicateNotice = page.locator(
+    ".app-header__operation > .app-header-task-notice",
   );
   await expect(duplicateNotice).toContainText("重复 ID：102464");
   await expect(duplicateNotice).toHaveAttribute("data-phase", "failed");

@@ -696,6 +696,7 @@ function appendPlan(): MissionTargetPreviewPlan {
         itemId: 0,
         blueprintModelId: null,
         mapId: "1204",
+        vanish: "瞬间消失",
         previewKind: "asset",
         transform: {
           location: { x: 100, y: 200, z: 300 },
@@ -714,6 +715,7 @@ function appendPlan(): MissionTargetPreviewPlan {
         itemId: 0,
         blueprintModelId: null,
         mapId: "1204",
+        vanish: "超视距消失",
         previewKind: "asset",
         transform: {
           location: { x: 140, y: 260, z: 360 },

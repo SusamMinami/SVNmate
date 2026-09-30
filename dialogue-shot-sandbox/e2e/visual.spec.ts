@@ -7561,6 +7561,8 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
   let loadedTaskId = "";
   let loadedTargetIds: string[] = [];
   let loadedMapMode = "";
+  let existingPreviewCount = 0;
+  const loadedPreviewPolicies: string[] = [];
   let mapStatusMatches = false;
   let refreshedTaskRequests = 0;
   await page.route(
@@ -7731,6 +7733,7 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
       mapId: "1204",
       positionText: "(X=10,Y=20,Z=30)",
       rotationText: "(Pitch=0,Yaw=90,Roll=0)",
+      vanish: "瞬间消失",
       rowNumber: 3,
     };
     await route.fulfill({
@@ -7909,12 +7912,40 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
     const request = route.request().postDataJSON();
     loadedTaskId = request.plan.taskId;
     loadedMapMode = request.mapMode;
+    loadedPreviewPolicies.push(request.existingPreviewPolicy);
     loadedTargetIds = request.plan.targets.map(
       (target: { targetId: string }) => target.targetId,
     );
     if (request.mapMode === "auto") {
       await new Promise((resolve) => setTimeout(resolve, 500));
     }
+    if (
+      request.existingPreviewPolicy === "prompt" &&
+      existingPreviewCount > 0
+    ) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          data: {
+            status: "confirmation_required",
+            taskId: request.plan.taskId,
+            mapId: "1204",
+            mapAssetPath:
+              "/Game/Seria/Maps/08_01_UrbanArea/08_01_UrbanArea",
+            autoOpenedMap: request.mapMode === "auto",
+            existingPreviewCount,
+          },
+        }),
+      });
+      return;
+    }
+    const previousPreviewCount = existingPreviewCount;
+    if (request.existingPreviewPolicy === "replace") {
+      existingPreviewCount = 0;
+    }
+    existingPreviewCount += loadedTargetIds.length;
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -7930,6 +7961,14 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
           spawnedCount: loadedTargetIds.length,
           assetCount: 1,
           markerCount: Math.max(0, loadedTargetIds.length - 1),
+          clearedPreviewCount:
+            request.existingPreviewPolicy === "replace"
+              ? previousPreviewCount
+              : 0,
+          retainedPreviewCount:
+            request.existingPreviewPolicy === "append"
+              ? previousPreviewCount
+              : 0,
         },
       }),
     });
@@ -7985,11 +8024,11 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
       {
         name: "m目标物表.csv",
         content: [
-          "##&MissionPosition.ID,,,MissionPosition.type,MissionPosition.NPCID,MissionPosition.ItemID,MissionPosition.BluePrint,MissionPosition.MapID,MissionPosition.Position,MissionPosition.Rotation,MissionPosition.npcchat2",
-          "##ID,类型,描述,坐标类型,NPCID,物品ID,蓝图路径,地图ID,座标,旋转,复杂闲话",
-          '500001,剧情NPC,商会安保,1,101968,0,,1204,"(X=10,Y=20,Z=30)","(Pitch=0,Yaw=90,Roll=0)",704200',
-          '500002,触发器,抵达区域,3,0,0,,1204,"(X=40,Y=50,Z=60)","(Pitch=0,Yaw=0,Roll=0)",',
-          '500003,触发器,错误地图,3,0,0,,1205,"(X=70,Y=80,Z=90)","(Pitch=0,Yaw=0,Roll=0)",',
+          "##&MissionPosition.ID,,,MissionPosition.type,MissionPosition.NPCID,MissionPosition.ItemID,MissionPosition.BluePrint,MissionPosition.MapID,MissionPosition.Position,MissionPosition.Rotation,MissionPosition.npcchat2,MissionPosition.Vanish",
+          "##ID,类型,描述,坐标类型,NPCID,物品ID,蓝图路径,地图ID,座标,旋转,复杂闲话,消失方式",
+          '500001,剧情NPC,商会安保,1,101968,0,,1204,"(X=10,Y=20,Z=30)","(Pitch=0,Yaw=90,Roll=0)",704200,瞬间消失',
+          '500002,触发器,抵达区域,3,0,0,,1204,"(X=40,Y=50,Z=60)","(Pitch=0,Yaw=0,Roll=0)",,超视距消失',
+          '500003,触发器,错误地图,3,0,0,,1205,"(X=70,Y=80,Z=90)","(Pitch=0,Yaw=0,Roll=0)",,不消失',
         ].join("\n"),
       },
       {
@@ -8046,6 +8085,27 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
   await expect(dialog.getByText("上城区 · 1204")).toBeVisible();
   await expect(dialog.locator(".mission-target-table tbody tr")).toHaveCount(2);
   await expect(dialog.getByText("0°, 90°, 0°")).toBeVisible();
+  await expect(
+    dialog
+      .locator(".mission-target-table tbody tr")
+      .nth(0)
+      .getByRole("img", { name: "消失方式：瞬间消失" }),
+  ).toHaveAttribute("data-vanish-mode", "instant");
+  await expect(
+    dialog
+      .locator(".mission-target-table tbody tr")
+      .nth(1)
+      .getByRole("img", { name: "消失方式：超视距消失" }),
+  ).toHaveAttribute("data-vanish-mode", "distance");
+  const targetTableMetrics = await dialog
+    .locator(".mission-target-table-wrap")
+    .evaluate((element) => ({
+      clientWidth: element.clientWidth,
+      scrollWidth: element.scrollWidth,
+    }));
+  expect(targetTableMetrics.scrollWidth).toBeLessThanOrEqual(
+    targetTableMetrics.clientWidth + 1,
+  );
   const firstTargetModelCell = dialog
     .locator(".mission-target-table tbody tr")
     .first()
@@ -8091,7 +8151,7 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
   expect(selectionReadRequests).toBe(1);
   await dialog.getByLabel("BP 文件名").fill("BP_Test");
   await dialog.getByRole("button", { name: "检查 BP 与对话模型" }).click();
-  await expect(dialog.getByText("BP 尚未创建站位组件")).toBeVisible();
+  await expect(page.getByRole("status")).toContainText("BP 尚未创建站位组件");
   const modalBounds = await dialog.boundingBox();
   const footerBounds = await dialog.locator("footer").boundingBox();
   expect(modalBounds).not.toBeNull();
@@ -8104,8 +8164,10 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
   });
   await dialog.getByRole("button", { name: "创建 BP" }).click();
   await expect(
-    dialog.getByText(/0 号玩家、1 个目标物和 c1 摄像机/),
-  ).toBeVisible();
+    page.getByRole("status"),
+  ).toContainText(
+    /0 号玩家、1 个目标物和 c1 摄像机/,
+  );
   expect(createRequests).toBe(1);
   expect(createdBlueprintName).toBe("BP_Test");
   expect(createdTargetIds).toEqual(["500001"]);
@@ -8125,14 +8187,19 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
     dialog.getByRole("alertdialog", { name: "等待手动切换地图" }),
   ).toBeVisible();
   await dialog.getByRole("button", { name: "检查并加载" }).click();
-  await expect(dialog.getByText("UE 尚未完成目标地图切换")).toBeVisible();
+  await expect(
+    dialog
+      .getByRole("alertdialog", { name: "等待手动切换地图" })
+      .getByRole("alert"),
+  ).toContainText("UE 尚未完成目标地图切换");
   expect(loadRequests).toBe(0);
   mapStatusMatches = true;
   await dialog.getByRole("button", { name: "检查并加载" }).click();
-  await expect(dialog.getByText(/当前已是\s*上城区/)).toBeVisible();
+  await expect(page.getByRole("status")).toContainText(/当前已是\s*上城区/);
   expect(loadRequests).toBe(1);
   expect(loadedTaskId).toBe("900001");
   expect(loadedMapMode).toBe("require-current");
+  expect(loadedPreviewPolicies).toEqual(["prompt"]);
   expect(loadedTargetIds).toEqual(["500001"]);
 
   mapStatusMatches = false;
@@ -8146,14 +8213,58 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
       name: "正在等待 UE 加载地图",
     }),
   ).toContainText("大型关卡可能需要数十秒");
-  await expect(dialog.getByText(/已自动打开\s*上城区/)).toBeVisible();
+  const existingPreviewChoice = dialog.getByRole("alertdialog", {
+    name: "如何处理已添加的目标物",
+  });
+  await expect(existingPreviewChoice).toBeVisible();
+  await expect(existingPreviewChoice).toContainText(
+    "UE 中已有1 个目标物预览",
+  );
+  await expect(existingPreviewChoice).toContainText(
+    "本次准备添加1 个目标物",
+  );
+  await expect(
+    existingPreviewChoice.getByRole("button", {
+      name: "保留并继续添加",
+    }),
+  ).toBeFocused();
   expect(loadRequests).toBe(2);
   expect(loadedMapMode).toBe("auto");
-  mapStatusMatches = true;
+  expect(loadedPreviewPolicies).toEqual(["prompt", "prompt"]);
+  await existingPreviewChoice.screenshot({
+    path: testInfo.outputPath("mission-target-existing-preview-choice.png"),
+  });
+  await existingPreviewChoice
+    .getByRole("button", { name: "保留并继续添加" })
+    .click();
+  await expect(page.getByRole("status")).toContainText(
+    /已自动打开\s*上城区，保留 1 个旧预览并加载/,
+  );
+  expect(loadRequests).toBe(3);
+  expect(loadedMapMode).toBe("require-current");
+  expect(loadedPreviewPolicies.at(-1)).toBe("append");
+  expect(existingPreviewCount).toBe(2);
 
-  await dialog.getByRole("button", { name: "修改位置" }).click();
+  mapStatusMatches = true;
+  await dialog.getByRole("button", { name: "加载到 UE" }).click();
+  await expect(existingPreviewChoice).toBeVisible();
+  await expect(existingPreviewChoice).toContainText(
+    "UE 中已有2 个目标物预览",
+  );
+  expect(loadRequests).toBe(4);
+  await existingPreviewChoice
+    .getByRole("button", { name: "清除后添加" })
+    .click();
+  await expect(page.getByRole("status")).toContainText(
+    /清除 2 个旧预览后加载/,
+  );
+  expect(loadRequests).toBe(5);
+  expect(loadedPreviewPolicies.at(-1)).toBe("replace");
+  expect(existingPreviewCount).toBe(1);
+
+  await dialog.getByRole("button", { name: "修改配置" }).click();
   const targetEditor = page.getByRole("region", {
-    name: "修改目标物位置",
+    name: "修改目标物配置",
     exact: true,
   });
   await expect(targetEditor.getByText("500001", { exact: true })).toBeVisible();
@@ -8169,15 +8280,21 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
   await expect(targetEditor.getByLabel("目标物 500001 新旋转")).toHaveValue(
     "(Pitch=0.000000,Yaw=95.000000,Roll=0.000000)",
   );
+  await expect(targetEditor.getByLabel("目标物 500001 消失方式")).toHaveValue(
+    "瞬间消失",
+  );
+  await targetEditor
+    .getByLabel("目标物 500001 消失方式")
+    .selectOption("超视距消失");
   await targetEditor.screenshot({
     path: testInfo.outputPath("mission-target-edit.png"),
   });
   page.once("dialog", async (confirmation) => {
-    expect(confirmation.message()).toContain("仅更新位置和旋转");
+    expect(confirmation.message()).toContain("消失方式");
     await confirmation.accept();
   });
   await targetEditor.getByRole("button", { name: "写入修改" }).click();
-  await expect(targetEditor.getByText(/修改 1 个目标物/)).toBeVisible();
+  await expect(page.getByRole("status")).toContainText(/修改 1 个目标物/);
   expect(selectionReadRequests).toBe(1);
   expect(targetUpdateItems).toEqual([
     expect.objectContaining({
@@ -8191,6 +8308,8 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
         location: { x: 15, y: 25, z: 35 },
         rotation: { pitch: 0, yaw: 95, roll: 0 },
       }),
+      originalVanish: "瞬间消失",
+      vanish: "超视距消失",
     }),
   ]);
   await targetEditor
@@ -8198,17 +8317,23 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
     .click();
   await expect(dialog.getByText("15, 25, 35")).toBeVisible();
   await expect(dialog.getByText("0°, 95°, 0°")).toBeVisible();
+  await expect(
+    dialog
+      .locator(".mission-target-table tbody tr")
+      .nth(0)
+      .getByRole("img", { name: "消失方式：超视距消失" }),
+  ).toHaveAttribute("data-vanish-mode", "distance");
 
   await dialog.getByLabel("任务节点 ID").fill("900002");
   await dialog.getByRole("button", { name: "解析任务目标物" }).click();
-  await expect(dialog.getByText(/目标物 MapID 不一致/)).toBeVisible();
+  await expect(page.getByRole("alert")).toContainText(/目标物 MapID 不一致/);
   expect(refreshedTaskRequests).toBe(0);
   await dialog.getByRole("button", { name: "解析任务目标物" }).click();
   await expect.poll(() => refreshedTaskRequests).toBe(1);
   await expect(
     dialog.getByRole("button", { name: /加载|计算.*站位/ }),
   ).toHaveCount(0);
-  expect(loadRequests).toBe(2);
+  expect(loadRequests).toBe(5);
 
   await dialog.getByRole("button", { name: "返回分镜工作台" }).click();
   await page.getByRole("button", { name: "注册 NPC" }).click();
@@ -8263,6 +8388,9 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
   const newActorMapSelect = registration.getByLabel("守卫新增 MapID");
   await expect(previewMapSelect).toHaveValue("1204");
   await expect(newActorMapSelect).toHaveValue("1204");
+  const newActorVanishSelect = registration.getByLabel("守卫新增 消失方式");
+  await expect(newActorVanishSelect).toHaveValue("瞬间消失");
+  await newActorVanishSelect.selectOption("超视距消失");
   await expect(previewMapSelect.locator("option:checked")).toHaveText(
     "1204 · 上城区",
   );
@@ -8275,8 +8403,8 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
   });
   await registration.getByRole("button", { name: "NPC 表" }).click();
   await expect(
-    registration.getByText(/守卫新增 → 101999/),
-  ).toBeVisible();
+    page.getByRole("status"),
+  ).toContainText(/守卫新增 → 101999/);
   expect(registrationWriteScope).toBe("npc_only");
   expect(npcOnlyWriteItems).toEqual([
     expect.objectContaining({
@@ -8297,8 +8425,8 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
   });
   await registration.getByRole("button", { name: "写入新增项" }).click();
   await expect(
-    registration.getByText(/守卫新增 → 500005/),
-  ).toBeVisible();
+    page.getByRole("status"),
+  ).toContainText(/守卫新增 → 500005/);
   expect(registrationWriteScope).toBe("target_only");
   expect(targetOnlyWriteItems).toEqual([
     expect.objectContaining({
@@ -8307,6 +8435,7 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
       existingModelId: 200135,
       existingNpcId: 101999,
       mapId: "1204",
+      vanish: "超视距消失",
       newNpc: null,
     }),
   ]);
@@ -8316,12 +8445,10 @@ test("previews mission targets and blocks mixed MapIDs before UE loading", async
 
   await page.getByRole("button", { name: "任务目标物" }).click();
   await expect(dialog.getByLabel("任务节点 ID")).toHaveValue("900002");
-  await expect(dialog.getByText(/目标物 MapID 不一致/)).toBeVisible();
+  await expect(page.getByRole("alert")).toContainText(/目标物 MapID 不一致/);
 
   await page.getByRole("button", { name: "注册 NPC" }).click();
-  await expect(
-    registration.getByText(/守卫新增 → 500005/),
-  ).toBeVisible();
+  await expect(page.getByRole("status")).toContainText(/守卫新增 → 500005/);
 });
 
 test("applies one MapID to selected actors and writes reusable NPCs as targets only", async ({

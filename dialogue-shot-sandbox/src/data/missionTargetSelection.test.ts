@@ -24,6 +24,7 @@ function target(
     itemId: null,
     blueprintModelId: null,
     mapId: "1204",
+    vanish: "瞬间消失",
     previewKind: "asset",
     transform: {
       location: { x, y: 0, z: 0 },

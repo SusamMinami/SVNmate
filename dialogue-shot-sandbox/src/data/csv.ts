@@ -480,12 +480,13 @@ function parseMissionPositions(text: string): MissionPositionRow[] {
         members,
         "MissionPosition.npcchat2",
       ),
+      vanishIndex: optionalIndex(members, "MissionPosition.Vanish"),
     }),
     (
       row,
       rowNumber,
       { indexes },
-      { descriptionIndex, complexChatIndex },
+      { descriptionIndex, complexChatIndex, vanishIndex },
     ) => {
       const id = valueAt(row, indexes, "MissionPosition.ID");
       if (!id) {
@@ -503,6 +504,7 @@ function parseMissionPositions(text: string): MissionPositionRow[] {
         mapId: valueAt(row, indexes, "MissionPosition.MapID"),
         positionText: valueAt(row, indexes, "MissionPosition.Position"),
         rotationText: valueAt(row, indexes, "MissionPosition.Rotation"),
+        vanish: optionalValueAt(row, vanishIndex),
         rowNumber,
         complexChatDialogueIds: configuredNumericReferences(
           optionalValueAt(row, complexChatIndex),

@@ -53,6 +53,7 @@ import type {
   MissionTargetBlueprintInspection,
   MissionTargetEditRequest,
   MissionTargetPreviewLoadResult,
+  MissionTargetPreviewLoadedResult,
   MissionTargetPreviewPlan,
   MissionTargetUpdateItem,
   SelectedLevelActorsResult,
@@ -94,6 +95,15 @@ interface LegacySlotWritePrompt {
   actionLabel: string;
 }
 
+interface ExistingPreviewDecision {
+  plan: MissionTargetPreviewPlan;
+  mapMode: "require-current" | "current";
+  existingPreviewCount: number;
+  autoOpenedMap: boolean;
+  currentMap: boolean;
+  error: string;
+}
+
 type LegacySlotWriteChoice = "normalize" | "preserve" | null;
 
 function isMapLoadStillInProgress(message: string): boolean {
@@ -130,7 +140,7 @@ function typeLabel(type: number | null): string {
 
 function loadSummary(
   plan: MissionTargetPreviewPlan,
-  result: MissionTargetPreviewLoadResult,
+  result: MissionTargetPreviewLoadedResult,
   currentMap = false,
 ): string {
   const mapStatus = currentMap
@@ -138,7 +148,13 @@ function loadSummary(
     : result.autoOpenedMap
       ? `已自动打开 ${plan.mapName}`
       : `当前已是 ${plan.mapName}`;
-  return `${mapStatus}，加载 ${result.assetCount} 个资产和 ${result.markerCount} 个定位标记${
+  const existingPreviewStatus =
+    result.clearedPreviewCount > 0
+      ? `，清除 ${result.clearedPreviewCount} 个旧预览后`
+      : result.retainedPreviewCount > 0
+        ? `，保留 ${result.retainedPreviewCount} 个旧预览并`
+        : "，";
+  return `${mapStatus}${existingPreviewStatus}加载 ${result.assetCount} 个资产和 ${result.markerCount} 个定位标记${
     plan.dialogueTimeline
       ? `，已选中 ${result.selectedActorCount ?? 0} 个变更角色供 NPC 注册`
       : ""
@@ -280,6 +296,8 @@ export function MissionTargetModal({
     useState("");
   const [mapLoadDecision, setMapLoadDecision] =
     useState<MapLoadDecision | null>(null);
+  const [existingPreviewDecision, setExistingPreviewDecision] =
+    useState<ExistingPreviewDecision | null>(null);
   const [legacySlotWritePrompt, setLegacySlotWritePrompt] =
     useState<LegacySlotWritePrompt | null>(null);
   const { busy, setBusy, setError, setStatus, beginTask, setTaskLabel, feedback, activeOperation } = useOperationFeedback();
@@ -775,9 +793,12 @@ export function MissionTargetModal({
       );
     }
     try {
-      const result = await loadMissionTargetPreview(selectedPlan, mapMode);
-      setMapLoadDecision(null);
-      setStatus(loadSummary(selectedPlan, result), "success");
+      const result = await loadMissionTargetPreview(
+        selectedPlan,
+        mapMode,
+        "prompt",
+      );
+      handlePreviewLoadResult(selectedPlan, result, mapMode);
     } catch (previewError) {
       const message =
         previewError instanceof Error
@@ -804,6 +825,79 @@ export function MissionTargetModal({
       } else {
         setError(message);
       }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function handlePreviewLoadResult(
+    selectedPlan: MissionTargetPreviewPlan,
+    result: MissionTargetPreviewLoadResult,
+    mapMode: "require-current" | "auto" | "current",
+    currentMap = false,
+  ): void {
+    if (result.status === "confirmation_required") {
+      setMapLoadDecision(null);
+      setExistingPreviewDecision({
+        plan: selectedPlan,
+        mapMode: mapMode === "current" ? "current" : "require-current",
+        existingPreviewCount: result.existingPreviewCount,
+        autoOpenedMap: result.autoOpenedMap,
+        currentMap,
+        error: "",
+      });
+      return;
+    }
+    setMapLoadDecision(null);
+    setExistingPreviewDecision(null);
+    setStatus(loadSummary(selectedPlan, result, currentMap), "success");
+  }
+
+  async function confirmPreviewLoad(
+    existingPreviewPolicy: "replace" | "append",
+  ): Promise<void> {
+    if (!existingPreviewDecision) {
+      return;
+    }
+    const decision = existingPreviewDecision;
+    beginTask(
+      existingPreviewPolicy === "replace"
+        ? "正在清除旧预览并加载所选目标物"
+        : "正在保留旧预览并添加所选目标物",
+    );
+    setExistingPreviewDecision((current) =>
+      current ? { ...current, error: "" } : current,
+    );
+    try {
+      const result = await loadMissionTargetPreview(
+        decision.plan,
+        decision.mapMode,
+        existingPreviewPolicy,
+      );
+      if (result.status !== "loaded") {
+        throw new Error("UE 预览状态已变化，请重新选择处理方式");
+      }
+      handlePreviewLoadResult(
+        decision.plan,
+        {
+          ...result,
+          autoOpenedMap: decision.autoOpenedMap || result.autoOpenedMap,
+        },
+        decision.mapMode,
+        decision.currentMap,
+      );
+    } catch (previewError) {
+      setExistingPreviewDecision((current) =>
+        current
+          ? {
+              ...current,
+              error:
+                previewError instanceof Error
+                  ? previewError.message
+                  : "目标物预览加载失败",
+            }
+          : current,
+      );
     } finally {
       setBusy(false);
     }
@@ -987,8 +1081,9 @@ export function MissionTargetModal({
         const result = await loadMissionTargetPreview(
           selectedPlan,
           "current",
+          "prompt",
         );
-        setStatus(loadSummary(selectedPlan, result, true), "success");
+        handlePreviewLoadResult(selectedPlan, result, "current", true);
         return;
       }
       const mapStatus = await inspectMissionTargetMap(
@@ -999,8 +1094,9 @@ export function MissionTargetModal({
         const result = await loadMissionTargetPreview(
           selectedPlan,
           "require-current",
+          "prompt",
         );
-        setStatus(loadSummary(selectedPlan, result), "success");
+        handlePreviewLoadResult(selectedPlan, result, "require-current");
       } else {
         setMapLoadDecision({
           plan: selectedPlan,
@@ -1048,9 +1144,13 @@ export function MissionTargetModal({
       const result = await loadMissionTargetPreview(
         mapLoadDecision.plan,
         "require-current",
+        "prompt",
       );
-      setMapLoadDecision(null);
-      setStatus(loadSummary(mapLoadDecision.plan, result), "success");
+      handlePreviewLoadResult(
+        mapLoadDecision.plan,
+        result,
+        "require-current",
+      );
     } catch (previewError) {
       setMapLoadDecision((current) =>
         current
@@ -1917,13 +2017,11 @@ export function MissionTargetModal({
   }
 
   function applyTargetUpdates(items: MissionTargetUpdateItem[]) {
-    const updates = new Map(
-      items.map((item) => [item.targetId, item.transform]),
-    );
+    const updates = new Map(items.map((item) => [item.targetId, item]));
     setTargetOverrides((current) => {
       const next = new Map(current);
-      for (const [targetId, transform] of updates) {
-        next.set(targetId, transform);
+      for (const [targetId, item] of updates) {
+        next.set(targetId, item.transform);
       }
       return next;
     });
@@ -1931,15 +2029,16 @@ export function MissionTargetModal({
       targets: MissionTargetPreviewPlan["targets"],
     ): MissionTargetPreviewPlan["targets"] =>
       targets.map((target) => {
-        const transform = updates.get(target.targetId);
-        return transform
+        const update = updates.get(target.targetId);
+        return update
           ? {
               ...target,
               transform: {
                 ...target.transform,
-                location: transform.location,
-                rotation: transform.rotation,
+                location: update.transform.location,
+                rotation: update.transform.rotation,
               },
+              vanish: update.vanish ?? target.vanish,
             }
           : target;
       });
@@ -1957,7 +2056,7 @@ export function MissionTargetModal({
         : current,
     );
     setUeTargetSelectionReview(null);
-    setStatus(`已修改 ${items.length} 个目标物的位置或旋转（Excel 未保存）`, "success");
+    setStatus(`已修改 ${items.length} 个目标物配置（Excel 未保存）`, "success");
   }
 
   if (editRequest) {
@@ -2717,7 +2816,7 @@ export function MissionTargetModal({
                   ? blueprintSync?.hasExplicitRoot
                     ? "把 BP 模型的世界位置和旋转写入目标物表"
                     : "需要先建立 BP 世界坐标"
-                  : "编辑所选目标物的位置和旋转"
+                  : "编辑所选目标物的位置、旋转和消失方式"
               }
             >
               {isBlueprintSync ? (
@@ -2725,7 +2824,7 @@ export function MissionTargetModal({
               ) : (
                 <PencilLine size={15} />
               )}
-              {isBlueprintSync ? "BP → 目标物" : "修改位置"}
+              {isBlueprintSync ? "BP → 目标物" : "修改配置"}
             </button>
             {isDialogueRegistration && canUpdateBlueprint && (
               <button
@@ -3423,6 +3522,100 @@ export function MissionTargetModal({
                     </button>
                   </>
                 )}
+              </footer>
+            </section>
+          </div>
+        )}
+
+        {existingPreviewDecision && (
+          <div
+            className="mission-map-choice-layer mission-target-preview-choice-layer"
+            role="presentation"
+          >
+            <section
+              className="mission-map-choice mission-target-preview-choice"
+              role="alertdialog"
+              aria-modal="true"
+              aria-labelledby="mission-target-preview-choice-title"
+              aria-describedby="mission-target-preview-choice-description"
+              onKeyDown={(event) => {
+                if (event.key === "Escape" && !busy) {
+                  setExistingPreviewDecision(null);
+                  setStatus("已取消加载目标物到 UE", "cancelled");
+                }
+              }}
+            >
+              <header>
+                <span>
+                  <Boxes size={18} />
+                </span>
+                <div>
+                  <small>UE 当前关卡已有目标物预览</small>
+                  <h3 id="mission-target-preview-choice-title">
+                    如何处理已添加的目标物
+                  </h3>
+                </div>
+              </header>
+              <div
+                className="mission-map-choice__body"
+                id="mission-target-preview-choice-description"
+              >
+                <dl>
+                  <div>
+                    <dt>UE 中已有</dt>
+                    <dd>
+                      {existingPreviewDecision.existingPreviewCount} 个目标物预览
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>本次准备添加</dt>
+                    <dd>
+                      {existingPreviewDecision.plan.targets.length} 个目标物
+                    </dd>
+                  </div>
+                </dl>
+                <p>
+                  “清除后添加”会先删除当前关卡中全部由镜头沙盘生成的旧预览；
+                  “保留并继续添加”不会改动旧预览。
+                </p>
+                {existingPreviewDecision.error && (
+                  <div className="mission-map-choice__error" role="alert">
+                    <AlertTriangle size={15} />
+                    <span>{existingPreviewDecision.error}</span>
+                  </div>
+                )}
+              </div>
+              <footer>
+                <button
+                  className="button"
+                  type="button"
+                  onClick={() => {
+                    setExistingPreviewDecision(null);
+                    setStatus("已取消加载目标物到 UE", "cancelled");
+                  }}
+                  disabled={busy}
+                >
+                  取消
+                </button>
+                <button
+                  className="button"
+                  type="button"
+                  onClick={() => void confirmPreviewLoad("replace")}
+                  disabled={busy}
+                >
+                  <Trash2 size={15} />
+                  清除后添加
+                </button>
+                <button
+                  className="button button--primary"
+                  type="button"
+                  autoFocus
+                  onClick={() => void confirmPreviewLoad("append")}
+                  disabled={busy}
+                >
+                  <PackagePlus size={15} />
+                  保留并继续添加
+                </button>
               </footer>
             </section>
           </div>

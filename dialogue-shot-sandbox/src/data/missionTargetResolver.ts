@@ -343,6 +343,7 @@ export function resolveMissionTargets(
       itemId: target.itemId,
       blueprintModelId: target.blueprintModelId,
       mapId: target.mapId,
+      vanish: target.vanish,
       previewKind: modelClassPath ? "asset" as const : "marker" as const,
       transform: transformFor(target),
       ambientDialogues: ambientDialoguesFor(target, npc),

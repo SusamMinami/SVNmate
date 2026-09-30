@@ -64,7 +64,12 @@ import type {
 import type { DialogueTextEditorItem } from "./components/DialogueTextEditorModal";
 import { DataSourceStatus } from "./components/DataSourceStatus";
 import { DirectorControl } from "./components/DirectorControl";
-import { OperationIcon, TaskGlyph, TaskMotionScope } from "./components/TaskMotion";
+import {
+  OperationIcon,
+  TaskGlyph,
+  TaskMotionScope,
+  TaskNoticeHostProvider,
+} from "./components/TaskMotion";
 import { ExistingAudioConfiguration } from "./components/ExistingAudioConfiguration";
 import { LaunchScreen } from "./components/LaunchScreen";
 import { MissingNpcModelModal } from "./components/MissingNpcModelModal";
@@ -1955,6 +1960,8 @@ function ShotInspector({
 export default function App() {
   const navigationFeedback = useNavigationFeedback();
   const statusTooltipsRef = useStatusTooltips();
+  const [taskNoticeHost, setTaskNoticeHost] =
+    useState<HTMLDivElement | null>(null);
   const [showLaunchScreen, setShowLaunchScreen] = useState(
     () =>
       window.sessionStorage.getItem(LAUNCH_SCREEN_STORAGE_KEY) !== "1",
@@ -5198,17 +5205,18 @@ export default function App() {
   }
 
   return (
-    <main
-      className="app-shell"
-      ref={shellRef}
-      {...navigationFeedback}
-      data-ark-theme="endfield"
-      data-ark-depth="moderate"
-      data-active-workspace={activeWorkspace}
-      data-workspace-direction={workspaceDirection}
-      data-configuration-mode={configurationMode}
-      data-configuration-transition={configurationModeTransition}
-    >
+    <TaskNoticeHostProvider host={taskNoticeHost}>
+      <main
+        className="app-shell"
+        ref={shellRef}
+        {...navigationFeedback}
+        data-ark-theme="endfield"
+        data-ark-depth="moderate"
+        data-active-workspace={activeWorkspace}
+        data-workspace-direction={workspaceDirection}
+        data-configuration-mode={configurationMode}
+        data-configuration-transition={configurationModeTransition}
+      >
       <input
         ref={(element) => {
           fileInputRef.current = element;
@@ -5391,6 +5399,12 @@ export default function App() {
             </p>
           </div>
         </div>
+
+        <div
+          className="app-header__operation"
+          ref={setTaskNoticeHost}
+          aria-label="当前操作状态"
+        />
 
         <div className="app-header__status" ref={statusTooltipsRef}>
           {activeWorkspace === "storyboard" && (
@@ -6884,6 +6898,7 @@ export default function App() {
           onComplete={dismissLaunchScreen}
         />
       )}
-    </main>
+      </main>
+    </TaskNoticeHostProvider>
   );
 }

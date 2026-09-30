@@ -19,16 +19,22 @@ import {
   parseUnrealVectorText,
   registrationWriteScope,
 } from "../data/npcRegistration";
+import {
+  isMissionTargetVanishMode,
+  MISSION_TARGET_VANISH_MODES,
+} from "../data/missionTargetVanish";
 import type {
   MissionTargetEditRequest,
   MissionTargetTransform,
   MissionTargetUpdateItem,
+  MissionTargetVanishMode,
   NpcProfile,
   NpcRegistrationCandidate,
   NpcRegistrationWriteItem,
   NpcRegistrationWriteResult,
   SelectedLevelActorsResult,
 } from "../types";
+import { MissionTargetVanishIcon } from "./MissionTargetVanishIcon";
 import {
   openConfigTable,
   readSelectedLevelActors,
@@ -54,6 +60,7 @@ interface TargetTransformDraft {
   actorRef: string;
   positionText: string;
   rotationText: string;
+  vanish: string;
 }
 
 function actorClassName(classPath: string): string {
@@ -125,6 +132,7 @@ function initialTargetEditState(
           rotationText: formatUnrealRotator(
             actor?.transform.rotation ?? target.transform.rotation,
           ),
+          vanish: target.vanish ?? "",
         },
       ];
     }),
@@ -246,6 +254,9 @@ export function NpcRegistrationModal({
     Record<string, NewNpcDraft>
   >({});
   const [mapChoices, setMapChoices] = useState<Record<string, string>>({});
+  const [vanishChoices, setVanishChoices] = useState<
+    Record<string, MissionTargetVanishMode>
+  >({});
   const [writtenTargetIdsByActor, setWrittenTargetIdsByActor] = useState<
     Record<string, string>
   >({});
@@ -305,21 +316,29 @@ export function NpcRegistrationModal({
       };
       const transform =
         location && rotation ? { location, rotation } : null;
+      const transformIsChanged = Boolean(
+        transform && transformChanged(originalTransform, transform),
+      );
+      const currentVanish = target.vanish ?? "";
+      const vanishChanged = draft?.vanish !== currentVanish;
+      const vanishValid =
+        !vanishChanged ||
+        isMissionTargetVanishMode(draft?.vanish ?? "");
       return {
         target,
         draft,
         originalTransform,
         transform,
-        changed: Boolean(
-          transform && transformChanged(originalTransform, transform),
-        ),
+        vanishChanged,
+        valid: Boolean(transform) && vanishValid,
+        changed: transformIsChanged || vanishChanged,
       };
     }) ?? [];
   const changedEditCount = parsedEditItems.filter(
     (item) => item.changed && !writtenTargetIds.has(item.target.targetId),
   ).length;
   const invalidEditCount = parsedEditItems.filter(
-    (item) => !item.transform,
+    (item) => !item.valid,
   ).length;
 
   async function refreshSelection() {
@@ -372,6 +391,7 @@ export function NpcRegistrationModal({
             actorRef: actor.actorRef,
             positionText: formatUnrealVector(actor.transform.location),
             rotationText: formatUnrealRotator(actor.transform.rotation),
+            vanish: target.vanish,
           };
         }
         setEditDrafts(nextDrafts);
@@ -396,7 +416,9 @@ export function NpcRegistrationModal({
       const nextChoices: Record<string, string> = {};
       const nextDrafts: Record<string, NewNpcDraft> = {};
       const nextMapChoices: Record<string, string> = {};
+      const nextVanishChoices: Record<string, MissionTargetVanishMode> = {};
       for (const candidate of result.candidates) {
+        nextVanishChoices[candidate.actor.actorRef] = "瞬间消失";
         if (candidate.registrationKind === "task_actor") {
           nextChoices[candidate.actor.actorRef] = "none";
           nextDrafts[candidate.actor.actorRef] = {
@@ -434,6 +456,7 @@ export function NpcRegistrationModal({
       setNpcChoices(nextChoices);
       setNewNpcDrafts(nextDrafts);
       setMapChoices(nextMapChoices);
+      setVanishChoices(nextVanishChoices);
       setWrittenTargetIdsByActor({});
       setTargetIdsCopied(false);
       setRegisteredNpcIds({});
@@ -448,6 +471,7 @@ export function NpcRegistrationModal({
       setSelectedActorRefs(new Set());
       setNpcChoices({});
       setMapChoices({});
+      setVanishChoices({});
       setError(
         selectionError instanceof Error
           ? selectionError.message
@@ -614,10 +638,10 @@ export function NpcRegistrationModal({
     if (!editRequest) {
       return;
     }
-    const invalid = parsedEditItems.find((item) => !item.transform);
+    const invalid = parsedEditItems.find((item) => !item.valid);
     if (invalid) {
       setError(
-        `目标物 ${invalid.target.targetId} 的位置或旋转格式无效`,
+        `目标物 ${invalid.target.targetId} 的位置、旋转或消失方式无效`,
       );
       return;
     }
@@ -626,7 +650,7 @@ export function NpcRegistrationModal({
         item.changed && !writtenTargetIds.has(item.target.targetId),
     );
     if (changed.length === 0) {
-      setStatus("没有需要写入的位置或旋转变化");
+      setStatus("没有需要写入的目标物配置变化");
       return;
     }
     const actorRefs = changed
@@ -655,21 +679,31 @@ export function NpcRegistrationModal({
       );
       return;
     }
-    const items: MissionTargetUpdateItem[] = changed.map((item) => ({
-      targetId: item.target.targetId,
-      mapId: item.target.mapId,
-      originalTransform: item.originalTransform,
-      transform: item.transform!,
-    }));
+    const items: MissionTargetUpdateItem[] = changed.map((item) => {
+      const vanish =
+        item.vanishChanged && isMissionTargetVanishMode(item.draft.vanish)
+          ? {
+              originalVanish: item.target.vanish ?? "",
+              vanish: item.draft.vanish,
+            }
+          : {};
+      return {
+        targetId: item.target.targetId,
+        mapId: item.target.mapId,
+        originalTransform: item.originalTransform,
+        transform: item.transform!,
+        ...vanish,
+      };
+    });
     if (
       !window.confirm(
-        `将按目标物 ID 修改 ${items.length} 行，仅更新位置和旋转。\n\n工作簿会保持未保存状态，是否继续？`,
+        `将按目标物 ID 修改 ${items.length} 行，仅更新发生变化的位置、旋转和消失方式。\n\n工作簿会保持未保存状态，是否继续？`,
       )
     ) {
       setStatus("已取消写入 Excel", "cancelled");
       return;
     }
-    beginTask("正在核对并写入目标物位置 · Excel 将保持未保存", "write-updates");
+    beginTask("正在核对并写入目标物配置 · Excel 将保持未保存", "write-updates");
     setError("");
     setStatus("");
     try {
@@ -690,7 +724,7 @@ export function NpcRegistrationModal({
       setError(
         (writeError instanceof Error
           ? writeError.message
-          : "修改目标物位置失败") + "；请先核对 Excel 未保存内容，勿立即重复写入。",
+          : "修改目标物配置失败") + "；请先核对 Excel 未保存内容，勿立即重复写入。",
         "uncertain",
       );
     } finally {
@@ -745,6 +779,7 @@ export function NpcRegistrationModal({
       canTurn: taskActor
         ? false
         : existingNpc?.canTurn ?? draft.canTurn,
+      vanish: vanishChoices[actorRef] ?? "瞬间消失",
       newNpc: createNewNpc
         ? {
             name: draft.name.trim(),
@@ -1112,7 +1147,7 @@ export function NpcRegistrationModal({
             ? "返回任务目标物"
             : "返回分镜工作台"
           : editMode
-            ? "关闭修改目标物位置"
+            ? "关闭修改目标物配置"
             : "关闭注册 NPC"
       }
       onClick={onClose}
@@ -1134,7 +1169,7 @@ export function NpcRegistrationModal({
         role={embedded ? "region" : "dialog"}
         aria-modal={embedded ? undefined : true}
         aria-label={
-          embedded ? (editMode ? "修改目标物位置" : "注册 NPC") : undefined
+          embedded ? (editMode ? "修改目标物配置" : "注册 NPC") : undefined
         }
         aria-labelledby={embedded ? undefined : titleId}
       >
@@ -1142,8 +1177,8 @@ export function NpcRegistrationModal({
           <>
             {editMode && (
               <div className="workspace-subview-title">
-                <small>任务目标物 / POSITION EDIT</small>
-                <strong>修改目标物位置</strong>
+                <small>任务目标物 / TARGET CONFIG</small>
+                <strong>修改目标物配置</strong>
               </div>
             )}
             {!editMode && writtenTargetIdList.length > 0 && (
@@ -1188,7 +1223,7 @@ export function NpcRegistrationModal({
                   {editMode ? "按目标物 ID 更新配置" : "UE 选择注册草稿"}
                 </small>
                 <h2 id={titleId}>
-                  {editMode ? "修改目标物位置" : "注册 NPC"}
+                  {editMode ? "修改目标物配置" : "注册 NPC"}
                 </h2>
               </div>
             </div>
@@ -1215,12 +1250,13 @@ export function NpcRegistrationModal({
                   <th>UE Actor</th>
                   <th>新位置</th>
                   <th>新旋转</th>
+                  <th>消失方式</th>
                   <th>状态</th>
                 </tr>
               </thead>
               <tbody>
                 {parsedEditItems.map(
-                  ({ target, draft, transform, changed }) => {
+                  ({ target, draft, transform, valid, changed }) => {
                     const positionValid = Boolean(
                       parseUnrealVectorText(draft.positionText),
                     );
@@ -1230,7 +1266,7 @@ export function NpcRegistrationModal({
                     const isWritten = writtenTargetIds.has(target.targetId);
                     const state = isWritten
                       ? { label: "已写入", tone: "is-existing" }
-                      : !transform
+                      : !valid
                         ? { label: "格式错误", tone: "is-warning" }
                         : changed
                           ? { label: "待修改", tone: "is-new" }
@@ -1339,6 +1375,32 @@ export function NpcRegistrationModal({
                           </small>
                         </td>
                         <td>
+                          <label className="mission-target-vanish-field">
+                            <MissionTargetVanishIcon value={draft.vanish} />
+                            <select
+                              value={draft.vanish}
+                              disabled={busy}
+                              onChange={(event) =>
+                                updateEditDraft(target.targetId, {
+                                  vanish: event.target.value,
+                                })
+                              }
+                              aria-label={`目标物 ${target.targetId} 消失方式`}
+                            >
+                              {!isMissionTargetVanishMode(draft.vanish) && (
+                                <option value={draft.vanish}>
+                                  {draft.vanish || "未配置"}（当前）
+                                </option>
+                              )}
+                              {MISSION_TARGET_VANISH_MODES.map((mode) => (
+                                <option key={mode} value={mode}>
+                                  {mode}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        </td>
+                        <td>
                           <span
                             className={`registration-state ${state.tone}`}
                           >
@@ -1399,6 +1461,8 @@ export function NpcRegistrationModal({
                     registeredNpcIds[actor.actorRef];
                   const writtenTargetId =
                     writtenTargetIdsByActor[actor.actorRef];
+                  const vanish =
+                    vanishChoices[actor.actorRef] ?? "瞬间消失";
                   const selected = selectedActorRefs.has(actor.actorRef);
                   return (
                     <tr
@@ -1645,19 +1709,52 @@ export function NpcRegistrationModal({
                         </code>
                       </td>
                       <td>
-                        {targetMatches.length > 0 ? (
-                          <span className="registration-state is-existing">
-                            已有 {targetMatches.map((target) => target.id).join(" / ")}
-                          </span>
-                        ) : writtenTargetId !== undefined ? (
-                          <span className="registration-state is-existing">
-                            已写入 {writtenTargetId}
-                          </span>
-                        ) : (
-                          <span className="registration-state is-new">
-                            新增
-                          </span>
-                        )}
+                        <div className="npc-registration-target-config">
+                          {targetMatches.length > 0 ? (
+                            <>
+                              <span className="registration-state is-existing">
+                                已有 {targetMatches.map((target) => target.id).join(" / ")}
+                              </span>
+                              <MissionTargetVanishIcon
+                                value={targetMatches[0]?.vanish ?? ""}
+                              />
+                            </>
+                          ) : writtenTargetId !== undefined ? (
+                            <>
+                              <span className="registration-state is-existing">
+                                已写入 {writtenTargetId}
+                              </span>
+                              <MissionTargetVanishIcon value={vanish} />
+                            </>
+                          ) : (
+                            <>
+                              <span className="registration-state is-new">
+                                新增
+                              </span>
+                              <label className="mission-target-vanish-field">
+                                <MissionTargetVanishIcon value={vanish} />
+                                <select
+                                  value={vanish}
+                                  disabled={busy || !selected}
+                                  onChange={(event) =>
+                                    setVanishChoices((current) => ({
+                                      ...current,
+                                      [actor.actorRef]:
+                                        event.target.value as MissionTargetVanishMode,
+                                    }))
+                                  }
+                                  aria-label={`${actor.label} 消失方式`}
+                                >
+                                  {MISSION_TARGET_VANISH_MODES.map((mode) => (
+                                    <option key={mode} value={mode}>
+                                      {mode}
+                                    </option>
+                                  ))}
+                                </select>
+                              </label>
+                            </>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   );

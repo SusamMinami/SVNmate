@@ -79,6 +79,11 @@ export interface MissionTaskRow {
   rowNumber: number;
 }
 
+export type MissionTargetVanishMode =
+  | "瞬间消失"
+  | "超视距消失"
+  | "不消失";
+
 export interface MissionPositionRow {
   id: string;
   type: number | null;
@@ -89,6 +94,7 @@ export interface MissionPositionRow {
   mapId: string;
   positionText: string;
   rotationText: string;
+  vanish: string;
   rowNumber: number;
   complexChatDialogueIds?: string[];
 }
@@ -291,6 +297,7 @@ export interface MissionTargetPreviewTarget {
   itemId: number | null;
   blueprintModelId: number | null;
   mapId: string;
+  vanish: string;
   previewKind: "asset" | "marker";
   transform: UnrealTransform;
   ambientDialogues?: MissionTargetDialogueReference[];
@@ -323,7 +330,12 @@ export interface MissionTargetPreviewPlan {
   };
 }
 
-export interface MissionTargetPreviewLoadResult {
+export type MissionTargetExistingPreviewPolicy =
+  | "prompt"
+  | "replace"
+  | "append";
+
+export interface MissionTargetPreviewLoadedResult {
   status: "loaded";
   taskId: string;
   mapId: string;
@@ -333,7 +345,22 @@ export interface MissionTargetPreviewLoadResult {
   assetCount: number;
   markerCount: number;
   selectedActorCount?: number;
+  clearedPreviewCount: number;
+  retainedPreviewCount: number;
 }
+
+export interface MissionTargetPreviewConfirmationResult {
+  status: "confirmation_required";
+  taskId: string;
+  mapId: string;
+  mapAssetPath: string;
+  autoOpenedMap: boolean;
+  existingPreviewCount: number;
+}
+
+export type MissionTargetPreviewLoadResult =
+  | MissionTargetPreviewLoadedResult
+  | MissionTargetPreviewConfirmationResult;
 
 export interface MissionTargetMapStatus {
   currentMapAssetPath: string;
@@ -1029,6 +1056,7 @@ export interface NpcRegistrationWriteItem {
   existingNpcId: number | null;
   existingTargetId: string | null;
   canTurn: boolean;
+  vanish: MissionTargetVanishMode;
   newNpc: {
     name: string;
     title: string;
@@ -1408,6 +1436,8 @@ export interface MissionTargetUpdateItem {
   mapId: string;
   originalTransform: MissionTargetTransform;
   transform: MissionTargetTransform;
+  originalVanish?: string;
+  vanish?: MissionTargetVanishMode;
 }
 
 export interface MissionTargetUpdateResult {

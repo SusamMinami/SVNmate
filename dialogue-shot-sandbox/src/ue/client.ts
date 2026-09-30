@@ -30,6 +30,7 @@ import type {
   MissionTargetBlueprintCompatibility,
   MissionTargetBlueprintInspection,
   MissionTargetBlueprintUpdateResult,
+  MissionTargetExistingPreviewPolicy,
   MissionTargetMapStatus,
   MissionTargetUpdateItem,
   MissionTargetUpdateResult,
@@ -199,8 +200,13 @@ async function postUe<T>(
 export function loadMissionTargetPreview(
   plan: MissionTargetPreviewPlan,
   mapMode: "require-current" | "auto" | "current",
+  existingPreviewPolicy: MissionTargetExistingPreviewPolicy = "prompt",
 ): Promise<MissionTargetPreviewLoadResult> {
-  return postUe("/api/ue/mission-targets/load", { plan, mapMode }, false);
+  return postUe(
+    "/api/ue/mission-targets/load",
+    { plan, mapMode, existingPreviewPolicy },
+    false,
+  );
 }
 
 export function refreshMissionTargetPlan(

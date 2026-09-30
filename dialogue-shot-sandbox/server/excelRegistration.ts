@@ -25,6 +25,12 @@ const VectorSchema = z.object({
   z: z.number().finite(),
 });
 
+const MissionTargetVanishSchema = z.enum([
+  "瞬间消失",
+  "超视距消失",
+  "不消失",
+]);
+
 const RegistrationPathsSchema = z.object({
   missionTarget: z.string().trim().min(1),
   npc: z.string().trim().min(1),
@@ -59,6 +65,7 @@ const RegistrationWriteSchema = z
           existingNpcId: z.number().int().positive().nullable(),
           existingTargetId: z.string().regex(/^\d+$/).nullable(),
           canTurn: z.boolean(),
+          vanish: MissionTargetVanishSchema.default("瞬间消失"),
           newNpc: z
             .object({
               name: z.string().trim().max(80),
@@ -160,6 +167,8 @@ const TransformUpdateSchema = z
               roll: z.number().finite(),
             }),
           }),
+          originalVanish: z.string().optional(),
+          vanish: MissionTargetVanishSchema.optional(),
         }),
       )
       .min(1)
@@ -168,6 +177,16 @@ const TransformUpdateSchema = z
   .superRefine((request, context) => {
     const seen = new Set<string>();
     request.items.forEach((item, index) => {
+      if (
+        (item.originalVanish === undefined) !==
+        (item.vanish === undefined)
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["items", index, "vanish"],
+          message: "修改消失方式时必须同时提供原值和目标值",
+        });
+      }
       if (seen.has(item.targetId)) {
         context.addIssue({
           code: "custom",
@@ -625,7 +644,7 @@ try {
     } "读取目标物表行数")
     $targetRowCount = [Math]::Max(0, $targetLastRow - 2)
     $targetValues =
-      Get-RangeValues $targetSheet 3 $targetLastRow 2 13 "批量读取目标物表"
+      Get-RangeValues $targetSheet 3 $targetLastRow 2 17 "批量读取目标物表"
     for ($rowOffset = 0; $rowOffset -lt $targetRowCount; $rowOffset++) {
       $rowId = [string](Get-RangeValue $targetValues $rowOffset 0)
       $mapId = [string](Get-RangeValue $targetValues $rowOffset 9)
@@ -639,6 +658,7 @@ try {
           itemId = [string](Get-RangeValue $targetValues $rowOffset 5)
           blueprintModelId =
             [string](Get-RangeValue $targetValues $rowOffset 6)
+          vanish = [string](Get-RangeValue $targetValues $rowOffset 15)
         }
         Add-IndexEntry $targetIdsByTransform (
           Get-TargetTransformKey $mapId $position $rotation
@@ -751,6 +771,11 @@ try {
         throw "Actor $($item.label) 在 MapID $($item.mapId) 中匹配到多个目标物"
       }
       if ($existingTargets.Count -eq 1) {
+        if (
+          [string]$existingTargets[0].vanish -cne [string]$item.vanish
+        ) {
+          throw "Actor $($item.label) 已匹配目标物 $($existingTargets[0].id)，但消失方式为 $($existingTargets[0].vanish)；请在目标物配置中修改现有行"
+        }
         $existingTargetByActor[$item.actorRef] =
           [string]$existingTargets[0].id
       }
@@ -1027,7 +1052,7 @@ try {
       Set-NewCell $targetSheet $row 14 $false
       Set-NewCell $targetSheet $row 15 0
       Set-NewCell $targetSheet $row 16 $item.canTurn
-      Set-NewCell $targetSheet $row 17 "瞬间消失"
+      Set-NewCell $targetSheet $row 17 $item.vanish
       [void]$createdTargets.Add(
         [PSCustomObject]@{ actorRef = $item.actorRef; id = $nextTargetId }
       )
@@ -1269,7 +1294,7 @@ try {
     return $targetSheet.UsedRange.Rows.Count
   } "读取目标物表行数"
   $targetValues =
-    Get-RangeValues $targetSheet 3 $lastTargetRow 2 13 "批量读取目标物表"
+    Get-RangeValues $targetSheet 3 $lastTargetRow 2 17 "批量读取目标物表"
 
   foreach ($item in $request.items) {
     $matchingRows = [Collections.ArrayList]::new()
@@ -1298,10 +1323,17 @@ try {
       [string](Get-RangeValue $targetValues $targetRowOffset 10)
     $currentRotation =
       [string](Get-RangeValue $targetValues $targetRowOffset 11)
+    $currentVanish =
+      [string](Get-RangeValue $targetValues $targetRowOffset 15)
+    $vanishRequested =
+      $null -ne $item.PSObject.Properties["vanish"]
     $positionAlreadyUpdated =
       Test-VectorEqual $currentPosition $item.transform.location
     $rotationAlreadyUpdated =
       Test-RotatorEqual $currentRotation $item.transform.rotation
+    $vanishAlreadyUpdated =
+      (-not $vanishRequested) -or
+      ($currentVanish -ceq [string]$item.vanish)
     $positionRequestedChange = -not (
       Test-VectorEqual (
         Format-Vector $item.originalTransform.location
@@ -1312,7 +1344,13 @@ try {
         Format-Rotator $item.originalTransform.rotation
       ) $item.transform.rotation
     )
-    $alreadyUpdated = $positionAlreadyUpdated -and $rotationAlreadyUpdated
+    $vanishRequestedChange =
+      $vanishRequested -and
+      ([string]$item.originalVanish -cne [string]$item.vanish)
+    $alreadyUpdated =
+      $positionAlreadyUpdated -and
+      $rotationAlreadyUpdated -and
+      $vanishAlreadyUpdated
     if ($alreadyUpdated) {
       [void]$unchangedTargetIds.Add([string]$item.targetId)
       [void]$plans.Add(
@@ -1321,20 +1359,27 @@ try {
           row = $targetRow
           position = $currentPosition
           rotation = $currentRotation
+          vanish = $currentVanish
           positionChanged = $false
           rotationChanged = $false
+          vanishChanged = $false
           highlightPosition = $positionRequestedChange
           highlightRotation = $rotationRequestedChange
+          highlightVanish = $vanishRequestedChange
         }
       )
       continue
     }
     $matchesOriginal = (
       (Test-VectorEqual $currentPosition $item.originalTransform.location) -and
-      (Test-RotatorEqual $currentRotation $item.originalTransform.rotation)
+      (Test-RotatorEqual $currentRotation $item.originalTransform.rotation) -and
+      (
+        (-not $vanishRequested) -or
+        ($currentVanish -ceq [string]$item.originalVanish)
+      )
     )
     if (-not $matchesOriginal) {
-      throw "目标物 $($item.targetId) 的位置或旋转已在 Excel 中变化，已停止覆盖；请先核对并刷新 CSV"
+      throw "目标物 $($item.targetId) 的位置、旋转或消失方式已在 Excel 中变化，已停止覆盖；请先核对并刷新 CSV"
     }
     [void]$plans.Add(
       [PSCustomObject]@{
@@ -1342,10 +1387,14 @@ try {
         row = $targetRow
         position = Format-Vector $item.transform.location
         rotation = Format-Rotator $item.transform.rotation
+        vanish =
+          if ($vanishRequested) { [string]$item.vanish } else { $currentVanish }
         positionChanged = -not $positionAlreadyUpdated
         rotationChanged = -not $rotationAlreadyUpdated
+        vanishChanged = $vanishRequested -and (-not $vanishAlreadyUpdated)
         highlightPosition = -not $positionAlreadyUpdated
         highlightRotation = -not $rotationAlreadyUpdated
+        highlightVanish = $vanishRequested -and (-not $vanishAlreadyUpdated)
       }
     )
   }
@@ -1371,7 +1420,17 @@ try {
         $targetSheet.Cells.Item($plan.row, 13).Font.Color = 255
       } "标记目标物 $($plan.item.targetId) 的旋转")
     }
-    if ($plan.positionChanged -or $plan.rotationChanged) {
+    if ($plan.vanishChanged) {
+      [void](Invoke-ExcelAction {
+        $targetSheet.Cells.Item($plan.row, 17).Value2 = $plan.vanish
+      } "修改目标物 $($plan.item.targetId) 的消失方式")
+    }
+    if ($plan.highlightVanish) {
+      [void](Invoke-ExcelAction {
+        $targetSheet.Cells.Item($plan.row, 17).Font.Color = 255
+      } "标记目标物 $($plan.item.targetId) 的消失方式")
+    }
+    if ($plan.positionChanged -or $plan.rotationChanged -or $plan.vanishChanged) {
       [void]$updatedTargets.Add(
         [PSCustomObject]@{
           targetId = [string]$plan.item.targetId
@@ -1667,13 +1726,20 @@ export function parseNpcRegistrationWriteRequest(
   };
 }
 
-export async function updateMissionTargetTransforms(
-  rawRequest: unknown,
-): Promise<MissionTargetUpdateResult> {
-  const request = TransformUpdateSchema.parse(rawRequest) as {
+export function parseMissionTargetUpdateRequest(rawRequest: unknown): {
+  items: MissionTargetUpdateItem[];
+  targetPath: string;
+} {
+  return TransformUpdateSchema.parse(rawRequest) as {
     items: MissionTargetUpdateItem[];
     targetPath: string;
   };
+}
+
+export async function updateMissionTargetTransforms(
+  rawRequest: unknown,
+): Promise<MissionTargetUpdateResult> {
+  const request = parseMissionTargetUpdateRequest(rawRequest);
   const result = await withExcelRegistrationLock(() =>
     runExcelTargetUpdate(request.items, request.targetPath),
   );

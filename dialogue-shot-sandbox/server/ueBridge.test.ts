@@ -713,6 +713,7 @@ function previewPlan(): MissionTargetPreviewPlan {
         itemId: 0,
         blueprintModelId: null,
         mapId: "1204",
+        vanish: "瞬间消失",
         previewKind: "asset",
         transform: {
           location: { x: 10, y: 20, z: 30 },
@@ -731,6 +732,7 @@ function previewPlan(): MissionTargetPreviewPlan {
         itemId: 0,
         blueprintModelId: null,
         mapId: "1204",
+        vanish: "不消失",
         previewKind: "marker",
         transform: {
           location: { x: 40, y: 50, z: 60 },
@@ -1083,11 +1085,20 @@ describe("mission target UE preview", () => {
       previewActors: [staleActor],
     });
 
-    await loadMissionTargetPreview(
-      { plan: previewPlan(), mapMode: "require-current" },
+    const result = await loadMissionTargetPreview(
+      {
+        plan: previewPlan(),
+        mapMode: "require-current",
+        existingPreviewPolicy: "replace",
+      },
       () => connection,
     );
 
+    expect(result).toMatchObject({
+      status: "loaded",
+      clearedPreviewCount: 1,
+      retainedPreviewCount: 0,
+    });
     const deletionCallIndex = connection.calls.findIndex(
       (call) =>
         call.action === "script.eval_python_expression" &&
@@ -1102,6 +1113,74 @@ describe("mission target UE preview", () => {
         (call) => call.action === "world.spawn_actor",
       ),
     );
+  });
+
+  it("requests confirmation before changing a level with existing previews", async () => {
+    const staleActor =
+      "PersistentLevel.ShotSandboxMissionTargetPreview_899999_499999";
+    const connection = new FakeUnrealConnection({
+      currentMaps: [previewPlan().mapAssetPath],
+      previewActors: [staleActor],
+    });
+
+    await expect(
+      loadMissionTargetPreview(
+        {
+          plan: previewPlan(),
+          mapMode: "require-current",
+          existingPreviewPolicy: "prompt",
+        },
+        () => connection,
+      ),
+    ).resolves.toMatchObject({
+      status: "confirmation_required",
+      existingPreviewCount: 1,
+    });
+    expect(connection.previewActors).toEqual([staleActor]);
+    expect(
+      connection.calls.some((call) => call.action === "world.spawn_actor"),
+    ).toBe(false);
+    expect(
+      connection.calls.some(
+        (call) =>
+          call.action === "script.eval_python_expression" &&
+          String(call.args.Expression).includes("destroy_actor(actor)"),
+      ),
+    ).toBe(false);
+  });
+
+  it("retains existing previews when appending the new selection", async () => {
+    const staleActor =
+      "PersistentLevel.ShotSandboxMissionTargetPreview_899999_499999";
+    const connection = new FakeUnrealConnection({
+      currentMaps: [previewPlan().mapAssetPath],
+      previewActors: [staleActor],
+    });
+
+    const result = await loadMissionTargetPreview(
+      {
+        plan: previewPlan(),
+        mapMode: "require-current",
+        existingPreviewPolicy: "append",
+      },
+      () => connection,
+    );
+
+    expect(result).toMatchObject({
+      status: "loaded",
+      spawnedCount: 2,
+      clearedPreviewCount: 0,
+      retainedPreviewCount: 1,
+    });
+    expect(connection.previewActors).toHaveLength(3);
+    expect(connection.previewActors).toContain(staleActor);
+    expect(
+      connection.calls.some(
+        (call) =>
+          call.action === "script.eval_python_expression" &&
+          String(call.args.Expression).includes("destroy_actor(actor)"),
+      ),
+    ).toBe(false);
   });
 
   it("waits for a manual map switch without opening the level", async () => {

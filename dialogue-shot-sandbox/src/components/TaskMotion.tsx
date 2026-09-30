@@ -1,11 +1,25 @@
 import { FileSearch } from "lucide-react";
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { createPortal } from "react-dom";
 import { isReducedMotionEnabled, useReducedMotionPreference } from "../app/useReducedMotionPreference";
 import type { TaskPhase } from "../taskFeedback";
 import "./taskMotion.css";
 
 const MotionContext = createContext(true);
+const TaskScopeActiveContext = createContext(true);
+const TaskNoticeHostContext = createContext<HTMLElement | null>(null);
 const settleTiming = { duration: 200, easing: "cubic-bezier(0.23, 1, 0.32, 1)" };
+
+export function TaskNoticeHostProvider({ host, children }: {
+  host: HTMLElement | null;
+  children: ReactNode;
+}) {
+  return (
+    <TaskNoticeHostContext.Provider value={host}>
+      {children}
+    </TaskNoticeHostContext.Provider>
+  );
+}
 
 /** Animate the action's own icon; no extra spinner or animation-driven completion. */
 export function OperationIcon({ kind, busy, children }: {
@@ -57,7 +71,13 @@ export function TaskMotionScope({ active, children }: { active: boolean; childre
       document.removeEventListener("visibilitychange", visibility);
     };
   }, []);
-  return <MotionContext.Provider value={active && visible && !reducedMotion}>{children}</MotionContext.Provider>;
+  return (
+    <TaskScopeActiveContext.Provider value={active}>
+      <MotionContext.Provider value={active && visible && !reducedMotion}>
+        {children}
+      </MotionContext.Provider>
+    </TaskScopeActiveContext.Provider>
+  );
 }
 
 function canSettle(element: HTMLElement) {
@@ -123,11 +143,23 @@ export function TaskGlyph({ phase, runId, variant = "frame", active = true }: {
 export function TaskNotice({ phase, runId, children, className = "npc-migration-message", animate = true }: {
   phase: TaskPhase; runId: string | number; children: ReactNode; className?: string; animate?: boolean;
 }) {
-  return <div className={`${className} task-notice`}
-    data-phase={phase} role={phase === "failed" || phase === "uncertain" ? "alert" : "status"}>
-    <TaskGlyph phase={phase} runId={runId} active={animate} />
-    <span>{children}</span>
-  </div>;
+  const host = useContext(TaskNoticeHostContext);
+  const scopeActive = useContext(TaskScopeActiveContext);
+  const notice = (
+    <div
+      className={`${className} task-notice${host ? " app-header-task-notice" : ""}`}
+      data-phase={phase}
+      role={phase === "failed" || phase === "uncertain" ? "alert" : "status"}
+      title={typeof children === "string" ? children : undefined}
+    >
+      <TaskGlyph phase={phase} runId={runId} active={animate} />
+      <span>{children}</span>
+    </div>
+  );
+  if (!host) {
+    return notice;
+  }
+  return scopeActive ? createPortal(notice, host) : null;
 }
 
 /** Determinate only: done includes attempted items, including failed reads. */

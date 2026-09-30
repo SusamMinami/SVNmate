@@ -1,6 +1,7 @@
 import { memo } from "react";
 import { Crosshair } from "lucide-react";
 import type { MissionTargetPreviewPlan } from "../types";
+import { MissionTargetVanishIcon } from "./MissionTargetVanishIcon";
 
 interface MissionTargetRowProps {
   target: MissionTargetPreviewPlan["targets"][number];
@@ -23,21 +24,42 @@ export const MissionTargetRow = memo(function MissionTargetRow({
     : target.type === null ? "未配置" : `类型 ${target.type}`;
   const modelLeaf = target.modelClassPath.replaceAll("\\", "/").split("/").at(-1) ?? "";
   const modelAssetName = modelLeaf.split(".")[0] || modelLeaf;
+  const locationValues = [
+    target.transform.location.x,
+    target.transform.location.y,
+    target.transform.location.z,
+  ].map((value) => value.toFixed(0));
+  const rotationValues = [
+    target.transform.rotation.pitch,
+    target.transform.rotation.yaw,
+    target.transform.rotation.roll,
+  ].map((value) => value.toFixed(0));
   return (
     <tr className={ueSelected ? "mission-target-row--ue-selected" : undefined}>
       <td className="mission-target-select">
         <input type="checkbox" checked={selected} disabled={disabled}
           onChange={() => onToggle(target.targetId)} aria-label={`选择目标物 ${target.targetId}`} />
       </td>
-      <td>
+      <td title={target.description || "未填写描述"}>
         <span className="mission-target-id">
           <strong>{target.targetId}</strong>
           {ueSelected && <span><Crosshair size={10} />UE 已选</span>}
         </span>
         <small>{target.description || "未填写描述"}</small>
       </td>
-      <td>{type}</td>
-      <td>{target.npcId && target.npcId > 0 ? `${target.npcName || "未知 NPC"} · ${target.npcId}` : "N/A"}</td>
+      <td>
+        <span className="mission-target-type">
+          <span>{type}</span>
+          <MissionTargetVanishIcon value={target.vanish} />
+        </span>
+      </td>
+      <td
+        title={target.npcId && target.npcId > 0
+          ? `${target.npcName || "未知 NPC"} · ${target.npcId}`
+          : "N/A"}
+      >
+        {target.npcId && target.npcId > 0 ? `${target.npcName || "未知 NPC"} · ${target.npcId}` : "N/A"}
+      </td>
       <td title={target.modelClassPath}>{target.modelId ? `${target.modelId} · ${modelAssetName}` : "N/A"}</td>
       <td>
         <div className="mission-target-dialogues">
@@ -53,10 +75,16 @@ export const MissionTargetRow = memo(function MissionTargetRow({
             : <span className="mission-target-dialogues__empty">无</span>}
         </div>
       </td>
-      <td><code>{[target.transform.location.x, target.transform.location.y, target.transform.location.z]
-        .map(value => value.toFixed(0)).join(", ")}</code></td>
-      <td><code>{[target.transform.rotation.pitch, target.transform.rotation.yaw, target.transform.rotation.roll]
-        .map(value => `${value.toFixed(0)}°`).join(", ")}</code></td>
+      <td title={`X=${locationValues[0]}, Y=${locationValues[1]}, Z=${locationValues[2]}`}>
+        <code className="mission-target-transform">
+          {locationValues.join(", ")}
+        </code>
+      </td>
+      <td title={`Pitch=${rotationValues[0]}°, Yaw=${rotationValues[1]}°, Roll=${rotationValues[2]}°`}>
+        <code className="mission-target-transform">
+          {rotationValues.map((value) => `${value}°`).join(", ")}
+        </code>
+      </td>
       <td><span className={`preview-kind preview-kind--${target.previewKind}`}>
         {target.previewKind === "asset" ? "实际资产" : "定位标记"}
       </span></td>

@@ -79,6 +79,7 @@ function database(): DialogueDatabase {
         positionText: "(X=10.000000,Y=20.000000,Z=30.000000)",
         rotationText:
           "(Pitch=0.000000,Yaw=90.000000,Roll=0.000000)",
+        vanish: "瞬间消失",
         rowNumber: 3,
       },
       {
@@ -92,6 +93,7 @@ function database(): DialogueDatabase {
         positionText: "(X=70.000000,Y=80.000000,Z=90.000000)",
         rotationText:
           "(Pitch=0.000000,Yaw=45.000000,Roll=0.000000)",
+        vanish: "不消失",
         rowNumber: 4,
       },
     ],
@@ -271,6 +273,7 @@ describe("registrationWriteScope", () => {
     existingNpcId: 101968,
     existingTargetId: null,
     canTurn: true,
+    vanish: "瞬间消失",
     newNpc: null,
   };
 

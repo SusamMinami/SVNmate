@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   EXCEL_REGISTRATION_SCRIPT,
   EXCEL_TARGET_UPDATE_SCRIPT,
+  parseMissionTargetUpdateRequest,
   parseNpcRegistrationWriteRequest,
   powerShellFileArguments,
   readablePowerShellError,
@@ -75,6 +76,7 @@ describe("Excel PowerShell errors", () => {
     expect(request.scope).toBe("npc_only");
     expect(request.items[0].mapId).toBe("");
     expect(request.items[0].targetDescription).toBe("");
+    expect(request.items[0].vanish).toBe("瞬间消失");
     expect(request.items[0].newNpc?.name).toBe("");
   });
 
@@ -126,6 +128,9 @@ describe("Excel PowerShell errors", () => {
     expect(EXCEL_REGISTRATION_SCRIPT).toContain(
       "Set-NewCell $targetSheet $row 4 $item.targetDescription",
     );
+    expect(EXCEL_REGISTRATION_SCRIPT).toContain(
+      "Set-NewCell $targetSheet $row 17 $item.vanish",
+    );
     expect(EXCEL_REGISTRATION_SCRIPT).not.toContain(
       "Set-NewCell $targetSheet $row 4 $item.label",
     );
@@ -146,6 +151,12 @@ describe("Excel PowerShell errors", () => {
     );
     expect(EXCEL_TARGET_UPDATE_SCRIPT).toContain(
       "$excel.Workbooks.Open($targetPath, 0, $false)",
+    );
+    expect(EXCEL_TARGET_UPDATE_SCRIPT).toContain(
+      "Get-RangeValues $targetSheet 3 $lastTargetRow 2 17",
+    );
+    expect(EXCEL_TARGET_UPDATE_SCRIPT).toContain(
+      "$targetSheet.Cells.Item($plan.row, 17).Value2 = $plan.vanish",
     );
   });
 
@@ -206,6 +217,7 @@ describe("Excel PowerShell errors", () => {
           existingNpcId: 101999,
           existingTargetId: null,
           canTurn: true,
+          vanish: "超视距消失",
           newNpc: null,
         },
       ],
@@ -214,9 +226,75 @@ describe("Excel PowerShell errors", () => {
     expect(request.scope).toBe("target_only");
     expect(request.items[0].existingNpcId).toBe(101999);
     expect(request.items[0].targetDescription).toBe("守卫队长");
+    expect(request.items[0].vanish).toBe("超视距消失");
     expect(request.paths.npc).toBe(
       "D:\\Project\\doc\\xlsdir\\NPC表.xlsm",
     );
+  });
+
+  it("rejects unsupported target vanish modes", () => {
+    expect(() =>
+      parseNpcRegistrationWriteRequest({
+        scope: "target_only",
+        paths: TEST_REGISTRATION_PATHS,
+        items: [
+          {
+            actorRef: "BP_Guard_C_1",
+            label: "守卫新增",
+            targetDescription: "守卫队长",
+            classPath: "/Game/Test/BP_Guard.BP_Guard_C",
+            transform: {
+              location: { x: 1, y: 2, z: 3 },
+              rotation: { pitch: 0, yaw: 90, roll: 0 },
+              scale: { x: 1, y: 1, z: 1 },
+            },
+            mapId: "1204",
+            existingModelId: 200135,
+            existingNpcId: 101999,
+            existingTargetId: null,
+            canTurn: true,
+            vanish: "淡出",
+            newNpc: null,
+          },
+        ],
+      }),
+    ).toThrow();
+  });
+
+  it("requires original and target vanish modes as one update pair", () => {
+    const request = {
+      targetPath: TEST_REGISTRATION_PATHS.missionTarget,
+      items: [
+        {
+          targetId: "500001",
+          mapId: "1204",
+          originalTransform: {
+            location: { x: 1, y: 2, z: 3 },
+            rotation: { pitch: 0, yaw: 90, roll: 0 },
+          },
+          transform: {
+            location: { x: 1, y: 2, z: 3 },
+            rotation: { pitch: 0, yaw: 90, roll: 0 },
+          },
+          vanish: "超视距消失",
+        },
+      ],
+    };
+
+    expect(() => parseMissionTargetUpdateRequest(request)).toThrow(
+      "修改消失方式时必须同时提供原值和目标值",
+    );
+    expect(() =>
+      parseMissionTargetUpdateRequest({
+        ...request,
+        items: [
+          {
+            ...request.items[0],
+            originalVanish: "瞬间消失",
+          },
+        ],
+      }),
+    ).not.toThrow();
   });
 
   it("accepts TaskActor writes without an NPC and uses the 500000 model segment", () => {

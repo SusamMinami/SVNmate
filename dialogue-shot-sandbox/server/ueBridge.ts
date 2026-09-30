@@ -42,6 +42,7 @@ import type {
   MissionTargetBlueprintCompatibility,
   MissionTargetBlueprintInspection,
   MissionTargetBlueprintUpdateResult,
+  MissionTargetExistingPreviewPolicy,
   MissionTargetMapStatus,
   MissionTargetPreviewLoadResult,
   MissionTargetPreviewPlan,
@@ -218,6 +219,7 @@ const MissionTargetPreviewPlanSchema = z.object({
       itemId: z.number().int().nullable(),
       blueprintModelId: z.number().int().nullable(),
       mapId: z.string().regex(/^\d+$/),
+      vanish: z.string().default(""),
       previewKind: z.enum(["asset", "marker"]),
       transform: z.object({
         location: VectorSchema,
@@ -255,6 +257,9 @@ const MissionTargetPreviewPlanSchema = z.object({
 const MissionTargetPreviewLoadRequestSchema = z.object({
   plan: MissionTargetPreviewPlanSchema,
   mapMode: z.enum(["require-current", "auto", "current"]),
+  existingPreviewPolicy: z
+    .enum(["prompt", "replace", "append"])
+    .default("prompt"),
 });
 
 const MissionTargetMapStatusRequestSchema = z.object({
@@ -6954,6 +6959,7 @@ function buildBlueprintDialoguePreviewPlan(
       itemId: null,
       blueprintModelId: modelIndex,
       mapId: dialogue.dialogueId,
+      vanish: "",
       previewKind: "asset" as const,
       transform: finalWorldTransform,
       ...(timelineRows.length > 0
@@ -11281,6 +11287,7 @@ export async function loadMissionTargetPreview(
   const request = MissionTargetPreviewLoadRequestSchema.parse(rawRequest) as {
     plan: MissionTargetPreviewPlan;
     mapMode: "require-current" | "auto" | "current";
+    existingPreviewPolicy: MissionTargetExistingPreviewPolicy;
   };
   const plan = request.plan;
   assertSinglePreviewMap(plan);
@@ -11356,7 +11363,26 @@ export async function loadMissionTargetPreview(
     }
 
     const existingPreviewActors = await findMissionPreviewActors(connection);
-    if (existingPreviewActors.length > 0) {
+    if (
+      existingPreviewActors.length > 0 &&
+      request.existingPreviewPolicy === "prompt"
+    ) {
+      return {
+        status: "confirmation_required",
+        taskId: plan.taskId,
+        mapId: plan.mapId,
+        mapAssetPath:
+          request.mapMode === "current"
+            ? currentMapAssetPath
+            : plan.mapAssetPath,
+        autoOpenedMap,
+        existingPreviewCount: existingPreviewActors.length,
+      };
+    }
+    if (
+      existingPreviewActors.length > 0 &&
+      request.existingPreviewPolicy === "replace"
+    ) {
       await deleteMissionPreviewActorsAndWait(
         connection,
         existingPreviewActors,
@@ -11416,7 +11442,10 @@ export async function loadMissionTargetPreview(
     if (plan.dialogueTimeline) {
       await selectMissionPreviewActors(connection, selectedActors);
     }
-    activeMissionPreviewActors = spawnedActors;
+    activeMissionPreviewActors =
+      request.existingPreviewPolicy === "append"
+        ? Array.from(new Set([...existingPreviewActors, ...spawnedActors]))
+        : spawnedActors;
     activeMissionPreviewMap =
       request.mapMode === "current"
         ? currentMapAssetPath
@@ -11438,6 +11467,14 @@ export async function loadMissionTargetPreview(
         (target) => target.previewKind === "marker",
       ).length,
       selectedActorCount: selectedActors.length,
+      clearedPreviewCount:
+        request.existingPreviewPolicy === "replace"
+          ? existingPreviewActors.length
+          : 0,
+      retainedPreviewCount:
+        request.existingPreviewPolicy === "append"
+          ? existingPreviewActors.length
+          : 0,
     };
   } catch (error) {
     if (spawnedActors.length > 0) {
