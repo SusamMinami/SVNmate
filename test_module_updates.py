@@ -74,6 +74,53 @@ class ModuleManifestTests(unittest.TestCase):
 
         self.assertEqual(manifest.entrypoint, "Install-SeriaQA.cmd")
 
+    def test_manifest_parses_bundle_files_and_runtime_requirements(self) -> None:
+        payload = self.valid_payload()
+        payload.update(
+            {
+                "id": "seria-wwise-migration",
+                "entrypoint": "SeriaWwiseMigration.exe",
+                "files": [
+                    "SeriaWwiseMigration.exe",
+                    "Invoke-WwiseMigrationWorkflow.ps1",
+                ],
+                "requires": {
+                    "svnmate_core": "1.1.0",
+                    "capabilities": {
+                        "update.multi_root_parallel": 1,
+                    },
+                },
+            }
+        )
+
+        manifest = ModuleManifest.from_dict(
+            payload,
+            expected_id="seria-wwise-migration",
+        )
+
+        self.assertEqual(
+            manifest.files,
+            (
+                "SeriaWwiseMigration.exe",
+                "Invoke-WwiseMigrationWorkflow.ps1",
+            ),
+        )
+        self.assertEqual(manifest.min_core_version, "1.1.0")
+        self.assertEqual(
+            dict(manifest.required_capabilities),
+            {"update.multi_root_parallel": 1},
+        )
+
+    def test_manifest_rejects_unsafe_bundle_file(self) -> None:
+        payload = self.valid_payload()
+        payload["files"] = ["../outside.ps1"]
+
+        with self.assertRaisesRegex(ModuleUpdateError, "不安全"):
+            ModuleManifest.from_dict(
+                payload,
+                expected_id="config-linker",
+            )
+
     def test_manifest_rejects_unapproved_script_type(self) -> None:
         payload = self.valid_payload()
         payload["entrypoint"] = "Install-Module.ps1"

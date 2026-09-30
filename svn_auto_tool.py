@@ -29,11 +29,16 @@ from svnmate_core import (
     needs_svn_cleanup,
     normalized_path_key,
 )
-from svnmate_ipc import IPC_PROTOCOL_VERSION, SvnMateIpcServer
+from svnmate_ipc import (
+    IPC_PROTOCOL_VERSION,
+    SvnMateIpcServer,
+    runtime_metadata,
+)
 from tool_modules import (
     CONFIG_LINKER,
     KINDLE_STATUS,
     MIGRATION_GUARD,
+    SERIA_WWISE_MIGRATION,
     SERIA_QA_OVERLAY,
     TOOL_MODULES,
     ToolModuleManager,
@@ -118,7 +123,7 @@ CONFIG_PATH = APP_DIR / "svn_auto_tool_config.json"
 LOG_DIR = APP_DIR / "logs"
 LOG_RETENTION_DAYS = 7
 MUSIC_EXTENSIONS = (".mp3", ".wav")
-APP_VERSION = "v1.4.7"
+APP_VERSION = "v1.5.0"
 LATEST_RELEASE_URL = "https://github.com/SusamMinami/SVNmate/releases/latest"
 RELEASE_DOWNLOAD_URL = "https://github.com/SusamMinami/SVNmate/releases/download/{tag}/{asset}"
 RELEASE_ASSET_NAME = "SVNmate.zip"
@@ -925,6 +930,7 @@ class SvnAutoTool:
             MIGRATION_GUARD.module_id: StringVar(
                 value=str(detected_migration_guard or "")
             ),
+            SERIA_WWISE_MIGRATION.module_id: StringVar(value=""),
             SERIA_QA_OVERLAY.module_id: StringVar(value=""),
             KINDLE_STATUS.module_id: StringVar(
                 value=str(detected_kindle_status or "")
@@ -2093,6 +2099,12 @@ class SvnAutoTool:
                 "会校验完整安装包并调用模块自带安装器；"
                 "游戏配置中的无关设置不会被覆盖。"
             )
+        elif spec.module_kind == "bundle":
+            details = (
+                f"将{action}{spec.display_name} v{manifest.version}。\n"
+                "会校验完整工具包并原子替换程序与工作流脚本；"
+                "SoundBanks、日志和本地凭证不会被写入安装目录。"
+            )
         else:
             details = (
                 f"将{action}{spec.display_name} v{manifest.version}。\n"
@@ -3060,6 +3072,8 @@ class SvnAutoTool:
                     getattr(self, "ipc_update_queue", ())
                 ),
                 "version": APP_VERSION,
+                "svnmate_version": APP_VERSION,
+                **runtime_metadata(),
             }
         if command != "update":
             return {
@@ -4872,6 +4886,10 @@ try {{
     $payloadExe = Join-Path $payload 'SVNAutoTool.exe'
     if (-not (Test-Path -LiteralPath $payloadExe -PathType Leaf)) {{
         throw "更新包缺少程序文件：$payloadExe"
+    }}
+    $payloadCli = Join-Path $payload 'SVNmateCLI.exe'
+    if (-not (Test-Path -LiteralPath $payloadCli -PathType Leaf)) {{
+        throw "更新包缺少命令行客户端：$payloadCli"
     }}
 
     Copy-Item -Path (Join-Path $payload '*') -Destination $appDir -Recurse -Force

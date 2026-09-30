@@ -23,6 +23,9 @@ class ModuleManifest:
     download_url: str
     sha256: str
     entrypoint: str
+    files: tuple[str, ...] = ()
+    min_core_version: str = "0.0.0"
+    required_capabilities: tuple[tuple[str, int], ...] = ()
 
     @classmethod
     def from_dict(
@@ -57,12 +60,57 @@ class ModuleManifest:
         ):
             raise ModuleUpdateError("模块入口文件不安全")
 
+        files_value = payload.get("files", [])
+        if not isinstance(files_value, list):
+            raise ModuleUpdateError("模块清单 files 必须是数组")
+        files: list[str] = []
+        seen_files: set[str] = set()
+        for value in files_value:
+            if not isinstance(value, str) or not value.strip():
+                raise ModuleUpdateError("模块文件清单包含无效路径")
+            relative = PurePosixPath(value.strip().replace("\\", "/"))
+            if relative.is_absolute() or ".." in relative.parts:
+                raise ModuleUpdateError(f"模块文件路径不安全：{value}")
+            normalized = relative.as_posix()
+            key = normalized.casefold()
+            if key in seen_files:
+                raise ModuleUpdateError(f"模块文件路径重复：{value}")
+            seen_files.add(key)
+            files.append(normalized)
+
+        requires = payload.get("requires", {})
+        if not isinstance(requires, dict):
+            raise ModuleUpdateError("模块清单 requires 必须是对象")
+        min_core_version = str(
+            requires.get("svnmate_core", "0.0.0")
+        ).strip()
+        version_key(min_core_version)
+        capabilities_value = requires.get("capabilities", {})
+        if not isinstance(capabilities_value, dict):
+            raise ModuleUpdateError("模块能力要求必须是对象")
+        required_capabilities: list[tuple[str, int]] = []
+        for name, capability_version in capabilities_value.items():
+            if (
+                not isinstance(name, str)
+                or not name.strip()
+                or not isinstance(capability_version, int)
+                or isinstance(capability_version, bool)
+                or capability_version < 1
+            ):
+                raise ModuleUpdateError("模块能力要求包含无效值")
+            required_capabilities.append(
+                (name.strip(), capability_version)
+            )
+
         return cls(
             module_id=module_id,
             version=version,
             download_url=download_url,
             sha256=sha256,
             entrypoint=entrypoint,
+            files=tuple(files),
+            min_core_version=min_core_version,
+            required_capabilities=tuple(required_capabilities),
         )
 
 

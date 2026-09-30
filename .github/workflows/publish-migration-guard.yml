@@ -12,6 +12,7 @@ on:
       - build_migration_guard.bat
       - svnmate_core/**
       - svnmate_ipc.py
+      - svnmate_update_client.py
   workflow_dispatch:
 
 permissions:
@@ -66,7 +67,16 @@ jobs:
             download_url = "https://github.com/SusamMinami/SVNmate/releases/download/migration-guard-latest/MigrationGuard.zip"
             sha256 = $sha256
             entrypoint = "MigrationGuard.exe"
-          } | ConvertTo-Json
+            requires = [ordered]@{
+              svnmate_core = "1.1.0"
+              capabilities = [ordered]@{
+                "update.batch" = 1
+                "update.cleanup_retry" = 1
+                "update.multi_root_parallel" = 1
+                "update.same_root_serial" = 1
+              }
+            }
+          } | ConvertTo-Json -Depth 5
           [IO.File]::WriteAllText(
             (Join-Path $PWD "manifest.json"),
             $manifest + [Environment]::NewLine,

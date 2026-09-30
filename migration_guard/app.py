@@ -3741,7 +3741,10 @@ class MigrationGuardApp:
                 if not update_plan.empty:
                     update_result = MigrationUpdateClient(
                         log=self._queue_log,
-                    ).update_folders(update_plan.targets)
+                    ).update_folders(
+                        update_plan.targets,
+                        source="migration-guard",
+                    )
                     self.events.put(("update-result", update_result))
                     if not update_result.get("ok"):
                         raise RuntimeError(
@@ -4672,7 +4675,10 @@ class MigrationGuardApp:
         ]
         update_result = MigrationUpdateClient(
             log=self._queue_log,
-        ).update_folders(folders)
+        ).update_folders(
+            folders,
+            source="migration-guard",
+        )
         self.events.put(("update-result", update_result))
         if not update_result.get("ok"):
             raise RuntimeError(

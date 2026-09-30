@@ -10,7 +10,7 @@
 | Tk 界面、定时任务、托盘、单实例、BAT 编排、自更新 | `svn_auto_tool.py` |
 | 无 UI 的 Update/Cleanup/重试及结果模型 | `svnmate_core/update.py` |
 | Windows Named Pipe 服务与客户端 | `svnmate_ipc.py` |
-| 迁移工具的 IPC 优先/core 回退 | `migration_guard/svn_update_client.py` |
+| 公共 IPC 优先/core 回退与 CLI | `svnmate_update_client.py`、`svnmate_cli.py` |
 | 模块定义、发现和启动 | `tool_modules.py` |
 | manifest、下载校验和模块替换 | `module_updates.py` |
 | Metro 昼夜主题与 ttk 样式 | `svnmate_theme.py` |
@@ -28,13 +28,15 @@
   `{"path": "...", "enabled": bool}` 自动迁移为单路径组。组内路径无数量上限，
   拖到行上合并，拖到本栏空白处拆分，拖到另一栏空白处移动整组。
 - 外部更新请求在 SVNmate 忙碌时进入 FIFO 队列，当前任务结束后自动执行；旧版
-  SVNmate 返回 `busy` 时，MigrationGuard 在原流程内等待重试，不要求用户重新核验。
+  SVNmate 不再兼容。IPC v2 请求必须声明最低 core 版本和能力要求。
+- `svnmate_core/version.py` 是 core 版本与能力表的唯一来源；GUI、CLI 和
+  MigrationGuard 不得各自维护另一份版本常量。
 - 主程序的 `Update.bat` 使用单线程后台队列，可与其他 Working Copy 的后续
   SVN update 重叠，但必须共享所属 Root 的互斥锁；
   全部 update 与后台 BAT 完成后，才串行执行 cleanup 和对应 `Build.bat`。
   不把“同 WC 串行”误解为所有工作副本完全串行。
 - 外部更新请求只处理指定目录的 SVN update/失败恢复，不运行每日任务或用户 BAT。
-- IPC 地址为 `\\.\pipe\SVNmate.Command.v1`。检测到 SVNmate 在运行但 IPC 不可用时
+- IPC 地址为 `\\.\pipe\SVNmate.Command.v2`。检测到 SVNmate 在运行但 IPC 不可用时
   返回 `ipc-unavailable`，禁止并发回退 core；未运行才可直接使用 core。
 - `svnmate_core` 不导入 Tkinter、不访问 `StringVar`，以结构化进度/结果与 UI 通信。
 - BAT 的工作目录为脚本所在目录，失败窗口保留 5 秒；命令行引号使用
@@ -44,8 +46,9 @@
 - 关闭窗口隐藏到托盘；重复启动唤醒原实例。处理 Explorer 的 `TaskbarCreated`
   并重建托盘，图标不可用时保留窗口入口。
 - 模块下载验证 HTTPS、manifest、入口白名单、ZIP 路径和 SHA-256。普通模块只
-  替换允许的 EXE/公开 `VERSION`；Seria QA Overlay 作为安装包型模块，先调用包内
-  安装器成功部署到 trunk，再提交受管模块版本，并保留安装日志与备份。两类更新均
+  替换允许的 EXE/公开 `VERSION`；bundle 模块按 manifest 文件白名单执行目录级
+  原子替换；Seria QA Overlay 作为安装包型模块，先调用包内
+  安装器成功部署到 trunk，再提交受管模块版本，并保留安装日志与备份。三类更新均
   不覆盖无关配置、缓存、日志或凭据。Kindle 保持弱耦合。
 - UI 沿用 `svnmate_theme.py` 的 Metro/Segoe UI、昼夜主题与 Per-Monitor V2 DPI；
   后台结果回 UI 线程，不让网络、SVN 或长日志阻塞主循环。
@@ -56,6 +59,7 @@
 
 ```powershell
 python -B svn_auto_tool.py
+python -B svnmate_cli.py --source smoke C:\some-working-copy
 python -B -m unittest test_svn_auto_tool test_svnmate_core test_svnmate_ipc test_tool_modules test_module_updates -v
 ```
 
@@ -70,14 +74,19 @@ python -B -m unittest test_migration_audit test_batch_workflow test_selective_up
 
 ## 发布入口
 
-- 主版本：`svn_auto_tool.py` 的 `APP_VERSION`。
+- 主版本：`svn_auto_tool.py` 的 `APP_VERSION`；core 版本与能力：
+  `svnmate_core/version.py`。
 - 主程序发布：[publish-release.yml](../.github/workflows/publish-release.yml)；
-  上传的是仓库内分享 ZIP，不会自动重新构建源码，也不自动运行测试。
+  Windows runner 先执行共享测试，再从源码构建 GUI 与 CLI 并生成发布 ZIP。
 - 模块发布：[ConfigLinker](../.github/workflows/publish-config-linker.yml)、
   [MigrationGuard](../.github/workflows/publish-migration-guard.yml) 各有固定通道。
 - Seria QA Overlay 的大型第三方 payload 不进 Git，使用
   `seria-qa-overlay/Publish-SeriaQAModule.ps1` 在已验证的 Windows 环境构建；
   只有显式传入 `-Publish` 才更新 `seria-qa-overlay-latest` 固定通道。
+- Wwise 音频迁移源码位于 `seria-wwise-migration/`，由
+  `publish-seria-wwise-migration.yml` 发布到
+  `seria-wwise-migration-latest` 固定通道；本地脚本只有显式传入 `-Publish`
+  才直接更新该通道。
 - Kindle 外部模块：[交接说明](../KINDLE_PUBLIC_CHANNEL_HANDOFF.md)。
 
 只在明确要求发布时核对版本、干净分享包、测试结果、远端附件与哈希；不要根据

@@ -51,7 +51,7 @@ class ReleaseConfigTests(unittest.TestCase):
     def test_release_asset_name_is_stable_and_url_safe(self) -> None:
         self.assertEqual(RELEASE_ASSET_NAME, "SVNmate.zip")
         asset_url = RELEASE_DOWNLOAD_URL.format(tag=APP_VERSION, asset=RELEASE_ASSET_NAME)
-        self.assertTrue(asset_url.endswith("/v1.4.7/SVNmate.zip"))
+        self.assertTrue(asset_url.endswith("/v1.5.0/SVNmate.zip"))
 
 
 class LayoutAndSummaryTests(unittest.TestCase):
@@ -450,6 +450,10 @@ class SelfUpdateTests(unittest.TestCase):
             self.assertIn("$payload = $extractDir", script)
             self.assertIn(
                 "更新包缺少程序文件：$payloadExe",
+                script,
+            )
+            self.assertIn(
+                "更新包缺少命令行客户端：$payloadCli",
                 script,
             )
             self.assertIn("-WorkingDirectory $appDir -PassThru", script)

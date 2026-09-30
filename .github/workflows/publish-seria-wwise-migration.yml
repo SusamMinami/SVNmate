@@ -1,0 +1,65 @@
+name: Publish Seria Wwise Migration Module
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/publish-seria-wwise-migration.yml
+      - seria-wwise-migration/**
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run PowerShell regression tests
+        working-directory: seria-wwise-migration
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          .\Tests\Test-WwiseFullMigration.ps1
+          .\Tests\Test-WwiseUnrealReconcile.ps1
+
+      - name: Build module assets
+        working-directory: seria-wwise-migration
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          .\Publish-SeriaWwiseMigrationModule.ps1 `
+            -OutputRoot "$env:RUNNER_TEMP\SeriaWwiseMigration"
+
+      - name: Create or update fixed module release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Continue"
+          gh release view seria-wwise-migration-latest 2> $null | Out-Null
+          $releaseExists = $LASTEXITCODE -eq 0
+          $ErrorActionPreference = "Stop"
+          $root = Join-Path $env:RUNNER_TEMP "SeriaWwiseMigration"
+          $archive = Join-Path $root "SeriaWwiseMigration.zip"
+          $manifest = Join-Path $root "manifest.json"
+          if ($releaseExists) {
+            gh release upload `
+              seria-wwise-migration-latest `
+              $archive `
+              $manifest `
+              --clobber
+            gh release edit seria-wwise-migration-latest --latest=false
+          } else {
+            gh release create `
+              seria-wwise-migration-latest `
+              $archive `
+              $manifest `
+              --title "Seria Wwise Migration latest module" `
+              --notes "Fixed update channel managed by SVNmate." `
+              --latest=false
+          }

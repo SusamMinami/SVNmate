@@ -126,13 +126,13 @@ MigrationGuard UI
 更新分发严格使用：
 
 ```text
-IPC 可用                       -> 常驻 SVNmate 按 FIFO 排队并串行执行
+IPC v2 可用且能力满足           -> 常驻 SVNmate 按 FIFO 排队；不同 WC 可并行
 IPC 不可用，但单实例锁存在       -> 阻断，提示重启新版
-IPC 不可用，且 SVNmate 未运行    -> 调用共享 core
+IPC 不可用，且 SVNmate 未运行    -> 调用模块内同版本共享 core
 ```
 
-旧版 SVNmate 若对忙碌请求返回 `busy`，MigrationGuard 保持当前工作流并等待重试，
-不要求用户重新选择资产或重新发起核验。
+请求必须声明最低 core 版本及能力集合。协议、core 或能力不满足时直接阻断并提示
+先更新 SVNmate；不再兼容旧 IPC 客户端。
 
 外部请求不运行 SVNmate 的用户 BAT/每日任务；详见
 [共享更新指南](svnmate-development.md)。

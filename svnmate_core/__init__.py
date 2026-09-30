@@ -14,12 +14,16 @@ from .update import (
     needs_svn_cleanup,
     normalized_path_key,
 )
+from .version import CORE_CAPABILITIES, CORE_VERSION, SVNMATE_CAPABILITIES
 
 __all__ = [
     "BatchUpdateResult",
     "CommandExecution",
+    "CORE_CAPABILITIES",
+    "CORE_VERSION",
     "MAX_PARALLEL_WORKING_COPIES",
     "StreamingCommandExecutor",
+    "SVNMATE_CAPABILITIES",
     "UpdateEvent",
     "UpdateStepResult",
     "WorkspaceUpdateResult",

@@ -1,3 +1,6 @@
+import contextlib
+import io
+import json
 import os
 import queue
 import threading
@@ -6,15 +9,22 @@ import unittest
 from collections import deque
 from unittest.mock import Mock, patch
 
-from migration_guard.svn_update_client import MigrationUpdateClient
+from migration_guard.svn_update_client import (
+    RESULT_PREFIX,
+    MigrationUpdateClient,
+    main as update_client_main,
+)
 from svn_auto_tool import APP_VERSION, SvnAutoTool
+from svnmate_core import CORE_CAPABILITIES, CORE_VERSION
 from svnmate_ipc import (
     IPC_PROTOCOL_VERSION,
     SvnMateIpcClient,
     SvnMateIpcServer,
     SvnMateResponseError,
     SvnMateUnavailableError,
+    make_ping_request,
     make_update_request,
+    runtime_requirement_failure,
     validate_request,
 )
 
@@ -32,16 +42,50 @@ class IpcProtocolTests(unittest.TestCase):
             request["folders"],
             [r"C:\trunk\res", r"D:\Oversea\OStrunk\res"],
         )
+        self.assertEqual(
+            request["requirements"]["min_core_version"],
+            CORE_VERSION,
+        )
+        self.assertEqual(
+            request["requirements"]["capabilities"],
+            CORE_CAPABILITIES,
+        )
 
     def test_invalid_request_is_rejected(self) -> None:
+        request = make_update_request(
+            [r"C:\trunk\res"],
+            request_id="invalid-folders",
+        )
+        request["folders"] = "not-a-list"
         with self.assertRaisesRegex(ValueError, "folders"):
+            validate_request(request)
+
+    def test_v1_request_without_requirements_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "IPC"):
             validate_request(
                 {
-                    "protocol_version": IPC_PROTOCOL_VERSION,
-                    "command": "update",
-                    "folders": "not-a-list",
+                    "protocol_version": 1,
+                    "request_id": "legacy-client",
+                    "command": "ping",
+                    "source": "legacy",
                 }
             )
+
+    def test_runtime_requirement_reports_upgrade(self) -> None:
+        request = make_ping_request(
+            request_id="future-client",
+            min_core_version="999.0.0",
+            required_capabilities={"update.future": 1},
+        )
+
+        failure = runtime_requirement_failure(validate_request(request))
+
+        self.assertIsNotNone(failure)
+        self.assertEqual(failure["status"], "upgrade-required")
+        self.assertEqual(
+            failure["missing_capabilities"],
+            {"update.future": 1},
+        )
 
     @unittest.skipUnless(os.name == "nt", "Windows named pipe only")
     def test_named_pipe_round_trip(self) -> None:
@@ -92,6 +136,11 @@ class SvnMateIpcHandlerTests(unittest.TestCase):
         self.assertTrue(response["ok"])
         self.assertEqual(response["status"], "ready")
         self.assertEqual(response["version"], APP_VERSION)
+        self.assertEqual(response["core_version"], CORE_VERSION)
+        self.assertEqual(
+            response["capabilities"]["update.multi_root_parallel"],
+            1,
+        )
 
     def test_busy_instance_queues_external_update(self) -> None:
         tool = SvnAutoTool.__new__(SvnAutoTool)
@@ -204,13 +253,20 @@ class MigrationUpdateClientTests(unittest.TestCase):
             instance_running=lambda: True,
         )
 
-        result = client.update_folders([r"C:\trunk\res"])
+        result = client.update_folders(
+            [r"C:\trunk\res"],
+            source="wwise-migration",
+        )
 
         self.assertTrue(result["ok"])
         self.assertEqual(result["executed_by"], "svnmate")
         ipc_client.update.assert_called_once()
+        self.assertEqual(
+            ipc_client.update.call_args.kwargs["source"],
+            "wwise-migration",
+        )
 
-    def test_busy_legacy_svnmate_is_retried_in_place(self) -> None:
+    def test_busy_svnmate_is_retried_in_place(self) -> None:
         ipc_client = Mock()
         ipc_client.update.side_effect = (
             {
@@ -235,8 +291,11 @@ class MigrationUpdateClientTests(unittest.TestCase):
             log=log,
         )
 
-        with patch("migration_guard.svn_update_client.time.sleep"):
-            result = client.update_folders([r"C:\trunk\res"])
+        with patch("svnmate_update_client.time.sleep"):
+            result = client.update_folders(
+                [r"C:\trunk\res"],
+                source="migration-guard",
+            )
 
         self.assertTrue(result["ok"])
         self.assertEqual(ipc_client.update.call_count, 2)
@@ -256,9 +315,12 @@ class MigrationUpdateClientTests(unittest.TestCase):
         )
 
         with patch(
-            "migration_guard.svn_update_client.create_cli_update_service"
+            "svnmate_update_client.create_cli_update_service"
         ) as create_service:
-            result = client.update_folders([r"C:\trunk\res"])
+            result = client.update_folders(
+                [r"C:\trunk\res"],
+                source="migration-guard",
+            )
 
         self.assertFalse(result["ok"])
         self.assertEqual(result["status"], "ipc-unavailable")
@@ -281,10 +343,13 @@ class MigrationUpdateClientTests(unittest.TestCase):
         )
 
         with patch(
-            "migration_guard.svn_update_client.create_cli_update_service",
+            "svnmate_update_client.create_cli_update_service",
             return_value=service,
         ):
-            result = client.update_folders([r"C:\trunk\res"])
+            result = client.update_folders(
+                [r"C:\trunk\res"],
+                source="migration-guard",
+            )
 
         self.assertTrue(result["ok"])
         self.assertEqual(result["executed_by"], "core")
@@ -299,13 +364,60 @@ class MigrationUpdateClientTests(unittest.TestCase):
         )
 
         with patch(
-            "migration_guard.svn_update_client.create_cli_update_service"
+            "svnmate_update_client.create_cli_update_service"
         ) as create_service:
-            result = client.update_folders([r"C:\trunk\res"])
+            result = client.update_folders(
+                [r"C:\trunk\res"],
+                source="migration-guard",
+            )
 
         self.assertFalse(result["ok"])
-        self.assertEqual(result["status"], "ipc-error")
+        self.assertEqual(result["status"], "upgrade-required")
         create_service.assert_not_called()
+
+    def test_cli_prints_machine_readable_result(self) -> None:
+        result = {
+            "ok": True,
+            "status": "completed",
+            "executed_by": "core",
+            "folders": [],
+        }
+        output = io.StringIO()
+
+        with (
+            patch(
+                "svnmate_update_client.update_working_copies",
+                return_value=result,
+            ) as update,
+            contextlib.redirect_stdout(output),
+        ):
+            exit_code = update_client_main(
+                [
+                    "--source",
+                    "wwise-migration",
+                    "--response-timeout",
+                    "42",
+                    r"C:\Sound",
+                    r"D:\server\17.0\res\Content\Seria\WwiseAudio",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        result_line = output.getvalue().strip()
+        self.assertTrue(result_line.startswith(RESULT_PREFIX))
+        self.assertEqual(
+            json.loads(result_line[len(RESULT_PREFIX) :]),
+            result,
+        )
+        update.assert_called_once_with(
+            [
+                r"C:\Sound",
+                r"D:\server\17.0\res\Content\Seria\WwiseAudio",
+            ],
+            log=unittest.mock.ANY,
+            source="wwise-migration",
+            response_timeout=42.0,
+        )
 
 
 if __name__ == "__main__":

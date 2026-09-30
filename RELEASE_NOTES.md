@@ -1,3 +1,31 @@
+# 一键更新SVN v1.5.0
+
+本版本将共享更新运行时与 Wwise 音频迁移工具纳入 SVNmate 统一版本治理。
+
+- IPC 升级为不兼容的 v2；每次请求必须声明最低 `core_version` 与所需
+  `capabilities`，运行中的 SVNmate 不满足要求时直接返回升级阻断。
+- 主发布包新增 `SVNmateCLI.exe`。受管工具在线时通过 Named Pipe 请求 SVNmate，
+  SVNmate 未运行时使用 CLI 内置的同版本 core，不再依赖源码目录或外部 Python。
+- Wwise 音频迁移注册为 bundle 模块，SVNmate 可从固定通道检查、安装和更新 EXE
+  及配套工作流脚本；目录级暂存、备份和原子替换保证失败时保留旧版本。
+- Bundle manifest 增加文件白名单、SHA-256、最低 core 版本和能力依赖校验。
+- 音频迁移继续读取外部 `C:\Sound\SeriaWwiseProject` 数据，不把 SoundBanks、日志
+  或生成凭证复制进 SVNmate 安装目录。
+- 主发布工作流改为从源码构建 `SVNAutoTool.exe` 与 `SVNmateCLI.exe` 后打包，避免
+  静态 ZIP 与源码版本漂移。
+
+---
+
+# MigrationGuard v1.1.0
+
+- 更新调用迁移到 SVNmate 公共客户端，并强制使用 IPC v2 的 core 版本与能力协商。
+- 在线 SVNmate 不满足要求时阻断更新并提示升级；SVNmate 未运行时使用模块内置的
+  同版本 core。
+- 发布 manifest 声明最低 core 版本和批量更新、Cleanup 重试、跨 WC 并行、
+  同 WC 串行能力。
+
+---
+
 # 一键更新SVN v1.4.7
 
 本版本修复同一任务组中的不同 Working Copy Root 仍被串行执行的问题。

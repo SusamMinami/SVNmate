@@ -2115,7 +2115,8 @@ class MigrationGuardUiSmokeTests(unittest.TestCase):
                 files[0].expected.source_local_path,
             )
             update_client.update_folders.assert_called_once_with(
-                plan.targets
+                plan.targets,
+                source="migration-guard",
             )
             events = []
             audited_result = None

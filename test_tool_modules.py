@@ -12,6 +12,7 @@ from tool_modules import (
     CONFIG_LINKER,
     KINDLE_STATUS,
     MIGRATION_GUARD,
+    SERIA_WWISE_MIGRATION,
     SERIA_QA_OVERLAY,
     ToolModuleManager,
     module_paths_from_config,
@@ -46,6 +47,17 @@ class ToolModuleManagerTests(unittest.TestCase):
             (
                 "https://github.com/SusamMinami/SVNmate/releases/download/"
                 "seria-qa-overlay-latest/module-manifest.json"
+            ),
+        )
+
+    def test_wwise_migration_uses_managed_bundle_channel(self) -> None:
+        self.assertEqual(SERIA_WWISE_MIGRATION.module_kind, "bundle")
+        self.assertFalse(SERIA_WWISE_MIGRATION.allow_custom_path)
+        self.assertEqual(
+            SERIA_WWISE_MIGRATION.manifest_url,
+            (
+                "https://github.com/SusamMinami/SVNmate/releases/download/"
+                "seria-wwise-migration-latest/manifest.json"
             ),
         )
 
@@ -85,6 +97,7 @@ class ToolModuleManagerTests(unittest.TestCase):
             r"D:\Tools\MigrationGuard.exe",
         )
         self.assertEqual(paths["seria-qa-overlay"], "")
+        self.assertEqual(paths["seria-wwise-migration"], "")
 
     def test_default_and_configured_paths_are_resolved(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -106,6 +119,15 @@ class ToolModuleManagerTests(unittest.TestCase):
                     / "modules"
                     / "SeriaQAOverlay"
                     / "Install-SeriaQA.cmd"
+                ),
+            )
+            self.assertEqual(
+                manager.executable_path(SERIA_WWISE_MIGRATION),
+                (
+                    app_dir
+                    / "modules"
+                    / "SeriaWwiseMigration"
+                    / "SeriaWwiseMigration.exe"
                 ),
             )
             configured = app_dir / "external" / "KindleLarkStatus.exe"
@@ -356,6 +378,82 @@ class ToolModuleManagerTests(unittest.TestCase):
 
             self.assertEqual(reapplied, target)
             self.assertEqual(len(applied), 2)
+
+    def test_bundle_install_replaces_declared_files_atomically(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app_dir = Path(temp_dir)
+            archive = app_dir / "SeriaWwiseMigration.zip"
+            files = (
+                "SeriaWwiseMigration.exe",
+                "Invoke-WwiseMigrationWorkflow.ps1",
+                "Invoke-WwiseFullMigration.ps1",
+            )
+            with zipfile.ZipFile(archive, "w") as handle:
+                for name in files:
+                    handle.writestr(name, f"new:{name}".encode())
+                handle.writestr("not-declared.txt", b"ignored")
+            digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+            manifest = ModuleManifest.from_dict(
+                {
+                    "id": "seria-wwise-migration",
+                    "version": "1.0.0",
+                    "download_url": "https://example.com/Wwise.zip",
+                    "sha256": digest,
+                    "entrypoint": "SeriaWwiseMigration.exe",
+                    "files": list(files),
+                    "requires": {
+                        "svnmate_core": "1.1.0",
+                        "capabilities": {
+                            "update.multi_root_parallel": 1,
+                        },
+                    },
+                },
+                expected_id="seria-wwise-migration",
+            )
+            manager = ToolModuleManager(app_dir)
+            target = manager.executable_path(SERIA_WWISE_MIGRATION)
+            target.parent.mkdir(parents=True)
+            target.write_bytes(b"old")
+            (target.parent / "obsolete.ps1").write_text(
+                "old",
+                encoding="utf-8",
+            )
+
+            installed = manager.install_archive(
+                SERIA_WWISE_MIGRATION,
+                manifest,
+                archive,
+            )
+
+            self.assertEqual(installed, target)
+            self.assertEqual(target.read_bytes(), b"new:SeriaWwiseMigration.exe")
+            self.assertFalse((target.parent / "obsolete.ps1").exists())
+            self.assertFalse((target.parent / "not-declared.txt").exists())
+            self.assertEqual(
+                (target.parent / "VERSION").read_text(encoding="utf-8"),
+                "1.0.0\n",
+            )
+
+    def test_module_requiring_newer_core_is_rejected(self) -> None:
+        manifest = ModuleManifest.from_dict(
+            {
+                "id": "seria-wwise-migration",
+                "version": "1.0.0",
+                "download_url": "https://example.com/Wwise.zip",
+                "sha256": "a" * 64,
+                "entrypoint": "SeriaWwiseMigration.exe",
+                "files": ["SeriaWwiseMigration.exe"],
+                "requires": {"svnmate_core": "999.0.0"},
+            },
+            expected_id="seria-wwise-migration",
+        )
+        manager = ToolModuleManager(
+            Path("C:/SVNmate"),
+            manifest_fetcher=lambda _url, _module_id: manifest,
+        )
+
+        with self.assertRaisesRegex(ModuleUpdateError, "请先更新 SVNmate"):
+            manager.check_update(SERIA_WWISE_MIGRATION)
 
     def test_installer_failure_keeps_previous_package_and_version(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

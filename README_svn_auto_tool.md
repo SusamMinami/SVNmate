@@ -5,6 +5,16 @@
 多项目文档入口见
 [`docs/README.md`](https://github.com/SusamMinami/SVNmate/blob/main/docs/README.md)。
 
+## v1.5.0 更新摘要
+
+- IPC v2 强制校验 `core_version` 与能力版本，不再兼容缺少能力声明的旧客户端。
+- 主安装包同时提供 `SVNAutoTool.exe` 和 `SVNmateCLI.exe`，GUI、迁移核验助手与
+  Wwise 音频迁移共用同一套更新、Cleanup 重试和按 WC Root 并发规则。
+- 新增受管的 Wwise 音频迁移 bundle；SVNmate 统一检查、安装和更新程序及工作流
+  脚本，SoundBanks 数据仍保留在外部 Wwise 项目中。
+- Bundle 更新使用文件白名单、SHA-256 和目录级原子替换，并验证最低 core 版本与
+  必需能力。
+
 ## v1.4.7 更新摘要
 
 - 修复同一任务组内不同 Working Copy Root 仍被串行执行的问题。
@@ -100,10 +110,9 @@ python svn_auto_tool.py
 
 运行 exe 不需要额外安装 Python。工具会优先使用 TortoiseSVN 的 `TortoiseProc.exe` 执行 update/cleanup，这和右键菜单行为更接近；如果找不到 TortoiseSVN，才会回退到命令行 `svn.exe`。
 
-其他本机工具可调用 `migration_guard.update_working_copies` 请求更新指定目录。SVNmate
-常驻时由 SVNmate 执行；未运行时调用方使用共享的 `svnmate_core`。如果检测到旧版
-SVNmate 正在运行但 IPC 不可用，调用方会停止并提示重启，避免两个进程同时操作同一
-工作副本。
+其他本机工具通过 `SVNmateCLI.exe` 或共享 Python 客户端请求更新指定目录。
+SVNmate 常驻时由 IPC v2 执行；未运行时 CLI 使用同一发布包中的 `svnmate_core`。
+每个请求都会校验 core 版本与能力，运行时不满足要求会提示先更新 SVNmate。
 
 执行 TortoiseSVN update 时，工具会在确认窗口已经完成后自动点击 `OK/确定/确认/关闭`；执行 cleanup 时会使用 TortoiseSVN 的 `/noui` 静默清理，避免弹出确认窗口。
 
@@ -125,11 +134,12 @@ https://bytedance.larkoffice.com/docx/BdDod9tjIo4rPbx2oWHchVRUnwh
 
 ## 工具模块
 
-“工具模块”卡片提供四个独立模块：
+“工具模块”卡片提供五个独立模块：
 
 ```text
 配置关系检索器（ConfigLinker）
 迁移核验助手（MigrationGuard）
+Wwise 音频迁移
 Seria QA Overlay
 Kindle 提示板（KindleLarkStatus）
 ```
@@ -144,18 +154,24 @@ Kindle 提示板（KindleLarkStatus）
 
 ```text
 modules\ConfigLinker\ConfigLinker.exe
+modules\SeriaWwiseMigration\SeriaWwiseMigration.exe
 modules\SeriaQAOverlay\Install-SeriaQA.cmd
 modules\KindleLarkStatus\KindleLarkStatus.exe
 ```
 
 迁移核验助手使用独立的 `migration-guard-latest` 在线更新通道；同时仍会从同目录
 或 `dist\MigrationGuard.exe` 自动识别，也可手动选择。
+Wwise 音频迁移使用 `seria-wwise-migration-latest` 固定通道，以 bundle 形式整体
+更新 EXE 和 PowerShell 工作流。默认读取
+`C:\Sound\SeriaWwiseProject\GeneratedSoundBanks_2022`，可通过
+`SERIA_WWISE_PROJECT_ROOT` 或 `SERIA_WWISE_SOURCE_ROOT` 覆盖数据位置。
+模块源码和测试统一维护在仓库的 `seria-wwise-migration/`。
 Seria QA Overlay 使用 `seria-qa-overlay-latest` 固定通道。安装或更新时必须先
 退出 `Seria.exe`；SVNmate 校验完整 ZIP 后调用包内安装器，将 QA 组件应用到
 `%SERIA_TRUNK%` 或默认 `C:\trunk`，并更新 trunk 外的恢复副本。
 其他模块不随 `SVNmate.zip` 预装。安装失败不会删除当前可用版本，也不会覆盖模块配置。
 
-MigrationGuard `1.0.5` 的无工程模式会缓存远端结果 5 分钟，并可按 2 分钟或
+MigrationGuard `1.1.0` 的无工程模式会缓存远端结果 5 分钟，并可按 2 分钟或
 5 分钟周期自动刷新。配置了有效本地工作区后，“更新并复核”会先让用户选择本批
 资产，只更新相关 SVN 目录，并让后续迁移、提交和 OSOB 阶段沿用同一范围。
 
@@ -165,6 +181,7 @@ MigrationGuard `1.0.5` 的无工程模式会缓存远端结果 5 分钟，并可
 
 - ConfigLinker 必须选择 `ConfigLinker.exe`。
 - 迁移核验助手必须选择 `MigrationGuard.exe`。
+- Wwise 音频迁移只使用 SVNmate 管理的完整 bundle，不选择单个 EXE。
 - Kindle 提示板必须选择 `KindleLarkStatus.exe`。
 - Seria QA Overlay 仅使用 SVNmate 管理的完整安装包，不允许选择单个 DLL 或脚本。
 - 新的 `tool_module_paths` 会保存到 `svn_auto_tool_config.json`。
@@ -178,8 +195,9 @@ SVNmate 启动后会后台检查支持在线发布的模块。网络失败只把
 - 有更新时该行主动作变为“更新”，仍可从“更多”菜单直接打开当前版本。
 - 更新前必须人工确认，不会静默替换。
 - 模块正在运行时会先提示关闭；更新完成后按原状态重启。
-- EXE 模块只替换 EXE 和公开 `VERSION`；安装包型模块只替换已校验的模块副本并
-  调用自身安装器。两类更新均不覆盖无关 JSON/INI 配置、日志、Token、缓存或 SSH 私钥。
+- EXE 模块只替换 EXE 和公开 `VERSION`；bundle 模块按文件白名单原子替换完整
+  工具目录；安装包型模块替换已校验的模块副本并调用自身安装器。所有更新均不覆盖
+  无关 JSON/INI 配置、日志、Token、缓存或 SSH 私钥。
 
 ConfigLinker 还可以在自身标题区点击更新圆点独立更新。SVNmate、ConfigLinker 和 KindleLarkStatus Windows 模块拥有各自版本，互不覆盖。
 

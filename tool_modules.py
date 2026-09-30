@@ -14,6 +14,7 @@ from module_updates import (
     verify_sha256,
     version_key,
 )
+from svnmate_core import CORE_VERSION, SVNMATE_CAPABILITIES
 
 
 @dataclass(frozen=True)
@@ -65,6 +66,19 @@ MIGRATION_GUARD = ToolModuleSpec(
     install_folder="MigrationGuard",
 )
 
+SERIA_WWISE_MIGRATION = ToolModuleSpec(
+    module_id="seria-wwise-migration",
+    display_name="Wwise 音频迁移",
+    manifest_url=(
+        "https://github.com/SusamMinami/SVNmate/releases/download/"
+        "seria-wwise-migration-latest/manifest.json"
+    ),
+    executable_name="SeriaWwiseMigration.exe",
+    install_folder="SeriaWwiseMigration",
+    module_kind="bundle",
+    allow_custom_path=False,
+)
+
 SERIA_QA_OVERLAY = ToolModuleSpec(
     module_id="seria-qa-overlay",
     display_name="Seria QA Overlay",
@@ -85,6 +99,7 @@ SERIA_QA_OVERLAY = ToolModuleSpec(
 TOOL_MODULES = (
     CONFIG_LINKER,
     MIGRATION_GUARD,
+    SERIA_WWISE_MIGRATION,
     SERIA_QA_OVERLAY,
     KINDLE_STATUS,
 )
@@ -100,6 +115,7 @@ def module_paths_from_config(
     paths = {
         CONFIG_LINKER.module_id: detected_config_linker,
         MIGRATION_GUARD.module_id: detected_migration_guard,
+        SERIA_WWISE_MIGRATION.module_id: "",
         SERIA_QA_OVERLAY.module_id: "",
         KINDLE_STATUS.module_id: detected_kindle_status,
     }
@@ -244,7 +260,30 @@ class ToolModuleManager:
                 f"模块入口不匹配：期望 {spec.executable_name}，"
                 f"实际 {manifest.entrypoint}"
             )
+        self._assert_runtime_compatible(manifest)
         return manifest
+
+    @staticmethod
+    def _assert_runtime_compatible(manifest: ModuleManifest) -> None:
+        if version_key(CORE_VERSION) < version_key(
+            manifest.min_core_version
+        ):
+            raise ModuleUpdateError(
+                "模块要求 svnmate_core >= "
+                f"{manifest.min_core_version}，当前为 {CORE_VERSION}；"
+                "请先更新 SVNmate"
+            )
+        missing = [
+            name
+            for name, required in manifest.required_capabilities
+            if SVNMATE_CAPABILITIES.get(name, 0) < required
+        ]
+        if missing:
+            raise ModuleUpdateError(
+                "当前 SVNmate 缺少模块要求的能力："
+                + "、".join(missing)
+                + "；请先更新 SVNmate"
+            )
 
     def update_available(
         self,
@@ -267,6 +306,7 @@ class ToolModuleManager:
             raise ModuleUpdateError("模块清单与安装目标不匹配")
         if manifest.entrypoint.casefold() != spec.executable_name.casefold():
             raise ModuleUpdateError("模块清单入口与安装目标不匹配")
+        self._assert_runtime_compatible(manifest)
         verify_sha256(archive, manifest.sha256)
         target = self.executable_path(spec, configured_path)
         update_root = self.app_dir / "_module_updates" / spec.module_id
@@ -280,6 +320,14 @@ class ToolModuleManager:
             )
         if spec.module_kind == "installer":
             return self._install_package(
+                spec,
+                manifest,
+                candidates[0].parent,
+                target,
+                extract_dir,
+            )
+        if spec.module_kind == "bundle":
+            return self._install_bundle(
                 spec,
                 manifest,
                 candidates[0].parent,
@@ -306,6 +354,65 @@ class ToolModuleManager:
                 shutil.copy2(backup_target, target)
             raise ModuleUpdateError(f"模块替换失败：{exc}") from exc
         finally:
+            shutil.rmtree(extract_dir, ignore_errors=True)
+        return target
+
+    def _install_bundle(
+        self,
+        spec: ToolModuleSpec,
+        manifest: ModuleManifest,
+        package_root: Path,
+        target: Path,
+        extract_dir: Path,
+    ) -> Path:
+        if not manifest.files:
+            raise ModuleUpdateError("Bundle 模块缺少 files 白名单")
+        if manifest.entrypoint.casefold() not in {
+            path.casefold() for path in manifest.files
+        }:
+            raise ModuleUpdateError("Bundle 文件白名单未包含入口程序")
+
+        target_dir = target.parent
+        staged_dir = target_dir.with_name(target_dir.name + ".new")
+        backup_dir = target_dir.with_name(target_dir.name + ".bak")
+        shutil.rmtree(staged_dir, ignore_errors=True)
+        shutil.rmtree(backup_dir, ignore_errors=True)
+
+        try:
+            staged_dir.mkdir(parents=True)
+            for relative in manifest.files:
+                source = package_root.joinpath(*Path(relative).parts)
+                if not source.is_file():
+                    raise ModuleUpdateError(
+                        f"Bundle 缺少清单文件：{relative}"
+                    )
+                destination = staged_dir.joinpath(*Path(relative).parts)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, destination)
+            (staged_dir / "VERSION").write_text(
+                manifest.version + "\n",
+                encoding="utf-8",
+            )
+
+            target_dir.parent.mkdir(parents=True, exist_ok=True)
+            had_existing = target_dir.is_dir()
+            if had_existing:
+                self._replace_path_with_retry(target_dir, backup_dir)
+            try:
+                self._replace_path_with_retry(staged_dir, target_dir)
+            except Exception:
+                if had_existing and backup_dir.is_dir():
+                    self._replace_path_with_retry(backup_dir, target_dir)
+                raise
+            shutil.rmtree(backup_dir, ignore_errors=True)
+        except ModuleUpdateError:
+            raise
+        except Exception as exc:
+            if not target_dir.exists() and backup_dir.is_dir():
+                self._replace_path_with_retry(backup_dir, target_dir)
+            raise ModuleUpdateError(f"Bundle 替换失败：{exc}") from exc
+        finally:
+            shutil.rmtree(staged_dir, ignore_errors=True)
             shutil.rmtree(extract_dir, ignore_errors=True)
         return target
 
