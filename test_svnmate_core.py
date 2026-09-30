@@ -272,7 +272,7 @@ class CoreUtilityTests(unittest.TestCase):
             nested.mkdir(parents=True)
             (root / ".svn").mkdir()
 
-            self.assertEqual(find_working_copy_root(nested), root)
+            self.assertTrue(find_working_copy_root(nested).samefile(root))
 
     @unittest.skipUnless(
         shutil.which("svn") and shutil.which("svnadmin"),

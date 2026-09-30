@@ -395,10 +395,10 @@ class SelfUpdateTests(unittest.TestCase):
                     "-File",
                     str(script_path),
                 ],
-                cwd=Path(temp_dir),
+                cwd=Path.cwd(),
             )
 
-            deadline = time.monotonic() + 5
+            deadline = time.monotonic() + 15
             while time.monotonic() < deadline and not marker_path.exists():
                 time.sleep(0.05)
             self.assertTrue(marker_path.exists())

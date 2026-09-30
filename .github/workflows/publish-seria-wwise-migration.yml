@@ -19,6 +19,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Install Subversion command-line tools
+        shell: pwsh
+        run: choco install svn --yes --no-progress
+
       - name: Run PowerShell regression tests
         working-directory: seria-wwise-migration
         shell: powershell
