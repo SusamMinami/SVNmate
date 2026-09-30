@@ -1,0 +1,24 @@
+{
+  "name": "character-creator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit && vite build",
+    "start": "python -m backend.server --open",
+    "test:backend": "python -m unittest discover -s tests -v",
+    "test:ui": "node tests/ui.mjs"
+  },
+  "dependencies": {
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "lucide-react": "^0.468.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "typescript": "~5.8.3",
+    "vite": "^6.4.1",
+    "@playwright/test": "^1.55.0"
+  }
+}

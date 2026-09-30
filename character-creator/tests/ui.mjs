@@ -1,0 +1,122 @@
+import { chromium, expect } from "@playwright/test";
+import assert from "node:assert/strict";
+import { mkdir } from "node:fs/promises";
+
+const browser = await chromium.launch({ channel: "msedge", headless: true });
+const screenshots = new URL("../.impeccable/review/", import.meta.url);
+await mkdir(screenshots, { recursive: true });
+const errors = [];
+const capture = !process.argv.includes("--no-capture");
+try {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, reducedMotion: "reduce" });
+  const page = await context.newPage();
+  page.on("dialog", d => d.accept());
+  page.setDefaultNavigationTimeout(30000);
+  page.on("pageerror", e => errors.push(e.message));
+  await page.goto("http://127.0.0.1:8766");
+  await page.locator("#career-name").waitFor();
+  assert.equal(await page.locator("#career-name").inputValue(), "剑士");
+  if (capture) await page.screenshot({ path: new URL("desktop.png", screenshots).pathname.replace(/^\/([A-Za-z]:)/, "$1"), fullPage: true });
+  await page.locator("#career-name").fill("剑士·界面测试");
+  await page.getByRole("button", { name: "成长与介绍", exact: true }).click();
+  await page.locator("#growth-basehp").waitFor();
+  await page.locator("#growth-basehp").fill("351");
+  await page.getByLabel("搜索职业").fill("Jodie");
+  await page.locator(".career").filter({ hasText: "发明家" }).click();
+  await page.locator("#growth-basehp").waitFor();
+  await page.getByRole("button", { name: "技能配置", exact: true }).click();
+  assert.ok((await page.locator("#linked-skill").innerText()).includes("600010"));
+  await page.getByLabel("搜索职业").fill("100");
+  await page.locator(".career").filter({ hasText: /^100剑士/ }).first().click();
+  await page.getByRole("button", { name: "基础配置", exact: true }).click();
+  await page.locator("#career-name").waitFor();
+  assert.equal(await page.locator("#career-name").inputValue(), "剑士·界面测试");
+  await page.getByRole("button", { name: "检查写入差异", exact: true }).click();
+  await page.locator("dialog[open]").waitFor();
+  assert.ok((await page.locator("dialog").innerText()).includes("CareerLevelupaddattr.basehp"));
+  assert.ok((await page.locator("dialog").innerText()).includes("CareerInfor.name"));
+  if (capture) await page.screenshot({ path: new URL("review.png", screenshots).pathname.replace(/^\/([A-Za-z]:)/, "$1"), fullPage: true });
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "撤销当前职业草稿" }).click();
+  assert.equal(await page.locator("#career-name").inputValue(), "剑士");
+  await page.getByRole("button", { name: "复制基础草稿" }).click();
+  await page.locator("#new-id").fill("600");
+  await page.getByRole("button", { name: "检查写入差异" }).click();
+  await page.getByRole("alert").filter({ hasText: "新职业 ID 已存在" }).waitFor();
+  await page.getByRole("button", { name: "返回编辑已有职业" }).click();
+  let releaseReview;
+  let requestReady;
+  const ready = new Promise(resolve => { requestReady = resolve; });
+  const gate = new Promise(resolve => { releaseReview = resolve; });
+  await page.route("**/api/prepare", async route => {
+    const response = await route.fetch();
+    requestReady();
+    await gate;
+    await route.fulfill({ response });
+  });
+  await page.locator("#career-name").fill("审核前草稿");
+  await page.getByRole("button", { name: "检查写入差异" }).click();
+  await ready;
+  await page.locator("#career-name").fill("审核期间新草稿");
+  releaseReview();
+  await page.getByRole("alert").filter({ hasText: "审核期间草稿或写入目标已改变" }).waitFor();
+  assert.equal(await page.locator("dialog[open]").count(), 0);
+  await page.unroute("**/api/prepare");
+  await page.getByRole("button", { name: "撤销当前职业草稿" }).click();
+  // UI-only receipt simulation. No commit request reaches the real-data backend.
+  await page.route("**/api/commit", route => route.fulfill({
+    json: { message: "合成回执：用于验证界面状态，未执行 Excel 写入。", paths: [] },
+  }));
+  await page.locator("#career-name").fill("剑士·回执状态测试");
+  await page.getByRole("button", { name: "检查写入差异" }).click();
+  await page.getByRole("dialog", { name: "审核隔离副本试写" }).waitFor();
+  await page.getByRole("button", { name: "确认试写副本" }).click();
+  await page.getByText("上次写入回执：合成回执", { exact: false }).waitFor();
+  await page.getByLabel("搜索职业").fill("Jodie");
+  await page.locator(".career").filter({ hasText: "发明家" }).click();
+  await page.locator("#career-name").waitFor();
+  await page.getByLabel("搜索职业").fill("100");
+  await page.locator(".career").filter({ hasText: /^100剑士/ }).first().click();
+  await page.getByRole("heading", { name: "已写入草稿", exact: true }).waitFor();
+  await expect(page.locator("#career-bp")).toHaveValue("Eric/BP_Eric");
+  await expect(page.getByRole("button", { name: "检查写入差异" })).toBeDisabled();
+  if (capture) await page.screenshot({ path: new URL("receipt-synthetic.png", screenshots).pathname.replace(/^\/([A-Za-z]:)/, "$1"), fullPage: true });
+  await page.locator("#career-name").fill("回执后的新草稿");
+  await expect(page.getByRole("button", { name: "检查写入差异" })).toBeEnabled();
+  await page.getByRole("heading", { name: "待写入草稿", exact: true }).waitFor();
+  await page.locator("#career-name").fill("剑士·回执状态测试");
+  await page.reload();
+  await page.locator("#career-name").waitFor();
+  await page.getByRole("heading", { name: "已写入草稿", exact: true }).waitFor();
+  await expect(page.getByRole("button", { name: "检查写入差异" })).toBeDisabled();
+  await page.getByRole("radio", { name: "源工作簿", exact: true }).check();
+  await expect(page.getByRole("button", { name: "检查写入差异" })).toBeEnabled();
+  await page.getByRole("radio", { name: "隔离工作簿副本", exact: true }).check();
+  await page.getByRole("button", { name: "恢复快照草稿", exact: true }).click();
+  await page.getByRole("button", { name: "表关系", exact: true }).click();
+  assert.equal(await page.locator(".catalog tbody tr").count(), 17);
+  await page.getByRole("button", { name: "基础配置", exact: true }).click();
+  await page.getByRole("button", { name: /个职业 · 本地快照/ }).click();
+  const oldDoc = await page.locator("#doc-path").inputValue();
+  await page.locator("#doc-path").fill("Z:\\nonexistent-character-test");
+  await page.getByRole("button", { name: "读取目录", exact: true }).click();
+  await page.getByRole("alert").filter({ hasText: "请选择同时包含" }).waitFor();
+  assert.equal(await page.locator("#career-name").inputValue(), "剑士");
+  await page.locator("#doc-path").fill(oldDoc);
+  await context.close();
+
+  for (const [name, width, height, scale] of [["user-1024", 1024, 768, 1.5], ["mobile", 390, 900, 1]]) {
+    const ctx = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: scale, reducedMotion: "reduce" });
+    const p = await ctx.newPage();
+    p.on("pageerror", e => errors.push(e.message));
+    await p.goto("http://127.0.0.1:8766");
+    await p.locator("#career-name").waitFor();
+    assert.ok(await p.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${name} horizontal overflow`);
+    if (capture) await p.screenshot({ path: new URL(`${name}.png`, screenshots).pathname.replace(/^\/([A-Za-z]:)/, "$1"), fullPage: true });
+    await ctx.close();
+  }
+  assert.deepEqual(errors, []);
+  console.log("PASS: real reads, retained drafts/receipts, multi-table review, clone collision, stale-review rejection, failed-load preservation, responsive bounds; commit simulated only");
+} finally {
+  await browser.close();
+}

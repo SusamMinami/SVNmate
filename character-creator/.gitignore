@@ -1,0 +1,12 @@
+!package.json
+!package-lock.json
+!tsconfig.json
+!.impeccable/design.json
+node_modules/
+dist/
+artifacts/
+__pycache__/
+*.pyc
+.local/
+.impeccable/review/
+.impeccable/config.local.json
